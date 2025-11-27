@@ -19,3 +19,6 @@
 [submodule "rbx-dom"]
 	path = rbx-dom
 	url = https://github.com/UserGeneratedLLC/rbx-dom.git
+[submodule "plugin/Packages/msgpack-luau"]
+	path = plugin/Packages/msgpack-luau
+	url = https://github.com/cipharius/msgpack-luau/
