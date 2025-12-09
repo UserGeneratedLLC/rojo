@@ -5,12 +5,12 @@ expression: default.project.json
 {
   "name": "respect_old_middleware",
   "tree": {
+    "$path": "src",
     "project_node": {
       "$className": "BoolValue",
       "$properties": {
         "Value": true
       }
-    },
-    "$path": "src"
+    }
   }
 }

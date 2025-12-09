@@ -4,7 +4,7 @@
 //! to reduce boilerplate and improve ergonomics when working with JSONC files.
 
 use anyhow::Context as _;
-use serde::de::DeserializeOwned;
+use serde::{de::DeserializeOwned, Serialize};
 
 /// Parse JSONC text into a `serde_json::Value`.
 ///
@@ -129,6 +129,55 @@ pub fn from_slice_with_context<T: DeserializeOwned>(
     let text = std::str::from_utf8(slice)
         .with_context(|| format!("{}: File is not valid UTF-8", context()))?;
     from_str_with_context(text, context)
+}
+
+/// Recursively sorts all object keys in a JSON value for deterministic output.
+fn sort_json_value(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Object(map) => {
+            let sorted: serde_json::Map<String, serde_json::Value> = map
+                .into_iter()
+                .map(|(k, v)| (k, sort_json_value(v)))
+                .collect::<Vec<_>>()
+                .into_iter()
+                .collect::<std::collections::BTreeMap<_, _>>()
+                .into_iter()
+                .collect();
+            serde_json::Value::Object(sorted)
+        }
+        serde_json::Value::Array(arr) => {
+            serde_json::Value::Array(arr.into_iter().map(sort_json_value).collect())
+        }
+        other => other,
+    }
+}
+
+/// Serialize a value to a pretty-printed JSON byte vector with sorted keys.
+///
+/// This ensures deterministic output by sorting all object keys alphabetically,
+/// which is especially useful for version control and syncback operations.
+///
+/// # Errors
+///
+/// Returns an error if the value cannot be serialized to JSON.
+pub fn to_vec_pretty_sorted<T: Serialize>(value: &T) -> anyhow::Result<Vec<u8>> {
+    let json_value = serde_json::to_value(value).context("Failed to convert to JSON value")?;
+    let sorted_value = sort_json_value(json_value);
+    serde_json::to_vec_pretty(&sorted_value).context("Failed to serialize to JSON")
+}
+
+/// Serialize a value to a pretty-printed JSON string with sorted keys.
+///
+/// This ensures deterministic output by sorting all object keys alphabetically,
+/// which is especially useful for version control and syncback operations.
+///
+/// # Errors
+///
+/// Returns an error if the value cannot be serialized to JSON.
+pub fn to_string_pretty_sorted<T: Serialize>(value: &T) -> anyhow::Result<String> {
+    let json_value = serde_json::to_value(value).context("Failed to convert to JSON value")?;
+    let sorted_value = sort_json_value(json_value);
+    serde_json::to_string_pretty(&sorted_value).context("Failed to serialize to JSON")
 }
 
 #[cfg(test)]
@@ -309,5 +358,66 @@ mod tests {
                 .unwrap_err();
         assert!(err.to_string().contains("config.json"));
         assert!(err.to_string().contains("UTF-8"));
+    }
+
+    #[test]
+    fn test_to_vec_pretty_sorted() {
+        use indexmap::IndexMap;
+
+        let mut map: IndexMap<String, i32> = IndexMap::new();
+        map.insert("zebra".to_string(), 1);
+        map.insert("apple".to_string(), 2);
+        map.insert("mango".to_string(), 3);
+
+        let result = to_vec_pretty_sorted(&map).unwrap();
+        let output = String::from_utf8(result).unwrap();
+
+        // Keys should be in alphabetical order
+        let apple_pos = output.find("apple").unwrap();
+        let mango_pos = output.find("mango").unwrap();
+        let zebra_pos = output.find("zebra").unwrap();
+        assert!(apple_pos < mango_pos);
+        assert!(mango_pos < zebra_pos);
+    }
+
+    #[test]
+    fn test_to_string_pretty_sorted() {
+        use indexmap::IndexMap;
+
+        let mut map: IndexMap<String, i32> = IndexMap::new();
+        map.insert("zebra".to_string(), 1);
+        map.insert("apple".to_string(), 2);
+        map.insert("mango".to_string(), 3);
+
+        let output = to_string_pretty_sorted(&map).unwrap();
+
+        // Keys should be in alphabetical order
+        let apple_pos = output.find("apple").unwrap();
+        let mango_pos = output.find("mango").unwrap();
+        let zebra_pos = output.find("zebra").unwrap();
+        assert!(apple_pos < mango_pos);
+        assert!(mango_pos < zebra_pos);
+    }
+
+    #[test]
+    fn test_sorted_nested_objects() {
+        use serde::Serialize;
+
+        #[derive(Serialize)]
+        struct Nested {
+            inner: std::collections::HashMap<String, i32>,
+        }
+
+        let mut inner = std::collections::HashMap::new();
+        inner.insert("z".to_string(), 1);
+        inner.insert("a".to_string(), 2);
+
+        let nested = Nested { inner };
+        let output = to_string_pretty_sorted(&nested).unwrap();
+
+        // Inner keys should also be sorted
+        let a_pos = output.find("\"a\"").unwrap();
+        let z_pos = output.find("\"z\"").unwrap();
+        assert!(a_pos < z_pos);
     }
 }

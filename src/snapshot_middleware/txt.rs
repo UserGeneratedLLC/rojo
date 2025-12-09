@@ -60,7 +60,7 @@ pub fn syncback_txt<'sync>(
             let parent = snapshot.path.parent_err()?;
             fs_snapshot.add_file(
                 parent.join(format!("{}.meta.json", new_inst.name)),
-                serde_json::to_vec_pretty(&meta).context("could not serialize metadata")?,
+                crate::json::to_vec_pretty_sorted(&meta).context("could not serialize metadata")?,
             );
         }
     }

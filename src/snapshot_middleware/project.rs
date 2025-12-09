@@ -509,7 +509,7 @@ pub fn syncback_project<'sync>(
 
     for (node_properties, node_attributes, old_inst) in node_changed_map {
         if project_node_should_reserialize(node_properties, node_attributes, old_inst)? {
-            fs_snapshot.add_file(project_path, serde_json::to_vec_pretty(&project)?);
+            fs_snapshot.add_file(project_path, crate::json::to_vec_pretty_sorted(&project)?);
             break;
         }
     }

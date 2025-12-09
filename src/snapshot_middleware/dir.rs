@@ -106,7 +106,7 @@ pub fn syncback_dir<'sync>(
         if !meta.is_empty() {
             dir_syncback.fs_snapshot.add_file(
                 snapshot.path.join("init.meta.json"),
-                serde_json::to_vec_pretty(&meta)
+                crate::json::to_vec_pretty_sorted(&meta)
                     .context("could not serialize new init.meta.json")?,
             );
         }
