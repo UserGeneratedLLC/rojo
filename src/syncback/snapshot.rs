@@ -206,6 +206,24 @@ impl<'sync> SyncbackSnapshot<'sync> {
             .as_ref()
             .map(|rules| rules.ignore_trees.as_slice())
     }
+
+    /// Returns user-specified ignore classes.
+    #[inline]
+    pub fn ignore_classes(&self) -> Option<&[String]> {
+        self.data
+            .project
+            .syncback_rules
+            .as_ref()
+            .map(|rules| rules.ignore_classes.as_slice())
+    }
+
+    /// Checks if a class name should be ignored during syncback.
+    #[inline]
+    pub fn should_ignore_class(&self, class_name: &str) -> bool {
+        self.ignore_classes()
+            .map(|classes| classes.iter().any(|c| c == class_name))
+            .unwrap_or(false)
+    }
 }
 
 pub fn filter_out_property(inst: &Instance, prop_name: &str) -> bool {

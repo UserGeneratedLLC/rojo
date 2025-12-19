@@ -385,6 +385,10 @@ pub struct SyncbackRules {
     /// syncback.
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     ignore_properties: IndexMap<Ustr, Vec<Ustr>>,
+    /// A list of class names to ignore entirely during syncback.
+    /// Instances of these classes will not be added, removed, or synced.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    ignore_classes: Vec<String>,
     /// Whether or not the `CurrentCamera` of `Workspace` is included in the
     /// syncback or not. Defaults to `false`.
     #[serde(skip_serializing_if = "Option::is_none")]

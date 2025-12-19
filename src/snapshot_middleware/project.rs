@@ -474,6 +474,18 @@ pub fn syncback_project<'sync>(
         // All of the children in this loop are by their nature not in the
         // project, so we just need to run syncback on them.
         for (name, new_child) in new_child_map.drain() {
+            // Skip instances of ignored classes
+            if snapshot.should_ignore_class(&new_child.class) {
+                // Also remove from old_child_map so it won't be marked as removed
+                old_child_map.remove(name.as_str());
+                log::debug!(
+                    "Skipping instance {} because its class {} is ignored",
+                    new_child.name,
+                    new_child.class
+                );
+                continue;
+            }
+
             let parent_path = match ref_to_path_map.get(&new_child.parent()) {
                 Some(path) => path.clone(),
                 None => {
@@ -502,7 +514,19 @@ pub fn syncback_project<'sync>(
                 }
             }
         }
-        removed_descendants.extend(old_child_map.drain().map(|(_, v)| v));
+        // Filter out instances of ignored classes from removal
+        removed_descendants.extend(old_child_map.drain().filter_map(|(_, inst)| {
+            if snapshot.should_ignore_class(inst.class_name().as_str()) {
+                log::debug!(
+                    "Not removing instance {} because its class {} is ignored",
+                    inst.name(),
+                    inst.class_name()
+                );
+                None
+            } else {
+                Some(inst)
+            }
+        }));
         node_changed_map.push((&node.properties, &node.attributes, old_inst))
     }
     let mut fs_snapshot = FsSnapshot::new();

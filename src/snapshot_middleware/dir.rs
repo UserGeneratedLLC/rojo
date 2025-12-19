@@ -161,6 +161,17 @@ pub fn syncback_dir_no_meta<'sync>(
 
         for new_child_ref in new_inst.children() {
             let new_child = snapshot.get_new_instance(*new_child_ref).unwrap();
+            // Skip instances of ignored classes
+            if snapshot.should_ignore_class(&new_child.class) {
+                // Also remove from old_child_map so it won't be marked as removed
+                old_child_map.remove(new_child.name.as_str());
+                log::debug!(
+                    "Skipping instance {} because its class {} is ignored",
+                    new_child.name,
+                    new_child.class
+                );
+                continue;
+            }
             if let Some(old_child) = old_child_map.remove(new_child.name.as_str()) {
                 if old_child.metadata().relevant_paths.is_empty() {
                     log::debug!(
@@ -186,10 +197,32 @@ pub fn syncback_dir_no_meta<'sync>(
             }
         }
         // Any children that are in the old dom but not the new one are removed.
-        removed_children.extend(old_child_map.into_values());
+        // Filter out instances of ignored classes from removal.
+        removed_children.extend(old_child_map.into_values().filter(|inst| {
+            if snapshot.should_ignore_class(inst.class_name().as_str()) {
+                log::debug!(
+                    "Not removing instance {} because its class {} is ignored",
+                    inst.name(),
+                    inst.class_name()
+                );
+                false
+            } else {
+                true
+            }
+        }));
     } else {
         // There is no old instance. Just add every child.
         for new_child_ref in new_inst.children() {
+            let new_child = snapshot.get_new_instance(*new_child_ref).unwrap();
+            // Skip instances of ignored classes
+            if snapshot.should_ignore_class(&new_child.class) {
+                log::debug!(
+                    "Skipping instance {} because its class {} is ignored",
+                    new_child.name,
+                    new_child.class
+                );
+                continue;
+            }
             children.push(snapshot.with_joined_path(*new_child_ref, None)?);
         }
     }
