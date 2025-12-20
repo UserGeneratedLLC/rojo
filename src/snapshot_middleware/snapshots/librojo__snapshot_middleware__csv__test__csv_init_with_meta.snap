@@ -20,6 +20,7 @@ metadata:
     - /root/init.meta.jsonc
   context:
     emit_legacy_scripts: true
+    decode_windows_invalid_chars: false
   specified_id: manually specified
   middleware: ~
   schema: ~

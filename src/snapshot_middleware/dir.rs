@@ -172,6 +172,11 @@ pub fn syncback_dir_no_meta<'sync>(
                 );
                 continue;
             }
+            // Skip instances matching ignoreTrees
+            if snapshot.should_ignore_tree(*new_child_ref) {
+                old_child_map.remove(new_child.name.as_str());
+                continue;
+            }
             if let Some(old_child) = old_child_map.remove(new_child.name.as_str()) {
                 if old_child.metadata().relevant_paths.is_empty() {
                     log::debug!(
@@ -221,6 +226,10 @@ pub fn syncback_dir_no_meta<'sync>(
                     new_child.name,
                     new_child.class
                 );
+                continue;
+            }
+            // Skip instances matching ignoreTrees
+            if snapshot.should_ignore_tree(*new_child_ref) {
                 continue;
             }
             children.push(snapshot.with_joined_path(*new_child_ref, None)?);

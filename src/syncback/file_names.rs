@@ -6,12 +6,15 @@ use std::borrow::Cow;
 use anyhow::Context;
 use rbx_dom_weak::Instance;
 
-use crate::{snapshot::InstanceWithMeta, snapshot_middleware::Middleware};
+use crate::{
+    path_encoding::encode_path_name, snapshot::InstanceWithMeta, snapshot_middleware::Middleware,
+};
 
 pub fn name_for_inst<'old>(
     middleware: Middleware,
     new_inst: &Instance,
     old_inst: Option<InstanceWithMeta<'old>>,
+    encode_invalid_chars: bool,
 ) -> anyhow::Result<Cow<'old, str>> {
     if let Some(old_inst) = old_inst {
         if let Some(source) = old_inst.metadata().relevant_paths.first() {
@@ -35,13 +38,37 @@ pub fn name_for_inst<'old>(
             | Middleware::CsvDir
             | Middleware::ServerScriptDir
             | Middleware::ClientScriptDir
-            | Middleware::ModuleScriptDir => Cow::Owned(new_inst.name.clone()),
+            | Middleware::ModuleScriptDir => {
+                let name = if encode_invalid_chars {
+                    let encoded = encode_path_name(&new_inst.name);
+                    // Validate for issues not fixed by encoding (trailing space/dot, control chars, reserved names)
+                    validate_file_name(&encoded).with_context(|| {
+                        format!("name '{}' (encoded from '{}') is not legal to write to the file system", encoded, new_inst.name)
+                    })?;
+                    encoded
+                } else {
+                    validate_file_name(&new_inst.name).with_context(|| {
+                        format!("name '{}' is not legal to write to the file system", new_inst.name)
+                    })?;
+                    new_inst.name.clone()
+                };
+                Cow::Owned(name)
+            }
             _ => {
                 let extension = extension_for_middleware(middleware);
-                let name = &new_inst.name;
-                validate_file_name(name).with_context(|| {
-                    format!("name '{name}' is not legal to write to the file system")
-                })?;
+                let name = if encode_invalid_chars {
+                    let encoded = encode_path_name(&new_inst.name);
+                    // Validate for issues not fixed by encoding (trailing space/dot, control chars, reserved names)
+                    validate_file_name(&encoded).with_context(|| {
+                        format!("name '{}' (encoded from '{}') is not legal to write to the file system", encoded, new_inst.name)
+                    })?;
+                    encoded
+                } else {
+                    validate_file_name(&new_inst.name).with_context(|| {
+                        format!("name '{}' is not legal to write to the file system", new_inst.name)
+                    })?;
+                    new_inst.name.clone()
+                };
                 Cow::Owned(format!("{name}.{extension}"))
             }
         })

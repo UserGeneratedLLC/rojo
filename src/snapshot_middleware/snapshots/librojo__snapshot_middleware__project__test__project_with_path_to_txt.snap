@@ -14,6 +14,7 @@ metadata:
     - /foo/default.project.json
   context:
     emit_legacy_scripts: true
+    decode_windows_invalid_chars: false
   specified_id: ~
   middleware: text
   schema: ~

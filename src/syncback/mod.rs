@@ -409,6 +409,12 @@ pub struct SyncbackRules {
     /// generally a better UX.
     #[serde(skip_serializing_if = "Option::is_none")]
     create_ignore_dir_paths: Option<bool>,
+    /// Whether to encode Windows-invalid characters in file names during
+    /// syncback. Characters like `<`, `>`, `:`, `"`, `/`, `\`, `|`, `?`, `*`
+    /// will be encoded as `%LT%`, `%GT%`, `%COLON%`, etc.
+    /// Defaults to `false`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    encode_windows_invalid_chars: Option<bool>,
 }
 
 impl SyncbackRules {
@@ -431,6 +437,13 @@ impl SyncbackRules {
         }
 
         Ok(globs)
+    }
+
+    /// Returns whether Windows-invalid characters should be encoded in file
+    /// names during syncback. Defaults to `false`.
+    #[inline]
+    pub fn encode_windows_invalid_chars(&self) -> bool {
+        self.encode_windows_invalid_chars.unwrap_or(false)
     }
 }
 

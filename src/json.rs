@@ -166,19 +166,6 @@ pub fn to_vec_pretty_sorted<T: Serialize>(value: &T) -> anyhow::Result<Vec<u8>> 
     serde_json::to_vec_pretty(&sorted_value).context("Failed to serialize to JSON")
 }
 
-/// Serialize a value to a pretty-printed JSON string with sorted keys.
-///
-/// This ensures deterministic output by sorting all object keys alphabetically,
-/// which is especially useful for version control and syncback operations.
-///
-/// # Errors
-///
-/// Returns an error if the value cannot be serialized to JSON.
-pub fn to_string_pretty_sorted<T: Serialize>(value: &T) -> anyhow::Result<String> {
-    let json_value = serde_json::to_value(value).context("Failed to convert to JSON value")?;
-    let sorted_value = sort_json_value(json_value);
-    serde_json::to_string_pretty(&sorted_value).context("Failed to serialize to JSON")
-}
 
 #[cfg(test)]
 mod tests {
@@ -381,25 +368,6 @@ mod tests {
     }
 
     #[test]
-    fn test_to_string_pretty_sorted() {
-        use indexmap::IndexMap;
-
-        let mut map: IndexMap<String, i32> = IndexMap::new();
-        map.insert("zebra".to_string(), 1);
-        map.insert("apple".to_string(), 2);
-        map.insert("mango".to_string(), 3);
-
-        let output = to_string_pretty_sorted(&map).unwrap();
-
-        // Keys should be in alphabetical order
-        let apple_pos = output.find("apple").unwrap();
-        let mango_pos = output.find("mango").unwrap();
-        let zebra_pos = output.find("zebra").unwrap();
-        assert!(apple_pos < mango_pos);
-        assert!(mango_pos < zebra_pos);
-    }
-
-    #[test]
     fn test_sorted_nested_objects() {
         use serde::Serialize;
 
@@ -413,7 +381,7 @@ mod tests {
         inner.insert("a".to_string(), 2);
 
         let nested = Nested { inner };
-        let output = to_string_pretty_sorted(&nested).unwrap();
+        let output = String::from_utf8(to_vec_pretty_sorted(&nested).unwrap()).unwrap();
 
         // Inner keys should also be sorted
         let a_pos = output.find("\"a\"").unwrap();

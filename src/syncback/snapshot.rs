@@ -44,7 +44,13 @@ impl<'sync> SyncbackSnapshot<'sync> {
             middleware: None,
         };
         let middleware = get_best_middleware(&snapshot);
-        let name = name_for_inst(middleware, snapshot.new_inst(), snapshot.old_inst())?;
+        let encode_invalid_chars = self.encode_windows_invalid_chars();
+        let name = name_for_inst(
+            middleware,
+            snapshot.new_inst(),
+            snapshot.old_inst(),
+            encode_invalid_chars,
+        )?;
         snapshot.path = self.path.join(name.as_ref());
 
         Ok(snapshot)
@@ -70,7 +76,13 @@ impl<'sync> SyncbackSnapshot<'sync> {
             middleware: None,
         };
         let middleware = get_best_middleware(&snapshot);
-        let name = name_for_inst(middleware, snapshot.new_inst(), snapshot.old_inst())?;
+        let encode_invalid_chars = self.encode_windows_invalid_chars();
+        let name = name_for_inst(
+            middleware,
+            snapshot.new_inst(),
+            snapshot.old_inst(),
+            encode_invalid_chars,
+        )?;
         snapshot.path = base_path.join(name.as_ref());
 
         Ok(snapshot)
@@ -222,6 +234,34 @@ impl<'sync> SyncbackSnapshot<'sync> {
     pub fn should_ignore_class(&self, class_name: &str) -> bool {
         self.ignore_classes()
             .map(|classes| classes.iter().any(|c| c == class_name))
+            .unwrap_or(false)
+    }
+
+    /// Checks if an instance should be ignored based on ignoreTrees rules.
+    /// Takes a Ref to check against the new tree's instance path.
+    #[inline]
+    pub fn should_ignore_tree(&self, referent: Ref) -> bool {
+        if let Some(ignore_trees) = self.ignore_tree() {
+            let path = inst_path(self.new_tree(), referent);
+            for ignored in ignore_trees {
+                if path.starts_with(ignored.as_str()) {
+                    log::debug!("Ignoring {path} because it matches ignoreTrees entry: {ignored}");
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Returns whether Windows-invalid characters should be encoded in file
+    /// names during syncback.
+    #[inline]
+    pub fn encode_windows_invalid_chars(&self) -> bool {
+        self.data
+            .project
+            .syncback_rules
+            .as_ref()
+            .map(|rules| rules.encode_windows_invalid_chars())
             .unwrap_or(false)
     }
 }

@@ -145,6 +145,11 @@ pub struct InstanceContext {
     pub emit_legacy_scripts: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sync_rules: Vec<SyncRule>,
+    /// Whether to decode Windows-invalid characters in file names.
+    /// Characters like `%LT%`, `%GT%`, `%COLON%`, etc. will be decoded
+    /// back to `<`, `>`, `:`, etc. in instance names sent to the plugin.
+    #[serde(default)]
+    pub decode_windows_invalid_chars: bool,
 }
 
 impl InstanceContext {
@@ -153,6 +158,7 @@ impl InstanceContext {
             path_ignore_rules: Arc::new(Vec::new()),
             emit_legacy_scripts: emit_legacy_scripts_default().unwrap(),
             sync_rules: Vec::new(),
+            decode_windows_invalid_chars: false,
         }
     }
 
@@ -163,6 +169,10 @@ impl InstanceContext {
                 .unwrap(),
             ..Self::new()
         }
+    }
+
+    pub fn set_decode_windows_invalid_chars(&mut self, decode: bool) {
+        self.decode_windows_invalid_chars = decode;
     }
 
     /// Extend the list of ignore rules in the context with the given new rules.

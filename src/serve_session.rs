@@ -106,8 +106,15 @@ impl ServeSession {
 
         let root_id = tree.get_root_id();
 
-        let instance_context =
+        let decode_windows_invalid_chars = root_project
+            .syncback_rules
+            .as_ref()
+            .map(|rules| rules.encode_windows_invalid_chars())
+            .unwrap_or(false);
+
+        let mut instance_context =
             InstanceContext::with_emit_legacy_scripts(root_project.emit_legacy_scripts);
+        instance_context.set_decode_windows_invalid_chars(decode_windows_invalid_chars);
 
         log::trace!("Generating snapshot of instances from VFS");
         let snapshot = snapshot_from_vfs(&instance_context, &vfs, start_path)?;
