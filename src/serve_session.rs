@@ -221,6 +221,12 @@ impl ServeSession {
     pub fn root_project(&self) -> &Project {
         &self.root_project
     }
+
+    /// Returns whether sync should only include script instances.
+    /// When enabled, only Script, LocalScript, and ModuleScript are synced.
+    pub fn sync_scripts_only(&self) -> bool {
+        self.root_project.sync_scripts_only.unwrap_or(false)
+    }
 }
 
 #[derive(Debug, Error)]

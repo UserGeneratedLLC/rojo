@@ -126,6 +126,13 @@ pub struct Project {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sync_rules: Vec<SyncRule>,
 
+    /// When enabled, only script instances (Script, LocalScript, ModuleScript)
+    /// will be synced to Roblox Studio. All other instances in the project are
+    /// ignored during sync, allowing Studio to maintain its own non-script
+    /// content. Defaults to `false`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sync_scripts_only: Option<bool>,
+
     /// The path to the file that this project came from. Relative paths in the
     /// project should be considered relative to the parent of this field, also
     /// given by `Project::folder_location`.

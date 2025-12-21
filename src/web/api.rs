@@ -24,7 +24,7 @@ use crate::{
     snapshot::{InstanceWithMeta, PatchSet, PatchUpdate},
     web::{
         interface::{
-            ErrorResponse, Instance, MessagesPacket, OpenResponse, ReadResponse,
+            ErrorResponse, Instance, InstanceMetadata, MessagesPacket, OpenResponse, ReadResponse,
             ServerInfoResponse, SocketPacket, SocketPacketBody, SocketPacketType, SubscribeMessage,
             WriteRequest, WriteResponse, PROTOCOL_VERSION, SERVER_VERSION,
         },
@@ -201,15 +201,55 @@ impl ApiService {
         let message_cursor = message_queue.cursor();
 
         let tree = self.serve_session.tree();
+        let scripts_only = self.serve_session.sync_scripts_only();
 
         let mut instances = HashMap::new();
 
-        for id in requested_ids {
-            if let Some(instance) = tree.get_instance(id) {
-                instances.insert(id, Instance::from_rojo_instance(instance));
+        if scripts_only {
+            // In scripts-only mode, we need to:
+            // 1. Find all scripts
+            // 2. Include their ancestor chains (so the tree structure is valid)
+            // 3. Mark non-script ancestors with ignoreUnknownInstances: true
+            // 4. Filter children to only include instances in our set
 
-                for descendant in tree.descendants(id) {
-                    instances.insert(descendant.id(), Instance::from_rojo_instance(descendant));
+            let mut included_ids: HashSet<Ref> = HashSet::new();
+
+            // First pass: collect all script IDs and their ancestors
+            for id in &requested_ids {
+                if let Some(instance) = tree.get_instance(*id) {
+                    collect_scripts_and_ancestors(&tree, instance.id(), &mut included_ids);
+                    for descendant in tree.descendants(*id) {
+                        collect_scripts_and_ancestors(&tree, descendant.id(), &mut included_ids);
+                    }
+                }
+            }
+
+            // Second pass: create Instance objects for included IDs
+            for id in &requested_ids {
+                if let Some(instance) = tree.get_instance(*id) {
+                    if included_ids.contains(id) {
+                        let inst = instance_for_scripts_only(instance, &included_ids);
+                        instances.insert(*id, inst);
+                    }
+
+                    for descendant in tree.descendants(*id) {
+                        let desc_id = descendant.id();
+                        if included_ids.contains(&desc_id) {
+                            let inst = instance_for_scripts_only(descendant, &included_ids);
+                            instances.insert(desc_id, inst);
+                        }
+                    }
+                }
+            }
+        } else {
+            // Normal mode: include all instances
+            for id in requested_ids {
+                if let Some(instance) = tree.get_instance(id) {
+                    instances.insert(id, Instance::from_rojo_instance(instance));
+
+                    for descendant in tree.descendants(id) {
+                        instances.insert(descendant.id(), Instance::from_rojo_instance(descendant));
+                    }
                 }
             }
         }
@@ -458,6 +498,7 @@ async fn handle_websocket_subscription(
     let session_id = serve_session.session_id();
     let tree_handle = serve_session.tree_handle();
     let message_queue = serve_session.message_queue();
+    let scripts_only = serve_session.sync_scripts_only();
 
     log::debug!(
         "WebSocket subscription established for session {}",
@@ -478,9 +519,17 @@ async fn handle_websocket_subscription(
                         if !messages.is_empty() {
                             let json_message = {
                                 let tree = tree_handle.lock().unwrap();
-                                let api_messages = messages
+                                let api_messages: Vec<_> = messages
                                     .into_iter()
-                                    .map(|patch| SubscribeMessage::from_patch_update(&tree, patch))
+                                    .map(|patch| {
+                                        let mut msg = SubscribeMessage::from_patch_update(&tree, patch);
+                                        // In scripts-only mode, transform to only include scripts
+                                        // and their necessary ancestors
+                                        if scripts_only {
+                                            filter_subscribe_message_for_scripts(&tree, &mut msg);
+                                        }
+                                        msg
+                                    })
                                     .collect();
 
                                 let response = SocketPacket {
@@ -566,4 +615,159 @@ fn parent_requirements(class: &str) -> Option<&str> {
         "BaseWrap" | "WrapLayer" | "WrapTarget" | "WrapDeformer" => "MeshPart",
         _ => return None,
     })
+}
+
+/// Checks if a class name is a script type (Script, LocalScript, ModuleScript).
+#[inline]
+fn is_script_class(class_name: &str) -> bool {
+    matches!(class_name, "Script" | "LocalScript" | "ModuleScript")
+}
+
+/// Filters a SubscribeMessage to only include scripts and their ancestors.
+/// Non-script ancestors get ignoreUnknownInstances: true.
+fn filter_subscribe_message_for_scripts(
+    tree: &crate::snapshot::RojoTree,
+    msg: &mut SubscribeMessage<'_>,
+) {
+    use std::borrow::Cow;
+
+    // Build set of IDs that should be included (scripts + their ancestors)
+    let mut included_ids: HashSet<Ref> = HashSet::new();
+
+    // First, find all scripts in the added instances and collect their ancestors
+    for (id, inst) in &msg.added {
+        if is_script_class(inst.class_name.as_str()) {
+            // Add this script and all its ancestors
+            included_ids.insert(*id);
+            let mut current_parent = inst.parent;
+            while !current_parent.is_none() {
+                if included_ids.contains(&current_parent) {
+                    break;
+                }
+                included_ids.insert(current_parent);
+                if let Some(parent_inst) = msg.added.get(&current_parent) {
+                    current_parent = parent_inst.parent;
+                } else if let Some(tree_inst) = tree.get_instance(current_parent) {
+                    current_parent = tree_inst.parent();
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+
+    // Filter added to only include IDs in our set
+    msg.added.retain(|id, _| included_ids.contains(id));
+
+    // ALL instances get ignoreUnknownInstances: true in scripts-only mode
+    // This ensures we only sync script content, never delete/modify other instances
+    // Non-scripts also have their properties cleared - they're just tree structure
+    for (_id, inst) in &mut msg.added {
+        inst.metadata = Some(InstanceMetadata {
+            ignore_unknown_instances: true,
+        });
+
+        // Non-scripts don't sync properties - they're just tree structure
+        if !is_script_class(inst.class_name.as_str()) {
+            inst.properties.clear();
+        }
+
+        // Filter children to only include those in our set
+        let filtered_children: Vec<Ref> = inst
+            .children
+            .iter()
+            .copied()
+            .filter(|child_id| included_ids.contains(child_id))
+            .collect();
+        inst.children = Cow::Owned(filtered_children);
+    }
+
+    // Only allow updates to scripts
+    msg.updated.retain(|update| {
+        tree.get_instance(update.id)
+            .map(|inst| is_script_class(inst.class_name().as_str()))
+            .unwrap_or(false)
+    });
+
+    // Only remove scripts (plugin will ignore unknown IDs anyway)
+    msg.removed.retain(|_id| {
+        // We can't check removed instances in the tree since they're gone,
+        // so we let all removals through - the plugin will ignore unknown IDs
+        true
+    });
+}
+
+/// Recursively collects a script instance and all its ancestors into the set.
+/// Only adds to the set if the instance is a script (then adds ancestors too).
+fn collect_scripts_and_ancestors(
+    tree: &crate::snapshot::RojoTree,
+    id: Ref,
+    included_ids: &mut HashSet<Ref>,
+) {
+    if let Some(instance) = tree.get_instance(id) {
+        if is_script_class(instance.class_name().as_str()) {
+            // This is a script - add it and all ancestors
+            let mut current_id = id;
+            while let Some(inst) = tree.get_instance(current_id) {
+                included_ids.insert(current_id);
+                let parent_id = inst.parent();
+                if parent_id.is_none() || included_ids.contains(&parent_id) {
+                    break;
+                }
+                current_id = parent_id;
+            }
+        }
+    }
+}
+
+/// Creates an Instance for scripts-only mode.
+/// - Scripts get their properties synced normally
+/// - Non-scripts only provide tree structure (no properties synced)
+fn instance_for_scripts_only<'a>(
+    source: InstanceWithMeta<'a>,
+    included_ids: &HashSet<Ref>,
+) -> Instance<'a> {
+    use std::borrow::Cow;
+
+    let is_script = is_script_class(source.class_name().as_str());
+
+    // Only sync properties for scripts, not for ancestor containers
+    let properties = if is_script {
+        source
+            .properties()
+            .iter()
+            .filter(|(_key, value)| {
+                // Filter out SharedString values (can't be serialized)
+                value.ty() != rbx_dom_weak::types::VariantType::SharedString
+            })
+            .map(|(key, value)| (*key, Cow::Borrowed(value)))
+            .collect()
+    } else {
+        // Non-scripts don't sync any properties - they're just tree structure
+        UstrMap::default()
+    };
+
+    // Filter children to only include those in our included set
+    let filtered_children: Vec<Ref> = source
+        .children()
+        .iter()
+        .copied()
+        .filter(|child_id| included_ids.contains(child_id))
+        .collect();
+
+    // In scripts-only mode, ALL instances get ignoreUnknownInstances: true
+    // This ensures we only sync script content, never delete/modify other instances
+    let metadata = Some(InstanceMetadata {
+        ignore_unknown_instances: true,
+    });
+
+    Instance {
+        id: source.id(),
+        parent: source.parent(),
+        name: Cow::Borrowed(source.name()),
+        class_name: source.class_name(),
+        properties,
+        children: Cow::Owned(filtered_children),
+        metadata,
+    }
 }
