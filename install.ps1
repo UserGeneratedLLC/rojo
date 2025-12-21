@@ -1,7 +1,6 @@
 #Requires -Version 5.1
 
 param([string]$Mode = "release")
-$DeployFolder = "C:\Program Files\Rojo"
 
 Set-Location $PSScriptRoot
 cargo build "--$Mode"
@@ -9,6 +8,5 @@ cargo build "--$Mode"
 if ($LASTEXITCODE -ne 0) { throw "Plugin build failed" }
 gsudo {
   Stop-Process -Name "rojo" -Force -ErrorAction SilentlyContinue
-  #Remove-Item "$DeployFolder\*" -Recurse -Force
-  Copy-Item ".\target\$Mode\rojo.exe" "$DeployFolder\"
+  Copy-Item ".\target\$Mode\rojo.exe" "C:\Program Files\Rojo\"
 }
