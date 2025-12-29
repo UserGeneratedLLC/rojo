@@ -49,11 +49,18 @@ impl AdjacentMetadata {
     pub fn read_and_apply_all(
         vfs: &Vfs,
         path: &Path,
-        name: &str,
+        _name: &str,
         snapshot: &mut InstanceSnapshot,
     ) -> anyhow::Result<()> {
-        let meta_path_json = path.with_file_name(format!("{name}.meta.json"));
-        let meta_path_jsonc = path.with_file_name(format!("{name}.meta.jsonc"));
+        // Use the file stem from the actual path (which has encoded chars)
+        // rather than the decoded name, so meta files are found correctly
+        // when encodeWindowsInvalidChars is enabled.
+        let file_stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        let meta_path_json = path.with_file_name(format!("{file_stem}.meta.json"));
+        let meta_path_jsonc = path.with_file_name(format!("{file_stem}.meta.jsonc"));
 
         if let Some(meta_contents) = vfs.read(&meta_path_json).with_not_found()? {
             let mut metadata = Self::from_slice(&meta_contents, meta_path_json.clone())?;
