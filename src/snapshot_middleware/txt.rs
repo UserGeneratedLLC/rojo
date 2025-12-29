@@ -6,6 +6,7 @@ use rbx_dom_weak::types::Variant;
 use rbx_dom_weak::ustr;
 
 use crate::{
+    path_encoding::encode_path_name,
     snapshot::{InstanceContext, InstanceMetadata, InstanceSnapshot},
     syncback::{FsSnapshot, SyncbackReturn, SyncbackSnapshot},
 };
@@ -58,8 +59,13 @@ pub fn syncback_txt<'sync>(
 
         if !meta.is_empty() {
             let parent = snapshot.path.parent_err()?;
+            let meta_name = if snapshot.encode_windows_invalid_chars() {
+                encode_path_name(&new_inst.name)
+            } else {
+                new_inst.name.clone()
+            };
             fs_snapshot.add_file(
-                parent.join(format!("{}.meta.json", new_inst.name)),
+                parent.join(format!("{}.meta.json", meta_name)),
                 crate::json::to_vec_pretty_sorted(&meta).context("could not serialize metadata")?,
             );
         }
