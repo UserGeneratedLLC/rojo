@@ -3,6 +3,17 @@
 $ProjectRbxl = "Project.rbxl"
 $ProjectJsonFile = "default.project.json"
 
+# Check for clean flag and filter it out
+$DoClean = $false
+$FilteredArgs = @()
+foreach ($Arg in $args) {
+  if ($Arg -eq "clean") {
+    $DoClean = $true
+  } else {
+    $FilteredArgs += $Arg
+  }
+}
+
 # Load .env file
 Get-Content ".env" | ForEach-Object {
   if ($_ -match "^\s*([^#][^=]+)=(.*)$") {
@@ -23,8 +34,29 @@ $Session.Cookies.Add($Cookie)
 Write-Host "Downloading $Url..."
 Invoke-WebRequest -Uri $Url -WebSession $Session -OutFile $ProjectRbxl
 
-if ($args.Count -eq 0) {
+# Delete src/ completely and recreate directory structure if --clean specified
+if ($DoClean) {
+  Write-Host "Cleaning src/ directory..."
+  if (Test-Path "src") {
+    Remove-Item -Path "src" -Recurse -Force
+  }
+  New-Item -ItemType Directory -Path "src/ReplicatedFirst" -Force | Out-Null
+  New-Item -ItemType Directory -Path "src/ReplicatedStorage" -Force | Out-Null
+  New-Item -ItemType Directory -Path "src/ServerScriptService" -Force | Out-Null
+  New-Item -ItemType Directory -Path "src/ServerStorage" -Force | Out-Null
+  New-Item -ItemType Directory -Path "src/StarterPlayer/StarterCharacterScripts" -Force | Out-Null
+  New-Item -ItemType Directory -Path "src/StarterPlayer/StarterPlayerScripts" -Force | Out-Null
+  New-Item -ItemType Directory -Path "src/Workspace" -Force | Out-Null
+}
+
+if ($FilteredArgs.Count -eq 0) {
   rojo syncback --non-interactive --input $ProjectRbxl $ProjectJsonFile
 } else {
-  rojo syncback @args --input $ProjectRbxl $ProjectJsonFile
+  rojo syncback --non-interactive @FilteredArgs --input $ProjectRbxl $ProjectJsonFile
+}
+
+# Stage all changes
+if ($DoClean) {
+  Write-Host "Running git add..."
+  git add .
 }
