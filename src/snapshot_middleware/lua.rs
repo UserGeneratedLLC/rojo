@@ -159,11 +159,20 @@ pub fn syncback_lua<'sync>(
 
         if !meta.is_empty() {
             let parent_location = snapshot.path.parent_err()?;
-            let meta_name = if snapshot.encode_windows_invalid_chars() {
-                encode_path_name(&new_inst.name)
-            } else {
-                new_inst.name.clone()
-            };
+            // Use the file stem from the script path (e.g., "Foo.server" from "Foo.server.luau")
+            // to match how AdjacentMetadata::read_and_apply_all looks for meta files.
+            let meta_name = snapshot
+                .path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| {
+                    if snapshot.encode_windows_invalid_chars() {
+                        encode_path_name(&new_inst.name)
+                    } else {
+                        new_inst.name.clone()
+                    }
+                });
             fs_snapshot.add_file(
                 parent_location.join(format!("{}.meta.json", meta_name)),
                 crate::json::to_vec_pretty_sorted(&meta).context("cannot serialize metadata")?,
