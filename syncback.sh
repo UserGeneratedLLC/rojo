@@ -55,4 +55,5 @@ fi
 if [ "$DoClean" = true ]; then
   echo "Running git add..."
   git add .
+  git add --renormalize .
 fi

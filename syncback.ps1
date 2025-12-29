@@ -59,4 +59,5 @@ if ($FilteredArgs.Count -eq 0) {
 if ($DoClean) {
   Write-Host "Running git add..."
   git add .
+  git add --renormalize .
 }
