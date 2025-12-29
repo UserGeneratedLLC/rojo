@@ -9,6 +9,8 @@ use crate::{
     syncback::{FsSnapshot, SyncbackReturn, SyncbackSnapshot},
 };
 
+use super::rbxm::clone_tree_filtered;
+
 pub fn snapshot_rbxmx(
     context: &InstanceContext,
     vfs: &Vfs,
@@ -49,20 +51,39 @@ pub fn syncback_rbxmx<'sync>(
     snapshot: &SyncbackSnapshot<'sync>,
 ) -> anyhow::Result<SyncbackReturn<'sync>> {
     let inst = snapshot.new_inst();
+    let tree_globs = snapshot.compile_tree_globs();
 
     let options =
         EncodeOptions::new().property_behavior(rbx_xml::EncodePropertyBehavior::WriteUnknown);
 
-    // Long-term, we probably want to have some logic for if this contains a
-    // script. That's a future endeavor though.
-    let mut serialized = Vec::new();
-    rbx_xml::to_writer(
-        &mut serialized,
-        snapshot.new_tree(),
-        &[inst.referent()],
-        options,
-    )
-    .context("failed to serialize new rbxmx")?;
+    // If we have ignoreTrees patterns, filter the tree before serialization
+    let serialized = if tree_globs.is_empty() {
+        let mut serialized = Vec::new();
+        rbx_xml::to_writer(
+            &mut serialized,
+            snapshot.new_tree(),
+            &[inst.referent()],
+            options,
+        )
+        .context("failed to serialize new rbxmx")?;
+        serialized
+    } else {
+        // Clone the subtree, filtering out ignored instances
+        let filtered_tree = clone_tree_filtered(
+            snapshot.new_tree(),
+            inst.referent(),
+            &tree_globs,
+        );
+        let mut serialized = Vec::new();
+        rbx_xml::to_writer(
+            &mut serialized,
+            &filtered_tree,
+            &[filtered_tree.root_ref()],
+            options,
+        )
+        .context("failed to serialize filtered rbxmx")?;
+        serialized
+    };
 
     Ok(SyncbackReturn {
         fs_snapshot: FsSnapshot::new().with_added_file(&snapshot.path, serialized),

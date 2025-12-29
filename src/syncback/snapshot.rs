@@ -3,6 +3,7 @@ use memofs::Vfs;
 use std::path::{Path, PathBuf};
 
 use crate::{
+    glob::Glob,
     snapshot::{InstanceWithMeta, RojoTree},
     snapshot_middleware::Middleware,
     Project,
@@ -239,18 +240,53 @@ impl<'sync> SyncbackSnapshot<'sync> {
 
     /// Checks if an instance should be ignored based on ignoreTrees rules.
     /// Takes a Ref to check against the new tree's instance path.
+    /// Supports glob patterns like `**/Abc/Script`.
     #[inline]
     pub fn should_ignore_tree(&self, referent: Ref) -> bool {
         if let Some(ignore_trees) = self.ignore_tree() {
             let path = inst_path(self.new_tree(), referent);
-            for ignored in ignore_trees {
-                if path.starts_with(ignored.as_str()) {
-                    log::debug!("Ignoring {path} because it matches ignoreTrees entry: {ignored}");
+            for pattern in ignore_trees {
+                // Try glob matching first, fall back to prefix matching for backwards compatibility
+                if let Ok(glob) = Glob::new(pattern) {
+                    if glob.is_match(&path) {
+                        log::debug!("Ignoring {path} because it matches ignoreTrees glob: {pattern}");
+                        return true;
+                    }
+                } else if path.starts_with(pattern.as_str()) {
+                    log::debug!("Ignoring {path} because it matches ignoreTrees prefix: {pattern}");
                     return true;
                 }
             }
         }
         false
+    }
+
+    /// Checks if an instance should be ignored using pre-compiled globs.
+    /// More efficient when checking many instances against the same patterns.
+    #[inline]
+    pub fn should_ignore_tree_with_globs(&self, referent: Ref, globs: &[Glob]) -> bool {
+        if globs.is_empty() {
+            return false;
+        }
+        let path = inst_path(self.new_tree(), referent);
+        for glob in globs {
+            if glob.is_match(&path) {
+                log::debug!("Ignoring {path} because it matches ignoreTrees glob pattern");
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Compiles the ignoreTrees patterns into globs.
+    /// Returns an empty Vec if no patterns are configured.
+    pub fn compile_tree_globs(&self) -> Vec<Glob> {
+        self.data
+            .project
+            .syncback_rules
+            .as_ref()
+            .and_then(|rules| rules.compile_tree_globs().ok())
+            .unwrap_or_default()
     }
 
     /// Returns whether Windows-invalid characters should be encoded in file

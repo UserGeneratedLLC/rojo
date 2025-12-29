@@ -2,10 +2,12 @@ use std::path::Path;
 
 use anyhow::Context;
 use memofs::Vfs;
+use rbx_dom_weak::{types::Ref, InstanceBuilder, WeakDom};
 
 use crate::{
+    glob::Glob,
     snapshot::{InstanceContext, InstanceMetadata, InstanceSnapshot},
-    syncback::{FsSnapshot, SyncbackReturn, SyncbackSnapshot},
+    syncback::{inst_path, FsSnapshot, SyncbackReturn, SyncbackSnapshot},
 };
 
 #[profiling::function]
@@ -46,18 +48,81 @@ pub fn syncback_rbxm<'sync>(
     snapshot: &SyncbackSnapshot<'sync>,
 ) -> anyhow::Result<SyncbackReturn<'sync>> {
     let inst = snapshot.new_inst();
+    let tree_globs = snapshot.compile_tree_globs();
 
-    // Long-term, we probably want to have some logic for if this contains a
-    // script. That's a future endeavor though.
-    let mut serialized = Vec::new();
-    rbx_binary::to_writer(&mut serialized, snapshot.new_tree(), &[inst.referent()])
-        .context("failed to serialize new rbxm")?;
+    // If we have ignoreTrees patterns, filter the tree before serialization
+    let serialized = if tree_globs.is_empty() {
+        let mut serialized = Vec::new();
+        rbx_binary::to_writer(&mut serialized, snapshot.new_tree(), &[inst.referent()])
+            .context("failed to serialize new rbxm")?;
+        serialized
+    } else {
+        // Clone the subtree, filtering out ignored instances
+        let filtered_tree = clone_tree_filtered(
+            snapshot.new_tree(),
+            inst.referent(),
+            &tree_globs,
+        );
+        let mut serialized = Vec::new();
+        rbx_binary::to_writer(&mut serialized, &filtered_tree, &[filtered_tree.root_ref()])
+            .context("failed to serialize filtered rbxm")?;
+        serialized
+    };
 
     Ok(SyncbackReturn {
         fs_snapshot: FsSnapshot::new().with_added_file(&snapshot.path, serialized),
         children: Vec::new(),
         removed_children: Vec::new(),
     })
+}
+
+/// Clones a subtree from the source WeakDom, filtering out instances that match
+/// the provided ignoreTrees glob patterns.
+pub fn clone_tree_filtered(source: &WeakDom, root_ref: Ref, ignore_globs: &[Glob]) -> WeakDom {
+    let root_inst = source.get_by_ref(root_ref).expect("root ref should exist");
+
+    // Create a new tree with the root instance
+    let mut builder = InstanceBuilder::new(root_inst.class)
+        .with_name(root_inst.name.clone())
+        .with_properties(root_inst.properties.clone());
+
+    // Recursively add children, filtering out ignored ones
+    add_children_filtered(source, root_ref, &mut builder, ignore_globs);
+
+    WeakDom::new(builder)
+}
+
+/// Recursively adds children to an InstanceBuilder, filtering out ignored instances.
+fn add_children_filtered(
+    source: &WeakDom,
+    parent_ref: Ref,
+    builder: &mut InstanceBuilder,
+    ignore_globs: &[Glob],
+) {
+    let parent = source.get_by_ref(parent_ref).expect("parent ref should exist");
+
+    for &child_ref in parent.children() {
+        let child_path = inst_path(source, child_ref);
+
+        // Check if this child should be ignored
+        let should_ignore = ignore_globs.iter().any(|glob| glob.is_match(&child_path));
+
+        if should_ignore {
+            log::debug!("Filtering out {child_path} from rbxm due to ignoreTrees pattern");
+            continue;
+        }
+
+        let child = source.get_by_ref(child_ref).expect("child ref should exist");
+
+        let mut child_builder = InstanceBuilder::new(child.class)
+            .with_name(child.name.clone())
+            .with_properties(child.properties.clone());
+
+        // Recursively add this child's children
+        add_children_filtered(source, child_ref, &mut child_builder, ignore_globs);
+
+        builder.add_child(child_builder);
+    }
 }
 
 #[cfg(test)]

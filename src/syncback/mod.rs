@@ -32,7 +32,7 @@ pub use file_names::{extension_for_middleware, name_for_inst, validate_file_name
 pub use fs_snapshot::FsSnapshot;
 pub use hash::*;
 pub use property_filter::{filter_properties, filter_properties_preallocated};
-pub use snapshot::{SyncbackData, SyncbackSnapshot};
+pub use snapshot::{inst_path, SyncbackData, SyncbackSnapshot};
 
 /// The name of an enviroment variable to use to override the behavior of
 /// syncback on model files.
@@ -57,6 +57,12 @@ pub fn syncback_loop(
         .syncback_rules
         .as_ref()
         .map(|rules| rules.compile_globs())
+        .transpose()?;
+
+    let tree_globs = project
+        .syncback_rules
+        .as_ref()
+        .map(|rules| rules.compile_tree_globs())
         .transpose()?;
 
     // TODO: Add a better way to tell if the root of a project is a directory
@@ -187,11 +193,11 @@ pub fn syncback_loop(
             log::debug!("Skipping {inst_path} because its path matches ignore pattern");
             continue;
         }
-        if let Some(syncback_rules) = &project.syncback_rules {
-            // Ignore trees;
-            for ignored in &syncback_rules.ignore_trees {
-                if inst_path.starts_with(ignored.as_str()) {
-                    log::debug!("Tree {inst_path} is blocked by project");
+        // Check ignoreTrees with glob pattern support
+        if let Some(ref globs) = tree_globs {
+            for glob in globs {
+                if glob.is_match(&inst_path) {
+                    log::debug!("Tree {inst_path} is blocked by ignoreTrees glob pattern");
                     continue 'syncback;
                 }
             }
@@ -261,10 +267,11 @@ pub fn syncback_loop(
                     );
                     continue;
                 }
-                if let Some(syncback_rules) = &project.syncback_rules {
-                    for ignored in &syncback_rules.ignore_trees {
-                        if inst_path.starts_with(ignored.as_str()) {
-                            log::debug!("Skipping removing {inst_path} because its path is blocked by project");
+                // Check ignoreTrees with glob pattern support
+                if let Some(ref globs) = tree_globs {
+                    for glob in globs {
+                        if glob.is_match(&inst_path) {
+                            log::debug!("Skipping removing {inst_path} because its path is blocked by ignoreTrees glob pattern");
                             continue 'remove;
                         }
                     }
@@ -434,6 +441,20 @@ impl SyncbackRules {
                     }
                 }
             }
+        }
+
+        Ok(globs)
+    }
+
+    /// Compiles the ignoreTrees patterns into glob matchers.
+    /// Supports glob patterns like `**/Abc/Script` for flexible matching.
+    pub fn compile_tree_globs(&self) -> anyhow::Result<Vec<Glob>> {
+        let mut globs = Vec::with_capacity(self.ignore_trees.len());
+
+        for pattern in &self.ignore_trees {
+            let glob = Glob::new(pattern)
+                .with_context(|| format!("the pattern '{pattern}' is not a valid ignoreTrees glob"))?;
+            globs.push(glob);
         }
 
         Ok(globs)
