@@ -20,7 +20,7 @@ use crate::{
         PathIgnoreRule, SyncRule,
     },
     snapshot_middleware::Middleware,
-    syncback::{filter_properties, FsSnapshot, SyncbackReturn, SyncbackSnapshot},
+    syncback::{filter_properties, inst_path, FsSnapshot, SyncbackReturn, SyncbackSnapshot},
     variant_eq::variant_eq,
     RojoRef,
 };
@@ -413,9 +413,11 @@ pub fn syncback_project<'sync>(
                 .get_new_instance(*child_ref)
                 .expect("all children of Instances should be in new DOM");
             if new_child_map.insert(&child.name, child).is_some() {
+                let parent_path = inst_path(snapshot.new_tree(), new_inst.referent());
                 anyhow::bail!(
                     "Instances that are direct children of an Instance that is made by a project file \
-                    must have a unique name.\nThe child '{}' of '{}' is duplicated in the place file.", child.name, old_inst.name()
+                    must have a unique name.\nThe child '{}' is duplicated in the place file.\n\
+                    Full path: {}/{}", child.name, parent_path, child.name
                 );
             }
         }
@@ -424,9 +426,11 @@ pub fn syncback_project<'sync>(
                 .get_old_instance(*child_ref)
                 .expect("all children of Instances should be in old DOM");
             if old_child_map.insert(child.name(), child).is_some() {
+                let parent_path = inst_path(snapshot.old_tree(), old_inst.id());
                 anyhow::bail!(
                     "Instances that are direct children of an Instance that is made by a project file \
-                    must have a unique name.\nThe child '{}' of '{}' is duplicated on the file system.", child.name(), old_inst.name()
+                    must have a unique name.\nThe child '{}' is duplicated on the file system.\n\
+                    Full path: {}/{}", child.name(), parent_path, child.name()
                 );
             }
         }
