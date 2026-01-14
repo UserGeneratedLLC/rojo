@@ -173,6 +173,8 @@ function StudioProvider:updateTheme()
 
 			Row = studioTheme:GetColor(Enum.StudioStyleGuideColor.BrightText),
 			Warning = studioTheme:GetColor(Enum.StudioStyleGuideColor.WarningText),
+			WhitespaceOnly = if isDark then Color3.fromRGB(140, 140, 140) else Color3.fromRGB(110, 110, 110),
+			Changes = if isDark then Color3.fromRGB(100, 140, 220) else Color3.fromRGB(40, 100, 180),
 
 			Background = {
 				-- Studio doesn't have good colors since their diffs use backgrounds, not text

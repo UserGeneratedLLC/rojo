@@ -13,6 +13,7 @@ local Log = require(Packages.Log)
 
 local Timer = require(Plugin.Timer)
 local Types = require(Plugin.Types)
+local WhitespaceUtil = require(Plugin.WhitespaceUtil)
 local decodeValue = require(Plugin.Reconciler.decodeValue)
 local getProperty = require(Plugin.Reconciler.getProperty)
 
@@ -237,13 +238,16 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 
 		-- Gather detail text
 		local changeList, changeInfo = nil, nil
+		local totalLineChanges = 0
+		local whitespaceLineChanges = 0
+		local hasSourceChange = false
 		if next(change.changedProperties) or change.changedName then
 			changeList = {}
 
 			local changeIndex = 0
-			local function addProp(prop: string, current: any?, incoming: any?, metadata: any?)
+			local function addProp(prop: string, current: any?, incoming: any?)
 				changeIndex += 1
-				changeList[changeIndex] = { prop, current, incoming, metadata }
+				changeList[changeIndex] = { prop, current, incoming }
 			end
 
 			-- Gather the changes
@@ -256,6 +260,12 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 				local incomingSuccess, incomingValue = decodeValue(incoming, instanceMap)
 				local currentSuccess, currentValue = getProperty(instance, prop)
 
+				-- Check if this is a Source property - count line differences
+				if prop == "Source" and currentSuccess and incomingSuccess then
+					hasSourceChange = true
+					totalLineChanges, whitespaceLineChanges = WhitespaceUtil.CountLineDifferences(currentValue, incomingValue)
+				end
+
 				addProp(
 					prop,
 					if currentSuccess then currentValue else "[Error]",
@@ -263,8 +273,15 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 				)
 			end
 
+			-- Count non-Source property changes
+			local propCount = changeIndex - (if hasSourceChange then 1 else 0)
+
 			changeInfo = {
-				edits = changeIndex,
+				-- Line changes for Source (nil if no Source change)
+				lineChanges = if hasSourceChange and totalLineChanges > 0 then totalLineChanges else nil,
+				isWhitespaceOnly = hasSourceChange and totalLineChanges > 0 and totalLineChanges == whitespaceLineChanges,
+				-- Property changes (non-Source: Name, Attributes, etc.)
+				propChanges = if propCount > 0 then propCount else nil,
 			}
 
 			-- Sort changes and add header

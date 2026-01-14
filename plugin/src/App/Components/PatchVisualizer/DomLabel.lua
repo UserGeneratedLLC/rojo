@@ -17,6 +17,40 @@ local ChangeList = require(script.Parent.ChangeList)
 local Tooltip = require(Plugin.App.Components.Tooltip)
 local ClassIcon = require(Plugin.App.Components.ClassIcon)
 
+local function ChangeTag(props)
+	return Theme.with(function(theme)
+		local tagColor = props.color or theme.SubTextColor
+		return e("Frame", {
+			Size = UDim2.new(0, 0, 0, 16),
+			AutomaticSize = Enum.AutomaticSize.X,
+			BackgroundColor3 = tagColor,
+			BackgroundTransparency = props.transparency:map(function(t)
+				return 0.85 + (0.15 * t)
+			end),
+			LayoutOrder = props.layoutOrder or 1,
+		}, {
+			Corner = e("UICorner", {
+				CornerRadius = UDim.new(0, 3),
+			}),
+			Padding = e("UIPadding", {
+				PaddingLeft = UDim.new(0, 5),
+				PaddingRight = UDim.new(0, 5),
+			}),
+			Label = e("TextLabel", {
+				Text = props.text,
+				BackgroundTransparency = 1,
+				FontFace = theme.Font.Thin,
+				TextSize = theme.TextSize.Small,
+				TextColor3 = tagColor,
+				TextXAlignment = Enum.TextXAlignment.Center,
+				TextTransparency = props.transparency,
+				Size = UDim2.new(0, 0, 1, 0),
+				AutomaticSize = Enum.AutomaticSize.X,
+			}),
+		})
+	end)
+end
+
 local Expansion = Roact.Component:extend("Expansion")
 
 function Expansion:render()
@@ -247,30 +281,31 @@ function DomLabel:render()
 					SortOrder = Enum.SortOrder.LayoutOrder,
 					Padding = UDim.new(0, 4),
 				}),
-				Edits = if props.changeInfo and props.changeInfo.edits
-					then e("TextLabel", {
-						Text = props.changeInfo.edits .. if props.changeInfo.failed then "," else "",
-						BackgroundTransparency = 1,
-						FontFace = theme.Font.Thin,
-						TextSize = theme.TextSize.Body,
-						TextColor3 = theme.SubTextColor,
-						TextTransparency = props.transparency,
-						Size = UDim2.new(0, 0, 0, theme.TextSize.Body),
-						AutomaticSize = Enum.AutomaticSize.X,
-						LayoutOrder = 2,
+				LinesTag = if props.changeInfo and props.changeInfo.lineChanges
+					then e(ChangeTag, {
+						text = (if props.changeInfo.isWhitespaceOnly then "Whitespace " else "Lines ")
+							.. (if props.changeInfo.lineChanges >= 10000 then "100+" else props.changeInfo.lineChanges),
+						color = if props.changeInfo.isWhitespaceOnly
+							then theme.Diff.WhitespaceOnly
+							else theme.Diff.Changes,
+						transparency = props.transparency,
+						layoutOrder = 1,
+					})
+					else nil,
+				PropsTag = if props.changeInfo and props.changeInfo.propChanges
+					then e(ChangeTag, {
+						text = "Props " .. props.changeInfo.propChanges,
+						color = theme.Diff.Changes or theme.Diff.Background.Edit,
+						transparency = props.transparency,
+						layoutOrder = 2,
 					})
 					else nil,
 				Failed = if props.changeInfo and props.changeInfo.failed
-					then e("TextLabel", {
-						Text = props.changeInfo.failed,
-						BackgroundTransparency = 1,
-						FontFace = theme.Font.Thin,
-						TextSize = theme.TextSize.Body,
-						TextColor3 = theme.Diff.Warning,
-						TextTransparency = props.transparency,
-						Size = UDim2.new(0, 0, 0, theme.TextSize.Body),
-						AutomaticSize = Enum.AutomaticSize.X,
-						LayoutOrder = 6,
+					then e(ChangeTag, {
+						text = "Failed " .. props.changeInfo.failed,
+						color = theme.Diff.Warning,
+						transparency = props.transparency,
+						layoutOrder = 3,
 					})
 					else nil,
 			}),
