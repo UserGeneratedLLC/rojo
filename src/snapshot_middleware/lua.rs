@@ -159,20 +159,28 @@ pub fn syncback_lua<'sync>(
 
         if !meta.is_empty() {
             let parent_location = snapshot.path.parent_err()?;
-            // Use the file stem from the script path (e.g., "Foo.server" from "Foo.server.luau")
-            // to match how AdjacentMetadata::read_and_apply_all looks for meta files.
-            let meta_name = snapshot
+            // Use the base name from the script path, stripping the script type suffix
+            // (e.g., "Foo" from "Foo.server.luau") to match how AdjacentMetadata::read_and_apply_all
+            // looks for meta files.
+            let file_stem = snapshot
                 .path
                 .file_stem()
                 .and_then(|s| s.to_str())
-                .map(|s| s.to_string())
-                .unwrap_or_else(|| {
-                    if snapshot.encode_windows_invalid_chars() {
-                        encode_path_name(&new_inst.name)
-                    } else {
-                        new_inst.name.clone()
-                    }
-                });
+                .unwrap_or("");
+            let meta_name = file_stem
+                .strip_suffix(".server")
+                .or_else(|| file_stem.strip_suffix(".client"))
+                .or_else(|| file_stem.strip_suffix(".plugin"))
+                .unwrap_or(file_stem);
+            let meta_name = if meta_name.is_empty() {
+                if snapshot.encode_windows_invalid_chars() {
+                    encode_path_name(&new_inst.name)
+                } else {
+                    new_inst.name.clone()
+                }
+            } else {
+                meta_name.to_string()
+            };
             fs_snapshot.add_file(
                 parent_location.join(format!("{}.meta.json", meta_name)),
                 crate::json::to_vec_pretty_sorted(&meta).context("cannot serialize metadata")?,
