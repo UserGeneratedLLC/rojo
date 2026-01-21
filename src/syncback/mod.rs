@@ -325,6 +325,31 @@ pub fn get_best_middleware(snapshot: &SyncbackSnapshot) -> Middleware {
             "ChatInputBarConfiguration",
             "BubbleChatConfiguration",
             "ChannelTabsConfiguration",
+            // GUI elements
+            "Frame",
+            "TextLabel",
+            "ImageLabel",
+            "TextButton",
+            "ImageButton",
+            "TextBox",
+            "ScrollingFrame",
+            "ViewportFrame",
+            "VideoFrame",
+            "CanvasGroup",
+            // UI layout/constraint classes
+            "UIListLayout",
+            "UIGridLayout",
+            "UITableLayout",
+            "UIPageLayout",
+            "UIFlexItem",
+            "UIPadding",
+            "UICorner",
+            "UIStroke",
+            "UIGradient",
+            "UIScale",
+            "UISizeConstraint",
+            "UITextSizeConstraint",
+            "UIAspectRatioConstraint",
         ]
         .into()
     });
