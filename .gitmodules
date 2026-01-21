@@ -16,3 +16,6 @@
 [submodule "plugin/Packages/Highlighter"]
 	path = plugin/Packages/Highlighter
 	url = https://github.com/boatbomber/highlighter.git
+[submodule "rbx-dom"]
+	path = rbx-dom
+	url = git@github.com:UserGeneratedLLC/rbx-dom.git

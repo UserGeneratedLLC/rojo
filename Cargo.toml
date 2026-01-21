@@ -48,12 +48,12 @@ harness = false
 [dependencies]
 memofs = { version = "0.3.1", path = "crates/memofs" }
 
-# rbx-dom dependencies (from fork, use [patch] section at bottom for local dev)
-rbx_binary = { git = "https://github.com/UserGeneratedLLC/rbx-dom", features = ["unstable_text_format"] }
-rbx_dom_weak = { git = "https://github.com/UserGeneratedLLC/rbx-dom" }
-rbx_reflection = { git = "https://github.com/UserGeneratedLLC/rbx-dom" }
-rbx_reflection_database = { git = "https://github.com/UserGeneratedLLC/rbx-dom" }
-rbx_xml = { git = "https://github.com/UserGeneratedLLC/rbx-dom" }
+# rbx-dom dependencies (local submodule)
+rbx_binary = { path = "rbx-dom/rbx_binary", features = ["unstable_text_format"] }
+rbx_dom_weak = { path = "rbx-dom/rbx_dom_weak" }
+rbx_reflection = { path = "rbx-dom/rbx_reflection" }
+rbx_reflection_database = { path = "rbx-dom/rbx_reflection_database" }
+rbx_xml = { path = "rbx-dom/rbx_xml" }
 
 anyhow = "1.0.80"
 backtrace = "0.3.69"
@@ -120,11 +120,3 @@ pretty_assertions = "1.4.0"
 serde_yaml = "0.8.26"
 tempfile = "3.10.1"
 walkdir = "2.5.0"
-
-# Uncomment for local development with rbx-dom
-# [patch.'https://github.com/UserGeneratedLLC/rbx-dom']
-# rbx_binary = { path = "../rbx-dom/rbx_binary" }
-# rbx_dom_weak = { path = "../rbx-dom/rbx_dom_weak" }
-# rbx_reflection = { path = "../rbx-dom/rbx_reflection" }
-# rbx_reflection_database = { path = "../rbx-dom/rbx_reflection_database" }
-# rbx_xml = { path = "../rbx-dom/rbx_xml" }
