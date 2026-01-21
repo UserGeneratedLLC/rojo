@@ -11,6 +11,7 @@ local Packages = Rojo.Packages
 
 local Log = require(Packages.Log)
 
+local Config = require(Plugin.Config)
 local Timer = require(Plugin.Timer)
 local Types = require(Plugin.Types)
 local WhitespaceUtil = require(Plugin.WhitespaceUtil)
@@ -335,8 +336,8 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 			continue
 		end
 
-		-- Skip TouchTransmitter (auto-created by Roblox when touch events are connected)
-		if instance.ClassName == "TouchTransmitter" then
+		-- Skip auto-created instances that shouldn't be synced
+		if Config.ignoredClassNames[instance.ClassName] then
 			continue
 		end
 

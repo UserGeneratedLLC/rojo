@@ -16,6 +16,12 @@ for i = 1, 3 do
 	end
 end
 
+-- ClassNames to ignore during sync (auto-created by Roblox, not meaningful for sync)
+local IgnoredClassNames = {
+	TouchTransmitter = true,
+	Camera = true,
+}
+
 return strict("Config", {
 	isDevBuild = isDevBuild,
 	codename = "Epiphany",
@@ -24,4 +30,5 @@ return strict("Config", {
 	protocolVersion = 5,
 	defaultHost = "localhost",
 	defaultPort = "34872",
+	ignoredClassNames = IgnoredClassNames,
 })

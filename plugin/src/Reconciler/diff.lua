@@ -6,6 +6,7 @@
 local Packages = script.Parent.Parent.Parent.Packages
 local Log = require(Packages.Log)
 
+local Config = require(script.Parent.Parent.Config)
 local invariant = require(script.Parent.Parent.invariant)
 local getProperty = require(script.Parent.getProperty)
 local Error = require(script.Parent.Error)
@@ -335,8 +336,8 @@ local function diff(instanceMap, virtualInstances, rootId)
 		-- corresponding virtual instance should be removed. Any instance that
 		-- does have a corresponding virtual instance is recursively diffed.
 		for _, childInstance in ipairs(instance:GetChildren()) do
-			-- Skip TouchTransmitter (auto-created by Roblox when touch events are connected)
-			if childInstance.ClassName == "TouchTransmitter" then
+			-- Skip auto-created instances that shouldn't be synced
+			if Config.ignoredClassNames[childInstance.ClassName] then
 				continue
 			end
 

@@ -8,6 +8,7 @@
 local Packages = script.Parent.Parent.Parent.Packages
 local Log = require(Packages.Log)
 
+local Config = require(script.Parent.Parent.Config)
 local PatchSet = require(script.Parent.Parent.PatchSet)
 local Types = require(script.Parent.Parent.Types)
 local invariant = require(script.Parent.Parent.invariant)
@@ -27,9 +28,9 @@ local function applyPatch(instanceMap, patch)
 	local deferredRefs = {}
 
 	for _, removedIdOrInstance in ipairs(patch.removed) do
-		-- Skip TouchTransmitter (auto-created by Roblox when touch events are connected)
+		-- Skip auto-created instances that shouldn't be synced
 		local instance = if Types.RbxId(removedIdOrInstance) then instanceMap.fromIds[removedIdOrInstance] else removedIdOrInstance
-		if instance and instance.ClassName == "TouchTransmitter" then
+		if instance and Config.ignoredClassNames[instance.ClassName] then
 			continue
 		end
 
