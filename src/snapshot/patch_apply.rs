@@ -14,7 +14,10 @@ use super::{
     patch::{AppliedPatchSet, AppliedPatchUpdate, PatchSet, PatchUpdate},
     InstanceSnapshot, RojoTree,
 };
-use crate::{multimap::MultiMap, RojoRef, REF_ID_ATTRIBUTE_NAME, REF_POINTER_ATTRIBUTE_PREFIX};
+use crate::{
+    multimap::MultiMap, RojoRef, REF_EXTERNAL_ATTRIBUTE_PREFIX, REF_ID_ATTRIBUTE_NAME,
+    REF_POINTER_ATTRIBUTE_PREFIX,
+};
 
 /// Consumes the input `PatchSet`, applying all of its prescribed changes to the
 /// tree and returns an `AppliedPatchSet`, which can be used to keep another
@@ -81,6 +84,10 @@ struct PatchApplyContext {
     /// properties.
     attribute_refs_to_rewrite: MultiMap<Ref, (Ustr, String)>,
 
+    /// Tracks external ref properties (references to instances outside the sync
+    /// tree, like SoundGroups in SoundService). These are stored as paths.
+    external_refs_to_rewrite: MultiMap<Ref, (Ustr, String)>,
+
     /// The current applied patch result, describing changes made to the tree.
     applied_patch_set: AppliedPatchSet,
 }
@@ -127,6 +134,34 @@ fn finalize_patch_application(context: PatchApplyContext, tree: &mut RojoTree) -
             .get_instance_mut(id)
             .expect("Invalid instance ID in deferred attribute ref map");
         instance.properties_mut().extend(real_rewrites.drain(..));
+    }
+
+    // Handle external path-based references (e.g., SoundGroup pointing to SoundService)
+    let mut external_rewrites = Vec::new();
+    for (id, map) in context.external_refs_to_rewrite {
+        for (prop_name, path) in map {
+            if let Some(target) = tree.get_instance_by_path(&path) {
+                log::debug!(
+                    "Resolved external reference {} -> {} (path: {})",
+                    prop_name,
+                    target,
+                    path
+                );
+                external_rewrites.push((prop_name, Variant::Ref(target)));
+            } else {
+                log::debug!(
+                    "Could not resolve external reference {} at path '{}' - instance not found in tree",
+                    prop_name,
+                    path
+                );
+            }
+        }
+        if !external_rewrites.is_empty() {
+            let mut instance = tree
+                .get_instance_mut(id)
+                .expect("Invalid instance ID in deferred external ref map");
+            instance.properties_mut().extend(external_rewrites.drain(..));
+        }
     }
 
     context.applied_patch_set
@@ -286,6 +321,30 @@ fn defer_ref_properties(tree: &mut RojoTree, id: Ref, context: &mut PatchApplyCo
                         .insert(id, (ustr(prop_name), str.to_string()));
                 } else {
                     log::error!("IDs specified by referent property attributes must be valid UTF-8 strings.")
+                }
+            } else {
+                log::warn!(
+                    "Attribute {attr_name} is of type {:?} when it was \
+                    expected to be a String",
+                    attr_value.ty()
+                )
+            }
+        }
+        // Handle external path-based references (for instances outside the sync tree)
+        if let Some(prop_name) = attr_name.strip_prefix(REF_EXTERNAL_ATTRIBUTE_PREFIX) {
+            if let Variant::String(path) = attr_value {
+                context
+                    .external_refs_to_rewrite
+                    .insert(id, (ustr(prop_name), path.clone()));
+            } else if let Variant::BinaryString(path) = attr_value {
+                if let Ok(str) = std::str::from_utf8(path.as_ref()) {
+                    context
+                        .external_refs_to_rewrite
+                        .insert(id, (ustr(prop_name), str.to_string()));
+                } else {
+                    log::error!(
+                        "External paths specified by referent property attributes must be valid UTF-8 strings."
+                    )
                 }
             } else {
                 log::warn!(

@@ -9,13 +9,15 @@ use rbx_dom_weak::{
 };
 
 use crate::{
-    multimap::MultiMap, syncback::snapshot::inst_path, REF_ID_ATTRIBUTE_NAME,
-    REF_POINTER_ATTRIBUTE_PREFIX,
+    multimap::MultiMap, syncback::snapshot::inst_path, REF_EXTERNAL_ATTRIBUTE_PREFIX,
+    REF_ID_ATTRIBUTE_NAME, REF_POINTER_ATTRIBUTE_PREFIX,
 };
 
 pub struct RefLinks {
     /// A map of referents to each of their Ref properties.
     prop_links: MultiMap<Ref, RefLink>,
+    /// A map of referents to external ref properties (ones pointing outside the tree).
+    external_links: MultiMap<Ref, ExternalRefLink>,
     /// A set of referents that need their ID rewritten. This includes
     /// Instances that have no existing ID.
     need_rewrite: HashSet<Ref>,
@@ -29,13 +31,42 @@ struct RefLink {
     value: Ref,
 }
 
+#[derive(PartialEq, Eq)]
+struct ExternalRefLink {
+    /// The name of a property
+    name: Ustr,
+    /// The path to the external instance.
+    path: String,
+}
+
+/// Collects all instance paths in a WeakDom before any pruning occurs.
+/// Returns a map of Ref -> path for all instances.
+pub fn collect_all_paths(dom: &WeakDom) -> HashMap<Ref, String> {
+    let mut paths = HashMap::new();
+    let mut queue = VecDeque::new();
+    queue.push_back(dom.root_ref());
+
+    while let Some(inst_ref) = queue.pop_front() {
+        let inst = dom.get_by_ref(inst_ref).unwrap();
+        queue.extend(inst.children().iter().copied());
+        paths.insert(inst_ref, inst_path(dom, inst_ref));
+    }
+
+    paths
+}
+
 /// Iterates through a WeakDom and collects referent properties.
 ///
 /// They can be linked to a dom later using `link_referents`.
-pub fn collect_referents(dom: &WeakDom) -> RefLinks {
+///
+/// The `pre_prune_paths` parameter should contain paths for instances that may
+/// have been pruned from the DOM. This allows external references (references
+/// to instances outside the sync tree) to be preserved as path-based attributes.
+pub fn collect_referents(dom: &WeakDom, pre_prune_paths: &HashMap<Ref, String>) -> RefLinks {
     let mut ids = HashMap::new();
     let mut need_rewrite = HashSet::new();
     let mut links = MultiMap::new();
+    let mut external_links = MultiMap::new();
 
     // Note that this is back-in, front-out. This is important because
     // VecDeque::extend is the equivalent to using push_back.
@@ -56,15 +87,31 @@ pub fn collect_referents(dom: &WeakDom) -> RefLinks {
             let target = match dom.get_by_ref(*prop_value) {
                 Some(inst) => inst,
                 None => {
-                    // Properties that are Some but point to nothing may as
-                    // well be `nil`. Roblox and us never produce these values
-                    // but syncback prunes trees without adjusting ref
-                    // properties for performance reasons.
-                    log::warn!(
-                        "Property {}.{} will be `nil` on the disk because the actual value is not being included in syncback",
-                        inst_path(dom, inst_ref),
-                        prop_name
-                    );
+                    // The target doesn't exist in the current DOM. Check if we
+                    // have its path from before pruning.
+                    if let Some(external_path) = pre_prune_paths.get(prop_value) {
+                        log::debug!(
+                            "Property {}.{} points to external instance at '{}', storing as path reference",
+                            inst_path(dom, inst_ref),
+                            prop_name,
+                            external_path
+                        );
+                        external_links.insert(
+                            inst_ref,
+                            ExternalRefLink {
+                                name: *prop_name,
+                                path: external_path.clone(),
+                            },
+                        );
+                    } else {
+                        // Properties that are Some but point to nothing may as
+                        // well be `nil`. This is a truly dangling reference.
+                        log::warn!(
+                            "Property {}.{} will be `nil` on the disk because the referenced instance does not exist",
+                            inst_path(dom, inst_ref),
+                            prop_name
+                        );
+                    }
                     continue;
                 }
             };
@@ -105,24 +152,46 @@ pub fn collect_referents(dom: &WeakDom) -> RefLinks {
     RefLinks {
         need_rewrite,
         prop_links: links,
+        external_links,
     }
 }
 
 pub fn link_referents(links: RefLinks, dom: &mut WeakDom) -> anyhow::Result<()> {
     write_id_attributes(&links, dom)?;
 
-    let mut prop_list = Vec::new();
+    // Convert MultiMaps to HashMaps for easier access
+    let prop_links: HashMap<Ref, Vec<RefLink>> = links.prop_links.into_iter().collect();
+    let external_links: HashMap<Ref, Vec<ExternalRefLink>> =
+        links.external_links.into_iter().collect();
 
-    for (inst_id, properties) in links.prop_links {
-        for ref_link in properties {
-            let prop_inst = match dom.get_by_ref(ref_link.value) {
-                Some(inst) => inst,
-                None => continue,
-            };
-            let id = get_existing_id(prop_inst)
-                .expect("all Instances that are pointed to should have an ID");
-            prop_list.push((ref_link.name, Variant::String(id.to_owned())));
+    // Collect all instance IDs that need attributes updated
+    let mut all_inst_ids: HashSet<Ref> = prop_links.keys().copied().collect();
+    all_inst_ids.extend(external_links.keys().copied());
+
+    let mut prop_list = Vec::new();
+    let mut external_prop_list = Vec::new();
+
+    for inst_id in all_inst_ids {
+        // Collect internal ref links
+        if let Some(properties) = prop_links.get(&inst_id) {
+            for ref_link in properties {
+                let prop_inst = match dom.get_by_ref(ref_link.value) {
+                    Some(inst) => inst,
+                    None => continue,
+                };
+                let id = get_existing_id(prop_inst)
+                    .expect("all Instances that are pointed to should have an ID");
+                prop_list.push((ref_link.name, Variant::String(id.to_owned())));
+            }
         }
+
+        // Collect external ref links
+        if let Some(external_properties) = external_links.get(&inst_id) {
+            for ext_link in external_properties {
+                external_prop_list.push((ext_link.name, Variant::String(ext_link.path.clone())));
+            }
+        }
+
         let inst = match dom.get_by_ref_mut(inst_id) {
             Some(inst) => inst,
             None => continue,
@@ -139,12 +208,24 @@ pub fn link_referents(links: RefLinks, dom: &mut WeakDom) -> anyhow::Result<()> 
             }
         }
         .into_iter()
-        .filter(|(name, _)| !name.starts_with(REF_POINTER_ATTRIBUTE_PREFIX))
+        .filter(|(name, _)| {
+            !name.starts_with(REF_POINTER_ATTRIBUTE_PREFIX)
+                && !name.starts_with(REF_EXTERNAL_ATTRIBUTE_PREFIX)
+        })
         .collect();
 
+        // Add internal ref pointers
         for (prop_name, prop_value) in prop_list.drain(..) {
             attributes.insert(
                 format!("{REF_POINTER_ATTRIBUTE_PREFIX}{prop_name}"),
+                prop_value,
+            );
+        }
+
+        // Add external ref pointers (path-based)
+        for (prop_name, prop_value) in external_prop_list.drain(..) {
+            attributes.insert(
+                format!("{REF_EXTERNAL_ATTRIBUTE_PREFIX}{prop_name}"),
                 prop_value,
             );
         }

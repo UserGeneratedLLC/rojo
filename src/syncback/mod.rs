@@ -14,7 +14,7 @@ use rbx_dom_weak::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashMap, VecDeque},
     env,
     path::Path,
     sync::OnceLock,
@@ -24,7 +24,7 @@ use crate::{
     glob::Glob,
     snapshot::{InstanceWithMeta, RojoTree},
     snapshot_middleware::Middleware,
-    syncback::ref_properties::{collect_referents, link_referents},
+    syncback::ref_properties::{collect_all_paths, collect_referents, link_referents},
     Project,
 };
 
@@ -65,6 +65,11 @@ pub fn syncback_loop(
         .map(|rules| rules.compile_tree_globs())
         .transpose()?;
 
+    // Collect all instance paths BEFORE pruning so we can track external references
+    // (references to instances that will be pruned, like SoundGroups in SoundService).
+    log::debug!("Collecting instance paths before pruning...");
+    let pre_prune_paths = collect_all_paths(&new_tree);
+
     // TODO: Add a better way to tell if the root of a project is a directory
     let skip_pruning = if let Some(path) = &project.tree.path {
         let middleware =
@@ -87,7 +92,7 @@ pub fn syncback_loop(
     }
 
     log::debug!("Collecting referents for new DOM...");
-    let deferred_referents = collect_referents(&new_tree);
+    let deferred_referents = collect_referents(&new_tree, &pre_prune_paths);
 
     // Remove any properties that are manually blocked from syncback via the
     // project file.

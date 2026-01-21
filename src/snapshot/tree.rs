@@ -231,6 +231,48 @@ impl RojoTree {
         self.specified_id_to_refs.insert(specified, id);
     }
 
+    /// Looks up an instance by its path in the tree (e.g., "SoundService/MySoundGroup").
+    /// The path is relative to the root of the tree, with segments separated by "/".
+    /// Returns the Ref if found, None otherwise.
+    pub fn get_instance_by_path(&self, path: &str) -> Option<Ref> {
+        if path.is_empty() {
+            return Some(self.get_root_id());
+        }
+
+        let segments: Vec<&str> = path.split('/').collect();
+        let mut current_ref = self.get_root_id();
+
+        // The root of the tree doesn't appear in the path, so we start with
+        // the root's children.
+        for (i, segment) in segments.iter().enumerate() {
+            let current = self.inner.get_by_ref(current_ref)?;
+
+            // For the first segment, check direct children of root
+            // For subsequent segments, check children of current
+            let children = if i == 0 {
+                current.children()
+            } else {
+                current.children()
+            };
+
+            let mut found = false;
+            for &child_ref in children {
+                let child = self.inner.get_by_ref(child_ref)?;
+                if child.name == *segment {
+                    current_ref = child_ref;
+                    found = true;
+                    break;
+                }
+            }
+
+            if !found {
+                return None;
+            }
+        }
+
+        Some(current_ref)
+    }
+
     fn insert_metadata(&mut self, id: Ref, metadata: InstanceMetadata) {
         for path in &metadata.relevant_paths {
             self.path_to_ids.insert(path.clone(), id);

@@ -4,6 +4,9 @@ use serde::{Deserialize, Serialize};
 
 pub const REF_ID_ATTRIBUTE_NAME: &str = "Rojo_Id";
 pub const REF_POINTER_ATTRIBUTE_PREFIX: &str = "Rojo_Target_";
+/// Prefix for attributes storing paths to external references (instances outside
+/// the sync tree, like SoundGroups in SoundService).
+pub const REF_EXTERNAL_ATTRIBUTE_PREFIX: &str = "Rojo_External_";
 
 // TODO add an internment strategy for RojoRefs
 // Something like what rbx-dom does for SharedStrings probably works
