@@ -263,7 +263,8 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 				-- Check if this is a Source property - count line differences
 				if prop == "Source" and currentSuccess and incomingSuccess then
 					hasSourceChange = true
-					totalLineChanges, whitespaceLineChanges = WhitespaceUtil.CountLineDifferences(currentValue, incomingValue)
+					totalLineChanges, whitespaceLineChanges =
+						WhitespaceUtil.CountLineDifferences(currentValue, incomingValue)
 				end
 
 				addProp(
@@ -279,7 +280,9 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 			changeInfo = {
 				-- Line changes for Source (nil if no Source change)
 				lineChanges = if hasSourceChange and totalLineChanges > 0 then totalLineChanges else nil,
-				isWhitespaceOnly = hasSourceChange and totalLineChanges > 0 and totalLineChanges == whitespaceLineChanges,
+				isWhitespaceOnly = hasSourceChange
+					and totalLineChanges > 0
+					and totalLineChanges == whitespaceLineChanges,
 				-- Property changes (non-Source: Name, Attributes, etc.)
 				propChanges = if propCount > 0 then propCount else nil,
 			}
