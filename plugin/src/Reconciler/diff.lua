@@ -43,7 +43,12 @@ local function findDuplicateNames(children: { Instance } | { string }, virtualIn
 end
 
 local function fuzzyEq(a: number, b: number, epsilon: number): boolean
-	return math.abs(a - b) < epsilon
+	local diff = math.abs(a - b)
+	-- Use both absolute and relative epsilon for better precision handling
+	-- Absolute: for small numbers near zero
+	-- Relative: for larger numbers where absolute epsilon is too tight
+	local maxVal = math.max(math.abs(a), math.abs(b), 1)
+	return diff < epsilon or diff < maxVal * epsilon
 end
 
 local function trueEquals(a, b): boolean
