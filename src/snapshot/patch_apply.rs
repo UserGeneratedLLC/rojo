@@ -160,7 +160,9 @@ fn finalize_patch_application(context: PatchApplyContext, tree: &mut RojoTree) -
             let mut instance = tree
                 .get_instance_mut(id)
                 .expect("Invalid instance ID in deferred external ref map");
-            instance.properties_mut().extend(external_rewrites.drain(..));
+            instance
+                .properties_mut()
+                .extend(external_rewrites.drain(..));
         }
     }
 
