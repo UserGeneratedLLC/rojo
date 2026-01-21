@@ -57,10 +57,7 @@ impl AdjacentMetadata {
         // when encodeWindowsInvalidChars is enabled.
         // Strip known script type suffixes (.server, .client, .plugin) to get
         // the base name for the meta file.
-        let file_stem = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
+        let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         let base_name = file_stem
             .strip_suffix(".server")
             .or_else(|| file_stem.strip_suffix(".client"))

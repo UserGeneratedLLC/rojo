@@ -69,11 +69,7 @@ pub fn syncback_rbxmx<'sync>(
         serialized
     } else {
         // Clone the subtree, filtering out ignored instances
-        let filtered_tree = clone_tree_filtered(
-            snapshot.new_tree(),
-            inst.referent(),
-            &tree_globs,
-        );
+        let filtered_tree = clone_tree_filtered(snapshot.new_tree(), inst.referent(), &tree_globs);
         let mut serialized = Vec::new();
         rbx_xml::to_writer(
             &mut serialized,

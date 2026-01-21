@@ -166,7 +166,6 @@ pub fn to_vec_pretty_sorted<T: Serialize>(value: &T) -> anyhow::Result<Vec<u8>> 
     serde_json::to_vec_pretty(&sorted_value).context("Failed to serialize to JSON")
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

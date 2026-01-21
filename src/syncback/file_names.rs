@@ -48,7 +48,10 @@ pub fn name_for_inst<'old>(
                     encoded
                 } else {
                     validate_file_name(&new_inst.name).with_context(|| {
-                        format!("name '{}' is not legal to write to the file system", new_inst.name)
+                        format!(
+                            "name '{}' is not legal to write to the file system",
+                            new_inst.name
+                        )
                     })?;
                     new_inst.name.clone()
                 };
@@ -65,7 +68,10 @@ pub fn name_for_inst<'old>(
                     encoded
                 } else {
                     validate_file_name(&new_inst.name).with_context(|| {
-                        format!("name '{}' is not legal to write to the file system", new_inst.name)
+                        format!(
+                            "name '{}' is not legal to write to the file system",
+                            new_inst.name
+                        )
                     })?;
                     new_inst.name.clone()
                 };

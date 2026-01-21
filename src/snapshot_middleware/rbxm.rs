@@ -58,11 +58,7 @@ pub fn syncback_rbxm<'sync>(
         serialized
     } else {
         // Clone the subtree, filtering out ignored instances
-        let filtered_tree = clone_tree_filtered(
-            snapshot.new_tree(),
-            inst.referent(),
-            &tree_globs,
-        );
+        let filtered_tree = clone_tree_filtered(snapshot.new_tree(), inst.referent(), &tree_globs);
         let mut serialized = Vec::new();
         rbx_binary::to_writer(&mut serialized, &filtered_tree, &[filtered_tree.root_ref()])
             .context("failed to serialize filtered rbxm")?;
@@ -99,7 +95,9 @@ fn add_children_filtered(
     builder: &mut InstanceBuilder,
     ignore_globs: &[Glob],
 ) {
-    let parent = source.get_by_ref(parent_ref).expect("parent ref should exist");
+    let parent = source
+        .get_by_ref(parent_ref)
+        .expect("parent ref should exist");
 
     for &child_ref in parent.children() {
         let child_path = inst_path(source, child_ref);
@@ -112,7 +110,9 @@ fn add_children_filtered(
             continue;
         }
 
-        let child = source.get_by_ref(child_ref).expect("child ref should exist");
+        let child = source
+            .get_by_ref(child_ref)
+            .expect("child ref should exist");
 
         let mut child_builder = InstanceBuilder::new(child.class)
             .with_name(child.name.clone())

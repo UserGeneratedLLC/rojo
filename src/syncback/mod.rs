@@ -369,8 +369,8 @@ pub fn get_best_middleware(snapshot: &SyncbackSnapshot) -> Middleware {
         middleware = Middleware::JsonModel;
     } else {
         middleware = match inst.class.as_str() {
-            "Folder" | "Configuration" | "Tool" 
-            | "ScreenGui" | "SurfaceGui" | "BillboardGui" | "AdGui" => Middleware::Dir,
+            "Folder" | "Configuration" | "Tool" | "ScreenGui" | "SurfaceGui" | "BillboardGui"
+            | "AdGui" => Middleware::Dir,
             "StringValue" => Middleware::Text,
             "Script" => Middleware::ServerScript,
             "LocalScript" => Middleware::ClientScript,
@@ -478,8 +478,9 @@ impl SyncbackRules {
         let mut globs = Vec::with_capacity(self.ignore_trees.len());
 
         for pattern in &self.ignore_trees {
-            let glob = Glob::new(pattern)
-                .with_context(|| format!("the pattern '{pattern}' is not a valid ignoreTrees glob"))?;
+            let glob = Glob::new(pattern).with_context(|| {
+                format!("the pattern '{pattern}' is not a valid ignoreTrees glob")
+            })?;
             globs.push(glob);
         }
 

@@ -249,7 +249,9 @@ impl<'sync> SyncbackSnapshot<'sync> {
                 // Try glob matching first, fall back to prefix matching for backwards compatibility
                 if let Ok(glob) = Glob::new(pattern) {
                     if glob.is_match(&path) {
-                        log::debug!("Ignoring {path} because it matches ignoreTrees glob: {pattern}");
+                        log::debug!(
+                            "Ignoring {path} because it matches ignoreTrees glob: {pattern}"
+                        );
                         return true;
                     }
                 } else if path.starts_with(pattern.as_str()) {
