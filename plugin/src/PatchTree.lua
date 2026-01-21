@@ -257,40 +257,40 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 				addProp("Name", instance.Name, change.changedName)
 			end
 
-		for prop, incoming in change.changedProperties do
-			local incomingSuccess, incomingValue = decodeValue(incoming, instanceMap)
-			local currentSuccess, currentValue = getProperty(instance, prop)
+			for prop, incoming in change.changedProperties do
+				local incomingSuccess, incomingValue = decodeValue(incoming, instanceMap)
+				local currentSuccess, currentValue = getProperty(instance, prop)
 
-			-- If incoming is a raw number and current is an EnumItem, convert incoming
-			-- to the proper EnumItem for better display (server sends Enum as raw numbers)
-			if
-				incomingSuccess
-				and currentSuccess
-				and typeof(incomingValue) == "number"
-				and typeof(currentValue) == "EnumItem"
-			then
-				local enumType = currentValue.EnumType
-				local ok, converted = pcall(function()
-					return enumType:FromValue(incomingValue)
-				end)
-				if ok and converted then
-					incomingValue = converted
+				-- If incoming is a raw number and current is an EnumItem, convert incoming
+				-- to the proper EnumItem for better display (server sends Enum as raw numbers)
+				if
+					incomingSuccess
+					and currentSuccess
+					and typeof(incomingValue) == "number"
+					and typeof(currentValue) == "EnumItem"
+				then
+					local enumType = currentValue.EnumType
+					local ok, converted = pcall(function()
+						return enumType:FromValue(incomingValue)
+					end)
+					if ok and converted then
+						incomingValue = converted
+					end
 				end
-			end
 
-			-- Check if this is a Source property - count line differences
-			if prop == "Source" and currentSuccess and incomingSuccess then
-				hasSourceChange = true
-				totalLineChanges, whitespaceLineChanges =
-					WhitespaceUtil.CountLineDifferences(currentValue, incomingValue)
-			end
+				-- Check if this is a Source property - count line differences
+				if prop == "Source" and currentSuccess and incomingSuccess then
+					hasSourceChange = true
+					totalLineChanges, whitespaceLineChanges =
+						WhitespaceUtil.CountLineDifferences(currentValue, incomingValue)
+				end
 
-			addProp(
-				prop,
-				if currentSuccess then currentValue else "[Error]",
-				if incomingSuccess then incomingValue else select(2, next(incoming))
-			)
-		end
+				addProp(
+					prop,
+					if currentSuccess then currentValue else "[Error]",
+					if incomingSuccess then incomingValue else select(2, next(incoming))
+				)
+			end
 
 			-- Count non-Source property changes
 			local propCount = changeIndex - (if hasSourceChange then 1 else 0)

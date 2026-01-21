@@ -29,7 +29,9 @@ local function applyPatch(instanceMap, patch)
 
 	for _, removedIdOrInstance in ipairs(patch.removed) do
 		-- Skip auto-created instances that shouldn't be synced
-		local instance = if Types.RbxId(removedIdOrInstance) then instanceMap.fromIds[removedIdOrInstance] else removedIdOrInstance
+		local instance = if Types.RbxId(removedIdOrInstance)
+			then instanceMap.fromIds[removedIdOrInstance]
+			else removedIdOrInstance
 		if instance and Config.ignoredClassNames[instance.ClassName] then
 			continue
 		end

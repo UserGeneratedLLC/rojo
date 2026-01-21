@@ -17,7 +17,10 @@ local function isEmpty(table)
 end
 
 -- Finds duplicate names among children and returns a set of names that are duplicated
-local function findDuplicateNames(children: { Instance } | { string }, virtualInstances: { [string]: any }?): { [string]: boolean }
+local function findDuplicateNames(
+	children: { Instance } | { string },
+	virtualInstances: { [string]: any }?
+): { [string]: boolean }
 	local nameCounts: { [string]: number } = {}
 	local duplicates: { [string]: boolean } = {}
 
@@ -411,10 +414,7 @@ local function diff(instanceMap, virtualInstances, rootId)
 
 	-- Log count of skipped duplicates
 	if skippedDuplicateCount > 0 then
-		Log.warn(
-			"Skipped {} location(s) with duplicate-named siblings (cannot reliably sync)",
-			skippedDuplicateCount
-		)
+		Log.warn("Skipped {} location(s) with duplicate-named siblings (cannot reliably sync)", skippedDuplicateCount)
 	end
 
 	if not diffSuccess then
