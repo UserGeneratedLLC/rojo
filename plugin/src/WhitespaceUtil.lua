@@ -18,7 +18,8 @@ end
 
 -- Counts lines that differ between two strings (capped at 100)
 -- Returns: totalDiff, whitespaceDiff (lines that only differ in whitespace)
--- Returns 10000, 10000 if exceeds 100 (frontend displays as "100+")
+-- Returns 10000 for totalDiff if exceeds 100 (frontend displays as "100+")
+-- whitespaceDiff is 10000 only if ALL checked differences were whitespace-only
 function WhitespaceUtil.CountLineDifferences(current: string, incoming: string): (number, number)
 	if type(current) ~= "string" or type(incoming) ~= "string" then
 		return 0, 0
@@ -29,6 +30,7 @@ function WhitespaceUtil.CountLineDifferences(current: string, incoming: string):
 	local maxLines = math.max(#currentLines, #incomingLines)
 
 	local totalDiff, whitespaceDiff = 0, 0
+	local hasContentChange = false
 	for i = 1, maxLines do
 		local currentLine = currentLines[i] or ""
 		local incomingLine = incomingLines[i] or ""
@@ -37,9 +39,13 @@ function WhitespaceUtil.CountLineDifferences(current: string, incoming: string):
 			totalDiff += 1
 			if NormalizeLine(currentLine) == NormalizeLine(incomingLine) then
 				whitespaceDiff += 1
+			else
+				hasContentChange = true
 			end
 			if totalDiff > 100 then
-				return 10000, 10000
+				-- Return 10000 for both only if ALL differences were whitespace-only
+				-- Otherwise return different values so isWhitespaceOnly is false
+				return 10000, if hasContentChange then 0 else 10000
 			end
 		end
 	end

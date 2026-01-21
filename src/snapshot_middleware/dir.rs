@@ -134,23 +134,29 @@ pub fn syncback_dir_no_meta<'sync>(
     let mut children = Vec::new();
     let mut removed_children = Vec::new();
 
-    // We have to enforce unique child names for the file system.
-    let mut child_names = HashSet::with_capacity(new_inst.children().len());
-    let mut duplicate_set = HashSet::new();
+    // Detect duplicate child names (case-insensitive for file system safety).
+    // We skip duplicates instead of failing, logging them for the user.
+    let mut child_name_counts: HashMap<String, usize> = HashMap::new();
     for child_ref in new_inst.children() {
         let child = snapshot.get_new_instance(*child_ref).unwrap();
-        if !child_names.insert(child.name.to_lowercase()) {
-            duplicate_set.insert(child.name.as_str());
-        }
+        let lower_name = child.name.to_lowercase();
+        *child_name_counts.entry(lower_name).or_insert(0) += 1;
     }
-    if !duplicate_set.is_empty() {
-        if duplicate_set.len() <= 25 {
-            anyhow::bail!(
-                "Instance has children with duplicate name (case may not exactly match):\n {}",
-                duplicate_set.into_iter().collect::<Vec<&str>>().join(", ")
-            );
-        }
-        anyhow::bail!("Instance has more than 25 children with duplicate names");
+
+    let duplicate_names: HashSet<String> = child_name_counts
+        .into_iter()
+        .filter(|(_, count)| *count > 1)
+        .map(|(name, _)| name)
+        .collect();
+
+    if !duplicate_names.is_empty() {
+        let inst_path = crate::syncback::inst_path(snapshot.new_tree(), snapshot.new);
+        let duplicate_list: Vec<&str> = duplicate_names.iter().map(|s| s.as_str()).collect();
+        log::warn!(
+            "Skipping children with duplicate names at '{}' (cannot reliably sync): {:?}",
+            inst_path,
+            duplicate_list
+        );
     }
 
     if let Some(old_inst) = snapshot.old_inst() {
@@ -162,6 +168,13 @@ pub fn syncback_dir_no_meta<'sync>(
 
         for new_child_ref in new_inst.children() {
             let new_child = snapshot.get_new_instance(*new_child_ref).unwrap();
+
+            // Skip children with duplicate names - cannot reliably sync them
+            if duplicate_names.contains(&new_child.name.to_lowercase()) {
+                old_child_map.remove(new_child.name.as_str());
+                continue;
+            }
+
             // Skip instances of ignored classes
             if snapshot.should_ignore_class(&new_child.class) {
                 // Also remove from old_child_map so it won't be marked as removed
@@ -203,8 +216,12 @@ pub fn syncback_dir_no_meta<'sync>(
             }
         }
         // Any children that are in the old dom but not the new one are removed.
-        // Filter out instances of ignored classes from removal.
+        // Filter out instances of ignored classes and duplicates from removal.
         removed_children.extend(old_child_map.into_values().filter(|inst| {
+            // Don't remove duplicates - we're skipping them entirely
+            if duplicate_names.contains(&inst.name().to_lowercase()) {
+                return false;
+            }
             if snapshot.should_ignore_class(inst.class_name().as_str()) {
                 log::debug!(
                     "Not removing instance {} because its class {} is ignored",
@@ -220,6 +237,12 @@ pub fn syncback_dir_no_meta<'sync>(
         // There is no old instance. Just add every child.
         for new_child_ref in new_inst.children() {
             let new_child = snapshot.get_new_instance(*new_child_ref).unwrap();
+
+            // Skip children with duplicate names - cannot reliably sync them
+            if duplicate_names.contains(&new_child.name.to_lowercase()) {
+                continue;
+            }
+
             // Skip instances of ignored classes
             if snapshot.should_ignore_class(&new_child.class) {
                 log::debug!(
