@@ -27,6 +27,12 @@ local function applyPatch(instanceMap, patch)
 	local deferredRefs = {}
 
 	for _, removedIdOrInstance in ipairs(patch.removed) do
+		-- Skip TouchInterest (auto-created by Roblox when touch events are connected)
+		local instance = if Types.RbxId(removedIdOrInstance) then instanceMap.fromIds[removedIdOrInstance] else removedIdOrInstance
+		if instance and instance.ClassName == "TouchInterest" then
+			continue
+		end
+
 		local removeInstanceSuccess = pcall(function()
 			if Types.RbxId(removedIdOrInstance) then
 				instanceMap:destroyId(removedIdOrInstance)

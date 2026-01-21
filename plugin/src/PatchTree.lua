@@ -335,6 +335,11 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 			continue
 		end
 
+		-- Skip TouchInterest (auto-created by Roblox when touch events are connected)
+		if instance.ClassName == "TouchInterest" then
+			continue
+		end
+
 		-- Gather ancestors from existing DOM
 		-- (note that they may have no ID if they're being removed as unknown)
 		local ancestryIds = {}
