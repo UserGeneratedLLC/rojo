@@ -15,7 +15,7 @@ use super::{
     InstanceSnapshot, RojoTree,
 };
 use crate::{
-    multimap::MultiMap, RojoRef, REF_EXTERNAL_ATTRIBUTE_PREFIX, REF_ID_ATTRIBUTE_NAME,
+    multimap::MultiMap, RojoRef, REF_ID_ATTRIBUTE_NAME, REF_PATH_ATTRIBUTE_PREFIX,
     REF_POINTER_ATTRIBUTE_PREFIX,
 };
 
@@ -79,14 +79,18 @@ struct PatchApplyContext {
     /// to be rewritten.
     has_refs_to_rewrite: HashSet<Ref>,
 
-    /// Tracks all ref properties that were specified using attributes. This has
-    /// to be handled after everything else is done just like normal referent
-    /// properties.
+    /// Legacy: Tracks ref properties using the old ID-based system (Rojo_Target_).
+    /// Kept for backwards compatibility with existing projects.
     attribute_refs_to_rewrite: MultiMap<Ref, (Ustr, String)>,
 
-    /// Tracks external ref properties (references to instances outside the sync
-    /// tree, like SoundGroups in SoundService). These are stored as paths.
-    external_refs_to_rewrite: MultiMap<Ref, (Ustr, String)>,
+    /// Tracks path-based ref properties (Rojo_Ref_). This is the preferred system
+    /// that stores paths to target instances.
+    path_refs_to_rewrite: MultiMap<Ref, (Ustr, String)>,
+
+    /// Tracks instances that have Rojo ref attributes that need to be cleaned up
+    /// after resolution. The attributes are only used as transport in the file
+    /// format and should not persist in the live game.
+    instances_needing_attr_cleanup: HashSet<Ref>,
 
     /// The current applied patch result, describing changes made to the tree.
     applied_patch_set: AppliedPatchSet,
@@ -136,33 +140,64 @@ fn finalize_patch_application(context: PatchApplyContext, tree: &mut RojoTree) -
         instance.properties_mut().extend(real_rewrites.drain(..));
     }
 
-    // Handle external path-based references (e.g., SoundGroup pointing to SoundService)
-    let mut external_rewrites = Vec::new();
-    for (id, map) in context.external_refs_to_rewrite {
+    // Handle path-based references (Rojo_Ref_)
+    let mut path_rewrites = Vec::new();
+    for (id, map) in context.path_refs_to_rewrite {
         for (prop_name, path) in map {
             if let Some(target) = tree.get_instance_by_path(&path) {
                 log::debug!(
-                    "Resolved external reference {} -> {} (path: {})",
+                    "Resolved path reference {} -> {} (path: {})",
                     prop_name,
                     target,
                     path
                 );
-                external_rewrites.push((prop_name, Variant::Ref(target)));
+                path_rewrites.push((prop_name, Variant::Ref(target)));
             } else {
                 log::debug!(
-                    "Could not resolve external reference {} at path '{}' - instance not found in tree",
+                    "Could not resolve path reference {} at path '{}' - instance not found in tree",
                     prop_name,
                     path
                 );
             }
         }
-        if !external_rewrites.is_empty() {
+        if !path_rewrites.is_empty() {
             let mut instance = tree
                 .get_instance_mut(id)
-                .expect("Invalid instance ID in deferred external ref map");
-            instance
-                .properties_mut()
-                .extend(external_rewrites.drain(..));
+                .expect("Invalid instance ID in deferred path ref map");
+            instance.properties_mut().extend(path_rewrites.drain(..));
+        }
+    }
+
+    // Clean up Rojo ref attributes - they're only used for transport in the file
+    // format and should not persist in the live game
+    for id in context.instances_needing_attr_cleanup {
+        let mut instance = match tree.get_instance_mut(id) {
+            Some(inst) => inst,
+            None => continue,
+        };
+
+        let attributes = match instance.properties_mut().get_mut(&ustr("Attributes")) {
+            Some(Variant::Attributes(attrs)) => attrs,
+            _ => continue,
+        };
+
+        // Remove all Rojo ref-related attributes
+        let keys_to_remove: Vec<String> = attributes
+            .iter()
+            .filter_map(|(name, _)| {
+                if name == REF_ID_ATTRIBUTE_NAME
+                    || name.starts_with(REF_POINTER_ATTRIBUTE_PREFIX)
+                    || name.starts_with(REF_PATH_ATTRIBUTE_PREFIX)
+                {
+                    Some(name.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        for key in keys_to_remove {
+            attributes.remove(key);
         }
     }
 
@@ -312,6 +347,7 @@ fn defer_ref_properties(tree: &mut RojoTree, id: Ref, context: &mut PatchApplyCo
             }
         }
         if let Some(prop_name) = attr_name.strip_prefix(REF_POINTER_ATTRIBUTE_PREFIX) {
+            context.instances_needing_attr_cleanup.insert(id);
             if let Variant::String(prop_value) = attr_value {
                 context
                     .attribute_refs_to_rewrite
@@ -332,20 +368,21 @@ fn defer_ref_properties(tree: &mut RojoTree, id: Ref, context: &mut PatchApplyCo
                 )
             }
         }
-        // Handle external path-based references (for instances outside the sync tree)
-        if let Some(prop_name) = attr_name.strip_prefix(REF_EXTERNAL_ATTRIBUTE_PREFIX) {
+        // Handle path-based references (Rojo_Ref_)
+        if let Some(prop_name) = attr_name.strip_prefix(REF_PATH_ATTRIBUTE_PREFIX) {
+            context.instances_needing_attr_cleanup.insert(id);
             if let Variant::String(path) = attr_value {
                 context
-                    .external_refs_to_rewrite
+                    .path_refs_to_rewrite
                     .insert(id, (ustr(prop_name), path.clone()));
             } else if let Variant::BinaryString(path) = attr_value {
                 if let Ok(str) = std::str::from_utf8(path.as_ref()) {
                     context
-                        .external_refs_to_rewrite
+                        .path_refs_to_rewrite
                         .insert(id, (ustr(prop_name), str.to_string()));
                 } else {
                     log::error!(
-                        "External paths specified by referent property attributes must be valid UTF-8 strings."
+                        "Paths specified by referent property attributes must be valid UTF-8 strings."
                     )
                 }
             } else {
@@ -358,6 +395,8 @@ fn defer_ref_properties(tree: &mut RojoTree, id: Ref, context: &mut PatchApplyCo
         }
     }
     if let Some(specified_id) = attr_id {
+        // Legacy Rojo_Id also needs cleanup
+        context.instances_needing_attr_cleanup.insert(id);
         tree.set_specified_id(id, specified_id);
     }
 }

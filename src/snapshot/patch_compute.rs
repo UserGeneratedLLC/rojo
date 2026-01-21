@@ -8,7 +8,7 @@ use rbx_dom_weak::{
     ustr, HashMapExt as _, UstrMap, UstrSet,
 };
 
-use crate::{RojoRef, REF_POINTER_ATTRIBUTE_PREFIX};
+use crate::{RojoRef, REF_PATH_ATTRIBUTE_PREFIX, REF_POINTER_ATTRIBUTE_PREFIX};
 
 use super::{
     patch::{PatchAdd, PatchSet, PatchUpdate},
@@ -286,6 +286,38 @@ fn compute_ref_properties(
     };
 
     for (attr_name, attr_value) in attributes.iter() {
+        // Handle new path-based refs (Rojo_Ref_)
+        if let Some(prop_name) = attr_name.strip_prefix(REF_PATH_ATTRIBUTE_PREFIX) {
+            let path = match attr_value {
+                Variant::String(str) => str.as_str(),
+                Variant::BinaryString(bytes) => {
+                    if let Ok(str) = std::str::from_utf8(bytes.as_ref()) {
+                        str
+                    } else {
+                        log::warn!(
+                            "Paths specified by referent property attributes must be valid UTF-8 strings"
+                        );
+                        continue;
+                    }
+                }
+                _ => {
+                    log::warn!(
+                        "Attribute {attr_name} is of type {:?} when it was expected to be a String",
+                        attr_value.ty()
+                    );
+                    continue;
+                }
+            };
+            if let Some(target_id) = tree.get_instance_by_path(path) {
+                map.insert(ustr(prop_name), Some(Variant::Ref(target_id)));
+            } else {
+                // Path not found yet - will be resolved during patch apply
+                map.insert(ustr(prop_name), None);
+            }
+            continue;
+        }
+
+        // Handle legacy ID-based refs (Rojo_Target_)
         let prop_name = match attr_name.strip_prefix(REF_POINTER_ATTRIBUTE_PREFIX) {
             Some(str) => str,
             None => continue,

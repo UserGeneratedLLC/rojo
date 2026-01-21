@@ -1,5 +1,6 @@
 //! Implements iterating through an entire WeakDom and linking all Ref
-//! properties using attributes.
+//! properties using path-based attributes (preferred) or ID-based attributes
+//! (fallback for non-unique paths).
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -9,34 +10,29 @@ use rbx_dom_weak::{
 };
 
 use crate::{
-    multimap::MultiMap, syncback::snapshot::inst_path, REF_EXTERNAL_ATTRIBUTE_PREFIX,
-    REF_ID_ATTRIBUTE_NAME, REF_POINTER_ATTRIBUTE_PREFIX,
+    syncback::snapshot::inst_path, REF_ID_ATTRIBUTE_NAME, REF_PATH_ATTRIBUTE_PREFIX,
+    REF_POINTER_ATTRIBUTE_PREFIX,
 };
 
 pub struct RefLinks {
-    /// A map of referents to each of their Ref properties.
-    prop_links: MultiMap<Ref, RefLink>,
-    /// A map of referents to external ref properties (ones pointing outside the tree).
-    external_links: MultiMap<Ref, ExternalRefLink>,
-    /// A set of referents that need their ID rewritten. This includes
-    /// Instances that have no existing ID.
-    need_rewrite: HashSet<Ref>,
+    /// Refs that use path-based linking (path is unique).
+    path_links: HashMap<Ref, Vec<PathRefLink>>,
+    /// Refs that use ID-based linking (path is NOT unique - fallback).
+    id_links: HashMap<Ref, Vec<IdRefLink>>,
+    /// Target instances that need a Rojo_Id written (for ID-based system).
+    targets_needing_id: HashSet<Ref>,
 }
 
 #[derive(PartialEq, Eq)]
-struct RefLink {
-    /// The name of a property
+struct PathRefLink {
     name: Ustr,
-    /// The value of the property.
-    value: Ref,
-}
-
-#[derive(PartialEq, Eq)]
-struct ExternalRefLink {
-    /// The name of a property
-    name: Ustr,
-    /// The path to the external instance.
     path: String,
+}
+
+#[derive(PartialEq, Eq)]
+struct IdRefLink {
+    name: Ustr,
+    target: Ref,
 }
 
 /// Collects all instance paths in a WeakDom before any pruning occurs.
@@ -55,140 +51,165 @@ pub fn collect_all_paths(dom: &WeakDom) -> HashMap<Ref, String> {
     paths
 }
 
+/// Checks if a path is unique in the DOM by verifying no duplicates exist
+/// at ANY level of the path (target, parent, grandparent, etc.).
+fn is_path_unique(dom: &WeakDom, target_ref: Ref) -> bool {
+    let mut current_ref = target_ref;
+
+    // Walk up the tree checking each level for duplicate names among siblings
+    loop {
+        let current = match dom.get_by_ref(current_ref) {
+            Some(inst) => inst,
+            None => return false,
+        };
+
+        let parent_ref = current.parent();
+        if parent_ref.is_none() {
+            // Reached root - path is unique at all levels
+            return true;
+        }
+
+        let parent = match dom.get_by_ref(parent_ref) {
+            Some(inst) => inst,
+            None => return true,
+        };
+
+        // Check if any sibling has the same name as current
+        let current_name = &current.name;
+        let mut count = 0;
+        for child_ref in parent.children() {
+            if let Some(child) = dom.get_by_ref(*child_ref) {
+                if &child.name == current_name {
+                    count += 1;
+                    if count > 1 {
+                        // Duplicate found at this level - path is not unique
+                        return false;
+                    }
+                }
+            }
+        }
+
+        // Move up to parent and check the next level
+        current_ref = parent_ref;
+    }
+}
+
 /// Iterates through a WeakDom and collects referent properties.
-///
-/// They can be linked to a dom later using `link_referents`.
+/// Uses paths when unique, falls back to IDs when paths are ambiguous.
 ///
 /// The `pre_prune_paths` parameter should contain paths for instances that may
-/// have been pruned from the DOM. This allows external references (references
-/// to instances outside the sync tree) to be preserved as path-based attributes.
+/// have been pruned from the DOM. This allows references to instances outside
+/// the sync tree to be preserved as path-based attributes.
 pub fn collect_referents(dom: &WeakDom, pre_prune_paths: &HashMap<Ref, String>) -> RefLinks {
-    let mut ids = HashMap::new();
-    let mut need_rewrite = HashSet::new();
-    let mut links = MultiMap::new();
-    let mut external_links = MultiMap::new();
+    let mut path_links: HashMap<Ref, Vec<PathRefLink>> = HashMap::new();
+    let mut id_links: HashMap<Ref, Vec<IdRefLink>> = HashMap::new();
+    let mut targets_needing_id: HashSet<Ref> = HashSet::new();
 
-    // Note that this is back-in, front-out. This is important because
-    // VecDeque::extend is the equivalent to using push_back.
     let mut queue = VecDeque::new();
     queue.push_back(dom.root_ref());
+
     while let Some(inst_ref) = queue.pop_front() {
         let pointer = dom.get_by_ref(inst_ref).unwrap();
         queue.extend(pointer.children().iter().copied());
 
         for (prop_name, prop_value) in &pointer.properties {
-            let Variant::Ref(prop_value) = prop_value else {
+            let Variant::Ref(target_ref) = prop_value else {
                 continue;
             };
-            if prop_value.is_none() {
+            if target_ref.is_none() {
                 continue;
             }
 
-            let target = match dom.get_by_ref(*prop_value) {
-                Some(inst) => inst,
-                None => {
-                    // The target doesn't exist in the current DOM. Check if we
-                    // have its path from before pruning.
-                    if let Some(external_path) = pre_prune_paths.get(prop_value) {
-                        log::debug!(
-                            "Property {}.{} points to external instance at '{}', storing as path reference",
-                            inst_path(dom, inst_ref),
-                            prop_name,
-                            external_path
-                        );
-                        external_links.insert(
-                            inst_ref,
-                            ExternalRefLink {
-                                name: *prop_name,
-                                path: external_path.clone(),
-                            },
-                        );
-                    } else {
-                        // Properties that are Some but point to nothing may as
-                        // well be `nil`. This is a truly dangling reference.
-                        log::warn!(
-                            "Property {}.{} will be `nil` on the disk because the referenced instance does not exist",
-                            inst_path(dom, inst_ref),
-                            prop_name
-                        );
-                    }
-                    continue;
+            // Check if target exists in current DOM
+            if let Some(_target) = dom.get_by_ref(*target_ref) {
+                // Target exists - check if path is unique
+                if is_path_unique(dom, *target_ref) {
+                    // Path is unique - use path-based system
+                    let target_path = inst_path(dom, *target_ref);
+                    path_links.entry(inst_ref).or_default().push(PathRefLink {
+                        name: *prop_name,
+                        path: target_path,
+                    });
+                } else {
+                    // Path is NOT unique - fall back to ID-based system
+                    log::debug!(
+                        "Property {}.{} uses ID-based reference because target has duplicate-named siblings",
+                        inst_path(dom, inst_ref),
+                        prop_name
+                    );
+                    id_links.entry(inst_ref).or_default().push(IdRefLink {
+                        name: *prop_name,
+                        target: *target_ref,
+                    });
+                    targets_needing_id.insert(*target_ref);
                 }
-            };
-
-            links.insert(
-                inst_ref,
-                RefLink {
+            } else if let Some(external_path) = pre_prune_paths.get(target_ref) {
+                // Target was pruned - use path (we can't check uniqueness, assume it's fine)
+                log::debug!(
+                    "Property {}.{} points to pruned instance at '{}', storing as path reference",
+                    inst_path(dom, inst_ref),
+                    prop_name,
+                    external_path
+                );
+                path_links.entry(inst_ref).or_default().push(PathRefLink {
                     name: *prop_name,
-                    value: *prop_value,
-                },
-            );
-
-            // 1. Check if target has an ID
-            if let Some(id) = get_existing_id(target) {
-                // If it does, we need to check whether that ID is a duplicate
-                if let Some(id_ref) = ids.get(id) {
-                    // If the same ID points to a new Instance, rewrite it.
-                    if id_ref != prop_value {
-                        if log::log_enabled!(log::Level::Trace) {
-                            log::trace!(
-                                "{} needs an id rewritten because it has the same id as {}",
-                                target.name,
-                                dom.get_by_ref(*id_ref).unwrap().name
-                            );
-                        }
-                        need_rewrite.insert(*prop_value);
-                    }
-                }
-                ids.insert(id, *prop_value);
+                    path: external_path.clone(),
+                });
             } else {
-                log::trace!("{} needs an id rewritten because it has no id but is referred to by {}.{prop_name}", target.name, pointer.name);
-                // If it does not, it needs one.
-                need_rewrite.insert(*prop_value);
+                // Truly dangling reference
+                log::warn!(
+                    "Property {}.{} will be `nil` on disk because the referenced instance does not exist",
+                    inst_path(dom, inst_ref),
+                    prop_name
+                );
             }
         }
     }
 
     RefLinks {
-        need_rewrite,
-        prop_links: links,
-        external_links,
+        path_links,
+        id_links,
+        targets_needing_id,
     }
 }
 
+/// Writes reference attributes to instances in the DOM.
+/// Uses paths for unique references, IDs for non-unique (duplicate siblings).
 pub fn link_referents(links: RefLinks, dom: &mut WeakDom) -> anyhow::Result<()> {
-    write_id_attributes(&links, dom)?;
-
-    // Convert MultiMaps to HashMaps for easier access
-    let prop_links: HashMap<Ref, Vec<RefLink>> = links.prop_links.into_iter().collect();
-    let external_links: HashMap<Ref, Vec<ExternalRefLink>> =
-        links.external_links.into_iter().collect();
+    // First, write Rojo_Id attributes to targets that need them (for ID-based refs)
+    write_id_attributes(&links.targets_needing_id, dom)?;
 
     // Collect all instance IDs that need attributes updated
-    let mut all_inst_ids: HashSet<Ref> = prop_links.keys().copied().collect();
-    all_inst_ids.extend(external_links.keys().copied());
-
-    let mut prop_list = Vec::new();
-    let mut external_prop_list = Vec::new();
+    let mut all_inst_ids: HashSet<Ref> = links.path_links.keys().copied().collect();
+    all_inst_ids.extend(links.id_links.keys().copied());
 
     for inst_id in all_inst_ids {
-        // Collect internal ref links
-        if let Some(properties) = prop_links.get(&inst_id) {
-            for ref_link in properties {
-                let prop_inst = match dom.get_by_ref(ref_link.value) {
-                    Some(inst) => inst,
-                    None => continue,
-                };
-                let id = get_existing_id(prop_inst)
-                    .expect("all Instances that are pointed to should have an ID");
-                prop_list.push((ref_link.name, Variant::String(id.to_owned())));
+        let mut path_attrs: Vec<(String, Variant)> = Vec::new();
+        let mut id_attrs: Vec<(String, Variant)> = Vec::new();
+
+        // Collect path-based refs
+        if let Some(path_refs) = links.path_links.get(&inst_id) {
+            for link in path_refs {
+                path_attrs.push((
+                    format!("{REF_PATH_ATTRIBUTE_PREFIX}{}", link.name),
+                    Variant::String(link.path.clone()),
+                ));
             }
         }
 
-        // Collect external ref links
-        if let Some(external_properties) = external_links.get(&inst_id) {
-            for ext_link in external_properties {
-                external_prop_list.push((ext_link.name, Variant::String(ext_link.path.clone())));
+        // Collect ID-based refs
+        if let Some(id_refs) = links.id_links.get(&inst_id) {
+            for link in id_refs {
+                let target = match dom.get_by_ref(link.target) {
+                    Some(inst) => inst,
+                    None => continue,
+                };
+                let id =
+                    get_existing_id(target).expect("all ID-based targets should have an ID by now");
+                id_attrs.push((
+                    format!("{REF_POINTER_ATTRIBUTE_PREFIX}{}", link.name),
+                    Variant::String(id.to_owned()),
+                ));
             }
         }
 
@@ -209,25 +230,19 @@ pub fn link_referents(links: RefLinks, dom: &mut WeakDom) -> anyhow::Result<()> 
         }
         .into_iter()
         .filter(|(name, _)| {
-            !name.starts_with(REF_POINTER_ATTRIBUTE_PREFIX)
-                && !name.starts_with(REF_EXTERNAL_ATTRIBUTE_PREFIX)
+            !name.starts_with(REF_PATH_ATTRIBUTE_PREFIX)
+                && !name.starts_with(REF_POINTER_ATTRIBUTE_PREFIX)
         })
         .collect();
 
-        // Add internal ref pointers
-        for (prop_name, prop_value) in prop_list.drain(..) {
-            attributes.insert(
-                format!("{REF_POINTER_ATTRIBUTE_PREFIX}{prop_name}"),
-                prop_value,
-            );
+        // Add path-based refs
+        for (attr_name, attr_value) in path_attrs {
+            attributes.insert(attr_name, attr_value);
         }
 
-        // Add external ref pointers (path-based)
-        for (prop_name, prop_value) in external_prop_list.drain(..) {
-            attributes.insert(
-                format!("{REF_EXTERNAL_ATTRIBUTE_PREFIX}{prop_name}"),
-                prop_value,
-            );
+        // Add ID-based refs
+        for (attr_name, attr_value) in id_attrs {
+            attributes.insert(attr_name, attr_value);
         }
 
         inst.properties
@@ -237,12 +252,18 @@ pub fn link_referents(links: RefLinks, dom: &mut WeakDom) -> anyhow::Result<()> 
     Ok(())
 }
 
-fn write_id_attributes(links: &RefLinks, dom: &mut WeakDom) -> anyhow::Result<()> {
-    for referent in &links.need_rewrite {
+fn write_id_attributes(targets: &HashSet<Ref>, dom: &mut WeakDom) -> anyhow::Result<()> {
+    for referent in targets {
         let inst = match dom.get_by_ref_mut(*referent) {
             Some(inst) => inst,
             None => continue,
         };
+
+        // Skip if already has an ID
+        if get_existing_id_from_props(&inst.properties).is_some() {
+            continue;
+        }
+
         let unique_id = match inst.properties.get(&ustr("UniqueId")) {
             Some(Variant::UniqueId(id)) => Some(*id),
             _ => None,
@@ -280,6 +301,21 @@ fn get_existing_id(inst: &Instance) -> Option<&str> {
         match id {
             Variant::String(str) => Some(str),
             Variant::BinaryString(bstr) => std::str::from_utf8(bstr.as_ref()).ok(),
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
+fn get_existing_id_from_props(props: &rbx_dom_weak::UstrMap<Variant>) -> Option<String> {
+    if let Variant::Attributes(attrs) = props.get(&ustr("Attributes"))? {
+        let id = attrs.get(REF_ID_ATTRIBUTE_NAME)?;
+        match id {
+            Variant::String(str) => Some(str.clone()),
+            Variant::BinaryString(bstr) => std::str::from_utf8(bstr.as_ref())
+                .ok()
+                .map(|s| s.to_string()),
             _ => None,
         }
     } else {
