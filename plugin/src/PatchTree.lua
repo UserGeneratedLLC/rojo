@@ -335,8 +335,8 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 			continue
 		end
 
-		-- Skip TouchInterest (auto-created by Roblox when touch events are connected)
-		if instance.ClassName == "TouchInterest" then
+		-- Skip TouchTransmitter (auto-created by Roblox when touch events are connected)
+		if instance.ClassName == "TouchTransmitter" then
 			continue
 		end
 

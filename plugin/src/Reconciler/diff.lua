@@ -335,8 +335,8 @@ local function diff(instanceMap, virtualInstances, rootId)
 		-- corresponding virtual instance should be removed. Any instance that
 		-- does have a corresponding virtual instance is recursively diffed.
 		for _, childInstance in ipairs(instance:GetChildren()) do
-			-- Skip TouchInterest (auto-created by Roblox when touch events are connected)
-			if childInstance.ClassName == "TouchInterest" then
+			-- Skip TouchTransmitter (auto-created by Roblox when touch events are connected)
+			if childInstance.ClassName == "TouchTransmitter" then
 				continue
 			end
 
