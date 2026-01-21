@@ -4,7 +4,7 @@ expression: src/pointer.model.json
 ---
 {
   "attributes": {
-    "Rojo_Target_Value": "test referent id"
+    "Rojo_Ref_Value": "ReplicatedStorage/target"
   },
   "className": "ObjectValue"
 }

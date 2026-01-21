@@ -1,0 +1,10 @@
+---
+source: tests/tests/syncback.rs
+expression: src/Message.model.json
+---
+{
+  "className": "Message",
+  "properties": {
+    "Text": "This message should be written to the disk."
+  }
+}

@@ -13,9 +13,7 @@ instances:
     Parent: id-9
     Properties:
       Attributes:
-        Attributes:
-          Rojo_Target_Value:
-            String: project target
+        Attributes: {}
       Value:
         Ref: id-9
   id-11:
@@ -28,9 +26,7 @@ instances:
     Parent: id-7
     Properties:
       Attributes:
-        Attributes:
-          Rojo_Target_PrimaryPart:
-            String: project target
+        Attributes: {}
       NeedsPivotMigration:
         Bool: false
       PrimaryPart:
@@ -70,9 +66,7 @@ instances:
     Parent: id-3
     Properties:
       Attributes:
-        Attributes:
-          Rojo_Target_Value:
-            String: folder target
+        Attributes: {}
       Value:
         Ref: id-5
   id-5:
@@ -95,9 +89,7 @@ instances:
     Parent: id-5
     Properties:
       Attributes:
-        Attributes:
-          Rojo_Target_Value:
-            String: folder target
+        Attributes: {}
       Value:
         Ref: id-5
   id-7:
@@ -112,9 +104,7 @@ instances:
     Parent: id-3
     Properties:
       Attributes:
-        Attributes:
-          Rojo_Id:
-            String: model target 2
+        Attributes: {}
   id-8:
     Children: []
     ClassName: Model
@@ -125,9 +115,7 @@ instances:
     Parent: id-7
     Properties:
       Attributes:
-        Attributes:
-          Rojo_Target_PrimaryPart:
-            String: model target 2
+        Attributes: {}
       NeedsPivotMigration:
         Bool: false
       PrimaryPart:

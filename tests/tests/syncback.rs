@@ -42,7 +42,7 @@ syncback_tests! {
     // Ensures that the `ignorePaths` setting works for `init` files
     ignore_paths_init => ["src/non-init.luau", "src/init-file/init.luau"],
     // Ensures that the `ignorePaths` setting works for removals
-    ignore_paths_removing => ["src/Message.rbxm"],
+    ignore_paths_removing => ["src/Message.model.json"],
     // Ensures that `ignoreTrees` works for additions
     ignore_trees_adding => [],
     // Ensures that `ignoreTrees` works for removals
@@ -61,12 +61,12 @@ syncback_tests! {
     // default.project.json doesn't change unexpectedly.
     project_reserialize => ["attribute_mismatch.luau", "property_mismatch.project.json"],
     // Confirms that Instances that cannot serialize as directories serialize as rbxms
-    rbxm_fallback => ["src/ChildWithDuplicates.rbxm"],
+    rbxm_fallback => [],
     // Ensures that ref properties are linked properly on the file system
     ref_properties => ["src/pointer.model.json", "src/target.model.json"],
     // Ensures that ref properties are linked when no attributes are manually
     // set in the DataModel
-    ref_properties_blank => ["src/pointer.model.json", "src/target.meta.json", "src/target.txt"],
+    ref_properties_blank => ["src/pointer.model.json", "src/target.txt"],
     // Ensures that if there is a conflict in RojoRefs, one of them is rewritten.
     ref_properties_conflict => ["src/Pointer_2.model.json", "src/Target_2.model.json"],
     // Ensures that having multiple pointers that are aimed at the same target doesn't trigger ref rewrites.

@@ -36,9 +36,7 @@ instances:
     Parent: id-3
     Properties:
       Attributes:
-        Attributes:
-          Rojo_Target_Value:
-            String: sword
+        Attributes: {}
       Value:
         Ref: id-5
   id-5:

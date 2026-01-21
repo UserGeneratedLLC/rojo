@@ -34,7 +34,7 @@ expression: model
       <Item class="ObjectValue" referent="4">
         <Properties>
           <string name="Name">ObjectValue</string>
-          <BinaryString name="AttributesSerialize">AQAAABEAAABSb2pvX1RhcmdldF9WYWx1ZQIFAAAAc3dvcmQ=</BinaryString>
+          <BinaryString name="AttributesSerialize"></BinaryString>
           <Ref name="Value">null</Ref>
         </Properties>
       </Item>

@@ -16,9 +16,7 @@ body:
           Parent: id-7
           Properties:
             Attributes:
-              Attributes:
-                Rojo_Target_PrimaryPart:
-                  String: project target
+              Attributes: {}
             NeedsPivotMigration:
               Bool: false
             PrimaryPart:

@@ -23,11 +23,8 @@ instances:
     Parent: id-2
     Properties:
       Attributes:
-        Attributes:
-          Rojo_Target_Value:
-            String: test pointer
+        Attributes: {}
       Value:
         Ref: id-4
 messageCursor: 1
 sessionId: id-1
-

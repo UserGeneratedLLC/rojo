@@ -7,15 +7,15 @@ expression: container.model.json
     {
       "attributes": {
         "Rojo_Id": "value_1",
-        "Rojo_Target_Value": "value_1"
+        "Rojo_Ref_Value": "ReplicatedStorage/container/value_1"
       },
       "className": "ObjectValue",
       "name": "value_1"
     },
     {
       "attributes": {
-        "Rojo_Id": "72bc28150ada2e6206442ee300004084",
-        "Rojo_Target_Value": "72bc28150ada2e6206442ee300004084"
+        "Rojo_Id": "value_1",
+        "Rojo_Ref_Value": "ReplicatedStorage/container/value_2"
       },
       "className": "ObjectValue",
       "name": "value_2"

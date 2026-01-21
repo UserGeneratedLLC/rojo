@@ -24,9 +24,7 @@ instances:
     Parent: id-2
     Properties:
       Attributes:
-        Attributes:
-          Rojo_Target_Value:
-            String: test pointer
+        Attributes: {}
       Value:
         Ref: id-4
   id-4:
@@ -39,9 +37,6 @@ instances:
     Parent: id-2
     Properties:
       Attributes:
-        Attributes:
-          Rojo_Id:
-            String: test pointer
+        Attributes: {}
 messageCursor: 0
 sessionId: id-1
-
