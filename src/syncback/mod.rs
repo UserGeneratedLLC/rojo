@@ -303,57 +303,6 @@ pub struct SyncbackReturn<'sync> {
 }
 
 pub fn get_best_middleware(snapshot: &SyncbackSnapshot) -> Middleware {
-    // At some point, we're better off using an O(1) method for checking
-    // equality for classes like this.
-    static JSON_MODEL_CLASSES: OnceLock<HashSet<&str>> = OnceLock::new();
-    let json_model_classes = JSON_MODEL_CLASSES.get_or_init(|| {
-        [
-            "Sound",
-            "SoundGroup",
-            "Sky",
-            "Atmosphere",
-            "BloomEffect",
-            "BlurEffect",
-            "ColorCorrectionEffect",
-            "DepthOfFieldEffect",
-            "SunRaysEffect",
-            "ParticleEmitter",
-            "TextChannel",
-            "TextChatCommand",
-            // TODO: Implement a way to use inheritance for this
-            "ChatWindowConfiguration",
-            "ChatInputBarConfiguration",
-            "BubbleChatConfiguration",
-            "ChannelTabsConfiguration",
-            // GUI elements
-            "Frame",
-            "TextLabel",
-            "ImageLabel",
-            "TextButton",
-            "ImageButton",
-            "TextBox",
-            "ScrollingFrame",
-            "ViewportFrame",
-            "VideoFrame",
-            "CanvasGroup",
-            // UI layout/constraint classes
-            "UIListLayout",
-            "UIGridLayout",
-            "UITableLayout",
-            "UIPageLayout",
-            "UIFlexItem",
-            "UIPadding",
-            "UICorner",
-            "UIStroke",
-            "UIGradient",
-            "UIScale",
-            "UISizeConstraint",
-            "UITextSizeConstraint",
-            "UIAspectRatioConstraint",
-        ]
-        .into()
-    });
-
     let old_middleware = snapshot
         .old_inst()
         .and_then(|inst| inst.metadata().middleware);
@@ -365,9 +314,8 @@ pub fn get_best_middleware(snapshot: &SyncbackSnapshot) -> Middleware {
         return override_middleware;
     } else if let Some(old_middleware) = old_middleware {
         return old_middleware;
-    } else if json_model_classes.contains(inst.class.as_str()) {
-        middleware = Middleware::JsonModel;
     } else {
+        // Specific classes that need special middleware, everything else defaults to JsonModel
         middleware = match inst.class.as_str() {
             "Folder" | "Configuration" | "Tool" | "ScreenGui" | "SurfaceGui" | "BillboardGui"
             | "AdGui" => Middleware::Dir,
@@ -376,9 +324,8 @@ pub fn get_best_middleware(snapshot: &SyncbackSnapshot) -> Middleware {
             "LocalScript" => Middleware::ClientScript,
             "ModuleScript" => Middleware::ModuleScript,
             "LocalizationTable" => Middleware::Csv,
-            // This isn't the ideal way to handle this but it works.
-            name if name.ends_with("Value") => Middleware::JsonModel,
-            _ => Middleware::Rbxm,
+            // Default: use JsonModel for everything else (becomes Dir if has children)
+            _ => Middleware::JsonModel,
         }
     }
 
@@ -390,14 +337,6 @@ pub fn get_best_middleware(snapshot: &SyncbackSnapshot) -> Middleware {
             Middleware::Csv => Middleware::CsvDir,
             Middleware::JsonModel | Middleware::Text => Middleware::Dir,
             _ => middleware,
-        }
-    }
-
-    if middleware == Middleware::Rbxm {
-        middleware = match env::var(DEBUG_MODEL_FORMAT_VAR) {
-            Ok(value) if value == "1" => Middleware::Rbxmx,
-            Ok(value) if value == "2" => Middleware::JsonModel,
-            _ => Middleware::Rbxm,
         }
     }
 
