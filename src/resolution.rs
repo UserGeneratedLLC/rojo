@@ -235,15 +235,11 @@ impl AmbiguousValue {
                 }
 
                 (VariantType::CFrame, AmbiguousValue::Array12(value)) => {
-                    let value = value.map(|v| v as f32);
-                    let pos = Vector3::new(value[0], value[1], value[2]);
-                    let orientation = Matrix3::new(
-                        Vector3::new(value[3], value[4], value[5]),
-                        Vector3::new(value[6], value[7], value[8]),
-                        Vector3::new(value[9], value[10], value[11]),
-                    );
+                    Ok(Self::array12_to_cframe(value).into())
+                }
 
-                    Ok(CFrame::new(pos, orientation).into())
+                (VariantType::OptionalCFrame, AmbiguousValue::Array12(value)) => {
+                    Ok(Variant::OptionalCFrame(Some(Self::array12_to_cframe(value))))
                 }
 
                 (VariantType::Attributes, AmbiguousValue::Attributes(value)) => Ok(value.into()),
@@ -282,6 +278,17 @@ impl AmbiguousValue {
 
             other => bail!("Cannot unambiguously resolve the value {other:?}"),
         }
+    }
+
+    fn array12_to_cframe(value: [f64; 12]) -> CFrame {
+        let value = value.map(|v| v as f32);
+        let pos = Vector3::new(value[0], value[1], value[2]);
+        let orientation = Matrix3::new(
+            Vector3::new(value[3], value[4], value[5]),
+            Vector3::new(value[6], value[7], value[8]),
+            Vector3::new(value[9], value[10], value[11]),
+        );
+        CFrame::new(pos, orientation)
     }
 
     fn describe(&self) -> &'static str {
