@@ -573,10 +573,11 @@ fn project_node_property_syncback(
                 }
             }
             _ => {
-                properties.insert(
-                    name,
-                    UnresolvedValue::from_variant(value.clone(), &new_inst.class, &name),
-                );
+                if let Some(resolved) =
+                    UnresolvedValue::from_variant(value.clone(), &new_inst.class, &name)
+                {
+                    properties.insert(name, resolved);
+                }
             }
         }
     }
