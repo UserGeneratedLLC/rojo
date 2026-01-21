@@ -344,7 +344,8 @@ pub fn get_best_middleware(snapshot: &SyncbackSnapshot) -> Middleware {
         middleware = Middleware::JsonModel;
     } else {
         middleware = match inst.class.as_str() {
-            "Folder" | "Configuration" | "Tool" => Middleware::Dir,
+            "Folder" | "Configuration" | "Tool" 
+            | "ScreenGui" | "SurfaceGui" | "BillboardGui" | "AdGui" => Middleware::Dir,
             "StringValue" => Middleware::Text,
             "Script" => Middleware::ServerScript,
             "LocalScript" => Middleware::ClientScript,
