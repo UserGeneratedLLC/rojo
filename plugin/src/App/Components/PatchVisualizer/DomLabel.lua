@@ -79,6 +79,7 @@ local DomLabel = Roact.Component:extend("DomLabel")
 function DomLabel:init()
 	local initHeight = self.props.elementHeight:getValue()
 	self.expanded = initHeight > 24
+	self.isMounted = true
 
 	self.motor = Flipper.SingleMotor.new(initHeight)
 	self.binding = bindingUtil.fromMotor(self.motor)
@@ -86,7 +87,11 @@ function DomLabel:init()
 	self:setState({
 		renderExpansion = self.expanded,
 	})
-	self.motor:onStep(function(value)
+	self.motorStepConnection = self.motor:onStep(function(value)
+		if not self.isMounted then
+			return
+		end
+
 		local renderExpansion = value > 24
 
 		self.props.setElementHeight(value)
@@ -104,6 +109,14 @@ function DomLabel:init()
 			}
 		end)
 	end)
+end
+
+function DomLabel:willUnmount()
+	self.isMounted = false
+	if self.motorStepConnection then
+		self.motorStepConnection:disconnect()
+		self.motorStepConnection = nil
+	end
 end
 
 function DomLabel:didUpdate(prevProps)
