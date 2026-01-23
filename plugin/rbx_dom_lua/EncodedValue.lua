@@ -11,12 +11,7 @@ local function unpackDecoder(f)
 end
 
 local function serializeFloat(value)
-	-- TODO: Figure out a better way to serialize infinity and NaN, neither of
-	-- which fit into JSON.
-	if value == math.huge or value == -math.huge then
-		return 999999999 * math.sign(value)
-	end
-
+	-- JSON5 supports Infinity and NaN natively
 	return value
 end
 

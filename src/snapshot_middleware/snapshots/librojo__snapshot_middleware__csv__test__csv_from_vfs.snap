@@ -22,5 +22,5 @@ name: foo
 class_name: LocalizationTable
 properties:
   Contents:
-    String: "[{\"key\":\"Ack\",\"example\":\"An exclamation of despair\",\"source\":\"Ack!\",\"values\":{\"es\":\"¡Ay!\"}}]"
+    String: "[\n  {\n    key: \"Ack\",\n    example: \"An exclamation of despair\",\n    source: \"Ack!\",\n    values: {\n      es: \"¡Ay!\",\n    },\n  },\n]"
 children: []

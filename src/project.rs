@@ -516,8 +516,11 @@ mod test {
         )
         .unwrap();
 
-        let serialized = serde_json::to_string(&project_node).unwrap();
-        assert_eq!(serialized, r#"{"$path":{"optional":"../src"}}"#);
+        let serialized = json5::to_string(&project_node).unwrap();
+        assert_eq!(
+            serialized,
+            "{\n  $path: {\n    optional: \"../src\",\n  },\n}"
+        );
     }
 
     #[test]
@@ -529,8 +532,11 @@ mod test {
         )
         .unwrap();
 
-        let serialized = serde_json::to_string(&project_node).unwrap();
-        assert_eq!(serialized, r#"{"$path":{"optional":"../src"}}"#);
+        let serialized = json5::to_string(&project_node).unwrap();
+        assert_eq!(
+            serialized,
+            "{\n  $path: {\n    optional: \"../src\",\n  },\n}"
+        );
     }
 
     #[test]
@@ -542,8 +548,9 @@ mod test {
         )
         .unwrap();
 
-        let serialized = serde_json::to_string(&project_node).unwrap();
-        assert_eq!(serialized, r#"{"$path":"../src"}"#);
+        let serialized = json5::to_string(&project_node).unwrap();
+        // Backslashes normalized to forward slashes
+        assert_eq!(serialized, "{\n  $path: \"../src\",\n}");
     }
 
     #[test]

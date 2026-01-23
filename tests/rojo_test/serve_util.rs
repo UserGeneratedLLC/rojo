@@ -163,14 +163,14 @@ impl TestServeSession {
         let url = format!("http://localhost:{}/api/rojo", self.port);
         let body = reqwest::blocking::get(url)?.text()?;
 
-        Ok(serde_json::from_str(&body).expect("Server returned malformed response"))
+        Ok(json5::from_str(&body).expect("Server returned malformed response"))
     }
 
     pub fn get_api_read(&self, id: Ref) -> Result<ReadResponse<'_>, reqwest::Error> {
         let url = format!("http://localhost:{}/api/read/{}", self.port, id);
         let body = reqwest::blocking::get(url)?.text()?;
 
-        Ok(serde_json::from_str(&body).expect("Server returned malformed response"))
+        Ok(json5::from_str(&body).expect("Server returned malformed response"))
     }
 
     pub fn get_api_socket_packet(
@@ -193,7 +193,7 @@ impl TestServeSession {
 
             match socket.read() {
                 Ok(Message::Text(text)) => {
-                    let packet: SocketPacket = serde_json::from_str(&text)?;
+                    let packet: SocketPacket = json5::from_str(&text)?;
                     if packet.packet_type != packet_type {
                         continue;
                     }
@@ -230,12 +230,13 @@ impl TestServeSession {
     ) -> Result<SerializeResponse, reqwest::Error> {
         let client = reqwest::blocking::Client::new();
         let url = format!("http://localhost:{}/api/serialize", self.port);
-        let body = serde_json::to_string(&SerializeRequest {
+        let body = json5::to_string(&SerializeRequest {
             session_id,
             ids: ids.to_vec(),
         });
 
-        client.post(url).body((body).unwrap()).send()?.json()
+        let response_body = client.post(url).body((body).unwrap()).send()?.text()?;
+        Ok(json5::from_str(&response_body).expect("Server returned malformed response"))
     }
 }
 

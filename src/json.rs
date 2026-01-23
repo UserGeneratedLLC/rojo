@@ -138,6 +138,368 @@ enum Json5Value {
     Object(std::collections::BTreeMap<String, Json5Value>),
 }
 
+/// Error type for compact JSON5 serialization.
+#[derive(Debug)]
+struct CompactJson5Error(String);
+
+impl std::fmt::Display for CompactJson5Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl std::error::Error for CompactJson5Error {}
+
+impl serde::ser::Error for CompactJson5Error {
+    fn custom<T: std::fmt::Display>(msg: T) -> Self {
+        CompactJson5Error(msg.to_string())
+    }
+}
+
+/// Serialize a value to a compact JSON5 string (for HTTP transport).
+///
+/// Supports NaN/Infinity. No whitespace between elements.
+///
+/// # Errors
+///
+/// Returns an error if the value cannot be serialized to JSON5.
+pub fn to_string_compact<T: Serialize>(value: &T) -> anyhow::Result<String> {
+    let mut output = String::new();
+    let mut serializer = CompactJson5Serializer { output: &mut output };
+    value.serialize(&mut serializer).map_err(|e| anyhow::anyhow!("{}", e))?;
+    Ok(output)
+}
+
+struct CompactJson5Serializer<'a> {
+    output: &'a mut String,
+}
+
+impl<'a> serde::Serializer for &mut CompactJson5Serializer<'a> {
+    type Ok = ();
+    type Error = CompactJson5Error;
+    type SerializeSeq = Self;
+    type SerializeTuple = Self;
+    type SerializeTupleStruct = Self;
+    type SerializeTupleVariant = Self;
+    type SerializeMap = Self;
+    type SerializeStruct = Self;
+    type SerializeStructVariant = Self;
+
+    fn serialize_bool(self, v: bool) -> Result<(), Self::Error> {
+        self.output.push_str(if v { "true" } else { "false" });
+        Ok(())
+    }
+
+    fn serialize_i8(self, v: i8) -> Result<(), Self::Error> {
+        self.output.push_str(&v.to_string());
+        Ok(())
+    }
+
+    fn serialize_i16(self, v: i16) -> Result<(), Self::Error> {
+        self.output.push_str(&v.to_string());
+        Ok(())
+    }
+
+    fn serialize_i32(self, v: i32) -> Result<(), Self::Error> {
+        self.output.push_str(&v.to_string());
+        Ok(())
+    }
+
+    fn serialize_i64(self, v: i64) -> Result<(), Self::Error> {
+        self.output.push_str(&v.to_string());
+        Ok(())
+    }
+
+    fn serialize_u8(self, v: u8) -> Result<(), Self::Error> {
+        self.output.push_str(&v.to_string());
+        Ok(())
+    }
+
+    fn serialize_u16(self, v: u16) -> Result<(), Self::Error> {
+        self.output.push_str(&v.to_string());
+        Ok(())
+    }
+
+    fn serialize_u32(self, v: u32) -> Result<(), Self::Error> {
+        self.output.push_str(&v.to_string());
+        Ok(())
+    }
+
+    fn serialize_u64(self, v: u64) -> Result<(), Self::Error> {
+        self.output.push_str(&v.to_string());
+        Ok(())
+    }
+
+    fn serialize_f32(self, v: f32) -> Result<(), Self::Error> {
+        self.serialize_f64(v as f64)
+    }
+
+    fn serialize_f64(self, v: f64) -> Result<(), Self::Error> {
+        if v.is_nan() {
+            self.output.push_str("NaN");
+        } else if v.is_infinite() {
+            if v.is_sign_positive() {
+                self.output.push_str("Infinity");
+            } else {
+                self.output.push_str("-Infinity");
+            }
+        } else {
+            self.output.push_str(&v.to_string());
+        }
+        Ok(())
+    }
+
+    fn serialize_char(self, v: char) -> Result<(), Self::Error> {
+        self.serialize_str(&v.to_string())
+    }
+
+    fn serialize_str(self, v: &str) -> Result<(), Self::Error> {
+        self.output.push('"');
+        for c in v.chars() {
+            match c {
+                '"' => self.output.push_str("\\\""),
+                '\\' => self.output.push_str("\\\\"),
+                '\n' => self.output.push_str("\\n"),
+                '\r' => self.output.push_str("\\r"),
+                '\t' => self.output.push_str("\\t"),
+                c if c < ' ' => self.output.push_str(&format!("\\u{:04x}", c as u32)),
+                c => self.output.push(c),
+            }
+        }
+        self.output.push('"');
+        Ok(())
+    }
+
+    fn serialize_bytes(self, v: &[u8]) -> Result<(), Self::Error> {
+        use serde::ser::SerializeSeq;
+        let mut seq = self.serialize_seq(Some(v.len()))?;
+        for b in v {
+            seq.serialize_element(b)?;
+        }
+        seq.end()
+    }
+
+    fn serialize_none(self) -> Result<(), Self::Error> {
+        self.serialize_unit()
+    }
+
+    fn serialize_some<T: ?Sized + Serialize>(self, value: &T) -> Result<(), Self::Error> {
+        value.serialize(self)
+    }
+
+    fn serialize_unit(self) -> Result<(), Self::Error> {
+        self.output.push_str("null");
+        Ok(())
+    }
+
+    fn serialize_unit_struct(self, _name: &'static str) -> Result<(), Self::Error> {
+        self.serialize_unit()
+    }
+
+    fn serialize_unit_variant(
+        self,
+        _name: &'static str,
+        _variant_index: u32,
+        variant: &'static str,
+    ) -> Result<(), Self::Error> {
+        self.serialize_str(variant)
+    }
+
+    fn serialize_newtype_struct<T: ?Sized + Serialize>(
+        self,
+        _name: &'static str,
+        value: &T,
+    ) -> Result<(), Self::Error> {
+        value.serialize(self)
+    }
+
+    fn serialize_newtype_variant<T: ?Sized + Serialize>(
+        self,
+        _name: &'static str,
+        _variant_index: u32,
+        variant: &'static str,
+        value: &T,
+    ) -> Result<(), Self::Error> {
+        self.output.push('{');
+        self.serialize_str(variant)?;
+        self.output.push(':');
+        value.serialize(&mut *self)?;
+        self.output.push('}');
+        Ok(())
+    }
+
+    fn serialize_seq(self, _len: Option<usize>) -> Result<Self::SerializeSeq, Self::Error> {
+        self.output.push('[');
+        Ok(self)
+    }
+
+    fn serialize_tuple(self, len: usize) -> Result<Self::SerializeTuple, Self::Error> {
+        self.serialize_seq(Some(len))
+    }
+
+    fn serialize_tuple_struct(
+        self,
+        _name: &'static str,
+        len: usize,
+    ) -> Result<Self::SerializeTupleStruct, Self::Error> {
+        self.serialize_seq(Some(len))
+    }
+
+    fn serialize_tuple_variant(
+        self,
+        _name: &'static str,
+        _variant_index: u32,
+        variant: &'static str,
+        _len: usize,
+    ) -> Result<Self::SerializeTupleVariant, Self::Error> {
+        self.output.push('{');
+        self.serialize_str(variant)?;
+        self.output.push_str(":[");
+        Ok(self)
+    }
+
+    fn serialize_map(self, _len: Option<usize>) -> Result<Self::SerializeMap, Self::Error> {
+        self.output.push('{');
+        Ok(self)
+    }
+
+    fn serialize_struct(
+        self,
+        _name: &'static str,
+        len: usize,
+    ) -> Result<Self::SerializeStruct, Self::Error> {
+        self.serialize_map(Some(len))
+    }
+
+    fn serialize_struct_variant(
+        self,
+        _name: &'static str,
+        _variant_index: u32,
+        variant: &'static str,
+        _len: usize,
+    ) -> Result<Self::SerializeStructVariant, Self::Error> {
+        self.output.push('{');
+        self.serialize_str(variant)?;
+        self.output.push_str(":{");
+        Ok(self)
+    }
+}
+
+impl<'a> serde::ser::SerializeSeq for &mut CompactJson5Serializer<'a> {
+    type Ok = ();
+    type Error = CompactJson5Error;
+
+    fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Self::Error> {
+        if !self.output.ends_with('[') {
+            self.output.push(',');
+        }
+        value.serialize(&mut **self)
+    }
+
+    fn end(self) -> Result<(), Self::Error> {
+        self.output.push(']');
+        Ok(())
+    }
+}
+
+impl<'a> serde::ser::SerializeTuple for &mut CompactJson5Serializer<'a> {
+    type Ok = ();
+    type Error = CompactJson5Error;
+
+    fn serialize_element<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Self::Error> {
+        serde::ser::SerializeSeq::serialize_element(self, value)
+    }
+
+    fn end(self) -> Result<(), Self::Error> {
+        serde::ser::SerializeSeq::end(self)
+    }
+}
+
+impl<'a> serde::ser::SerializeTupleStruct for &mut CompactJson5Serializer<'a> {
+    type Ok = ();
+    type Error = CompactJson5Error;
+
+    fn serialize_field<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Self::Error> {
+        serde::ser::SerializeSeq::serialize_element(self, value)
+    }
+
+    fn end(self) -> Result<(), Self::Error> {
+        serde::ser::SerializeSeq::end(self)
+    }
+}
+
+impl<'a> serde::ser::SerializeTupleVariant for &mut CompactJson5Serializer<'a> {
+    type Ok = ();
+    type Error = CompactJson5Error;
+
+    fn serialize_field<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Self::Error> {
+        serde::ser::SerializeSeq::serialize_element(self, value)
+    }
+
+    fn end(self) -> Result<(), Self::Error> {
+        self.output.push_str("]}");
+        Ok(())
+    }
+}
+
+impl<'a> serde::ser::SerializeMap for &mut CompactJson5Serializer<'a> {
+    type Ok = ();
+    type Error = CompactJson5Error;
+
+    fn serialize_key<T: ?Sized + Serialize>(&mut self, key: &T) -> Result<(), Self::Error> {
+        if !self.output.ends_with('{') {
+            self.output.push(',');
+        }
+        key.serialize(&mut **self)
+    }
+
+    fn serialize_value<T: ?Sized + Serialize>(&mut self, value: &T) -> Result<(), Self::Error> {
+        self.output.push(':');
+        value.serialize(&mut **self)
+    }
+
+    fn end(self) -> Result<(), Self::Error> {
+        self.output.push('}');
+        Ok(())
+    }
+}
+
+impl<'a> serde::ser::SerializeStruct for &mut CompactJson5Serializer<'a> {
+    type Ok = ();
+    type Error = CompactJson5Error;
+
+    fn serialize_field<T: ?Sized + Serialize>(
+        &mut self,
+        key: &'static str,
+        value: &T,
+    ) -> Result<(), Self::Error> {
+        serde::ser::SerializeMap::serialize_key(self, key)?;
+        serde::ser::SerializeMap::serialize_value(self, value)
+    }
+
+    fn end(self) -> Result<(), Self::Error> {
+        serde::ser::SerializeMap::end(self)
+    }
+}
+
+impl<'a> serde::ser::SerializeStructVariant for &mut CompactJson5Serializer<'a> {
+    type Ok = ();
+    type Error = CompactJson5Error;
+
+    fn serialize_field<T: ?Sized + Serialize>(
+        &mut self,
+        key: &'static str,
+        value: &T,
+    ) -> Result<(), Self::Error> {
+        serde::ser::SerializeStruct::serialize_field(self, key, value)
+    }
+
+    fn end(self) -> Result<(), Self::Error> {
+        self.output.push_str("}}");
+        Ok(())
+    }
+}
+
 /// Serialize a value to a JSON5 byte vector with sorted keys.
 ///
 /// Supports NaN/Infinity and sorts object keys alphabetically.
@@ -148,10 +510,11 @@ enum Json5Value {
 pub fn to_vec_pretty_sorted<T: Serialize>(value: &T) -> anyhow::Result<Vec<u8>> {
     // Serialize to json5 string (preserves NaN/Infinity)
     let json5_str = json5::to_string(value).context("Failed to serialize to JSON5")?;
-    
+
     // Parse into Json5Value which uses BTreeMap (sorted keys)
-    let sorted: Json5Value = json5::from_str(&json5_str).context("Failed to parse JSON5 for sorting")?;
-    
+    let sorted: Json5Value =
+        json5::from_str(&json5_str).context("Failed to parse JSON5 for sorting")?;
+
     // Serialize back to json5 (now sorted)
     let output = json5::to_string(&sorted).context("Failed to serialize sorted JSON5")?;
     Ok(output.into_bytes())

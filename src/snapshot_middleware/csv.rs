@@ -243,7 +243,7 @@ fn convert_localization_csv(contents: &[u8]) -> Result<String, csv::Error> {
     }
 
     let encoded =
-        serde_json::to_string(&entries).expect("Could not encode JSON for localization table");
+        json5::to_string(&entries).expect("Could not encode JSON5 for localization table");
 
     Ok(encoded)
 }

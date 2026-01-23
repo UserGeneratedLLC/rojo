@@ -239,12 +239,13 @@ fn write_sourcemap(
 
     if let Some(output_path) = output {
         let mut file = BufWriter::new(File::create(output_path)?);
-        serde_json::to_writer(&mut file, &root_node)?;
+        let json_output = json5::to_string(&root_node)?;
+        file.write_all(json_output.as_bytes())?;
         file.flush()?;
 
         println!("Created sourcemap at {}", output_path.display());
     } else {
-        let output = serde_json::to_string(&root_node)?;
+        let output = json5::to_string(&root_node)?;
         println!("{}", output);
     }
 

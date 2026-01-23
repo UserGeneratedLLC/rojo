@@ -1,12 +1,18 @@
 use hyper::{header::CONTENT_TYPE, Body, Response, StatusCode};
 use serde::Serialize;
 
+use crate::json as json_module;
+
 pub fn json_ok<T: Serialize>(value: T) -> Response<Body> {
-    json(value, StatusCode::OK)
+    json_response(value, StatusCode::OK)
 }
 
-pub fn json<T: Serialize>(value: T, code: StatusCode) -> Response<Body> {
-    let serialized = match serde_json::to_string(&value) {
+/// Alias for backwards compatibility
+pub use json_response as json;
+
+pub fn json_response<T: Serialize>(value: T, code: StatusCode) -> Response<Body> {
+    // Use compact JSON5 for transport efficiency, preserves NaN/Infinity
+    let serialized = match json_module::to_string_compact(&value) {
         Ok(v) => v,
         Err(err) => {
             return Response::builder()

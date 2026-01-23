@@ -28,7 +28,7 @@ use crate::{
             ServerInfoResponse, SocketPacket, SocketPacketBody, SocketPacketType, SubscribeMessage,
             WriteRequest, WriteResponse, PROTOCOL_VERSION, SERVER_VERSION,
         },
-        util::{json, json_ok},
+        util::{json_response, json_ok},
     },
     web_api::{
         BufferEncode, InstanceUpdate, RefPatchRequest, RefPatchResponse, SerializeRequest,
@@ -48,7 +48,7 @@ pub async fn call(serve_session: Arc<ServeSession>, mut request: Request<Body>) 
             if is_upgrade_request(&request) {
                 service.handle_api_socket(&mut request).await
             } else {
-                json(
+                json_response(
                     ErrorResponse::bad_request(
                         "/api/socket must be called as a websocket upgrade request",
                     ),
@@ -64,7 +64,7 @@ pub async fn call(serve_session: Arc<ServeSession>, mut request: Request<Body>) 
         }
         (&Method::POST, "/api/write") => service.handle_api_write(request).await,
 
-        (_method, path) => json(
+        (_method, path) => json_response(
             ErrorResponse::not_found(format!("Route not found: {}", path)),
             StatusCode::NOT_FOUND,
         ),
@@ -104,7 +104,7 @@ impl ApiService {
         let input_cursor: u32 = match argument.parse() {
             Ok(v) => v,
             Err(err) => {
-                return json(
+                return json_response(
                     ErrorResponse::bad_request(format!("Malformed message cursor: {}", err)),
                     StatusCode::BAD_REQUEST,
                 );
@@ -115,7 +115,7 @@ impl ApiService {
         let (response, websocket) = match upgrade(request, None) {
             Ok(result) => result,
             Err(err) => {
-                return json(
+                return json_response(
                     ErrorResponse::internal_error(format!("WebSocket upgrade failed: {}", err)),
                     StatusCode::INTERNAL_SERVER_ERROR,
                 );
@@ -145,7 +145,7 @@ impl ApiService {
         let request: WriteRequest = match json::from_slice(&body) {
             Ok(request) => request,
             Err(err) => {
-                return json(
+                return json_response(
                     ErrorResponse::bad_request(format!("Invalid body: {}", err)),
                     StatusCode::BAD_REQUEST,
                 );
@@ -153,7 +153,7 @@ impl ApiService {
         };
 
         if request.session_id != session_id {
-            return json(
+            return json_response(
                 ErrorResponse::bad_request("Wrong session ID"),
                 StatusCode::BAD_REQUEST,
             );
@@ -189,7 +189,7 @@ impl ApiService {
         let requested_ids = match requested_ids {
             Ok(ids) => ids,
             Err(_) => {
-                return json(
+                return json_response(
                     ErrorResponse::bad_request("Malformed ID list"),
                     StatusCode::BAD_REQUEST,
                 );
@@ -274,7 +274,7 @@ impl ApiService {
         let request: SerializeRequest = match json::from_slice(&body) {
             Ok(request) => request,
             Err(err) => {
-                return json(
+                return json_response(
                     ErrorResponse::bad_request(format!("Invalid body: {}", err)),
                     StatusCode::BAD_REQUEST,
                 );
@@ -282,7 +282,7 @@ impl ApiService {
         };
 
         if request.session_id != session_id {
-            return json(
+            return json_response(
                 ErrorResponse::bad_request("Wrong session ID"),
                 StatusCode::BAD_REQUEST,
             );
@@ -315,7 +315,7 @@ impl ApiService {
 
                 response_dom.transfer_within(child_ref, object_value);
             } else {
-                json(
+                json_response(
                     ErrorResponse::bad_request(format!("provided id {id} is not in the tree")),
                     StatusCode::BAD_REQUEST,
                 );
@@ -343,7 +343,7 @@ impl ApiService {
         let request: RefPatchRequest = match json::from_slice(&body) {
             Ok(request) => request,
             Err(err) => {
-                return json(
+                return json_response(
                     ErrorResponse::bad_request(format!("Invalid body: {}", err)),
                     StatusCode::BAD_REQUEST,
                 );
@@ -351,7 +351,7 @@ impl ApiService {
         };
 
         if request.session_id != session_id {
-            return json(
+            return json_response(
                 ErrorResponse::bad_request("Wrong session ID"),
                 StatusCode::BAD_REQUEST,
             );
@@ -400,7 +400,7 @@ impl ApiService {
         let requested_id = match Ref::from_str(argument) {
             Ok(id) => id,
             Err(_) => {
-                return json(
+                return json_response(
                     ErrorResponse::bad_request("Invalid instance ID"),
                     StatusCode::BAD_REQUEST,
                 );
@@ -412,7 +412,7 @@ impl ApiService {
         let instance = match tree.get_instance(requested_id) {
             Some(instance) => instance,
             None => {
-                return json(
+                return json_response(
                     ErrorResponse::bad_request("Instance not found"),
                     StatusCode::NOT_FOUND,
                 );
@@ -422,7 +422,7 @@ impl ApiService {
         let script_path = match pick_script_path(instance) {
             Some(path) => path,
             None => {
-                return json(
+                return json_response(
                     ErrorResponse::bad_request(
                         "No appropriate file could be found to open this script",
                     ),
@@ -435,7 +435,7 @@ impl ApiService {
             Ok(()) => {}
             Err(error) => match error {
                 OpenError::Io(io_error) => {
-                    return json(
+                    return json_response(
                         ErrorResponse::internal_error(format!(
                             "Attempting to open {} failed because of the following io error: {}",
                             script_path.display(),
@@ -449,7 +449,7 @@ impl ApiService {
                     status,
                     stderr,
                 } => {
-                    return json(
+                    return json_response(
                         ErrorResponse::internal_error(format!(
                             r#"The command '{}' to open '{}' failed with the error code '{}'.
                             Error logs:
@@ -554,7 +554,8 @@ async fn handle_websocket_subscription(
                                     }),
                                 };
 
-                                serde_json::to_string(&response)?
+                                // Use json5 to preserve NaN/Infinity values
+                                json5::to_string(&response)?
                             };
 
                             log::debug!("Sending batch of messages over WebSocket subscription");
