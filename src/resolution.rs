@@ -89,9 +89,19 @@ impl UnresolvedValue {
                 Variant::Color3(color) => {
                     AmbiguousValue::Array3([color.r as f64, color.g as f64, color.b as f64])
                 }
-                Variant::CFrame(cf) => Self::cframe_to_array12(cf),
+                Variant::CFrame(cf) => {
+                    if Self::cframe_is_nan(&cf) {
+                        return None;
+                    }
+                    Self::cframe_to_array12(cf)
+                }
                 Variant::OptionalCFrame(maybe_cf) => match maybe_cf {
-                    Some(cf) => Self::cframe_to_array12(cf),
+                    Some(cf) => {
+                        if Self::cframe_is_nan(&cf) {
+                            return None;
+                        }
+                        Self::cframe_to_array12(cf)
+                    }
                     None => return None,
                 },
                 Variant::Attributes(attr) => AmbiguousValue::Attributes(attr),
@@ -102,6 +112,13 @@ impl UnresolvedValue {
                 }
             }))
         } else {
+            // Skip OptionalCFrame(None) and CFrames with NaN values to avoid serializing null arrays
+            match &variant {
+                Variant::OptionalCFrame(None) => return None,
+                Variant::OptionalCFrame(Some(cf)) if Self::cframe_is_nan(cf) => return None,
+                Variant::CFrame(cf) if Self::cframe_is_nan(cf) => return None,
+                _ => {}
+            }
             Some(Self::FullyQualified(variant))
         }
     }
@@ -121,6 +138,21 @@ impl UnresolvedValue {
             cf.orientation.z.y as f64,
             cf.orientation.z.z as f64,
         ])
+    }
+
+    fn cframe_is_nan(cf: &CFrame) -> bool {
+        cf.position.x.is_nan()
+            || cf.position.y.is_nan()
+            || cf.position.z.is_nan()
+            || cf.orientation.x.x.is_nan()
+            || cf.orientation.x.y.is_nan()
+            || cf.orientation.x.z.is_nan()
+            || cf.orientation.y.x.is_nan()
+            || cf.orientation.y.y.is_nan()
+            || cf.orientation.y.z.is_nan()
+            || cf.orientation.z.x.is_nan()
+            || cf.orientation.z.y.is_nan()
+            || cf.orientation.z.z.is_nan()
     }
 
     /// Creates an `UnresolvedValue` from a variant, only returning ambiguous
