@@ -207,9 +207,13 @@ fn recurse_create_node<'a>(
         }
     } else {
         for val in file_paths {
-            output_file_paths.push(Cow::from(
-                val.strip_prefix(project_dir).expect(PATH_STRIP_FAILED_ERR),
-            ));
+            // Try to create relative path, fall back to absolute if path is outside project dir
+            match val.strip_prefix(project_dir) {
+                Ok(relative) => output_file_paths.push(Cow::from(relative)),
+                Err(_) => output_file_paths.push(Cow::Owned(
+                    path::absolute(val).expect(ABSOLUTE_PATH_FAILED_ERR),
+                )),
+            }
         }
     };
 
