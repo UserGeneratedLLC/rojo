@@ -147,11 +147,10 @@ impl AdjacentMetadata {
                     }
                 }
                 _ => {
-                    if let Some(resolved) =
-                        UnresolvedValue::from_variant(value.clone(), class, &name)
-                    {
-                        properties.insert(name, resolved);
-                    }
+                    properties.insert(
+                        name,
+                        UnresolvedValue::from_variant(value.clone(), class, &name),
+                    );
                 }
             }
         }
@@ -376,11 +375,10 @@ impl DirectoryMetadata {
                     }
                 }
                 _ => {
-                    if let Some(resolved) =
-                        UnresolvedValue::from_variant(value.clone(), class, &name)
-                    {
-                        properties.insert(name, resolved);
-                    }
+                    properties.insert(
+                        name,
+                        UnresolvedValue::from_variant(value.clone(), class, &name),
+                    );
                 }
             }
         }

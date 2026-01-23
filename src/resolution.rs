@@ -40,14 +40,12 @@ impl UnresolvedValue {
 
     /// Creates an `UnresolvedValue` from a variant, using a class and property
     /// name to potentially allow for ambiguous Enum variants.
-    ///
-    /// Returns `None` for variants that should not be serialized (e.g., `OptionalCFrame(None)`).
-    pub fn from_variant(variant: Variant, class_name: &str, prop_name: &str) -> Option<Self> {
+    pub fn from_variant(variant: Variant, class_name: &str, prop_name: &str) -> Self {
         let descriptor = find_descriptor(class_name, prop_name);
         if descriptor.is_some() {
             // We can only use an ambiguous syntax if the property is known
             // to the reflection database.
-            Some(Self::Ambiguous(match variant {
+            Self::Ambiguous(match variant {
                 Variant::Enum(rbx_enum) => {
                     if let Some(property) = descriptor {
                         if let DataType::Enum(enum_name) = &property.data_type {
@@ -55,15 +53,15 @@ impl UnresolvedValue {
                             if let Some(enum_descriptor) = database.enums.get(enum_name) {
                                 for (variant_name, id) in &enum_descriptor.items {
                                     if *id == rbx_enum.to_u32() {
-                                        return Some(Self::Ambiguous(AmbiguousValue::String(
+                                        return Self::Ambiguous(AmbiguousValue::String(
                                             variant_name.to_string(),
-                                        )));
+                                        ));
                                     }
                                 }
                             }
                         }
                     }
-                    return Some(Self::FullyQualified(variant));
+                    return Self::FullyQualified(variant);
                 }
                 Variant::Bool(bool) => AmbiguousValue::Bool(bool),
                 Variant::Float32(n) => AmbiguousValue::Number(n as f64),
@@ -77,7 +75,7 @@ impl UnresolvedValue {
                 Variant::Content(ref content) => match content.value() {
                     ContentType::None => AmbiguousValue::String(String::new()),
                     ContentType::Uri(uri) => AmbiguousValue::String(uri.clone()),
-                    _ => return Some(Self::FullyQualified(variant)),
+                    _ => return Self::FullyQualified(variant),
                 },
                 Variant::ContentId(content) => AmbiguousValue::String(content.into_string()),
                 Variant::Vector2(vector) => {
@@ -89,70 +87,30 @@ impl UnresolvedValue {
                 Variant::Color3(color) => {
                     AmbiguousValue::Array3([color.r as f64, color.g as f64, color.b as f64])
                 }
-                Variant::CFrame(cf) => {
-                    if Self::cframe_is_nan(&cf) {
-                        return None;
-                    }
-                    Self::cframe_to_array12(cf)
-                }
-                Variant::OptionalCFrame(maybe_cf) => match maybe_cf {
-                    Some(cf) => {
-                        if Self::cframe_is_nan(&cf) {
-                            return None;
-                        }
-                        Self::cframe_to_array12(cf)
-                    }
-                    None => return None,
-                },
+                Variant::CFrame(cf) => AmbiguousValue::Array12([
+                    cf.position.x as f64,
+                    cf.position.y as f64,
+                    cf.position.z as f64,
+                    cf.orientation.x.x as f64,
+                    cf.orientation.x.y as f64,
+                    cf.orientation.x.z as f64,
+                    cf.orientation.y.x as f64,
+                    cf.orientation.y.y as f64,
+                    cf.orientation.y.z as f64,
+                    cf.orientation.z.x as f64,
+                    cf.orientation.z.y as f64,
+                    cf.orientation.z.z as f64,
+                ]),
                 Variant::Attributes(attr) => AmbiguousValue::Attributes(attr),
                 Variant::Font(font) => AmbiguousValue::Font(font),
                 Variant::MaterialColors(colors) => AmbiguousValue::MaterialColors(colors),
                 _ => {
-                    return Some(Self::FullyQualified(variant));
+                    return Self::FullyQualified(variant);
                 }
-            }))
+            })
         } else {
-            // Skip OptionalCFrame(None) and CFrames with NaN values to avoid serializing null arrays
-            match &variant {
-                Variant::OptionalCFrame(None) => return None,
-                Variant::OptionalCFrame(Some(cf)) if Self::cframe_is_nan(cf) => return None,
-                Variant::CFrame(cf) if Self::cframe_is_nan(cf) => return None,
-                _ => {}
-            }
-            Some(Self::FullyQualified(variant))
+            Self::FullyQualified(variant)
         }
-    }
-
-    fn cframe_to_array12(cf: CFrame) -> AmbiguousValue {
-        AmbiguousValue::Array12([
-            cf.position.x as f64,
-            cf.position.y as f64,
-            cf.position.z as f64,
-            cf.orientation.x.x as f64,
-            cf.orientation.x.y as f64,
-            cf.orientation.x.z as f64,
-            cf.orientation.y.x as f64,
-            cf.orientation.y.y as f64,
-            cf.orientation.y.z as f64,
-            cf.orientation.z.x as f64,
-            cf.orientation.z.y as f64,
-            cf.orientation.z.z as f64,
-        ])
-    }
-
-    fn cframe_is_nan(cf: &CFrame) -> bool {
-        cf.position.x.is_nan()
-            || cf.position.y.is_nan()
-            || cf.position.z.is_nan()
-            || cf.orientation.x.x.is_nan()
-            || cf.orientation.x.y.is_nan()
-            || cf.orientation.x.z.is_nan()
-            || cf.orientation.y.x.is_nan()
-            || cf.orientation.y.y.is_nan()
-            || cf.orientation.y.z.is_nan()
-            || cf.orientation.z.x.is_nan()
-            || cf.orientation.z.y.is_nan()
-            || cf.orientation.z.z.is_nan()
     }
 
     /// Creates an `UnresolvedValue` from a variant, only returning ambiguous
@@ -267,11 +225,15 @@ impl AmbiguousValue {
                 }
 
                 (VariantType::CFrame, AmbiguousValue::Array12(value)) => {
-                    Ok(Self::array12_to_cframe(value).into())
-                }
+                    let value = value.map(|v| v as f32);
+                    let pos = Vector3::new(value[0], value[1], value[2]);
+                    let orientation = Matrix3::new(
+                        Vector3::new(value[3], value[4], value[5]),
+                        Vector3::new(value[6], value[7], value[8]),
+                        Vector3::new(value[9], value[10], value[11]),
+                    );
 
-                (VariantType::OptionalCFrame, AmbiguousValue::Array12(value)) => {
-                    Ok(Variant::OptionalCFrame(Some(Self::array12_to_cframe(value))))
+                    Ok(CFrame::new(pos, orientation).into())
                 }
 
                 (VariantType::Attributes, AmbiguousValue::Attributes(value)) => Ok(value.into()),
@@ -310,17 +272,6 @@ impl AmbiguousValue {
 
             other => bail!("Cannot unambiguously resolve the value {other:?}"),
         }
-    }
-
-    fn array12_to_cframe(value: [f64; 12]) -> CFrame {
-        let value = value.map(|v| v as f32);
-        let pos = Vector3::new(value[0], value[1], value[2]);
-        let orientation = Matrix3::new(
-            Vector3::new(value[3], value[4], value[5]),
-            Vector3::new(value[6], value[7], value[8]),
-            Vector3::new(value[9], value[10], value[11]),
-        );
-        CFrame::new(pos, orientation)
     }
 
     fn describe(&self) -> &'static str {
