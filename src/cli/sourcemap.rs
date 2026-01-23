@@ -20,7 +20,6 @@ use crate::{
 
 use super::resolve_path;
 
-const PATH_STRIP_FAILED_ERR: &str = "Failed to create relative paths for project file!";
 const ABSOLUTE_PATH_FAILED_ERR: &str = "Failed to turn relative path into absolute path!";
 
 /// Representation of a node in the generated sourcemap tree.
@@ -198,24 +197,29 @@ fn recurse_create_node<'a>(
     let mut output_file_paths: Vec<Cow<'a, Path>> =
         Vec::with_capacity(instance.metadata().relevant_paths.len());
 
-    if use_absolute_paths {
-        // It's somewhat important to note here that `path::absolute` takes in a Path and returns a PathBuf
-        for val in file_paths {
-            output_file_paths.push(Cow::Owned(
-                path::absolute(val).expect(ABSOLUTE_PATH_FAILED_ERR),
-            ));
-        }
-    } else {
-        for val in file_paths {
-            // Try to create relative path, fall back to absolute if path is outside project dir
-            match val.strip_prefix(project_dir) {
-                Ok(relative) => output_file_paths.push(Cow::from(relative)),
-                Err(_) => output_file_paths.push(Cow::Owned(
-                    path::absolute(val).expect(ABSOLUTE_PATH_FAILED_ERR),
-                )),
+    // Canonicalize project_dir once for consistent comparison
+    let canonical_project_dir = std::fs::canonicalize(project_dir).ok();
+
+    for val in file_paths {
+        if use_absolute_paths {
+            let abs_path = path::absolute(val).expect(ABSOLUTE_PATH_FAILED_ERR);
+            output_file_paths.push(Cow::Owned(abs_path));
+        } else if let Some(ref proj_dir) = canonical_project_dir {
+            // Canonicalize file path and strip project dir prefix to get relative path
+            if let Ok(canonical_file) = std::fs::canonicalize(val) {
+                if let Ok(relative) = canonical_file.strip_prefix(proj_dir) {
+                    output_file_paths.push(Cow::Owned(relative.to_path_buf()));
+                    continue;
+                }
             }
+            // Fallback: file is outside project dir
+            let abs_path = path::absolute(val).expect(ABSOLUTE_PATH_FAILED_ERR);
+            output_file_paths.push(Cow::Owned(abs_path));
+        } else {
+            let abs_path = path::absolute(val).expect(ABSOLUTE_PATH_FAILED_ERR);
+            output_file_paths.push(Cow::Owned(abs_path));
         }
-    };
+    }
 
     Some(SourcemapNode {
         name: instance.name(),
