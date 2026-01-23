@@ -554,8 +554,8 @@ async fn handle_websocket_subscription(
                                     }),
                                 };
 
-                                // Use json5 to preserve NaN/Infinity values
-                                json5::to_string(&response)?
+                                // Use compact JSON5 encoder for transport efficiency, preserves NaN/Infinity
+                                json::to_string_compact(&response)?
                             };
 
                             log::debug!("Sending batch of messages over WebSocket subscription");
