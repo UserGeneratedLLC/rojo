@@ -3,8 +3,8 @@ source: tests/tests/syncback.rs
 expression: src/pointer.model.json
 ---
 {
-  "attributes": {
-    "Rojo_Ref_Value": "ReplicatedStorage/target"
+  className: "ObjectValue",
+  attributes: {
+    Rojo_Ref_Value: "ReplicatedStorage/target",
   },
-  "className": "ObjectValue"
 }

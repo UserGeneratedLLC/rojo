@@ -8,6 +8,7 @@ metadata:
   relevant_paths:
     - /foo/init.meta.json
     - /foo/init.meta.jsonc
+    - /foo/init.meta.json5
   context:
     emit_legacy_scripts: true
     decode_windows_invalid_chars: false

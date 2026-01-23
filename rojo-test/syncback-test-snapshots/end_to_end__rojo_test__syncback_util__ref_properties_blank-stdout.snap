@@ -2,5 +2,5 @@
 source: tests/rojo_test/syncback_util.rs
 expression: "String::from_utf8_lossy(&output.stdout)"
 ---
-Writing src/pointer.model.json
+Writing src/pointer.model.json5
 Writing src/target.txt

@@ -182,7 +182,7 @@ pub fn syncback_lua<'sync>(
                 meta_name.to_string()
             };
             fs_snapshot.add_file(
-                parent_location.join(format!("{}.meta.json", meta_name)),
+                parent_location.join(format!("{}.meta.json5", meta_name)),
                 crate::json::to_vec_pretty_sorted(&meta).context("cannot serialize metadata")?,
             );
         }
@@ -225,9 +225,9 @@ pub fn syncback_lua_init<'sync>(
 
         if !meta.is_empty() {
             dir_syncback.fs_snapshot.add_file(
-                snapshot.path.join("init.meta.json"),
+                snapshot.path.join("init.meta.json5"),
                 crate::json::to_vec_pretty_sorted(&meta)
-                    .context("could not serialize new init.meta.json")?,
+                    .context("could not serialize new init.meta.json5")?,
             );
         }
     }

@@ -4,7 +4,7 @@ expression: "String::from_utf8_lossy(&output.stdout)"
 ---
 Writing default.project.json
 Writing src/adjacent.luau
-Writing src/adjacent.meta.json
-Writing src/init/init.meta.json
+Writing src/adjacent.meta.json5
+Writing src/init/init.meta.json5
 Writing src/model.model.json
 Writing src/init

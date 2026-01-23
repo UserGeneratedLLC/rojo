@@ -3,17 +3,17 @@ source: tests/tests/syncback.rs
 expression: nested.project.json
 ---
 {
-  "name": "Nested",
-  "tree": {
-    "$className": "Configuration",
-    "BoolValue": {
-      "$className": "BoolValue",
-      "$properties": {
-        "Value": true
-      }
+  name: "Nested",
+  tree: {
+    $className: "Configuration",
+    BoolValue: {
+      $className: "BoolValue",
+      $properties: {
+        Value: true,
+      },
     },
-    "StringValue": {
-      "$path": "string_value.txt"
-    }
-  }
+    StringValue: {
+      $path: "string_value.txt",
+    },
+  },
 }

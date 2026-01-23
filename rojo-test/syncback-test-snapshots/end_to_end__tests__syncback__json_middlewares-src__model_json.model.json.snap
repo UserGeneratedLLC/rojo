@@ -3,8 +3,8 @@ source: tests/tests/syncback.rs
 expression: src/model_json.model.json
 ---
 {
-  "className": "StringValue",
-  "properties": {
-    "Value": "This text is model_json"
-  }
+  className: "StringValue",
+  properties: {
+    Value: "This text is model_json",
+  },
 }

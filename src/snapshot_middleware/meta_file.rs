@@ -65,6 +65,7 @@ impl AdjacentMetadata {
             .unwrap_or(file_stem);
         let meta_path_json = path.with_file_name(format!("{base_name}.meta.json"));
         let meta_path_jsonc = path.with_file_name(format!("{base_name}.meta.jsonc"));
+        let meta_path_json5 = path.with_file_name(format!("{base_name}.meta.json5"));
 
         if let Some(meta_contents) = vfs.read(&meta_path_json).with_not_found()? {
             let mut metadata = Self::from_slice(&meta_contents, meta_path_json.clone())?;
@@ -72,13 +73,19 @@ impl AdjacentMetadata {
         }
 
         if let Some(meta_contents) = vfs.read(&meta_path_jsonc).with_not_found()? {
-            let mut metadata = Self::from_slice(&meta_contents, meta_path_json.clone())?;
+            let mut metadata = Self::from_slice(&meta_contents, meta_path_jsonc.clone())?;
+            metadata.apply_all(snapshot)?;
+        }
+
+        if let Some(meta_contents) = vfs.read(&meta_path_json5).with_not_found()? {
+            let mut metadata = Self::from_slice(&meta_contents, meta_path_json5.clone())?;
             metadata.apply_all(snapshot)?;
         }
 
         // Rather than pushing these in the snapshot middleware, we can just do it here.
         snapshot.metadata.relevant_paths.push(meta_path_json);
         snapshot.metadata.relevant_paths.push(meta_path_jsonc);
+        snapshot.metadata.relevant_paths.push(meta_path_json5);
 
         Ok(())
     }
@@ -290,6 +297,7 @@ impl DirectoryMetadata {
     ) -> anyhow::Result<()> {
         let meta_path_json = path.join("init.meta.json");
         let meta_path_jsonc = path.join("init.meta.jsonc");
+        let meta_path_json5 = path.join("init.meta.json5");
 
         if let Some(meta_contents) = vfs.read(&meta_path_json).with_not_found()? {
             let mut metadata = Self::from_slice(&meta_contents, meta_path_json.clone())?;
@@ -301,9 +309,15 @@ impl DirectoryMetadata {
             metadata.apply_all(snapshot)?;
         }
 
+        if let Some(meta_contents) = vfs.read(&meta_path_json5).with_not_found()? {
+            let mut metadata = Self::from_slice(&meta_contents, meta_path_json5.clone())?;
+            metadata.apply_all(snapshot)?;
+        }
+
         // Rather than pushing these in the snapshot middleware, we can just do it here.
         snapshot.metadata.relevant_paths.push(meta_path_json);
         snapshot.metadata.relevant_paths.push(meta_path_jsonc);
+        snapshot.metadata.relevant_paths.push(meta_path_json5);
 
         Ok(())
     }
@@ -495,32 +509,34 @@ impl DirectoryMetadata {
 }
 
 /// Retrieves the meta file that should be applied for the provided directory,
-/// if it exists.
+/// if it exists. Checks for .json5, .jsonc, and .json in that order.
 pub fn dir_meta(vfs: &Vfs, path: &Path) -> anyhow::Result<Option<DirectoryMetadata>> {
-    let meta_path = path.join("init.meta.json");
-
-    if let Some(meta_contents) = vfs.read(&meta_path).with_not_found()? {
-        let metadata = DirectoryMetadata::from_slice(&meta_contents, meta_path)?;
-        Ok(Some(metadata))
-    } else {
-        Ok(None)
+    // Check json5 first (preferred), then jsonc, then json
+    for ext in ["init.meta.json5", "init.meta.jsonc", "init.meta.json"] {
+        let meta_path = path.join(ext);
+        if let Some(meta_contents) = vfs.read(&meta_path).with_not_found()? {
+            let metadata = DirectoryMetadata::from_slice(&meta_contents, meta_path)?;
+            return Ok(Some(metadata));
+        }
     }
+    Ok(None)
 }
 
 /// Retrieves the meta file that should be applied for the provided file,
-/// if it exists.
+/// if it exists. Checks for .json5, .jsonc, and .json in that order.
 ///
 /// The `name` field should be the name the metadata should have.
 pub fn file_meta(vfs: &Vfs, path: &Path, name: &str) -> anyhow::Result<Option<AdjacentMetadata>> {
-    let mut meta_path = path.with_file_name(name);
-    meta_path.set_extension("meta.json");
-
-    if let Some(meta_contents) = vfs.read(&meta_path).with_not_found()? {
-        let metadata = AdjacentMetadata::from_slice(&meta_contents, meta_path)?;
-        Ok(Some(metadata))
-    } else {
-        Ok(None)
+    // Check json5 first (preferred), then jsonc, then json
+    for ext in ["meta.json5", "meta.jsonc", "meta.json"] {
+        let mut meta_path = path.with_file_name(name);
+        meta_path.set_extension(ext);
+        if let Some(meta_contents) = vfs.read(&meta_path).with_not_found()? {
+            let metadata = AdjacentMetadata::from_slice(&meta_contents, meta_path)?;
+            return Ok(Some(metadata));
+        }
     }
+    Ok(None)
 }
 
 #[cfg(test)]

@@ -16,7 +16,7 @@ use crate::{
 };
 
 /// Represents 'default' project names that act as `init` files
-pub static DEFAULT_PROJECT_NAMES: [&str; 2] = ["default.project.json", "default.project.jsonc"];
+pub static DEFAULT_PROJECT_NAMES: [&str; 3] = ["default.project.json", "default.project.jsonc", "default.project.json5"];
 
 /// Error type returned by any function that handles projects.
 #[derive(Debug, Error)]
@@ -48,7 +48,8 @@ enum Error {
 
     #[error("Error parsing Rojo project in path {}", .path.display())]
     Json {
-        source: serde_json::Error,
+        #[source]
+        source: anyhow::Error,
         path: PathBuf,
     },
 }
@@ -145,7 +146,7 @@ impl Project {
     pub fn is_project_file(path: &Path) -> bool {
         path.file_name()
             .and_then(|name| name.to_str())
-            .map(|name| name.ends_with(".project.json") || name.ends_with(".project.jsonc"))
+            .map(|name| name.ends_with(".project.json") || name.ends_with(".project.jsonc") || name.ends_with(".project.json5"))
             .unwrap_or(false)
     }
 
@@ -234,10 +235,7 @@ impl Project {
         fallback_name: Option<&str>,
     ) -> Result<Self, Error> {
         let mut project: Self = json::from_slice(contents).map_err(|e| Error::Json {
-            source: serde_json::Error::io(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                e.to_string(),
-            )),
+            source: e,
             path: project_file_location.clone(),
         })?;
         project.file_location = project_file_location;

@@ -3,18 +3,18 @@ source: tests/tests/syncback.rs
 expression: default.project.json
 ---
 {
-  "$schema": "rojo/project-schema",
-  "name": "schema_roundtrip",
-  "tree": {
-    "$className": "Folder",
-    "src": {
-      "$path": "src"
+  $schema: "rojo/project-schema",
+  name: "schema_roundtrip",
+  tree: {
+    $className: "Folder",
+    src: {
+      $path: "src",
     },
-    "trigger_reserialization": {
-      "$className": "BoolValue",
-      "$properties": {
-        "Value": true
-      }
-    }
-  }
+    trigger_reserialization: {
+      $className: "BoolValue",
+      $properties: {
+        Value: true,
+      },
+    },
+  },
 }

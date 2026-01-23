@@ -116,7 +116,7 @@ pub fn syncback_csv<'sync>(
                 new_inst.name.clone()
             };
             fs_snapshot.add_file(
-                parent.join(format!("{}.meta.json", meta_name)),
+                parent.join(format!("{}.meta.json5", meta_name)),
                 crate::json::to_vec_pretty_sorted(&meta).context("cannot serialize metadata")?,
             )
         }
@@ -154,9 +154,9 @@ pub fn syncback_csv_init<'sync>(
         meta.properties.shift_remove(&ustr("Contents"));
         if !meta.is_empty() {
             dir_syncback.fs_snapshot.add_file(
-                snapshot.path.join("init.meta.json"),
+                snapshot.path.join("init.meta.json5"),
                 crate::json::to_vec_pretty_sorted(&meta)
-                    .context("could not serialize new init.meta.json")?,
+                    .context("could not serialize new init.meta.json5")?,
             );
         }
     }
@@ -256,7 +256,7 @@ fn localization_to_csv(csv_contents: &str) -> anyhow::Result<Vec<u8>> {
     let mut writer = csv::Writer::from_writer(&mut out);
 
     let mut csv: Vec<LocalizationEntry> =
-        serde_json::from_str(csv_contents).context("cannot decode JSON from localization table")?;
+        json5::from_str(csv_contents).context("cannot decode JSON from localization table")?;
 
     // TODO sort this better
     csv.sort_by(|a, b| a.source.partial_cmp(&b.source).unwrap());

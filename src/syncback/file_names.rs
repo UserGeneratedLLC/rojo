@@ -85,13 +85,13 @@ pub fn name_for_inst<'old>(
 pub fn extension_for_middleware(middleware: Middleware) -> &'static str {
     match middleware {
         Middleware::Csv => "csv",
-        Middleware::JsonModel => "model.json",
-        Middleware::Json => "json",
+        Middleware::JsonModel => "model.json5",
+        Middleware::Json => "json5",
         Middleware::ServerScript => "server.luau",
         Middleware::ClientScript => "client.luau",
         Middleware::ModuleScript => "luau",
         Middleware::PluginScript => "plugin.luau",
-        Middleware::Project => "project.json",
+        Middleware::Project => "project.json5",
         Middleware::Rbxm => "rbxm",
         Middleware::Rbxmx => "rbxmx",
         Middleware::Toml => "toml",

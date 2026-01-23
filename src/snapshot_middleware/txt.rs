@@ -65,7 +65,7 @@ pub fn syncback_txt<'sync>(
                 new_inst.name.clone()
             };
             fs_snapshot.add_file(
-                parent.join(format!("{}.meta.json", meta_name)),
+                parent.join(format!("{}.meta.json5", meta_name)),
                 crate::json::to_vec_pretty_sorted(&meta).context("could not serialize metadata")?,
             );
         }

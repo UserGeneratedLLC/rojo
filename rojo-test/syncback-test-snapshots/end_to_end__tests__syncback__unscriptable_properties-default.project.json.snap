@@ -3,16 +3,16 @@ source: tests/tests/syncback.rs
 expression: default.project.json
 ---
 {
-  "name": "unscriptable_properties",
-  "syncbackRules": {
-    "syncUnscriptable": true
+  name: "unscriptable_properties",
+  syncbackRules: {
+    syncUnscriptable: true,
   },
-  "tree": {
-    "$className": "BinaryStringValue",
-    "$properties": {
-      "Value": {
-        "BinaryString": "Rojo/is/cool"
-      }
-    }
-  }
+  tree: {
+    $className: "BinaryStringValue",
+    $properties: {
+      Value: {
+        BinaryString: "Rojo/is/cool",
+      },
+    },
+  },
 }

@@ -11,6 +11,7 @@ metadata:
     - /foo/other.txt
     - /foo/other.meta.json
     - /foo/other.meta.jsonc
+    - /foo/other.meta.json5
     - /foo/default.project.json
   context:
     emit_legacy_scripts: true

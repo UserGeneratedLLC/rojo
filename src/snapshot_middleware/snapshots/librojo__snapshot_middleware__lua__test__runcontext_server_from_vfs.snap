@@ -11,6 +11,7 @@ metadata:
     - /foo.server.lua
     - /foo.meta.json
     - /foo.meta.jsonc
+    - /foo.meta.json5
   context:
     emit_legacy_scripts: false
     decode_windows_invalid_chars: false

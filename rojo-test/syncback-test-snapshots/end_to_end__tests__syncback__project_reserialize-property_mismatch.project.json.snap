@@ -3,13 +3,13 @@ source: tests/tests/syncback.rs
 expression: property_mismatch.project.json
 ---
 {
-  "name": "property_mismatch",
-  "tree": {
-    "$className": "BrickColorValue",
-    "$properties": {
-      "Value": {
-        "BrickColor": 345
-      }
-    }
-  }
+  name: "property_mismatch",
+  tree: {
+    $className: "BrickColorValue",
+    $properties: {
+      Value: {
+        BrickColor: 345,
+      },
+    },
+  },
 }

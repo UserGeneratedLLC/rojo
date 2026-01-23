@@ -18,6 +18,7 @@ metadata:
     - /root/init.csv
     - /root/init.meta.json
     - /root/init.meta.jsonc
+    - /root/init.meta.json5
   context:
     emit_legacy_scripts: true
     decode_windows_invalid_chars: false

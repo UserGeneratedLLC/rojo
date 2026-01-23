@@ -18,6 +18,7 @@ metadata:
     - /foo/init.csv
     - /foo/init.meta.json
     - /foo/init.meta.jsonc
+    - /foo/init.meta.json5
   context:
     emit_legacy_scripts: true
     decode_windows_invalid_chars: false
@@ -44,6 +45,7 @@ children:
         - /foo/Child/init.csv
         - /foo/Child/init.meta.json
         - /foo/Child/init.meta.jsonc
+        - /foo/Child/init.meta.json5
       context:
         emit_legacy_scripts: true
         decode_windows_invalid_chars: false
