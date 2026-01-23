@@ -165,8 +165,12 @@ impl serde::ser::Error for CompactJson5Error {
 /// Returns an error if the value cannot be serialized to JSON5.
 pub fn to_string_compact<T: Serialize>(value: &T) -> anyhow::Result<String> {
     let mut output = String::new();
-    let mut serializer = CompactJson5Serializer { output: &mut output };
-    value.serialize(&mut serializer).map_err(|e| anyhow::anyhow!("{}", e))?;
+    let mut serializer = CompactJson5Serializer {
+        output: &mut output,
+    };
+    value
+        .serialize(&mut serializer)
+        .map_err(|e| anyhow::anyhow!("{}", e))?;
     Ok(output)
 }
 
@@ -764,7 +768,9 @@ mod tests {
     #[test]
     fn test_deserialize_infinity() {
         #[derive(Debug, Deserialize)]
-        struct TestFloat { x: f64 }
+        struct TestFloat {
+            x: f64,
+        }
         let result: TestFloat = from_str(r#"{ "x": Infinity }"#).unwrap();
         assert!(result.x.is_infinite() && result.x.is_sign_positive());
     }
@@ -772,7 +778,9 @@ mod tests {
     #[test]
     fn test_deserialize_negative_infinity() {
         #[derive(Debug, Deserialize)]
-        struct TestFloat { x: f64 }
+        struct TestFloat {
+            x: f64,
+        }
         let result: TestFloat = from_str(r#"{ "x": -Infinity }"#).unwrap();
         assert!(result.x.is_infinite() && result.x.is_sign_negative());
     }
@@ -780,7 +788,9 @@ mod tests {
     #[test]
     fn test_deserialize_nan() {
         #[derive(Debug, Deserialize)]
-        struct TestFloat { x: f64 }
+        struct TestFloat {
+            x: f64,
+        }
         let result: TestFloat = from_str(r#"{ "x": NaN }"#).unwrap();
         assert!(result.x.is_nan());
     }
@@ -956,7 +966,9 @@ mod tests {
 
         assert_eq!(result.normal, 42.5);
         assert!(result.infinity.is_infinite() && result.infinity.is_sign_positive());
-        assert!(result.negative_infinity.is_infinite() && result.negative_infinity.is_sign_negative());
+        assert!(
+            result.negative_infinity.is_infinite() && result.negative_infinity.is_sign_negative()
+        );
         assert!(result.nan_value.is_nan());
     }
 
@@ -994,7 +1006,9 @@ mod tests {
 
         assert_eq!(deserialized.normal, original.normal);
         assert!(deserialized.infinity.is_infinite() && deserialized.infinity.is_sign_positive());
-        assert!(deserialized.neg_infinity.is_infinite() && deserialized.neg_infinity.is_sign_negative());
+        assert!(
+            deserialized.neg_infinity.is_infinite() && deserialized.neg_infinity.is_sign_negative()
+        );
     }
 
     #[test]
@@ -1047,15 +1061,22 @@ mod tests {
         let deserialized: CFrameData = from_str(&json_str).unwrap();
 
         // Verify position
-        assert!(deserialized.position[0].is_infinite() && deserialized.position[0].is_sign_positive());
+        assert!(
+            deserialized.position[0].is_infinite() && deserialized.position[0].is_sign_positive()
+        );
         assert!(deserialized.position[1].is_nan());
-        assert!(deserialized.position[2].is_infinite() && deserialized.position[2].is_sign_negative());
+        assert!(
+            deserialized.position[2].is_infinite() && deserialized.position[2].is_sign_negative()
+        );
 
         // Verify orientation
         assert_eq!(deserialized.orientation[0][0], 1.0);
         assert!(deserialized.orientation[0][2].is_nan());
         assert!(deserialized.orientation[1][1].is_infinite());
-        assert!(deserialized.orientation[2][0].is_infinite() && deserialized.orientation[2][0].is_sign_negative());
+        assert!(
+            deserialized.orientation[2][0].is_infinite()
+                && deserialized.orientation[2][0].is_sign_negative()
+        );
     }
 
     #[test]
@@ -1093,7 +1114,11 @@ mod tests {
         let deserialized: MetaFile = from_str(&json_str).unwrap();
 
         assert_eq!(deserialized.class_name, "Humanoid");
-        assert!(deserialized.properties.get("Transparency").unwrap().is_nan());
+        assert!(deserialized
+            .properties
+            .get("Transparency")
+            .unwrap()
+            .is_nan());
         assert!(deserialized.properties.get("Health").unwrap().is_infinite());
         assert_eq!(*deserialized.properties.get("WalkSpeed").unwrap(), 16.0);
     }

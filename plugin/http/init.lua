@@ -72,7 +72,7 @@ function Http.jsonDecode(source)
 	if success then
 		return result
 	end
-	print("[HTTP Response:json()] Native decode failed, using JSON5 for size:", #self.body)
+	print("[Http.jsonDecode] Native decode failed, using JSON5 for size:", #source)
 	return JSON5Decoder.Decode(source)
 end
 

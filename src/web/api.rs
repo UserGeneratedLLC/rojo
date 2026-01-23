@@ -28,7 +28,7 @@ use crate::{
             ServerInfoResponse, SocketPacket, SocketPacketBody, SocketPacketType, SubscribeMessage,
             WriteRequest, WriteResponse, PROTOCOL_VERSION, SERVER_VERSION,
         },
-        util::{json_response, json_ok},
+        util::{json_ok, json_response},
     },
     web_api::{
         BufferEncode, InstanceUpdate, RefPatchRequest, RefPatchResponse, SerializeRequest,
