@@ -27,9 +27,14 @@ function ChangeBatcher.new(instanceMap, onChangesFlushed)
 		__instanceMap = instanceMap,
 		__onChangesFlushed = onChangesFlushed,
 		__pendingPropertyChanges = {},
+		__syncSourceOnly = false,
 	}, ChangeBatcher)
 
 	return self
+end
+
+function ChangeBatcher:setSyncSourceOnly(enabled)
+	self.__syncSourceOnly = enabled
 end
 
 function ChangeBatcher:stop()
@@ -69,7 +74,7 @@ function ChangeBatcher:__flush()
 		return nil
 	end
 
-	local patch = createPatchSet(self.__instanceMap, self.__pendingPropertyChanges)
+	local patch = createPatchSet(self.__instanceMap, self.__pendingPropertyChanges, self.__syncSourceOnly)
 
 	if PatchSet.isEmpty(patch) then
 		return nil

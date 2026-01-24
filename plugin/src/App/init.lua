@@ -106,13 +106,17 @@ function App:init()
 			-- Our notif is now out of date- redoing will not restore the patch
 			-- since we've undone even further. Dismiss the notif.
 			cleanup()
-			dismissNotif()
+			if dismissNotif then
+				dismissNotif()
+			end
 		end)
 		redoConnection = ChangeHistoryService.OnRedo:Once(function(redoneAction: string)
 			if redoneAction == action then
 				-- The user has restored the patch, so we can dismiss the notif
 				cleanup()
-				dismissNotif()
+				if dismissNotif then
+					dismissNotif()
+				end
 			end
 		end)
 	end)

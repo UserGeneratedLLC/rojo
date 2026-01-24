@@ -12,7 +12,7 @@ local PatchSet = require(script.Parent.Parent.PatchSet)
 
 local encodePatchUpdate = require(script.Parent.encodePatchUpdate)
 
-return function(instanceMap, propertyChanges)
+return function(instanceMap, propertyChanges, syncSourceOnly)
 	local patch = PatchSet.newEmpty()
 
 	for instance, properties in propertyChanges do
@@ -30,8 +30,20 @@ return function(instanceMap, propertyChanges)
 				Log.warn("Cannot sync non-nil Parent property changes yet")
 			end
 		else
-			local update = encodePatchUpdate(instance, instanceId, properties)
-			table.insert(patch.updated, update)
+			if syncSourceOnly then
+				-- Filter to only Source property when server is in source-only mode
+				if properties.Source then
+					local update = encodePatchUpdate(instance, instanceId, { Source = true })
+					if update then
+						table.insert(patch.updated, update)
+					end
+				end
+			else
+				local update = encodePatchUpdate(instance, instanceId, properties)
+				if update then
+					table.insert(patch.updated, update)
+				end
+			end
 		end
 
 		propertyChanges[instance] = nil

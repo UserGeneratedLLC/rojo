@@ -100,6 +100,7 @@ function ServeSession.new(options)
 		__status = Status.NotStarted,
 		__apiContext = options.apiContext,
 		__twoWaySync = options.twoWaySync,
+		__syncSourceOnly = false,
 		__reconciler = reconciler,
 		__instanceMap = instanceMap,
 		__changeBatcher = changeBatcher,
@@ -196,6 +197,11 @@ function ServeSession:start()
 		:connect()
 		:andThen(function(serverInfo)
 			self:setLoadingText("Loading initial data from server...")
+
+			-- Configure sync mode based on server capabilities
+			self.__syncSourceOnly = serverInfo.syncSourceOnly or false
+			self.__changeBatcher:setSyncSourceOnly(self.__syncSourceOnly)
+
 			return self:__initialSync(serverInfo):andThen(function()
 				self:setLoadingText("Starting sync loop...")
 				self:__setStatus(Status.Connected, serverInfo.projectName)
@@ -526,8 +532,20 @@ function ServeSession:__initialSync(serverInfo)
 					continue
 				end
 
-				local update = encodePatchUpdate(instance, change.id, change.changedProperties)
-				table.insert(inversePatch.updated, update)
+				local propertiesToSync = change.changedProperties
+				if self.__syncSourceOnly then
+					-- Filter to only Source property when server is in source-only mode
+					if propertiesToSync.Source then
+						propertiesToSync = { Source = propertiesToSync.Source }
+					else
+						continue
+					end
+				end
+
+				local update = encodePatchUpdate(instance, change.id, propertiesToSync)
+				if update then
+					table.insert(inversePatch.updated, update)
+				end
 			end
 			-- Add the removed instances back to Rojo
 			-- selene:allow(empty_if, unused_variable, empty_loop)

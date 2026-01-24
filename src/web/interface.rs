@@ -165,6 +165,10 @@ pub struct ServerInfoResponse {
     pub game_id: Option<u64>,
     pub place_id: Option<u64>,
     pub root_instance_id: Ref,
+    /// When true, the server only supports syncing script Source property changes.
+    /// Other property changes will be ignored.
+    #[serde(default)]
+    pub sync_source_only: bool,
 }
 
 /// Response body from /api/read/{id}
