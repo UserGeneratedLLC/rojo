@@ -95,7 +95,7 @@ function ConfirmingPage:render()
 					text = "Reject",
 					style = "Warning",
 					transparency = self.props.transparency,
-					layoutOrder = 2,
+					layoutOrder = 0,
 					onClick = function()
 						self:setState({ showingRejectConfirm = true })
 					end,

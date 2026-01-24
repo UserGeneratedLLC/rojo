@@ -200,7 +200,16 @@ impl JobThreadContext {
                 if let Some(instance) = tree.get_instance(id) {
                     if let Some(instigating_source) = &instance.metadata().instigating_source {
                         match instigating_source {
-                            InstigatingSource::Path(path) => fs::remove_file(path).unwrap(),
+                            InstigatingSource::Path(path) => {
+                                if let Err(err) = fs::remove_file(path) {
+                                    log::error!(
+                                        "Failed to remove file {:?} for instance {:?}: {}",
+                                        path,
+                                        id,
+                                        err
+                                    );
+                                }
+                            }
                             InstigatingSource::ProjectNode { .. } => {
                                 log::warn!(
                                     "Cannot remove instance {:?}, it's from a project file",
@@ -244,14 +253,21 @@ impl JobThreadContext {
                                 match instigating_source {
                                     InstigatingSource::Path(path) => {
                                         if let Some(Variant::String(value)) = changed_value {
-                                            fs::write(path, value).unwrap();
+                                            if let Err(err) = fs::write(path, value) {
+                                                log::error!(
+                                                    "Failed to write Source to {:?} for instance {:?}: {}",
+                                                    path,
+                                                    id,
+                                                    err
+                                                );
+                                            }
                                         } else {
                                             log::warn!("Cannot change Source to non-string value.");
                                         }
                                     }
                                     InstigatingSource::ProjectNode { .. } => {
                                         log::warn!(
-                                            "Cannot remove instance {:?}, it's from a project file",
+                                            "Cannot update instance {:?}, it's from a project file",
                                             id
                                         );
                                     }
