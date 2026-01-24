@@ -113,6 +113,8 @@ end
 
 function DomLabel:willUnmount()
 	self.isMounted = false
+	-- Stop the motor to prevent onStep callbacks after unmount
+	self.motor:stop()
 	if self.motorStepConnection then
 		self.motorStepConnection:disconnect()
 		self.motorStepConnection = nil
