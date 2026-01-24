@@ -75,6 +75,19 @@ function StudioProvider:updateTheme()
 					BackgroundColor = BRAND_COLOR,
 				},
 			},
+			Warning = {
+				-- Warning uses orange theming for destructive actions.
+				ActionFillColor = Color3.fromHex("FFFFFF"),
+				ActionFillTransparency = 0.8,
+				Enabled = {
+					TextColor = Color3.fromHex("FFFFFF"),
+					BackgroundColor = Color3.fromHex("E67E22"),
+				},
+				Disabled = {
+					TextColor = Color3.fromHex("FFFFFF"),
+					BackgroundColor = Color3.fromHex("B5651D"),
+				},
+			},
 			Bordered = {
 				ActionFillColor = studioTheme:GetColor(
 					Enum.StudioStyleGuideColor.ButtonText,

@@ -95,7 +95,7 @@ function TextButton:render()
 				BackgroundTransparency = 1,
 			}),
 
-			Border = style == "Bordered" and e(SlicedImage, {
+			Border = (style == "Bordered") and e(SlicedImage, {
 				slice = Assets.Slices.RoundedBorder,
 				color = bindingUtil.mapLerp(
 					bindingEnabled,
@@ -130,7 +130,7 @@ function TextButton:render()
 				zIndex = -1,
 			}),
 
-			Background = style == "Solid" and e(SlicedImage, {
+			Background = (style == "Solid" or style == "Warning") and e(SlicedImage, {
 				slice = Assets.Slices.RoundedBackground,
 				color = bindingUtil.mapLerp(
 					bindingEnabled,

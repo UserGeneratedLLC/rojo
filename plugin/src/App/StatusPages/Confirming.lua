@@ -28,6 +28,7 @@ function ConfirmingPage:init()
 		showingTableDiff = false,
 		oldTable = {},
 		newTable = {},
+		showingRejectConfirm = false,
 	})
 end
 
@@ -89,19 +90,21 @@ function ConfirmingPage:render()
 					}),
 				}),
 
-				Reject = if Settings:get("twoWaySync")
-					then e(TextButton, {
-						text = "Reject",
-						style = "Bordered",
-						transparency = self.props.transparency,
-						layoutOrder = 2,
-						onClick = self.props.onReject,
-					}, {
-						Tip = e(Tooltip.Trigger, {
-							text = "Push Studio changes to the Rojo server",
-						}),
-					})
-					else nil,
+			Reject = if Settings:get("twoWaySync")
+				then e(TextButton, {
+					text = "Reject",
+					style = "Warning",
+					transparency = self.props.transparency,
+					layoutOrder = 2,
+					onClick = function()
+						self:setState({ showingRejectConfirm = true })
+					end,
+				}, {
+					Tip = e(Tooltip.Trigger, {
+						text = "Push Studio changes to the Rojo server",
+					}),
+				})
+				else nil,
 
 				Accept = e(TextButton, {
 					text = "Accept",
@@ -207,6 +210,74 @@ function ConfirmingPage:render()
 
 							oldTable = self.state.oldTable,
 							newTable = self.state.newTable,
+						}),
+					}),
+				}),
+			}),
+
+			RejectConfirm = e(StudioPluginGui, {
+				id = "Rojo_RejectConfirm",
+				title = "Confirm Reject",
+				active = self.state.showingRejectConfirm,
+				isEphemeral = true,
+
+				initDockState = Enum.InitialDockState.Float,
+				overridePreviousState = true,
+				floatingSize = Vector2.new(340, 120),
+				minimumSize = Vector2.new(300, 100),
+
+				zIndexBehavior = Enum.ZIndexBehavior.Sibling,
+
+				onClose = function()
+					self:setState({ showingRejectConfirm = false })
+				end,
+			}, {
+				Content = e("Frame", {
+					Size = UDim2.fromScale(1, 1),
+					BackgroundColor3 = theme.BackgroundColor,
+				}, {
+					Message = e("TextLabel", {
+						Text = "Are you sure you want to reject incoming changes and push Studio changes to the server?",
+						FontFace = theme.Font.Main,
+						TextSize = theme.TextSize.Body,
+						TextColor3 = theme.TextColor,
+						TextWrapped = true,
+						Size = UDim2.new(1, -20, 0, 50),
+						Position = UDim2.new(0, 10, 0, 10),
+						BackgroundTransparency = 1,
+					}),
+
+					Buttons = e("Frame", {
+						Size = UDim2.new(1, -20, 0, 34),
+						Position = UDim2.new(0, 10, 1, -44),
+						BackgroundTransparency = 1,
+					}, {
+						Layout = e("UIListLayout", {
+							HorizontalAlignment = Enum.HorizontalAlignment.Right,
+							FillDirection = Enum.FillDirection.Horizontal,
+							SortOrder = Enum.SortOrder.LayoutOrder,
+							Padding = UDim.new(0, 10),
+						}),
+
+						Cancel = e(TextButton, {
+							text = "Cancel",
+							style = "Bordered",
+							transparency = self.props.transparency,
+							layoutOrder = 1,
+							onClick = function()
+								self:setState({ showingRejectConfirm = false })
+							end,
+						}),
+
+						Confirm = e(TextButton, {
+							text = "Reject",
+							style = "Warning",
+							transparency = self.props.transparency,
+							layoutOrder = 2,
+							onClick = function()
+								self:setState({ showingRejectConfirm = false })
+								self.props.onReject()
+							end,
 						}),
 					}),
 				}),
