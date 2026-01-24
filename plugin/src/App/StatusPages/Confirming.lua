@@ -90,21 +90,21 @@ function ConfirmingPage:render()
 					}),
 				}),
 
-			Reject = if Settings:get("twoWaySync")
-				then e(TextButton, {
-					text = "Reject",
-					style = "Warning",
-					transparency = self.props.transparency,
-					layoutOrder = 0,
-					onClick = function()
-						self:setState({ showingRejectConfirm = true })
-					end,
-				}, {
-					Tip = e(Tooltip.Trigger, {
-						text = "Push Studio changes to the Rojo server",
-					}),
-				})
-				else nil,
+				Reject = if Settings:get("twoWaySync")
+					then e(TextButton, {
+						text = "Reject",
+						style = "Warning",
+						transparency = self.props.transparency,
+						layoutOrder = 0,
+						onClick = function()
+							self:setState({ showingRejectConfirm = true })
+						end,
+					}, {
+						Tip = e(Tooltip.Trigger, {
+							text = "Push Studio changes to the Rojo server",
+						}),
+					})
+					else nil,
 
 				Accept = e(TextButton, {
 					text = "Accept",
