@@ -646,7 +646,7 @@ fn meshpart_with_id() {
             .unwrap();
 
         let serialize_response = session
-            .get_api_serialize(&[*meshpart, *objectvalue], info.session_id)
+            .get_api_serialize(&[*meshpart, *objectvalue])
             .unwrap();
 
         // We don't assert a snapshot on the SerializeResponse because the model includes the
@@ -673,9 +673,7 @@ fn forced_parent() {
             read_response.intern_and_redact(&mut redactions, root_id)
         );
 
-        let serialize_response = session
-            .get_api_serialize(&[root_id], info.session_id)
-            .unwrap();
+        let serialize_response = session.get_api_serialize(&[root_id]).unwrap();
 
         assert_eq!(serialize_response.session_id, info.session_id);
 

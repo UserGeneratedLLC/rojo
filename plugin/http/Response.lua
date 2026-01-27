@@ -1,5 +1,6 @@
 local HttpService = game:GetService("HttpService")
-local JSON5Decoder = require(script.Parent.Parent.json5.JSON5Decoder)
+
+local msgpack = require(script.Parent.Parent.msgpack)
 
 local stringTemplate = [[
 Http.Response {
@@ -29,13 +30,11 @@ function Response:isSuccess()
 end
 
 function Response:json()
-	-- Try fast native decode first, fallback to JSON5 for NaN/Infinity
-	local success, result = pcall(HttpService.JSONDecode, HttpService, self.body)
-	if success then
-		return result
-	end
-	print("[HTTP Response:json()] Native decode failed, using JSON5 for size:", #self.body)
-	return JSON5Decoder.Decode(self.body)
+	return HttpService:JSONDecode(self.body)
+end
+
+function Response:msgpack()
+	return msgpack.decode(self.body)
 end
 
 return Response

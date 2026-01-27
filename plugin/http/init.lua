@@ -1,9 +1,8 @@
 local HttpService = game:GetService("HttpService")
 
-local Promise = require(script.Parent.Promise)
 local Log = require(script.Parent.Log)
-local JSON5Decoder = require(script.Parent.json5.JSON5Decoder)
-local JSONEncoder = require(script.Parent.json5.JSONEncoder)
+local msgpack = require(script.Parent.msgpack)
+local Promise = require(script.Parent.Promise)
 
 local HttpError = require(script.Error)
 local HttpResponse = require(script.Response)
@@ -63,17 +62,19 @@ function Http.post(url, body)
 end
 
 function Http.jsonEncode(object)
-	return JSONEncoder.Compact5(object)
+	return HttpService:JSONEncode(object)
 end
 
 function Http.jsonDecode(source)
-	-- Try fast native decode first, fallback to JSON5 for NaN/Infinity
-	local success, result = pcall(HttpService.JSONDecode, HttpService, source)
-	if success then
-		return result
-	end
-	print("[Http.jsonDecode] Native decode failed, using JSON5 for size:", #source)
-	return JSON5Decoder.Decode(source)
+	return HttpService:JSONDecode(source)
+end
+
+function Http.msgpackEncode(object)
+	return msgpack.encode(object)
+end
+
+function Http.msgpackDecode(source)
+	return msgpack.decode(source)
 end
 
 return Http

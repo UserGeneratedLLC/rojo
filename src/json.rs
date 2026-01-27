@@ -163,6 +163,7 @@ impl serde::ser::Error for CompactJson5Error {
 /// # Errors
 ///
 /// Returns an error if the value cannot be serialized to JSON5.
+#[allow(dead_code)]
 pub fn to_string_compact<T: Serialize>(value: &T) -> anyhow::Result<String> {
     let mut output = String::new();
     let mut serializer = CompactJson5Serializer {

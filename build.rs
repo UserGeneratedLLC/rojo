@@ -30,6 +30,20 @@ fn snapshot_from_fs_path(path: &Path) -> io::Result<VfsSnapshot> {
                 continue;
             }
 
+            // Skip binary asset files that can't be read as text
+            if file_name.ends_with(".png")
+                || file_name.ends_with(".jpg")
+                || file_name.ends_with(".gif")
+                || file_name.ends_with(".webp")
+            {
+                continue;
+            }
+
+            // Skip directories that aren't needed for plugin functionality
+            if file_name == "assets" || file_name == "benchmark" {
+                continue;
+            }
+
             let child_snapshot = snapshot_from_fs_path(&entry.path())?;
             children.push((file_name, child_snapshot));
         }
@@ -66,6 +80,7 @@ fn main() -> Result<(), anyhow::Error> {
             "fmt" => snapshot_from_fs_path(&plugin_dir.join("fmt"))?,
             "http" => snapshot_from_fs_path(&plugin_dir.join("http"))?,
             "log" => snapshot_from_fs_path(&plugin_dir.join("log"))?,
+            "msgpack" => snapshot_from_fs_path(&plugin_dir.join("msgpack.lua"))?,
             "rbx_dom_lua" => snapshot_from_fs_path(&plugin_dir.join("rbx_dom_lua"))?,
             "src" => snapshot_from_fs_path(&plugin_dir.join("src"))?,
             "Packages" => snapshot_from_fs_path(&plugin_dir.join("Packages"))?,

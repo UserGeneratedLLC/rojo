@@ -160,15 +160,83 @@ pub struct ServerInfoResponse {
     pub server_version: String,
     pub protocol_version: u64,
     pub project_name: String,
+    #[serde(
+        serialize_with = "serialize_place_ids",
+        deserialize_with = "deserialize_place_ids",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     pub expected_place_ids: Option<HashSet<u64>>,
+    #[serde(
+        serialize_with = "serialize_place_ids",
+        deserialize_with = "deserialize_place_ids",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     pub unexpected_place_ids: Option<HashSet<u64>>,
+    #[serde(
+        serialize_with = "serialize_optional_u64_as_f64",
+        deserialize_with = "deserialize_optional_f64_as_u64",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     pub game_id: Option<u64>,
+    #[serde(
+        serialize_with = "serialize_optional_u64_as_f64",
+        deserialize_with = "deserialize_optional_f64_as_u64",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     pub place_id: Option<u64>,
     pub root_instance_id: Ref,
     /// When true, the server only supports syncing script Source property changes.
     /// Other property changes will be ignored.
     #[serde(default)]
     pub sync_source_only: bool,
+}
+
+// Serialize place IDs as f64 to avoid msgpack uint64 encoding issues with Lua
+fn serialize_place_ids<S>(ids: &Option<HashSet<u64>>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match ids {
+        Some(set) => {
+            use serde::ser::SerializeSeq;
+            let mut seq = serializer.serialize_seq(Some(set.len()))?;
+            for id in set {
+                seq.serialize_element(&(*id as f64))?;
+            }
+            seq.end()
+        }
+        None => serializer.serialize_none(),
+    }
+}
+
+fn deserialize_place_ids<'de, D>(deserializer: D) -> Result<Option<HashSet<u64>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt: Option<Vec<f64>> = Option::deserialize(deserializer)?;
+    Ok(opt.map(|v| v.into_iter().map(|f| f as u64).collect()))
+}
+
+fn serialize_optional_u64_as_f64<S>(value: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    match value {
+        Some(v) => serializer.serialize_f64(*v as f64),
+        None => serializer.serialize_none(),
+    }
+}
+
+fn deserialize_optional_f64_as_u64<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt: Option<f64> = Option::deserialize(deserializer)?;
+    Ok(opt.map(|f| f as u64))
 }
 
 /// Response body from /api/read/{id}
@@ -253,31 +321,8 @@ pub struct SerializeRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SerializeResponse {
     pub session_id: SessionId,
-    pub model_contents: BufferEncode,
-}
-
-/// Using this struct we can force Roblox to JSONDecode this as a buffer.
-/// This is what Roblox's serde APIs use, so it saves a step in the plugin.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct BufferEncode {
-    m: (),
-    t: Cow<'static, str>,
-    base64: String,
-}
-
-impl BufferEncode {
-    pub fn new(content: Vec<u8>) -> Self {
-        let base64 = data_encoding::BASE64.encode(&content);
-        Self {
-            m: (),
-            t: Cow::Borrowed("buffer"),
-            base64,
-        }
-    }
-
-    pub fn model(&self) -> &str {
-        &self.base64
-    }
+    #[serde(with = "serde_bytes")]
+    pub model_contents: Vec<u8>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
