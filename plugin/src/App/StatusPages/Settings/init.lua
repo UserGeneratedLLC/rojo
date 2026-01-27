@@ -237,6 +237,14 @@ function SettingsPage:render()
 				layoutOrder = layoutIncrement(),
 			}),
 
+			OneShotSync = e(Setting, {
+				id = "oneShotSync",
+				name = "One-Shot Sync",
+				description = "Disconnect automatically after the initial sync completes",
+				transparency = self.props.transparency,
+				layoutOrder = layoutIncrement(),
+			}),
+
 			LogLevel = e(Setting, {
 				id = "logLevel",
 				name = "Log Level",

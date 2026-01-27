@@ -51,6 +51,103 @@ local function ChangeTag(props)
 	end)
 end
 
+-- Radio button option for selection
+local function SelectionOption(props)
+	return Theme.with(function(theme)
+		local isSelected = props.isSelected
+		local bgColor = if isSelected
+			then (if props.optionType == "push" then Color3.fromHex("27AE60")
+				elseif props.optionType == "pull" then Color3.fromHex("E74C3C")
+				else Color3.fromHex("7F8C8D"))
+			else theme.BorderedContainer.BackgroundColor
+		local textColor = if isSelected then Color3.new(1, 1, 1) else theme.TextColor
+
+		return e("TextButton", {
+			Size = UDim2.new(0, 36, 0, 18),
+			BackgroundColor3 = bgColor,
+			BackgroundTransparency = props.transparency:map(function(t)
+				return if isSelected then 0.1 + (0.9 * t) else 0.7 + (0.3 * t)
+			end),
+			BorderSizePixel = 0,
+			Text = props.text,
+			FontFace = if isSelected then theme.Font.Bold else theme.Font.Main,
+			TextSize = theme.TextSize.Small,
+			TextColor3 = textColor,
+			TextTransparency = props.transparency,
+			LayoutOrder = props.layoutOrder,
+			ZIndex = 10,
+			[Roact.Event.Activated] = function()
+				if props.onClick then
+					props.onClick()
+				end
+			end,
+		}, {
+			Corner = e("UICorner", {
+				CornerRadius = UDim.new(0, 3),
+			}),
+		})
+	end)
+end
+
+-- Selection radio group component
+local function SelectionRadio(props)
+	if not props.visible then
+		return nil
+	end
+
+	return e("Frame", {
+		Size = UDim2.new(0, 118, 0, 18),
+		BackgroundTransparency = 1,
+		Position = UDim2.new(1, -5, 0, 3),
+		AnchorPoint = Vector2.new(1, 0),
+		ZIndex = 10,
+	}, {
+		Layout = e("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal,
+			HorizontalAlignment = Enum.HorizontalAlignment.Right,
+			VerticalAlignment = Enum.VerticalAlignment.Center,
+			SortOrder = Enum.SortOrder.LayoutOrder,
+			Padding = UDim.new(0, 4),
+		}),
+		Pull = e(SelectionOption, {
+			text = "Pull",
+			optionType = "pull",
+			isSelected = props.selection == "pull",
+			transparency = props.transparency,
+			layoutOrder = 1,
+			onClick = function()
+				if props.onSelectionChange then
+					props.onSelectionChange(props.nodeId, "pull")
+				end
+			end,
+		}),
+		Skip = e(SelectionOption, {
+			text = "Skip",
+			optionType = "ignore",
+			isSelected = props.selection == "ignore",
+			transparency = props.transparency,
+			layoutOrder = 2,
+			onClick = function()
+				if props.onSelectionChange then
+					props.onSelectionChange(props.nodeId, "ignore")
+				end
+			end,
+		}),
+		Push = e(SelectionOption, {
+			text = "Push",
+			optionType = "push",
+			isSelected = props.selection == "push",
+			transparency = props.transparency,
+			layoutOrder = 3,
+			onClick = function()
+				if props.onSelectionChange then
+					props.onSelectionChange(props.nodeId, "push")
+				end
+			end,
+		}),
+	})
+end
+
 local Expansion = Roact.Component:extend("Expansion")
 
 function Expansion:render()
@@ -230,16 +327,6 @@ function DomLabel:render()
 						end
 					end
 				end,
-			}, {
-				StateTip = if (props.instance or props.changeList)
-					then e(Tooltip.Trigger, {
-						text = (if props.changeList
-							then "Click to " .. (if self.expanded then "hide" else "view") .. " changes"
-							else "") .. (if props.instance
-							then (if props.changeList then " & d" else "D") .. "ouble click to open in Explorer"
-							else ""),
-					})
-					else nil,
 			}),
 			Expansion = if props.changeList
 				then e(Expansion, {
@@ -285,9 +372,10 @@ function DomLabel:render()
 			}),
 			ChangeInfo = e("Frame", {
 				BackgroundTransparency = 1,
-				Size = UDim2.new(1, -indent - 80, 0, 24),
-				Position = UDim2.new(1, -2, 0, 0),
+				Size = UDim2.new(1, -indent - (if props.patchType and props.onSelectionChange then 210 else 80), 0, 24),
+				Position = UDim2.new(1, if props.patchType and props.onSelectionChange then -130 else -2, 0, 0),
 				AnchorPoint = Vector2.new(1, 0),
+				ClipsDescendants = true,
 			}, {
 				Layout = e("UIListLayout", {
 					FillDirection = Enum.FillDirection.Horizontal,
@@ -323,6 +411,13 @@ function DomLabel:render()
 						layoutOrder = 3,
 					})
 					else nil,
+			}),
+			SelectionRadio = e(SelectionRadio, {
+				visible = props.patchType ~= nil and props.onSelectionChange ~= nil,
+				nodeId = props.nodeId,
+				selection = props.selection,
+				transparency = props.transparency,
+				onSelectionChange = props.onSelectionChange,
 			}),
 			LineGuides = e("Folder", nil, lineGuides),
 		})

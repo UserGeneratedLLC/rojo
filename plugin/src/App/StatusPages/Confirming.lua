@@ -6,6 +6,7 @@ local Roact = require(Packages.Roact)
 
 local Settings = require(Plugin.Settings)
 local Theme = require(Plugin.App.Theme)
+local PatchTree = require(Plugin.PatchTree)
 local TextButton = require(Plugin.App.Components.TextButton)
 local StudioPluginGui = require(Plugin.App.Components.Studio.StudioPluginGui)
 local Tooltip = require(Plugin.App.Components.Tooltip)
@@ -21,6 +22,12 @@ function ConfirmingPage:init()
 	self.contentSize, self.setContentSize = Roact.createBinding(0)
 	self.containerSize, self.setContainerSize = Roact.createBinding(Vector2.new(0, 0))
 
+	-- Initialize selections from patchTree defaults
+	local initialSelections = {}
+	if self.props.patchTree then
+		initialSelections = PatchTree.buildInitialSelections(self.props.patchTree)
+	end
+
 	self:setState({
 		showingStringDiff = false,
 		currentString = "",
@@ -29,10 +36,48 @@ function ConfirmingPage:init()
 		oldTable = {},
 		newTable = {},
 		showingRejectConfirm = false,
+		selections = initialSelections,
 	})
+
+	-- Callback to update individual selection
+	self.onSelectionChange = function(nodeId, selection)
+		self:setState(function(state)
+			local newSelections = table.clone(state.selections)
+			newSelections[nodeId] = selection
+			return { selections = newSelections }
+		end)
+	end
+
+	-- Set all selections to a specific value
+	self.setAllSelections = function(value)
+		if not self.props.patchTree then
+			return
+		end
+		local newSelections = {}
+		self.props.patchTree:forEach(function(node)
+			if node.patchType then
+				newSelections[node.id] = value
+			end
+		end)
+		self:setState({ selections = newSelections })
+	end
+end
+
+function ConfirmingPage:didUpdate(prevProps)
+	-- If patchTree changed, reinitialize selections
+	if prevProps.patchTree ~= self.props.patchTree and self.props.patchTree then
+		local initialSelections = PatchTree.buildInitialSelections(self.props.patchTree)
+		self:setState({ selections = initialSelections })
+	end
 end
 
 function ConfirmingPage:render()
+	-- Check if all items have a selection
+	local allSelected = true
+	if self.props.patchTree then
+		allSelected = PatchTree.allNodesSelected(self.props.patchTree, self.state.selections)
+	end
+
 	return Theme.with(function(theme)
 		local pageContent = Roact.createFragment({
 			Title = e("TextLabel", {
@@ -56,6 +101,8 @@ function ConfirmingPage:render()
 				layoutOrder = 3,
 
 				patchTree = self.props.patchTree,
+				selections = self.state.selections,
+				onSelectionChange = self.onSelectionChange,
 
 				showStringDiff = function(currentString: string, incomingString: string)
 					self:setState({
@@ -78,44 +125,57 @@ function ConfirmingPage:render()
 				LayoutOrder = 4,
 				BackgroundTransparency = 1,
 			}, {
-				Abort = e(TextButton, {
-					text = "Abort",
-					style = "Bordered",
-					transparency = self.props.transparency,
-					layoutOrder = 1,
-					onClick = self.props.onAbort,
-				}, {
-					Tip = e(Tooltip.Trigger, {
-						text = "Stop the connection process",
-					}),
-				}),
+			Abort = e(TextButton, {
+				text = "Abort",
+				style = "Bordered",
+				transparency = self.props.transparency,
+				layoutOrder = 1,
+				onClick = self.props.onAbort,
+			}),
 
-				Reject = if Settings:get("twoWaySync")
+				PullAll = if Settings:get("twoWaySync")
 					then e(TextButton, {
-						text = "Reject",
-						style = "Warning",
+						text = "Pull All",
+						style = "Danger",
 						transparency = self.props.transparency,
-						layoutOrder = 0,
+						layoutOrder = 2,
 						onClick = function()
-							self:setState({ showingRejectConfirm = true })
+							self.setAllSelections("pull")
 						end,
-					}, {
-						Tip = e(Tooltip.Trigger, {
-							text = "Push Studio changes to the Rojo server",
-						}),
 					})
 					else nil,
 
-				Accept = e(TextButton, {
-					text = "Accept",
-					style = "Solid",
+				SkipAll = e(TextButton, {
+					text = "Skip All",
+					style = "Neutral",
 					transparency = self.props.transparency,
 					layoutOrder = 3,
-					onClick = self.props.onAccept,
-				}, {
-					Tip = e(Tooltip.Trigger, {
-						text = "Pull Rojo server changes to Studio",
-					}),
+					onClick = function()
+						self.setAllSelections("ignore")
+					end,
+				}),
+
+				PushAll = e(TextButton, {
+					text = "Push All",
+					style = "Success",
+					transparency = self.props.transparency,
+					layoutOrder = 4,
+					onClick = function()
+						self.setAllSelections("push")
+					end,
+				}),
+
+				Commit = e(TextButton, {
+					text = "Commit",
+					style = "Primary",
+					transparency = self.props.transparency,
+					layoutOrder = 5,
+					enabled = allSelected,
+					onClick = function()
+						if allSelected and self.props.onConfirm then
+							self.props.onConfirm(self.state.selections)
+						end
+					end,
 				}),
 
 				Layout = e("UIListLayout", {
@@ -215,74 +275,7 @@ function ConfirmingPage:render()
 				}),
 			}),
 
-			RejectConfirm = e(StudioPluginGui, {
-				id = "Rojo_RejectConfirm",
-				title = "Confirm Reject",
-				active = self.state.showingRejectConfirm,
-				isEphemeral = true,
-
-				initDockState = Enum.InitialDockState.Float,
-				overridePreviousState = true,
-				floatingSize = Vector2.new(340, 120),
-				minimumSize = Vector2.new(300, 100),
-
-				zIndexBehavior = Enum.ZIndexBehavior.Sibling,
-
-				onClose = function()
-					self:setState({ showingRejectConfirm = false })
-				end,
-			}, {
-				Content = e("Frame", {
-					Size = UDim2.fromScale(1, 1),
-					BackgroundColor3 = theme.BackgroundColor,
-				}, {
-					Message = e("TextLabel", {
-						Text = "Are you sure you want to reject incoming changes and push Studio changes to the server?",
-						FontFace = theme.Font.Main,
-						TextSize = theme.TextSize.Body,
-						TextColor3 = theme.TextColor,
-						TextWrapped = true,
-						Size = UDim2.new(1, -20, 0, 50),
-						Position = UDim2.new(0, 10, 0, 10),
-						BackgroundTransparency = 1,
-					}),
-
-					Buttons = e("Frame", {
-						Size = UDim2.new(1, -20, 0, 34),
-						Position = UDim2.new(0, 10, 1, -44),
-						BackgroundTransparency = 1,
-					}, {
-						Layout = e("UIListLayout", {
-							HorizontalAlignment = Enum.HorizontalAlignment.Right,
-							FillDirection = Enum.FillDirection.Horizontal,
-							SortOrder = Enum.SortOrder.LayoutOrder,
-							Padding = UDim.new(0, 10),
-						}),
-
-						Cancel = e(TextButton, {
-							text = "Cancel",
-							style = "Bordered",
-							transparency = self.props.transparency,
-							layoutOrder = 1,
-							onClick = function()
-								self:setState({ showingRejectConfirm = false })
-							end,
-						}),
-
-						Confirm = e(TextButton, {
-							text = "Reject",
-							style = "Warning",
-							transparency = self.props.transparency,
-							layoutOrder = 2,
-							onClick = function()
-								self:setState({ showingRejectConfirm = false })
-								self.props.onReject()
-							end,
-						}),
-					}),
-				}),
-			}),
-		})
+			})
 
 		if self.props.createPopup then
 			return e(StudioPluginGui, {

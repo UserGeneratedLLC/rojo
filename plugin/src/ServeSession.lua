@@ -590,55 +590,91 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 
 	if userDecision == "Abort" then
 		return Promise.reject("Aborted Rojo sync operation")
-	elseif userDecision == "Reject" then
-		if not self.__twoWaySync then
-			return Promise.reject("Cannot reject sync operation without two-way sync enabled")
-		end
-		-- The user wants their studio DOM to write back to their Rojo DOM
-		-- so we will reverse the patch and send it back
-
-		local inversePatch = PatchSet.newEmpty()
-
-		-- Send back the current properties
-		for _, change in catchUpPatch.updated do
-			local instance = self.__instanceMap.fromIds[change.id]
-			if not instance then
-				continue
-			end
-
-			local propertiesToSync = change.changedProperties
-			if self.__syncSourceOnly then
-				-- Filter to only Source property when server is in source-only mode
-				if propertiesToSync.Source then
-					propertiesToSync = { Source = propertiesToSync.Source }
-				else
-					continue
-				end
-			end
-
-			local update = encodePatchUpdate(instance, change.id, propertiesToSync)
-			if update then
-				table.insert(inversePatch.updated, update)
-			end
-		end
-		-- Add the removed instances back to Rojo
-		-- selene:allow(empty_if, unused_variable, empty_loop)
-		for _, instance in catchUpPatch.removed do
-			-- TODO: Generate ID for our instance and add it to inversePatch.added
-		end
-		-- Remove the additions we've rejected
-		for id, _change in catchUpPatch.added do
-			table.insert(inversePatch.removed, id)
-		end
-
-		return self.__apiContext:write(inversePatch)
 	elseif userDecision == "Accept" then
+		-- Legacy: Accept all changes (push all to Studio)
 		self:__setStatus(Status.Connected, serverInfo.projectName)
 		self:__applyGameAndPlaceId(serverInfo)
 		self:__applyPatch(catchUpPatch)
 		return Promise.resolve()
+	elseif type(userDecision) == "table" and userDecision.type == "Confirm" then
+		-- New: Apply based on per-item selections
+		local selections = userDecision.selections or {}
+
+		-- Build partial patches based on selections
+		local pushPatch = PatchSet.newEmpty() -- Items to apply to Studio
+		local pullPatch = PatchSet.newEmpty() -- Items to send back to Rojo
+
+		-- Process updated items
+		for _, change in catchUpPatch.updated do
+			local selection = selections[change.id]
+			if selection == "push" then
+				-- Apply Rojo changes to Studio
+				table.insert(pushPatch.updated, change)
+			elseif selection == "pull" and self.__twoWaySync then
+				-- Send Studio state back to Rojo
+				local instance = self.__instanceMap.fromIds[change.id]
+				if instance then
+					local propertiesToSync = change.changedProperties
+					if self.__syncSourceOnly then
+						if propertiesToSync.Source then
+							propertiesToSync = { Source = propertiesToSync.Source }
+						else
+							continue
+						end
+					end
+					local update = encodePatchUpdate(instance, change.id, propertiesToSync)
+					if update then
+						table.insert(pullPatch.updated, update)
+					end
+				end
+			end
+			-- "ignore" items are skipped
+		end
+
+		-- Process removed items
+		for _, idOrInstance in catchUpPatch.removed do
+			local id = if type(idOrInstance) == "string" then idOrInstance else self.__instanceMap.fromInstances[idOrInstance]
+			local selection = selections[id]
+			if selection == "push" then
+				-- Apply Rojo removal to Studio
+				table.insert(pushPatch.removed, idOrInstance)
+			elseif selection == "pull" and self.__twoWaySync then
+				-- Don't remove in Studio, but we can't easily "add back" to Rojo
+				-- For now, just skip (similar to ignore)
+			end
+			-- "ignore" items are skipped
+		end
+
+		-- Process added items
+		for id, change in catchUpPatch.added do
+			local selection = selections[id]
+			if selection == "push" then
+				-- Apply Rojo addition to Studio
+				pushPatch.added[id] = change
+			elseif selection == "pull" and self.__twoWaySync then
+				-- Don't add in Studio, remove from Rojo
+				table.insert(pullPatch.removed, id)
+			end
+			-- "ignore" items are skipped
+		end
+
+		-- Apply the changes
+		self:__setStatus(Status.Connected, serverInfo.projectName)
+		self:__applyGameAndPlaceId(serverInfo)
+
+		-- Apply push items to Studio
+		if not PatchSet.isEmpty(pushPatch) then
+			self:__applyPatch(pushPatch)
+		end
+
+		-- Send pull items back to Rojo server
+		if self.__twoWaySync and not PatchSet.isEmpty(pullPatch) then
+			return self.__apiContext:write(pullPatch)
+		end
+
+		return Promise.resolve()
 	else
-		return Promise.reject("Invalid user decision: " .. userDecision)
+		return Promise.reject("Invalid user decision: " .. tostring(userDecision))
 	end
 end
 

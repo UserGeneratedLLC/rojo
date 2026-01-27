@@ -130,7 +130,7 @@ function TextButton:render()
 				zIndex = -1,
 			}),
 
-			Background = (style == "Solid" or style == "Warning") and e(SlicedImage, {
+			Background = (style == "Solid" or style == "Warning" or style == "Primary" or style == "Success" or style == "Danger" or style == "Neutral") and e(SlicedImage, {
 				slice = Assets.Slices.RoundedBackground,
 				color = bindingUtil.mapLerp(
 					bindingEnabled,

@@ -32,6 +32,10 @@ function PatchVisualizer:shouldUpdate(nextProps)
 		return true
 	end
 
+	if self.props.selections ~= nextProps.selections then
+		return true
+	end
+
 	local currentPatch, nextPatch = self.props.patch, nextProps.patch
 	if currentPatch ~= nil or nextPatch ~= nil then
 		return not PatchSet.isEqual(currentPatch, nextPatch)
@@ -96,6 +100,10 @@ function PatchVisualizer:render()
 				name = node.name,
 				changeInfo = node.changeInfo,
 				changeList = node.changeList,
+				-- Selection props
+				nodeId = node.id,
+				selection = self.props.selections and self.props.selections[node.id],
+				onSelectionChange = self.props.onSelectionChange,
 			})
 
 			if isFinalChild then

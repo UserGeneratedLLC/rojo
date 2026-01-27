@@ -709,14 +709,28 @@ function App:startSession()
 	end)
 
 	serveSession:setConfirmCallback(function(instanceMap, patch, serverInfo)
+		-- Helper to schedule one-shot disconnect after auto-accept
+		local function scheduleOneShotDisconnect()
+			if Settings:get("oneShotSync") then
+				task.delay(0.5, function()
+					if self.serveSession then
+						Log.info("One-shot sync: disconnecting after sync")
+						self:endSession()
+					end
+				end)
+			end
+		end
+
 		if PatchSet.isEmpty(patch) then
 			Log.trace("Accepting patch without confirmation because it is empty")
+			scheduleOneShotDisconnect()
 			return "Accept"
 		end
 
 		-- Play solo auto-connect does not require confirmation
 		if self:isAutoConnectPlaytestServerAvailable() then
 			Log.trace("Accepting patch without confirmation because play solo auto-connect is enabled")
+			scheduleOneShotDisconnect()
 			return "Accept"
 		end
 
@@ -728,6 +742,7 @@ function App:startSession()
 					Log.trace(
 						"Accepting patch without confirmation because project has already been connected and behavior is set to Initial"
 					)
+					scheduleOneShotDisconnect()
 					return "Accept"
 				end
 			elseif confirmationBehavior == "Large Changes" then
@@ -736,6 +751,7 @@ function App:startSession()
 					Log.trace(
 						"Accepting patch without confirmation because patch is small and behavior is set to Large Changes"
 					)
+					scheduleOneShotDisconnect()
 					return "Accept"
 				end
 			elseif confirmationBehavior == "Unlisted PlaceId" then
@@ -746,11 +762,13 @@ function App:startSession()
 						Log.trace(
 							"Accepting patch without confirmation because placeId is listed and behavior is set to Unlisted PlaceId"
 						)
+						scheduleOneShotDisconnect()
 						return "Accept"
 					end
 				end
 			elseif confirmationBehavior == "Never" then
 				Log.trace("Accepting patch without confirmation because behavior is set to Never")
+				scheduleOneShotDisconnect()
 				return "Accept"
 			end
 		end
@@ -769,6 +787,7 @@ function App:startSession()
 				and datamodelUpdates.changedClassName == nil
 			then
 				Log.trace("Accepting patch without confirmation because it only contains a datamodel name change")
+				scheduleOneShotDisconnect()
 				return "Accept"
 			end
 		end
@@ -786,14 +805,14 @@ function App:startSession()
 		})
 
 		self:addNotification({
-			text = string.format(
-				"Please accept%sor abort the initializing sync session.",
-				Settings:get("twoWaySync") and ", reject, " or " "
-			),
+			text = "Please review and confirm the sync changes, or disconnect.",
 			timeout = 7,
 		})
 
 		local result = self.confirmationEvent:Wait()
+
+		-- Track if this was the initial sync for this project
+		local isInitialSyncForProject = not self.knownProjects[serverInfo.projectName]
 
 		-- Reset UI state back to Connected after confirmation
 		-- This is needed for ongoing WebSocket patches where the session
@@ -808,6 +827,20 @@ function App:startSession()
 			})
 		end
 
+		-- One-shot sync: disconnect after confirmation
+		if Settings:get("oneShotSync") then
+			local resultType = if type(result) == "table" then result.type else result
+			if resultType == "Confirm" or resultType == "Accept" then
+				-- Delay slightly to allow patch to be applied
+				task.delay(0.5, function()
+					if self.serveSession then
+						Log.info("One-shot sync: disconnecting after sync")
+						self:endSession()
+					end
+				end)
+			end
+		end
+
 		return result
 	end)
 
@@ -815,7 +848,8 @@ function App:startSession()
 		-- If all changes have been reverted, auto-accept the empty patch
 		if PatchSet.isEmpty(patch) then
 			Log.trace("Patch became empty after merging, auto-accepting")
-			self.confirmationBindable:Fire("Accept")
+			-- Return empty selections to accept all (nothing to do)
+			self.confirmationBindable:Fire({ type = "Confirm", selections = {} })
 			return
 		end
 
@@ -925,11 +959,8 @@ function App:render()
 						onAbort = function()
 							self.confirmationBindable:Fire("Abort")
 						end,
-						onAccept = function()
-							self.confirmationBindable:Fire("Accept")
-						end,
-						onReject = function()
-							self.confirmationBindable:Fire("Reject")
+						onConfirm = function(selections)
+							self.confirmationBindable:Fire({ type = "Confirm", selections = selections })
 						end,
 					}),
 

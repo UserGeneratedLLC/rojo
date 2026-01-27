@@ -313,6 +313,7 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 		end
 
 		-- Add this node to tree
+		-- For Edit nodes, default to "push" (apply Rojo changes to Studio)
 		tree:addNode(instanceMap.fromInstances[instance.Parent], {
 			id = change.id,
 			patchType = "Edit",
@@ -321,6 +322,7 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 			instance = instance,
 			changeInfo = changeInfo,
 			changeList = changeList,
+			defaultSelection = "push",
 		})
 	end
 	Timer.stop()
@@ -364,6 +366,7 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 		tree:buildAncestryNodes(previousId, ancestryIds, patch, instanceMap)
 
 		-- Add this node to tree
+		-- For Remove nodes, default to "push" (apply Rojo removal to Studio)
 		local nodeId = instanceMap.fromInstances[instance] or HttpService:GenerateGUID(false)
 		instanceMap:insert(nodeId, instance)
 		tree:addNode(instanceMap.fromInstances[instance.Parent], {
@@ -372,6 +375,7 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 			className = instance.ClassName,
 			name = instance.Name,
 			instance = instance,
+			defaultSelection = "push",
 		})
 	end
 	Timer.stop()
@@ -440,6 +444,7 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 		end
 
 		-- Add this node to tree
+		-- For Add nodes, default to "push" (apply Rojo addition to Studio)
 		tree:addNode(change.Parent, {
 			id = change.Id,
 			patchType = "Add",
@@ -448,12 +453,48 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 			changeInfo = changeInfo,
 			changeList = changeList,
 			instance = instanceMap.fromIds[id],
+			defaultSelection = "push",
 		})
 	end
 	Timer.stop()
 
 	Timer.stop()
 	return tree
+end
+
+-- Builds initial selections map from the tree using defaultSelection values
+-- Returns a table mapping node id -> selection ("push", "pull", or "ignore")
+function PatchTree.buildInitialSelections(tree)
+	local selections = {}
+	tree:forEach(function(node)
+		if node.patchType and node.defaultSelection then
+			selections[node.id] = node.defaultSelection
+		end
+	end)
+	return selections
+end
+
+-- Gets all selectable node IDs (nodes that have a patchType)
+-- Returns an array of node IDs
+function PatchTree.getSelectableNodeIds(tree)
+	local ids = {}
+	tree:forEach(function(node)
+		if node.patchType then
+			table.insert(ids, node.id)
+		end
+	end)
+	return ids
+end
+
+-- Checks if all selectable nodes have a selection
+function PatchTree.allNodesSelected(tree, selections)
+	local allSelected = true
+	tree:forEach(function(node)
+		if node.patchType and not selections[node.id] then
+			allSelected = false
+		end
+	end)
+	return allSelected
 end
 
 -- Updates the metadata of a tree with the unapplied patch and currently existing instances

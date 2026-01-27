@@ -75,8 +75,60 @@ function StudioProvider:updateTheme()
 					BackgroundColor = BRAND_COLOR,
 				},
 			},
+			Primary = {
+				-- Primary uses blue theming for main actions.
+				ActionFillColor = Color3.fromHex("FFFFFF"),
+				ActionFillTransparency = 0.8,
+				Enabled = {
+					TextColor = Color3.fromHex("FFFFFF"),
+					BackgroundColor = Color3.fromHex("335FFF"),
+				},
+				Disabled = {
+					TextColor = Color3.fromHex("FFFFFF"),
+					BackgroundColor = Color3.fromHex("2A4FCC"),
+				},
+			},
+			Success = {
+				-- Success uses green theming for positive actions.
+				ActionFillColor = Color3.fromHex("FFFFFF"),
+				ActionFillTransparency = 0.8,
+				Enabled = {
+					TextColor = Color3.fromHex("FFFFFF"),
+					BackgroundColor = Color3.fromHex("27AE60"),
+				},
+				Disabled = {
+					TextColor = Color3.fromHex("FFFFFF"),
+					BackgroundColor = Color3.fromHex("1E8449"),
+				},
+			},
+			Danger = {
+				-- Danger uses red theming for destructive actions.
+				ActionFillColor = Color3.fromHex("FFFFFF"),
+				ActionFillTransparency = 0.8,
+				Enabled = {
+					TextColor = Color3.fromHex("FFFFFF"),
+					BackgroundColor = Color3.fromHex("E74C3C"),
+				},
+				Disabled = {
+					TextColor = Color3.fromHex("FFFFFF"),
+					BackgroundColor = Color3.fromHex("B03A2E"),
+				},
+			},
+			Neutral = {
+				-- Neutral uses gray theming for skip/ignore actions.
+				ActionFillColor = Color3.fromHex("FFFFFF"),
+				ActionFillTransparency = 0.8,
+				Enabled = {
+					TextColor = Color3.fromHex("FFFFFF"),
+					BackgroundColor = Color3.fromHex("7F8C8D"),
+				},
+				Disabled = {
+					TextColor = Color3.fromHex("FFFFFF"),
+					BackgroundColor = Color3.fromHex("616A6B"),
+				},
+			},
 			Warning = {
-				-- Warning uses orange theming for destructive actions.
+				-- Warning uses orange theming for caution actions.
 				ActionFillColor = Color3.fromHex("FFFFFF"),
 				ActionFillTransparency = 0.8,
 				Enabled = {
