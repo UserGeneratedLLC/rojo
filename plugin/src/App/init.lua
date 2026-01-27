@@ -695,16 +695,14 @@ function App:startSession()
 					text = tostring(details),
 					timeout = 10,
 				})
-			else
-				self:setState({
-					appStatus = AppStatus.NotConnected,
-					toolbarIcon = Assets.Images.PluginButton,
-				})
-				self:addNotification({
-					text = "Disconnected from session.",
-					timeout = 10,
-				})
-			end
+		else
+			self:setState({
+				appStatus = AppStatus.NotConnected,
+				toolbarIcon = Assets.Images.PluginButton,
+			})
+			-- Intentionally not showing a notification here to avoid
+			-- Studio switching focus to the viewport on disconnect
+		end
 		end
 	end)
 
