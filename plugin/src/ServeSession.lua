@@ -78,6 +78,15 @@ function ServeSession.new(options)
 	end
 
 	local function onChangesFlushed(patch)
+		-- ONE-SHOT MODE: Block ALL automatic outgoing writes from the ChangeBatcher.
+		-- The only writes allowed in One-shot mode are explicit "pull" selections
+		-- from the confirmation dialog (handled directly in __confirmAndApplyInitialPatch).
+		-- This ensures nothing can be pushed to the server without explicit user action.
+		if Settings:get("oneShotSync") then
+			Log.info("One-shot mode: blocking automatic outgoing write from ChangeBatcher")
+			return
+		end
+
 		self.__apiContext:write(patch)
 	end
 
@@ -211,7 +220,14 @@ function ServeSession:__onWebSocketMessage(messagesPacket)
 	end
 
 	-- If we're already waiting for confirmation, merge into the patch being confirmed
+	-- UNLESS we're in One-shot mode, where we ignore all further changes
 	if self.__confirmingPatch ~= nil then
+		if Settings:get("oneShotSync") then
+			Log.info("One-shot mode: ignoring incoming changes while confirming (will be picked up on next connection)")
+			self.__apiContext:setMessageCursor(messagesPacket.messageCursor)
+			return
+		end
+
 		Log.trace("Already confirming, merging into current patch")
 		PatchSet.merge(self.__confirmingPatch, combinedPatch, self.__instanceMap)
 		-- Notify the UI to update the displayed patch
