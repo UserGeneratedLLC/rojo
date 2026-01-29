@@ -24,26 +24,57 @@ impl StdBackend {
         let (tx, rx) = crossbeam_channel::unbounded();
 
         thread::spawn(move || {
+            log::trace!("File watcher thread started");
+
             for event in notify_rx {
-                match event {
+                let send_result = match event {
                     DebouncedEvent::Create(path) => {
-                        tx.send(VfsEvent::Create(path))?;
+                        tx.send(VfsEvent::Create(path))
                     }
                     DebouncedEvent::Write(path) => {
-                        tx.send(VfsEvent::Write(path))?;
+                        tx.send(VfsEvent::Write(path))
                     }
                     DebouncedEvent::Remove(path) => {
-                        tx.send(VfsEvent::Remove(path))?;
+                        tx.send(VfsEvent::Remove(path))
                     }
                     DebouncedEvent::Rename(from, to) => {
-                        tx.send(VfsEvent::Remove(from))?;
-                        tx.send(VfsEvent::Create(to))?;
+                        tx.send(VfsEvent::Remove(from))
+                            .and_then(|_| tx.send(VfsEvent::Create(to)))
                     }
-                    _ => {}
+                    DebouncedEvent::Error(err, path) => {
+                        log::error!(
+                            "File watcher error: {:?} (path: {:?}). \
+                            File watching is no longer reliable.",
+                            err,
+                            path
+                        );
+                        std::process::exit(1);
+                    }
+                    DebouncedEvent::Rescan => {
+                        log::error!(
+                            "File watcher requested rescan due to too many changes. \
+                            File watching is no longer reliable."
+                        );
+                        std::process::exit(1);
+                    }
+                    // NoticeWrite and NoticeRemove are pre-debounce notifications, skip them
+                    DebouncedEvent::NoticeWrite(_) | DebouncedEvent::NoticeRemove(_) => continue,
+                    // Chmod events are not relevant for our purposes
+                    DebouncedEvent::Chmod(_) => continue,
+                };
+
+                if let Err(err) = send_result {
+                    log::error!(
+                        "File watcher thread failed to send event: {}. \
+                        File watching is no longer reliable.",
+                        err
+                    );
+                    std::process::exit(1);
                 }
             }
 
-            Result::<(), crossbeam_channel::SendError<VfsEvent>>::Ok(())
+            log::error!("File watcher thread has terminated unexpectedly.");
+            std::process::exit(1);
         });
 
         Self {
