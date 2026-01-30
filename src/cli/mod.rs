@@ -56,7 +56,7 @@ impl Options {
 #[derive(Debug, Parser)]
 pub struct GlobalOptions {
     /// Sets verbosity level. Can be specified multiple times.
-    #[clap(long("verbose"), short, global(true), parse(from_occurrences))]
+    #[clap(long("verbose"), short, global(true), action = clap::ArgAction::Count)]
     pub verbosity: u8,
 
     /// Set color behavior. Valid values are auto, always, and never.

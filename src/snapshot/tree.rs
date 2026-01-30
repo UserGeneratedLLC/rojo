@@ -244,16 +244,10 @@ impl RojoTree {
 
         // The root of the tree doesn't appear in the path, so we start with
         // the root's children.
-        for (i, segment) in segments.iter().enumerate() {
+        for segment in segments.iter() {
             let current = self.inner.get_by_ref(current_ref)?;
 
-            // For the first segment, check direct children of root
-            // For subsequent segments, check children of current
-            let children = if i == 0 {
-                current.children()
-            } else {
-                current.children()
-            };
+            let children = current.children();
 
             let mut found = false;
             for &child_ref in children {

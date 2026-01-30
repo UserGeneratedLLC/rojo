@@ -18,8 +18,10 @@ pub fn snapshot_toml(
     name: &str,
 ) -> anyhow::Result<Option<InstanceSnapshot>> {
     let contents = vfs.read(path)?;
+    let contents_str = std::str::from_utf8(&contents)
+        .with_context(|| format!("File is not valid UTF-8: {}", path.display()))?;
 
-    let value: toml::Value = toml::from_slice(&contents)
+    let value: toml::Value = toml::from_str(contents_str)
         .with_context(|| format!("File contains malformed TOML: {}", path.display()))?;
 
     let as_lua = toml_to_lua(value).to_string();

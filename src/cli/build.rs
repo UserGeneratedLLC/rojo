@@ -50,7 +50,7 @@ impl BuildCommand {
             (None, None) => {
                 BuildCommand::command()
                     .error(
-                        clap::ErrorKind::MissingRequiredArgument,
+                        clap::error::ErrorKind::MissingRequiredArgument,
                         "one of the following arguments must be provided: \n    --output <OUTPUT>\n    --plugin <PLUGIN>",
                     )
                     .exit();
