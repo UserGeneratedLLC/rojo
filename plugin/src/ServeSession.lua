@@ -290,15 +290,17 @@ function ServeSession:start()
 				-- during confirmation can be merged into the patch
 				-- Note: connectWebSocket returns a Promise that only resolves when
 				-- the connection closes, so we don't chain .andThen() on it
-				self.__apiContext:connectWebSocket({
-					["messages"] = function(messagesPacket)
-						self:__onWebSocketMessage(messagesPacket)
-					end,
-				}):catch(function(err)
-					if self.__status ~= Status.Disconnected then
-						self:__stopInternal(err)
-					end
-				end)
+				self.__apiContext
+					:connectWebSocket({
+						["messages"] = function(messagesPacket)
+							self:__onWebSocketMessage(messagesPacket)
+						end,
+					})
+					:catch(function(err)
+						if self.__status ~= Status.Disconnected then
+							self:__stopInternal(err)
+						end
+					end)
 
 				-- Now show confirmation and wait for user decision
 				return self:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
@@ -649,7 +651,9 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 
 		-- Process removed items
 		for _, idOrInstance in catchUpPatch.removed do
-			local id = if type(idOrInstance) == "string" then idOrInstance else self.__instanceMap.fromInstances[idOrInstance]
+			local id = if type(idOrInstance) == "string"
+				then idOrInstance
+				else self.__instanceMap.fromInstances[idOrInstance]
 			local selection = selections[id]
 			if selection == "push" then
 				-- Apply Rojo removal to Studio

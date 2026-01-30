@@ -56,7 +56,8 @@ local function SelectionOption(props)
 	return Theme.with(function(theme)
 		local isSelected = props.isSelected
 		local bgColor = if isSelected
-			then (if props.optionType == "push" then Color3.fromHex("27AE60")
+			then (if props.optionType == "push"
+				then Color3.fromHex("27AE60")
 				elseif props.optionType == "pull" then Color3.fromHex("E74C3C")
 				else Color3.fromHex("7F8C8D"))
 			else theme.BorderedContainer.BackgroundColor

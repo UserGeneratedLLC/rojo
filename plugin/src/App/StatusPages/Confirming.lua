@@ -125,13 +125,13 @@ function ConfirmingPage:render()
 				LayoutOrder = 4,
 				BackgroundTransparency = 1,
 			}, {
-			Abort = e(TextButton, {
-				text = "Abort",
-				style = "Bordered",
-				transparency = self.props.transparency,
-				layoutOrder = 1,
-				onClick = self.props.onAbort,
-			}),
+				Abort = e(TextButton, {
+					text = "Abort",
+					style = "Bordered",
+					transparency = self.props.transparency,
+					layoutOrder = 1,
+					onClick = self.props.onAbort,
+				}),
 
 				PullAll = if Settings:get("twoWaySync")
 					then e(TextButton, {
@@ -274,8 +274,7 @@ function ConfirmingPage:render()
 					}),
 				}),
 			}),
-
-			})
+		})
 
 		if self.props.createPopup then
 			return e(StudioPluginGui, {

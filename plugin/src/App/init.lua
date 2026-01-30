@@ -803,6 +803,23 @@ function App:startSession()
 		-- Track if this was the initial sync for this project
 		local isInitialSyncForProject = not self.knownProjects[serverInfo.projectName]
 
+		-- One-shot sync: disconnect immediately after confirmation
+		-- Skip the "Connected" UI state entirely to avoid flash
+		if Settings:get("oneShotSync") then
+			local resultType = if type(result) == "table" then result.type else result
+			if resultType == "Confirm" or resultType == "Accept" then
+				-- Use task.defer to disconnect after patch is applied (runs after current thread yields)
+				task.defer(function()
+					if self.serveSession then
+						Log.info("One-shot sync: disconnecting after sync")
+						self:endSession()
+					end
+				end)
+			end
+			-- Don't transition to Connected UI, just return result and let disconnect happen
+			return result
+		end
+
 		-- Reset UI state back to Connected after confirmation
 		-- This is needed for ongoing WebSocket patches where the session
 		-- is already connected and won't trigger a status change
@@ -814,20 +831,6 @@ function App:startSession()
 				-- PatchVisualizer unmounts while Flipper motors are running
 				patchTree = nil,
 			})
-		end
-
-		-- One-shot sync: disconnect after confirmation
-		if Settings:get("oneShotSync") then
-			local resultType = if type(result) == "table" then result.type else result
-			if resultType == "Confirm" or resultType == "Accept" then
-				-- Delay slightly to allow patch to be applied
-				task.delay(0.5, function()
-					if self.serveSession then
-						Log.info("One-shot sync: disconnecting after sync")
-						self:endSession()
-					end
-				end)
-			end
 		end
 
 		return result

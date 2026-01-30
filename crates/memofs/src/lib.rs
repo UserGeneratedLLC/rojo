@@ -29,7 +29,7 @@ use std::{io, str};
 pub use in_memory_fs::InMemoryFs;
 pub use noop_backend::NoopBackend;
 pub use snapshot::VfsSnapshot;
-pub use std_backend::StdBackend;
+pub use std_backend::{CriticalErrorHandler, StdBackend, WatcherCriticalError};
 
 mod sealed {
     use super::*;
@@ -639,7 +639,7 @@ mod test {
         let file_path = dir.path().join("file.txt");
         fs_err::write(&file_path, contents.to_string()).unwrap();
 
-        let vfs = Vfs::new(StdBackend::new());
+        let vfs = Vfs::new(StdBackend::new_for_testing());
         let canonicalized = vfs.canonicalize(&file_path).unwrap();
         assert_eq!(canonicalized, file_path.canonicalize().unwrap());
         assert_eq!(
@@ -653,7 +653,7 @@ mod test {
         let dir = tempfile::tempdir().unwrap();
         let file_path = dir.path().join("test");
 
-        let vfs = Vfs::new(StdBackend::new());
+        let vfs = Vfs::new(StdBackend::new_for_testing());
         let err = vfs.canonicalize(&file_path).unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
     }

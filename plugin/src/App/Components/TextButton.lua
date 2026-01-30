@@ -130,19 +130,27 @@ function TextButton:render()
 				zIndex = -1,
 			}),
 
-			Background = (style == "Solid" or style == "Warning" or style == "Primary" or style == "Success" or style == "Danger" or style == "Neutral") and e(SlicedImage, {
-				slice = Assets.Slices.RoundedBackground,
-				color = bindingUtil.mapLerp(
-					bindingEnabled,
-					buttonTheme.Enabled.BackgroundColor,
-					buttonTheme.Disabled.BackgroundColor
-				),
-				transparency = self.props.transparency,
+			Background = (
+				style == "Solid"
+				or style == "Warning"
+				or style == "Primary"
+				or style == "Success"
+				or style == "Danger"
+				or style == "Neutral"
+			)
+				and e(SlicedImage, {
+					slice = Assets.Slices.RoundedBackground,
+					color = bindingUtil.mapLerp(
+						bindingEnabled,
+						buttonTheme.Enabled.BackgroundColor,
+						buttonTheme.Disabled.BackgroundColor
+					),
+					transparency = self.props.transparency,
 
-				size = UDim2.new(1, 0, 1, 0),
+					size = UDim2.new(1, 0, 1, 0),
 
-				zIndex = -2,
-			}),
+					zIndex = -2,
+				}),
 
 			Children = Roact.createFragment(self.props[Roact.Children]),
 		})
