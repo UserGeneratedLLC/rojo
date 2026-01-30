@@ -407,13 +407,28 @@ function PatchSet.removeDataModelName(patchSet, instanceMap)
 	end
 
 	for i, update in ipairs(patchSet.updated) do
-		if update.id == dataModelId and update.changedName ~= nil then
-			update.changedName = nil
+		if update.id == dataModelId then
+			-- Remove Name from both changedName and changedProperties
+			local hadChanges = false
+			if update.changedName ~= nil then
+				update.changedName = nil
+				hadChanges = true
+			end
+			if update.changedProperties and update.changedProperties.Name ~= nil then
+				update.changedProperties.Name = nil
+				hadChanges = true
+			end
+
+			if not hadChanges then
+				return
+			end
+
 			-- Remove update entirely if no other changes remain
 			if
-				update.changedClassName == nil
+				update.changedName == nil
+				and update.changedClassName == nil
 				and update.changedMetadata == nil
-				and next(update.changedProperties) == nil
+				and (update.changedProperties == nil or next(update.changedProperties) == nil)
 			then
 				table.remove(patchSet.updated, i)
 			end

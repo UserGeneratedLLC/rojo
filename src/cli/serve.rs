@@ -19,8 +19,8 @@ const DEFAULT_PORT: u16 = 34872;
 /// Expose a Rojo project to the Rojo Studio plugin.
 #[derive(Debug, Parser)]
 pub struct ServeCommand {
-    /// Path to the project to serve. Defaults to the current directory.
-    #[clap(default_value = "")]
+    /// Path to the project to serve. Defaults to `default.project.json5`.
+    #[clap(default_value = "default.project.json5")]
     pub project: PathBuf,
 
     /// The IP address to listen on. Defaults to `127.0.0.1`.
