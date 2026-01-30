@@ -823,14 +823,7 @@ function App:startSession()
 		return result
 	end)
 
-	serveSession:setPatchUpdateCallback(function(instanceMap, patch)
-		-- ONE-SHOT MODE: Ignore all further changes during confirmation
-		-- They will be picked up on the next connection attempt
-		if Settings:get("oneShotSync") then
-			Log.info("One-shot mode: ignoring incoming changes during confirmation")
-			return
-		end
-
+	serveSession:setPatchUpdateCallback(function(instanceMap, patch, changedIds)
 		-- If all changes have been reverted, auto-accept the empty patch
 		if PatchSet.isEmpty(patch) then
 			Log.trace("Patch became empty after merging, auto-accepting")
@@ -840,8 +833,11 @@ function App:startSession()
 		end
 
 		-- Update the patchTree when new changes arrive during confirmation
+		-- The changedIds parameter contains IDs of items that were modified
+		-- so their selections can be reset (user must re-review)
 		self:setState({
 			patchTree = PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" }),
+			changedIds = changedIds, -- Pass to UI so it can unselect changed items
 		})
 	end)
 
@@ -949,6 +945,7 @@ function App:render()
 					ConfirmingPage = createPageElement(AppStatus.Confirming, {
 						confirmData = self.state.confirmData,
 						patchTree = self.state.patchTree,
+						changedIds = self.state.changedIds,
 						createPopup = not self.state.guiEnabled,
 
 						onAbort = function()

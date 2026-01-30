@@ -248,6 +248,24 @@ pub struct ReadResponse<'a> {
     pub instances: HashMap<Ref, Instance<'a>>,
 }
 
+/// Instance data for creating new instances via the write API
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AddedInstance {
+    /// The parent instance's Ref (must exist in Rojo's tree)
+    pub parent: Ref,
+    /// The instance name
+    pub name: String,
+    /// The class name (e.g., "ModuleScript", "Script", "LocalScript")
+    pub class_name: String,
+    /// Properties to set on the instance
+    #[serde(default)]
+    pub properties: HashMap<String, Variant>,
+    /// Children instances (recursively encoded for hierarchical syncback)
+    #[serde(default)]
+    pub children: Vec<AddedInstance>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WriteRequest {
@@ -255,7 +273,7 @@ pub struct WriteRequest {
     pub removed: Vec<Ref>,
 
     #[serde(default)]
-    pub added: HashMap<Ref, ()>,
+    pub added: HashMap<Ref, AddedInstance>,
     pub updated: Vec<InstanceUpdate>,
 }
 

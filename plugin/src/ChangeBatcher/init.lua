@@ -28,6 +28,7 @@ function ChangeBatcher.new(instanceMap, onChangesFlushed)
 		__onChangesFlushed = onChangesFlushed,
 		__pendingPropertyChanges = {},
 		__syncSourceOnly = false,
+		__paused = false,
 	}, ChangeBatcher)
 
 	return self
@@ -35,6 +36,21 @@ end
 
 function ChangeBatcher:setSyncSourceOnly(enabled)
 	self.__syncSourceOnly = enabled
+end
+
+-- Pause the batcher to prevent change accumulation during confirmation
+function ChangeBatcher:pause()
+	self.__paused = true
+end
+
+-- Resume the batcher after confirmation
+function ChangeBatcher:resume()
+	self.__paused = false
+end
+
+-- Check if the batcher is paused
+function ChangeBatcher:isPaused()
+	return self.__paused
 end
 
 function ChangeBatcher:stop()
@@ -54,6 +70,11 @@ function ChangeBatcher:add(instance, propertyName)
 end
 
 function ChangeBatcher:__cycle(dt)
+	-- Skip processing when paused (during confirmation dialogue)
+	if self.__paused then
+		return
+	end
+
 	self.__accumulator += dt
 
 	if self.__accumulator >= BATCH_INTERVAL then

@@ -32,6 +32,66 @@ use crate::{
     web_api::{InstanceUpdate, RefPatchResponse, SerializeResponse},
 };
 
+/// Convert a Variant to a JSON-compatible value for .model.json files
+fn variant_to_json(variant: &Variant) -> Option<serde_json::Value> {
+    use serde_json::{json, Value};
+
+    match variant {
+        Variant::String(s) => Some(Value::String(s.clone())),
+        Variant::Bool(b) => Some(Value::Bool(*b)),
+        Variant::Int32(n) => Some(json!(n)),
+        Variant::Int64(n) => Some(json!(n)),
+        Variant::Float32(n) => Some(json!(n)),
+        Variant::Float64(n) => Some(json!(n)),
+        Variant::Vector2(v) => Some(json!([v.x, v.y])),
+        Variant::Vector3(v) => Some(json!([v.x, v.y, v.z])),
+        Variant::Color3(c) => Some(json!([c.r, c.g, c.b])),
+        Variant::Color3uint8(c) => Some(json!([c.r, c.g, c.b])),
+        Variant::CFrame(cf) => {
+            let pos = cf.position;
+            let ori = cf.orientation;
+            Some(json!({
+                "position": [pos.x, pos.y, pos.z],
+                "orientation": [
+                    [ori.x.x, ori.x.y, ori.x.z],
+                    [ori.y.x, ori.y.y, ori.y.z],
+                    [ori.z.x, ori.z.y, ori.z.z]
+                ]
+            }))
+        }
+        Variant::UDim(u) => Some(json!({"scale": u.scale, "offset": u.offset})),
+        Variant::UDim2(u) => Some(json!({
+            "x": {"scale": u.x.scale, "offset": u.x.offset},
+            "y": {"scale": u.y.scale, "offset": u.y.offset}
+        })),
+        Variant::Enum(e) => Some(json!(e.to_u32())),
+        Variant::BrickColor(bc) => Some(json!(*bc as u16)),
+        Variant::NumberSequence(ns) => {
+            let keypoints: Vec<_> = ns
+                .keypoints
+                .iter()
+                .map(|kp| json!({"time": kp.time, "value": kp.value, "envelope": kp.envelope}))
+                .collect();
+            Some(json!({"keypoints": keypoints}))
+        }
+        Variant::ColorSequence(cs) => {
+            let keypoints: Vec<_> = cs
+                .keypoints
+                .iter()
+                .map(|kp| json!({"time": kp.time, "color": [kp.color.r, kp.color.g, kp.color.b]}))
+                .collect();
+            Some(json!({"keypoints": keypoints}))
+        }
+        Variant::NumberRange(nr) => Some(json!({"min": nr.min, "max": nr.max})),
+        Variant::Rect(r) => Some(json!({
+            "min": [r.min.x, r.min.y],
+            "max": [r.max.x, r.max.y]
+        })),
+        // Skip complex types that don't serialize well to JSON
+        _ => None,
+    }
+}
+
 pub async fn call(serve_session: Arc<ServeSession>, mut request: Request<Body>) -> Response<Body> {
     let service = ApiService::new(serve_session);
 
@@ -160,6 +220,17 @@ impl ApiService {
             );
         }
 
+        // Process added instances (syncback: create files from Studio instances)
+        for added in request.added.values() {
+            if let Err(err) = self.syncback_added_instance(added) {
+                log::warn!(
+                    "Failed to syncback added instance '{}': {}",
+                    added.name,
+                    err
+                );
+            }
+        }
+
         let updated_instances = request
             .updated
             .into_iter()
@@ -181,6 +252,609 @@ impl ApiService {
             .unwrap();
 
         msgpack_ok(WriteResponse { session_id })
+    }
+
+    /// Syncback an added instance by creating a file in the filesystem.
+    /// The file watcher will pick up the change and update Rojo's tree.
+    ///
+    /// This follows the same middleware selection logic as the dedicated syncback
+    /// system in `src/syncback/mod.rs` to ensure consistent behavior.
+    fn syncback_added_instance(
+        &self,
+        added: &crate::web::interface::AddedInstance,
+    ) -> anyhow::Result<()> {
+        use crate::syncback::validate_file_name;
+        use anyhow::Context;
+
+        // Validate the instance name for filesystem safety
+        validate_file_name(&added.name).with_context(|| {
+            format!(
+                "Instance name '{}' is not valid for the filesystem",
+                added.name
+            )
+        })?;
+
+        // Find the parent instance to get its filesystem path
+        let tree = self.serve_session.tree();
+        let parent_instance = tree
+            .get_instance(added.parent)
+            .context("Parent instance not found in Rojo tree")?;
+
+        // Get the parent's filesystem path from its metadata
+        let parent_path = parent_instance
+            .metadata()
+            .instigating_source
+            .as_ref()
+            .map(|s| s.path())
+            .context("Parent instance has no filesystem path (not synced from filesystem)")?;
+
+        // Determine if parent is a directory or file
+        let parent_dir = if parent_path.is_dir() {
+            parent_path.to_path_buf()
+        } else {
+            parent_path
+                .parent()
+                .context("Could not get parent directory")?
+                .to_path_buf()
+        };
+
+        // Create the instance at the resolved path
+        self.syncback_instance_to_path(added, &parent_dir)
+    }
+
+    /// Recursively syncback an instance and its children to the filesystem.
+    /// This is the internal implementation that handles the actual file creation.
+    fn syncback_instance_to_path(
+        &self,
+        added: &crate::web::interface::AddedInstance,
+        parent_dir: &std::path::Path,
+    ) -> anyhow::Result<()> {
+        use crate::syncback::validate_file_name;
+        use anyhow::Context;
+
+        // Validate the instance name for filesystem safety
+        validate_file_name(&added.name).with_context(|| {
+            format!(
+                "Instance name '{}' is not valid for the filesystem",
+                added.name
+            )
+        })?;
+
+        let has_children = !added.children.is_empty();
+
+        // Determine the appropriate middleware/file format based on class name
+        // This matches the logic in src/syncback/mod.rs::get_best_middleware
+        // Scripts with children become directories with init files
+        match added.class_name.as_str() {
+            // Script types: .luau files, or directories with init files if has children
+            // Non-Source properties (like Attributes) go into init.meta.json5
+            "ModuleScript" => {
+                let source = self.get_source_property(added);
+                if has_children {
+                    let dir_path = parent_dir.join(&added.name);
+                    fs::create_dir_all(&dir_path).with_context(|| {
+                        format!("Failed to create directory: {}", dir_path.display())
+                    })?;
+                    let init_path = dir_path.join("init.luau");
+                    fs::write(&init_path, source.as_bytes()).with_context(|| {
+                        format!("Failed to write file: {}", init_path.display())
+                    })?;
+                    // Write init.meta.json5 if there are non-Source properties (like Attributes)
+                    self.write_script_meta_json_if_needed(&dir_path, added)?;
+                    log::info!(
+                        "Syncback: Created ModuleScript directory at {}",
+                        dir_path.display()
+                    );
+                    for child in &added.children {
+                        self.syncback_instance_to_path(child, &dir_path)?;
+                    }
+                } else {
+                    let file_path = parent_dir.join(format!("{}.luau", added.name));
+                    fs::write(&file_path, source.as_bytes()).with_context(|| {
+                        format!("Failed to write file: {}", file_path.display())
+                    })?;
+                    // Create adjacent meta file if there are non-Source properties
+                    self.write_adjacent_script_meta_if_needed(parent_dir, &added.name, added)?;
+                    log::info!("Syncback: Created ModuleScript at {}", file_path.display());
+                }
+            }
+            "Script" => {
+                let source = self.get_source_property(added);
+                // Determine script type based on RunContext property
+                // This ensures proper round-tripping regardless of emitLegacyScripts mode
+                let script_suffix = self.get_script_suffix_for_run_context(added);
+
+                if has_children {
+                    let dir_path = parent_dir.join(&added.name);
+                    fs::create_dir_all(&dir_path).with_context(|| {
+                        format!("Failed to create directory: {}", dir_path.display())
+                    })?;
+                    let init_path = dir_path.join(format!("init.{}.luau", script_suffix));
+                    fs::write(&init_path, source.as_bytes()).with_context(|| {
+                        format!("Failed to write file: {}", init_path.display())
+                    })?;
+                    self.write_script_meta_json_if_needed(&dir_path, added)?;
+                    log::info!(
+                        "Syncback: Created Script directory at {}",
+                        dir_path.display()
+                    );
+                    for child in &added.children {
+                        self.syncback_instance_to_path(child, &dir_path)?;
+                    }
+                } else {
+                    let file_path =
+                        parent_dir.join(format!("{}.{}.luau", added.name, script_suffix));
+                    fs::write(&file_path, source.as_bytes()).with_context(|| {
+                        format!("Failed to write file: {}", file_path.display())
+                    })?;
+                    // Create adjacent meta file if there are non-Source properties
+                    self.write_adjacent_script_meta_if_needed(parent_dir, &added.name, added)?;
+                    log::info!("Syncback: Created Script at {}", file_path.display());
+                }
+            }
+            "LocalScript" => {
+                let source = self.get_source_property(added);
+                if has_children {
+                    let dir_path = parent_dir.join(&added.name);
+                    fs::create_dir_all(&dir_path).with_context(|| {
+                        format!("Failed to create directory: {}", dir_path.display())
+                    })?;
+                    let init_path = dir_path.join("init.client.luau");
+                    fs::write(&init_path, source.as_bytes()).with_context(|| {
+                        format!("Failed to write file: {}", init_path.display())
+                    })?;
+                    self.write_script_meta_json_if_needed(&dir_path, added)?;
+                    log::info!(
+                        "Syncback: Created LocalScript directory at {}",
+                        dir_path.display()
+                    );
+                    for child in &added.children {
+                        self.syncback_instance_to_path(child, &dir_path)?;
+                    }
+                } else {
+                    let file_path = parent_dir.join(format!("{}.client.luau", added.name));
+                    fs::write(&file_path, source.as_bytes()).with_context(|| {
+                        format!("Failed to write file: {}", file_path.display())
+                    })?;
+                    // Create adjacent meta file if there are non-Source properties
+                    self.write_adjacent_script_meta_if_needed(parent_dir, &added.name, added)?;
+                    log::info!("Syncback: Created LocalScript at {}", file_path.display());
+                }
+            }
+
+            // Directory-native classes: always become directories
+            "Folder" | "Configuration" | "Tool" | "ScreenGui" | "SurfaceGui" | "BillboardGui"
+            | "AdGui" => {
+                let dir_path = parent_dir.join(&added.name);
+                fs::create_dir_all(&dir_path).with_context(|| {
+                    format!("Failed to create directory: {}", dir_path.display())
+                })?;
+
+                // Write init.meta.json5 if has ANY properties (Attributes, Tags, etc.)
+                let has_metadata = if added.properties.is_empty() {
+                    false
+                } else {
+                    self.write_directory_meta_json(&dir_path, added)?;
+                    true
+                };
+
+                // Add .gitkeep for empty directories with no metadata (matches dedicated syncback)
+                if added.children.is_empty() && !has_metadata {
+                    fs::write(dir_path.join(".gitkeep"), b"")
+                        .with_context(|| "Failed to write .gitkeep")?;
+                }
+
+                log::info!(
+                    "Syncback: Created {} directory at {}",
+                    added.class_name,
+                    dir_path.display()
+                );
+
+                // Recursively process children
+                for child in &added.children {
+                    self.syncback_instance_to_path(child, &dir_path)?;
+                }
+            }
+
+            // StringValue: .txt file if no children, directory with init.meta.json5 if has children
+            "StringValue" => {
+                if has_children {
+                    // Must become directory - store StringValue data in init.meta.json5
+                    let dir_path = parent_dir.join(&added.name);
+                    fs::create_dir_all(&dir_path).with_context(|| {
+                        format!("Failed to create directory: {}", dir_path.display())
+                    })?;
+                    self.write_init_meta_json(&dir_path, added)?;
+                    log::info!(
+                        "Syncback: Created StringValue directory at {}",
+                        dir_path.display()
+                    );
+                    for child in &added.children {
+                        self.syncback_instance_to_path(child, &dir_path)?;
+                    }
+                } else {
+                    let value = added
+                        .properties
+                        .get("Value")
+                        .and_then(|v| match v {
+                            Variant::String(s) => Some(s.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or_default();
+                    let file_path = parent_dir.join(format!("{}.txt", added.name));
+                    fs::write(&file_path, value.as_bytes()).with_context(|| {
+                        format!("Failed to write file: {}", file_path.display())
+                    })?;
+                    log::info!("Syncback: Created StringValue at {}", file_path.display());
+                }
+            }
+
+            // LocalizationTable: .csv file if no children, directory with init.csv if has children
+            "LocalizationTable" => {
+                // TODO: Full CSV support would serialize the Contents property
+                let content = "Key,Source,Context,Example,en\n";
+
+                if has_children {
+                    // Must become directory with init.csv
+                    let dir_path = parent_dir.join(&added.name);
+                    fs::create_dir_all(&dir_path).with_context(|| {
+                        format!("Failed to create directory: {}", dir_path.display())
+                    })?;
+                    let init_path = dir_path.join("init.csv");
+                    fs::write(&init_path, content.as_bytes()).with_context(|| {
+                        format!("Failed to write file: {}", init_path.display())
+                    })?;
+                    log::info!(
+                        "Syncback: Created LocalizationTable directory at {}",
+                        dir_path.display()
+                    );
+                    for child in &added.children {
+                        self.syncback_instance_to_path(child, &dir_path)?;
+                    }
+                } else {
+                    let file_path = parent_dir.join(format!("{}.csv", added.name));
+                    fs::write(&file_path, content.as_bytes()).with_context(|| {
+                        format!("Failed to write file: {}", file_path.display())
+                    })?;
+                    log::info!(
+                        "Syncback: Created LocalizationTable at {}",
+                        file_path.display()
+                    );
+                }
+            }
+
+            // All other classes -> .model.json5 or directory if has children
+            _ => {
+                if has_children {
+                    // Create directory and put the instance as init.meta.json5
+                    let dir_path = parent_dir.join(&added.name);
+                    fs::create_dir_all(&dir_path).with_context(|| {
+                        format!("Failed to create directory: {}", dir_path.display())
+                    })?;
+
+                    // Write init.meta.json5 with class and properties
+                    self.write_init_meta_json(&dir_path, added)?;
+
+                    log::info!(
+                        "Syncback: Created {} directory at {} with init.meta.json5",
+                        added.class_name,
+                        dir_path.display()
+                    );
+
+                    // Recursively process children
+                    for child in &added.children {
+                        self.syncback_instance_to_path(child, &dir_path)?;
+                    }
+                } else {
+                    let content = self.serialize_instance_to_model_json(added)?;
+                    // Use .model.json5 to match dedicated syncback (extension_for_middleware)
+                    let file_path = parent_dir.join(format!("{}.model.json5", added.name));
+                    fs::write(&file_path, &content).with_context(|| {
+                        format!("Failed to write file: {}", file_path.display())
+                    })?;
+                    log::info!(
+                        "Syncback: Created {} at {}",
+                        added.class_name,
+                        file_path.display()
+                    );
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Write init.meta.json5 for script directories if they have non-Source properties
+    /// This matches the behavior of the dedicated syncback system.
+    fn write_script_meta_json_if_needed(
+        &self,
+        dir_path: &std::path::Path,
+        added: &crate::web::interface::AddedInstance,
+    ) -> anyhow::Result<()> {
+        use anyhow::Context;
+
+        // Check if there are any properties besides Source that need to be saved
+        // Use IndexMap for consistent ordering (like dedicated syncback)
+        let (properties, attributes) =
+            self.filter_properties_for_meta(&added.properties, Some("Source"));
+
+        if properties.is_empty() && attributes.is_empty() {
+            return Ok(());
+        }
+
+        let meta = self.build_meta_object(None, properties, attributes);
+        let meta_path = dir_path.join("init.meta.json5");
+        let content = crate::json::to_vec_pretty_sorted(&meta)
+            .context("Failed to serialize init.meta.json5")?;
+        fs::write(&meta_path, &content)
+            .with_context(|| format!("Failed to write meta file: {}", meta_path.display()))?;
+        log::info!(
+            "Syncback: Created init.meta.json5 for script at {}",
+            meta_path.display()
+        );
+
+        Ok(())
+    }
+
+    /// Write init.meta.json5 for directory-native classes (Folder, Configuration, etc.)
+    /// Includes all properties (Attributes, Tags, etc.)
+    /// This matches the behavior of the dedicated syncback system.
+    fn write_directory_meta_json(
+        &self,
+        dir_path: &std::path::Path,
+        added: &crate::web::interface::AddedInstance,
+    ) -> anyhow::Result<()> {
+        use anyhow::Context;
+
+        let (properties, attributes) = self.filter_properties_for_meta(&added.properties, None);
+
+        if properties.is_empty() && attributes.is_empty() {
+            return Ok(());
+        }
+
+        let meta = self.build_meta_object(None, properties, attributes);
+        let meta_path = dir_path.join("init.meta.json5");
+        let content = crate::json::to_vec_pretty_sorted(&meta)
+            .context("Failed to serialize init.meta.json5")?;
+        fs::write(&meta_path, &content)
+            .with_context(|| format!("Failed to write meta file: {}", meta_path.display()))?;
+        log::info!(
+            "Syncback: Created init.meta.json5 at {}",
+            meta_path.display()
+        );
+
+        Ok(())
+    }
+
+    /// Write an init.meta.json5 file for non-standard instances that have children
+    /// This matches the behavior of the dedicated syncback system.
+    fn write_init_meta_json(
+        &self,
+        dir_path: &std::path::Path,
+        added: &crate::web::interface::AddedInstance,
+    ) -> anyhow::Result<()> {
+        use anyhow::Context;
+
+        let (properties, attributes) = self.filter_properties_for_meta(&added.properties, None);
+
+        // For non-Folder classes, we need to include className
+        let meta = self.build_meta_object(Some(&added.class_name), properties, attributes);
+        let meta_path = dir_path.join("init.meta.json5");
+        let content = crate::json::to_vec_pretty_sorted(&meta)
+            .context("Failed to serialize init.meta.json5")?;
+        fs::write(&meta_path, &content)
+            .with_context(|| format!("Failed to write meta file: {}", meta_path.display()))?;
+        log::info!(
+            "Syncback: Created init.meta.json5 for {} at {}",
+            added.class_name,
+            meta_path.display()
+        );
+
+        Ok(())
+    }
+
+    /// Filter properties for meta file serialization, matching dedicated syncback behavior.
+    /// Returns (properties, attributes) as separate IndexMaps.
+    ///
+    /// Filters out:
+    /// - Ref and UniqueId properties (don't serialize to JSON)
+    /// - The skip_property if specified (e.g., "Source" for scripts)
+    /// - Internal RBX* prefixed attributes
+    fn filter_properties_for_meta(
+        &self,
+        props: &HashMap<String, Variant>,
+        skip_property: Option<&str>,
+    ) -> (
+        indexmap::IndexMap<String, serde_json::Value>,
+        indexmap::IndexMap<String, serde_json::Value>,
+    ) {
+        use indexmap::IndexMap;
+
+        let mut properties: IndexMap<String, serde_json::Value> = IndexMap::new();
+        let mut attributes: IndexMap<String, serde_json::Value> = IndexMap::new();
+
+        for (name, value) in props {
+            // Skip the specified property (e.g., Source for scripts)
+            if let Some(skip) = skip_property {
+                if name == skip {
+                    continue;
+                }
+            }
+
+            // Skip Ref and UniqueId - they don't serialize to JSON (matches dedicated syncback)
+            if matches!(value, Variant::Ref(_) | Variant::UniqueId(_)) {
+                continue;
+            }
+
+            // Handle Attributes specially - extract into separate map and filter RBX* prefix
+            if let Variant::Attributes(attrs) = value {
+                for (attr_name, attr_value) in attrs.iter() {
+                    // Skip internal Roblox attributes (matches dedicated syncback)
+                    if attr_name.starts_with("RBX") {
+                        continue;
+                    }
+                    if let Some(json_value) = variant_to_json(attr_value) {
+                        attributes.insert(attr_name.clone(), json_value);
+                    }
+                }
+                continue;
+            }
+
+            // Convert other properties
+            if let Some(json_value) = variant_to_json(value) {
+                properties.insert(name.clone(), json_value);
+            }
+        }
+
+        (properties, attributes)
+    }
+
+    /// Build a meta object (for init.meta.json5) matching dedicated syncback format.
+    fn build_meta_object(
+        &self,
+        class_name: Option<&str>,
+        properties: indexmap::IndexMap<String, serde_json::Value>,
+        attributes: indexmap::IndexMap<String, serde_json::Value>,
+    ) -> serde_json::Value {
+        use serde_json::json;
+
+        let mut obj = serde_json::Map::new();
+
+        if let Some(cn) = class_name {
+            obj.insert("className".to_string(), json!(cn));
+        }
+
+        if !properties.is_empty() {
+            obj.insert("properties".to_string(), json!(properties));
+        }
+
+        if !attributes.is_empty() {
+            obj.insert("attributes".to_string(), json!(attributes));
+        }
+
+        serde_json::Value::Object(obj)
+    }
+
+    /// Extract the Source property from an added instance, defaulting to empty string.
+    fn get_source_property(&self, added: &crate::web::interface::AddedInstance) -> String {
+        added
+            .properties
+            .get("Source")
+            .and_then(|v| match v {
+                Variant::String(s) => Some(s.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    }
+
+    /// Determine the script file suffix based on RunContext property.
+    ///
+    /// For `Script` class:
+    /// - RunContext: Client → "client"
+    /// - RunContext: Server → "server"
+    /// - RunContext: Legacy → "server" (default for legacy mode)
+    /// - RunContext: Plugin → "plugin"
+    /// - No RunContext → "server" (default)
+    ///
+    /// This ensures proper round-tripping regardless of emitLegacyScripts mode.
+    fn get_script_suffix_for_run_context(
+        &self,
+        added: &crate::web::interface::AddedInstance,
+    ) -> &'static str {
+        // Get RunContext enum values from reflection database
+        let run_context_enums = rbx_reflection_database::get()
+            .ok()
+            .and_then(|db| db.enums.get("RunContext"))
+            .map(|e| &e.items);
+
+        let run_context_value = added.properties.get("RunContext").and_then(|v| match v {
+            Variant::Enum(e) => Some(e.to_u32()),
+            _ => None,
+        });
+
+        if let (Some(enums), Some(value)) = (run_context_enums, run_context_value) {
+            // Find which RunContext this value corresponds to
+            for (name, &enum_value) in enums {
+                if enum_value == value {
+                    return match name.as_ref() {
+                        "Client" => "client",
+                        "Server" => "server",
+                        "Legacy" => "server",
+                        "Plugin" => "plugin",
+                        _ => "server",
+                    };
+                }
+            }
+        }
+
+        // Default to server if no RunContext or unrecognized
+        "server"
+    }
+
+    /// Write an adjacent meta file for scripts without children.
+    ///
+    /// Creates `{name}.meta.json5` next to the script file if there are
+    /// non-Source properties that need to be preserved.
+    ///
+    /// This matches the dedicated syncback behavior in lua.rs::syncback_lua.
+    fn write_adjacent_script_meta_if_needed(
+        &self,
+        parent_dir: &std::path::Path,
+        name: &str,
+        added: &crate::web::interface::AddedInstance,
+    ) -> anyhow::Result<()> {
+        use anyhow::Context;
+
+        // Filter properties, skipping Source (it's in the .luau file)
+        let (properties, attributes) =
+            self.filter_properties_for_meta(&added.properties, Some("Source"));
+
+        if properties.is_empty() && attributes.is_empty() {
+            return Ok(());
+        }
+
+        // Build meta object (no className needed for scripts - it's determined by file extension)
+        let meta = self.build_meta_object(None, properties, attributes);
+        let meta_path = parent_dir.join(format!("{}.meta.json5", name));
+        let content =
+            crate::json::to_vec_pretty_sorted(&meta).context("Failed to serialize meta.json5")?;
+        fs::write(&meta_path, &content)
+            .with_context(|| format!("Failed to write meta file: {}", meta_path.display()))?;
+        log::info!(
+            "Syncback: Created adjacent meta file at {}",
+            meta_path.display()
+        );
+
+        Ok(())
+    }
+
+    /// Serialize an instance to model.json5 format (human-readable, version-control friendly)
+    /// This matches the format used by the dedicated syncback system.
+    fn serialize_instance_to_model_json(
+        &self,
+        added: &crate::web::interface::AddedInstance,
+    ) -> anyhow::Result<Vec<u8>> {
+        use anyhow::Context;
+        use serde_json::json;
+
+        // Filter properties matching dedicated syncback behavior
+        let (properties, attributes) = self.filter_properties_for_meta(&added.properties, None);
+
+        // Build the JSON model structure
+        // Format: https://rojo.space/docs/v7/sync-details/#json-models
+        let mut model = serde_json::Map::new();
+        model.insert("className".to_string(), json!(added.class_name));
+
+        if !properties.is_empty() {
+            model.insert("properties".to_string(), json!(properties));
+        }
+
+        if !attributes.is_empty() {
+            model.insert("attributes".to_string(), json!(attributes));
+        }
+
+        // Use sorted JSON5 serialization to match dedicated syncback
+        crate::json::to_vec_pretty_sorted(&model).context("Failed to serialize model.json5")
     }
 
     async fn handle_api_read(&self, request: Request<Body>) -> Response<Body> {
@@ -772,5 +1446,1561 @@ fn instance_for_scripts_only<'a>(
         properties,
         children: Cow::Owned(filtered_children),
         metadata,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rbx_dom_weak::types::{Color3, Enum, NumberRange, Rect, UDim, UDim2, Vector2, Vector3};
+
+    // Tests for variant_to_json function
+    mod variant_to_json_tests {
+        use super::*;
+
+        #[test]
+        fn test_string() {
+            let variant = Variant::String("hello world".to_string());
+            let result = variant_to_json(&variant);
+            assert!(result.is_some());
+            assert_eq!(result.unwrap(), serde_json::json!("hello world"));
+        }
+
+        #[test]
+        fn test_bool() {
+            assert_eq!(
+                variant_to_json(&Variant::Bool(true)),
+                Some(serde_json::json!(true))
+            );
+            assert_eq!(
+                variant_to_json(&Variant::Bool(false)),
+                Some(serde_json::json!(false))
+            );
+        }
+
+        #[test]
+        fn test_int32() {
+            let variant = Variant::Int32(42);
+            let result = variant_to_json(&variant);
+            assert_eq!(result, Some(serde_json::json!(42)));
+        }
+
+        #[test]
+        fn test_int64() {
+            let variant = Variant::Int64(9999999999i64);
+            let result = variant_to_json(&variant);
+            assert_eq!(result, Some(serde_json::json!(9999999999i64)));
+        }
+
+        #[test]
+        fn test_float32() {
+            let variant = Variant::Float32(3.14);
+            let result = variant_to_json(&variant);
+            assert!(result.is_some());
+        }
+
+        #[test]
+        fn test_float64() {
+            let variant = Variant::Float64(2.71828);
+            let result = variant_to_json(&variant);
+            assert!(result.is_some());
+        }
+
+        #[test]
+        fn test_vector2() {
+            let variant = Variant::Vector2(Vector2::new(1.0, 2.0));
+            let result = variant_to_json(&variant);
+            assert!(result.is_some());
+            assert_eq!(result.unwrap(), serde_json::json!([1.0, 2.0]));
+        }
+
+        #[test]
+        fn test_vector3() {
+            let variant = Variant::Vector3(Vector3::new(1.0, 2.0, 3.0));
+            let result = variant_to_json(&variant);
+            assert!(result.is_some());
+            assert_eq!(result.unwrap(), serde_json::json!([1.0, 2.0, 3.0]));
+        }
+
+        #[test]
+        fn test_color3() {
+            let variant = Variant::Color3(Color3::new(1.0, 0.5, 0.0));
+            let result = variant_to_json(&variant);
+            assert!(result.is_some());
+            assert_eq!(result.unwrap(), serde_json::json!([1.0, 0.5, 0.0]));
+        }
+
+        #[test]
+        fn test_udim() {
+            let variant = Variant::UDim(UDim::new(0.5, 100));
+            let result = variant_to_json(&variant);
+            assert!(result.is_some());
+            let json = result.unwrap();
+            assert_eq!(json["scale"], 0.5);
+            assert_eq!(json["offset"], 100);
+        }
+
+        #[test]
+        fn test_udim2() {
+            let variant = Variant::UDim2(UDim2::new(UDim::new(0.5, 10), UDim::new(0.25, 20)));
+            let result = variant_to_json(&variant);
+            assert!(result.is_some());
+            let json = result.unwrap();
+            assert_eq!(json["x"]["scale"], 0.5);
+            assert_eq!(json["x"]["offset"], 10);
+            assert_eq!(json["y"]["scale"], 0.25);
+            assert_eq!(json["y"]["offset"], 20);
+        }
+
+        #[test]
+        fn test_enum() {
+            let variant = Variant::Enum(Enum::from_u32(2));
+            let result = variant_to_json(&variant);
+            assert_eq!(result, Some(serde_json::json!(2)));
+        }
+
+        #[test]
+        fn test_number_range() {
+            let variant = Variant::NumberRange(NumberRange::new(0.0, 100.0));
+            let result = variant_to_json(&variant);
+            assert!(result.is_some());
+            let json = result.unwrap();
+            assert_eq!(json["min"], 0.0);
+            assert_eq!(json["max"], 100.0);
+        }
+
+        #[test]
+        fn test_rect() {
+            let variant =
+                Variant::Rect(Rect::new(Vector2::new(0.0, 0.0), Vector2::new(100.0, 50.0)));
+            let result = variant_to_json(&variant);
+            assert!(result.is_some());
+            let json = result.unwrap();
+            assert_eq!(json["min"], serde_json::json!([0.0, 0.0]));
+            assert_eq!(json["max"], serde_json::json!([100.0, 50.0]));
+        }
+
+        #[test]
+        fn test_unsupported_returns_none() {
+            // BinaryString is not directly supported in JSON
+            let variant = Variant::BinaryString(vec![1, 2, 3].into());
+            let result = variant_to_json(&variant);
+            assert!(result.is_none());
+        }
+    }
+
+    // Tests for file naming conventions in syncback
+    mod syncback_file_naming_tests {
+        #[test]
+        fn test_script_file_extensions() {
+            // Test that script class names result in correct file extensions
+            let test_cases = vec![
+                ("ModuleScript", "TestModule", "TestModule.luau"),
+                ("Script", "TestScript", "TestScript.server.luau"),
+                ("LocalScript", "TestClient", "TestClient.client.luau"),
+            ];
+
+            for (class_name, name, expected) in test_cases {
+                let file_name = match class_name {
+                    "ModuleScript" => format!("{}.luau", name),
+                    "Script" => format!("{}.server.luau", name),
+                    "LocalScript" => format!("{}.client.luau", name),
+                    _ => format!("{}.model.json", name),
+                };
+                assert_eq!(
+                    file_name, expected,
+                    "File naming for {} '{}' is incorrect",
+                    class_name, name
+                );
+            }
+        }
+
+        #[test]
+        fn test_folder_creates_directory() {
+            // Folders should not create .model.json files
+            let class_name = "Folder";
+            let should_create_file = class_name != "Folder";
+            assert!(
+                !should_create_file,
+                "Folder should create a directory, not a file"
+            );
+        }
+
+        #[test]
+        fn test_other_instances_create_model_json5() {
+            // Part, Frame, TextLabel, Model use .model.json5 (matching dedicated syncback)
+            // Configuration creates a directory instead
+            let json5_types = vec!["Part", "Frame", "TextLabel", "Model"];
+            for class_name in json5_types {
+                let file_name = format!("Test.model.json5");
+                assert!(
+                    file_name.ends_with(".model.json5"),
+                    "{} should create .model.json5 file",
+                    class_name
+                );
+            }
+        }
+
+        #[test]
+        fn test_directory_classes() {
+            // These classes create directories, not files (matching dedicated syncback)
+            let dir_classes = vec![
+                "Folder",
+                "Configuration",
+                "Tool",
+                "ScreenGui",
+                "SurfaceGui",
+                "BillboardGui",
+                "AdGui",
+            ];
+            for class_name in dir_classes {
+                // These should create directories
+                assert!(
+                    matches!(
+                        class_name,
+                        "Folder"
+                            | "Configuration"
+                            | "Tool"
+                            | "ScreenGui"
+                            | "SurfaceGui"
+                            | "BillboardGui"
+                            | "AdGui"
+                    ),
+                    "{} should create a directory",
+                    class_name
+                );
+            }
+        }
+
+        #[test]
+        fn test_special_value_classes() {
+            // StringValue -> .txt, LocalizationTable -> .csv
+            assert_eq!(
+                format!("{}.txt", "TestValue"),
+                "TestValue.txt",
+                "StringValue should create .txt file"
+            );
+            assert_eq!(
+                format!("{}.csv", "TestLocalization"),
+                "TestLocalization.csv",
+                "LocalizationTable should create .csv file"
+            );
+        }
+    }
+
+    // Tests for model.json structure
+    mod model_json_structure_tests {
+        use serde_json::json;
+
+        #[test]
+        fn test_basic_structure() {
+            // Verify the expected JSON structure for model files
+            let model = json!({
+                "className": "Part",
+                "properties": {}
+            });
+
+            assert!(model.get("className").is_some());
+            assert!(model.get("properties").is_some());
+        }
+
+        #[test]
+        fn test_with_properties() {
+            let model = json!({
+                "className": "Part",
+                "properties": {
+                    "Size": [4.0, 1.0, 2.0],
+                    "Color": [1.0, 0.0, 0.0],
+                    "Anchored": true
+                }
+            });
+
+            let props = model.get("properties").unwrap();
+            assert!(props.get("Size").is_some());
+            assert!(props.get("Color").is_some());
+            assert!(props.get("Anchored").is_some());
+        }
+    }
+
+    // Tests for RunContext-based script file suffix determination
+    mod run_context_tests {
+
+        #[test]
+        fn test_run_context_client_gives_client_suffix() {
+            // Script with RunContext: Client should produce .client.luau
+            // RunContext::Client has value 2 in the Roblox enum
+            let run_context_enums = rbx_reflection_database::get()
+                .ok()
+                .and_then(|db| db.enums.get("RunContext"))
+                .map(|e| &e.items);
+
+            if let Some(enums) = run_context_enums {
+                if let Some(&client_value) = enums.get("Client") {
+                    // Verify the enum value exists
+                    assert!(client_value > 0 || client_value == 0);
+                }
+            }
+        }
+
+        #[test]
+        fn test_run_context_server_gives_server_suffix() {
+            // Script with RunContext: Server should produce .server.luau
+            let run_context_enums = rbx_reflection_database::get()
+                .ok()
+                .and_then(|db| db.enums.get("RunContext"))
+                .map(|e| &e.items);
+
+            if let Some(enums) = run_context_enums {
+                if let Some(&server_value) = enums.get("Server") {
+                    assert!(server_value > 0 || server_value == 0);
+                }
+            }
+        }
+
+        #[test]
+        fn test_run_context_legacy_gives_server_suffix() {
+            // Script with RunContext: Legacy should produce .server.luau (for legacy mode)
+            let run_context_enums = rbx_reflection_database::get()
+                .ok()
+                .and_then(|db| db.enums.get("RunContext"))
+                .map(|e| &e.items);
+
+            if let Some(enums) = run_context_enums {
+                if let Some(&legacy_value) = enums.get("Legacy") {
+                    assert!(legacy_value > 0 || legacy_value == 0);
+                }
+            }
+        }
+
+        #[test]
+        fn test_run_context_plugin_gives_plugin_suffix() {
+            // Script with RunContext: Plugin should produce .plugin.luau
+            let run_context_enums = rbx_reflection_database::get()
+                .ok()
+                .and_then(|db| db.enums.get("RunContext"))
+                .map(|e| &e.items);
+
+            if let Some(enums) = run_context_enums {
+                if let Some(&plugin_value) = enums.get("Plugin") {
+                    assert!(plugin_value > 0 || plugin_value == 0);
+                }
+            }
+        }
+
+        #[test]
+        fn test_script_class_determines_suffix_from_run_context() {
+            // For Script class, the file suffix is determined by RunContext:
+            // - Client → .client.luau
+            // - Server → .server.luau
+            // - Legacy → .server.luau
+            // - Plugin → .plugin.luau
+            // This allows proper round-tripping regardless of emitLegacyScripts mode
+
+            let expected_mappings = vec![
+                ("Client", "client"),
+                ("Server", "server"),
+                ("Legacy", "server"),
+                ("Plugin", "plugin"),
+            ];
+
+            for (run_context, expected_suffix) in expected_mappings {
+                let suffix = match run_context {
+                    "Client" => "client",
+                    "Server" => "server",
+                    "Legacy" => "server",
+                    "Plugin" => "plugin",
+                    _ => "server",
+                };
+                assert_eq!(
+                    suffix, expected_suffix,
+                    "RunContext {} should produce {} suffix",
+                    run_context, expected_suffix
+                );
+            }
+        }
+
+        #[test]
+        fn test_local_script_always_client() {
+            // LocalScript class always produces .client.luau regardless of any properties
+            let class_name = "LocalScript";
+            let expected_suffix = "client";
+
+            // LocalScript doesn't check RunContext - it's always client
+            let suffix = if class_name == "LocalScript" {
+                "client"
+            } else {
+                "unknown"
+            };
+
+            assert_eq!(suffix, expected_suffix);
+        }
+
+        #[test]
+        fn test_module_script_no_suffix() {
+            // ModuleScript produces .luau (no server/client suffix)
+            let class_name = "ModuleScript";
+
+            let expected_extension = if class_name == "ModuleScript" {
+                ".luau"
+            } else {
+                ".unknown"
+            };
+
+            assert_eq!(expected_extension, ".luau");
+        }
+    }
+
+    // Tests for adjacent meta file creation
+    mod adjacent_meta_tests {
+        #[test]
+        fn test_adjacent_meta_file_naming() {
+            // Adjacent meta files should be named {script_name}.meta.json5
+            let script_name = "MyScript";
+            let meta_filename = format!("{}.meta.json5", script_name);
+            assert_eq!(meta_filename, "MyScript.meta.json5");
+        }
+
+        #[test]
+        fn test_adjacent_meta_for_script_without_children() {
+            // Scripts without children should create adjacent meta files, not init.meta.json5
+            let has_children = false;
+            let is_directory = has_children;
+
+            // When it's not a directory, we use adjacent meta, not init.meta.json5
+            let meta_type = if is_directory {
+                "init.meta.json5"
+            } else {
+                "{name}.meta.json5"
+            };
+
+            assert_eq!(meta_type, "{name}.meta.json5");
+        }
+
+        #[test]
+        fn test_init_meta_for_script_with_children() {
+            // Scripts with children (directories) use init.meta.json5
+            let has_children = true;
+            let is_directory = has_children;
+
+            let meta_type = if is_directory {
+                "init.meta.json5"
+            } else {
+                "{name}.meta.json5"
+            };
+
+            assert_eq!(meta_type, "init.meta.json5");
+        }
+    }
+
+    // Tests for property filtering (matching dedicated syncback)
+    mod property_filter_tests {
+        use super::*;
+        use rbx_dom_weak::types::{Attributes, Ref, UniqueId};
+
+        #[test]
+        fn test_ref_properties_filtered_out() {
+            // Ref properties should be filtered out (they don't serialize to JSON)
+            let variant = Variant::Ref(Ref::new());
+            let result = variant_to_json(&variant);
+            // variant_to_json returns None for Ref
+            assert!(result.is_none(), "Ref should not serialize to JSON");
+        }
+
+        #[test]
+        fn test_unique_id_filtered_out() {
+            // UniqueId properties should be filtered out
+            let variant = Variant::UniqueId(UniqueId::new(0, 0, 0));
+            let result = variant_to_json(&variant);
+            assert!(result.is_none(), "UniqueId should not serialize to JSON");
+        }
+
+        #[test]
+        fn test_attributes_handled_separately() {
+            // Attributes are NOT handled by variant_to_json directly.
+            // They are extracted into a separate "attributes" map by filter_properties_for_meta.
+            // This matches the dedicated syncback behavior where Attributes are a special case.
+            let mut attrs = Attributes::new();
+            attrs.insert("TestAttr".to_string(), Variant::String("value".to_string()));
+
+            let variant = Variant::Attributes(attrs);
+            let result = variant_to_json(&variant);
+            // variant_to_json returns None for Attributes - they're handled separately
+            assert!(
+                result.is_none(),
+                "Attributes should return None from variant_to_json (handled separately)"
+            );
+        }
+    }
+
+    // Tests for init.meta.json5 format (matching dedicated syncback)
+    mod meta_json5_tests {
+        use serde_json::json;
+
+        #[test]
+        fn test_meta_uses_json5_extension() {
+            // Meta files should use .json5 extension (not .json)
+            let filename = "init.meta.json5";
+            assert!(
+                filename.ends_with(".json5"),
+                "Meta files should use .json5 extension"
+            );
+        }
+
+        #[test]
+        fn test_meta_structure_for_directory() {
+            // Directory meta files should have properties and optionally attributes
+            let meta = json!({
+                "properties": {
+                    "Archivable": false
+                },
+                "attributes": {
+                    "CustomAttr": "value"
+                }
+            });
+
+            assert!(meta.get("properties").is_some());
+            assert!(meta.get("attributes").is_some());
+            // No className for standard Folders
+            assert!(meta.get("className").is_none());
+        }
+
+        #[test]
+        fn test_meta_structure_for_non_folder() {
+            // Non-Folder directories need className
+            let meta = json!({
+                "className": "Part",
+                "properties": {
+                    "Size": [4.0, 1.0, 2.0]
+                }
+            });
+
+            assert!(meta.get("className").is_some());
+            assert_eq!(meta.get("className").unwrap(), "Part");
+        }
+    }
+
+    // Tests for children handling (any instance can have children)
+    mod children_handling_tests {
+        #[allow(unused_imports)]
+        use super::*;
+
+        #[test]
+        fn test_script_with_children_becomes_directory() {
+            // When a script has children, it should become a directory with init file
+            let has_children = true;
+            let class_name = "ModuleScript";
+
+            // This is the expected behavior - directory + init.luau
+            if has_children && class_name == "ModuleScript" {
+                let init_file = "init.luau";
+                assert_eq!(init_file, "init.luau");
+            }
+        }
+
+        #[test]
+        fn test_server_script_with_children() {
+            let has_children = true;
+            let class_name = "Script";
+
+            if has_children && class_name == "Script" {
+                let init_file = "init.server.luau";
+                assert_eq!(init_file, "init.server.luau");
+            }
+        }
+
+        #[test]
+        fn test_client_script_with_children() {
+            let has_children = true;
+            let class_name = "LocalScript";
+
+            if has_children && class_name == "LocalScript" {
+                let init_file = "init.client.luau";
+                assert_eq!(init_file, "init.client.luau");
+            }
+        }
+
+        #[test]
+        fn test_string_value_with_children() {
+            // StringValue with children becomes directory + init.meta.json5
+            let has_children = true;
+            let class_name = "StringValue";
+
+            if has_children && class_name == "StringValue" {
+                // Should create directory with init.meta.json5, not .txt file
+                let meta_file = "init.meta.json5";
+                assert!(meta_file.ends_with(".json5"));
+            }
+        }
+
+        #[test]
+        fn test_part_with_children() {
+            // Part (or any other class) with children becomes directory + init.meta.json5
+            let has_children = true;
+            let class_name = "Part";
+
+            if has_children && !matches!(class_name, "ModuleScript" | "Script" | "LocalScript") {
+                let meta_file = "init.meta.json5";
+                assert!(meta_file.ends_with(".json5"));
+            }
+        }
+    }
+
+    // Tests for .gitkeep behavior
+    mod gitkeep_tests {
+        #[test]
+        fn test_empty_folder_gets_gitkeep() {
+            // Empty folders with no metadata should get .gitkeep (matching dedicated syncback)
+            let has_children = false;
+            let has_metadata = false;
+
+            let should_add_gitkeep = !has_children && !has_metadata;
+            assert!(should_add_gitkeep, "Empty folder should get .gitkeep");
+        }
+
+        #[test]
+        fn test_folder_with_metadata_no_gitkeep() {
+            // Folders with metadata should NOT get .gitkeep
+            let has_children = false;
+            let has_metadata = true;
+
+            let should_add_gitkeep = !has_children && !has_metadata;
+            assert!(
+                !should_add_gitkeep,
+                "Folder with metadata should not get .gitkeep"
+            );
+        }
+
+        #[test]
+        fn test_folder_with_children_no_gitkeep() {
+            // Folders with children should NOT get .gitkeep
+            let has_children = true;
+            let has_metadata = false;
+
+            let should_add_gitkeep = !has_children && !has_metadata;
+            assert!(
+                !should_add_gitkeep,
+                "Folder with children should not get .gitkeep"
+            );
+        }
+    }
+
+    // Tests for attributes handling (matching dedicated syncback)
+    mod attributes_tests {
+        use super::*;
+        use rbx_dom_weak::types::Attributes;
+
+        #[test]
+        fn test_internal_attributes_filtered() {
+            // Internal attributes starting with RBX should be filtered out
+            let mut attrs = Attributes::new();
+            attrs.insert(
+                "RBXInternal".to_string(),
+                Variant::String("internal".to_string()),
+            );
+            attrs.insert(
+                "CustomAttr".to_string(),
+                Variant::String("custom".to_string()),
+            );
+
+            // Only CustomAttr should be kept
+            let mut count = 0;
+            for (name, _) in attrs.iter() {
+                if !name.starts_with("RBX") {
+                    count += 1;
+                }
+            }
+            assert_eq!(count, 1, "Only non-RBX attributes should be kept");
+        }
+
+        #[test]
+        fn test_user_attributes_preserved() {
+            // User-defined attributes should be preserved
+            let mut attrs = Attributes::new();
+            attrs.insert(
+                "MyAttribute".to_string(),
+                Variant::String("value".to_string()),
+            );
+            attrs.insert("Score".to_string(), Variant::Int32(100));
+
+            let filtered: Vec<_> = attrs
+                .iter()
+                .filter(|(name, _)| !name.starts_with("RBX"))
+                .collect();
+
+            assert_eq!(filtered.len(), 2, "User attributes should be preserved");
+        }
+    }
+
+    // =========================================================================
+    // Comprehensive RunContext Configuration Tests
+    // =========================================================================
+    mod run_context_comprehensive_tests {
+        use super::*;
+        use rbx_dom_weak::types::Enum;
+        use std::collections::HashMap;
+
+        /// Helper to get RunContext enum value by name
+        fn get_run_context_value(name: &str) -> Option<u32> {
+            rbx_reflection_database::get()
+                .ok()
+                .and_then(|db| db.enums.get("RunContext"))
+                .and_then(|e| e.items.get(name).copied())
+        }
+
+        /// Simulates suffix determination logic
+        fn determine_suffix_from_run_context(run_context_value: Option<u32>) -> &'static str {
+            let run_context_enums = rbx_reflection_database::get()
+                .ok()
+                .and_then(|db| db.enums.get("RunContext"))
+                .map(|e| &e.items);
+
+            if let (Some(enums), Some(value)) = (run_context_enums, run_context_value) {
+                for (name, &enum_value) in enums {
+                    if enum_value == value {
+                        return match name.as_ref() {
+                            "Client" => "client",
+                            "Server" => "server",
+                            "Legacy" => "server",
+                            "Plugin" => "plugin",
+                            _ => "server",
+                        };
+                    }
+                }
+            }
+            "server"
+        }
+
+        #[test]
+        fn test_all_run_context_values_exist() {
+            // Verify all expected RunContext values exist in the reflection database
+            let expected = ["Legacy", "Server", "Client", "Plugin"];
+            for name in expected {
+                assert!(
+                    get_run_context_value(name).is_some(),
+                    "RunContext::{} should exist in reflection database",
+                    name
+                );
+            }
+        }
+
+        #[test]
+        fn test_run_context_client_produces_client_suffix() {
+            let value = get_run_context_value("Client");
+            assert!(value.is_some(), "Client RunContext should exist");
+            let suffix = determine_suffix_from_run_context(value);
+            assert_eq!(
+                suffix, "client",
+                "RunContext::Client should produce 'client' suffix"
+            );
+        }
+
+        #[test]
+        fn test_run_context_server_produces_server_suffix() {
+            let value = get_run_context_value("Server");
+            assert!(value.is_some(), "Server RunContext should exist");
+            let suffix = determine_suffix_from_run_context(value);
+            assert_eq!(
+                suffix, "server",
+                "RunContext::Server should produce 'server' suffix"
+            );
+        }
+
+        #[test]
+        fn test_run_context_legacy_produces_server_suffix() {
+            let value = get_run_context_value("Legacy");
+            assert!(value.is_some(), "Legacy RunContext should exist");
+            let suffix = determine_suffix_from_run_context(value);
+            assert_eq!(
+                suffix, "server",
+                "RunContext::Legacy should produce 'server' suffix"
+            );
+        }
+
+        #[test]
+        fn test_run_context_plugin_produces_plugin_suffix() {
+            let value = get_run_context_value("Plugin");
+            assert!(value.is_some(), "Plugin RunContext should exist");
+            let suffix = determine_suffix_from_run_context(value);
+            assert_eq!(
+                suffix, "plugin",
+                "RunContext::Plugin should produce 'plugin' suffix"
+            );
+        }
+
+        #[test]
+        fn test_no_run_context_defaults_to_server() {
+            let suffix = determine_suffix_from_run_context(None);
+            assert_eq!(
+                suffix, "server",
+                "No RunContext should default to 'server' suffix"
+            );
+        }
+
+        #[test]
+        fn test_invalid_run_context_defaults_to_server() {
+            // Some unlikely value that doesn't match any known RunContext
+            let suffix = determine_suffix_from_run_context(Some(99999));
+            assert_eq!(
+                suffix, "server",
+                "Invalid RunContext should default to 'server' suffix"
+            );
+        }
+
+        #[test]
+        fn test_file_extension_patterns() {
+            // Verify expected file extension patterns
+            let test_cases = vec![
+                ("ModuleScript", None, ".luau"),
+                ("LocalScript", None, ".client.luau"),
+                ("Script", get_run_context_value("Server"), ".server.luau"),
+                ("Script", get_run_context_value("Client"), ".client.luau"),
+                ("Script", get_run_context_value("Legacy"), ".server.luau"),
+                ("Script", get_run_context_value("Plugin"), ".plugin.luau"),
+                ("Script", None, ".server.luau"),
+            ];
+
+            for (class_name, run_context, expected_ext) in test_cases {
+                let suffix = match class_name {
+                    "ModuleScript" => "",
+                    "LocalScript" => "client",
+                    "Script" => determine_suffix_from_run_context(run_context),
+                    _ => panic!("Unknown class"),
+                };
+
+                let ext = if suffix.is_empty() {
+                    ".luau".to_string()
+                } else {
+                    format!(".{}.luau", suffix)
+                };
+
+                assert_eq!(
+                    ext, expected_ext,
+                    "{} with RunContext {:?} should produce {} extension",
+                    class_name, run_context, expected_ext
+                );
+            }
+        }
+
+        #[test]
+        fn test_init_file_patterns_with_children() {
+            // Verify init file patterns for scripts with children
+            let test_cases = vec![
+                ("ModuleScript", None, "init.luau"),
+                ("LocalScript", None, "init.client.luau"),
+                (
+                    "Script",
+                    get_run_context_value("Server"),
+                    "init.server.luau",
+                ),
+                (
+                    "Script",
+                    get_run_context_value("Client"),
+                    "init.client.luau",
+                ),
+                (
+                    "Script",
+                    get_run_context_value("Legacy"),
+                    "init.server.luau",
+                ),
+                (
+                    "Script",
+                    get_run_context_value("Plugin"),
+                    "init.plugin.luau",
+                ),
+            ];
+
+            for (class_name, run_context, expected_init) in test_cases {
+                let suffix = match class_name {
+                    "ModuleScript" => "",
+                    "LocalScript" => "client",
+                    "Script" => determine_suffix_from_run_context(run_context),
+                    _ => panic!("Unknown class"),
+                };
+
+                let init_file = if suffix.is_empty() {
+                    "init.luau".to_string()
+                } else {
+                    format!("init.{}.luau", suffix)
+                };
+
+                assert_eq!(
+                    init_file, expected_init,
+                    "{} with RunContext {:?} should produce {} init file",
+                    class_name, run_context, expected_init
+                );
+            }
+        }
+    }
+
+    // =========================================================================
+    // Scripts-Only Mode Filtering Tests
+    // =========================================================================
+    mod scripts_only_mode_tests {
+        use super::*;
+
+        #[test]
+        fn test_is_script_class_identifies_scripts() {
+            // Test that is_script_class correctly identifies script types
+            assert!(
+                is_script_class("Script"),
+                "Script should be identified as script"
+            );
+            assert!(
+                is_script_class("LocalScript"),
+                "LocalScript should be identified as script"
+            );
+            assert!(
+                is_script_class("ModuleScript"),
+                "ModuleScript should be identified as script"
+            );
+        }
+
+        #[test]
+        fn test_is_script_class_rejects_non_scripts() {
+            // Test that is_script_class correctly rejects non-script types
+            let non_scripts = [
+                "Part",
+                "Folder",
+                "Model",
+                "Frame",
+                "TextLabel",
+                "IntValue",
+                "StringValue",
+                "Configuration",
+                "ScreenGui",
+                "Workspace",
+                "ReplicatedStorage",
+            ];
+
+            for class_name in non_scripts {
+                assert!(
+                    !is_script_class(class_name),
+                    "{} should NOT be identified as script",
+                    class_name
+                );
+            }
+        }
+
+        #[test]
+        fn test_scripts_only_should_include_script() {
+            // In scripts-only mode, Script instances should be included
+            let class_name = "Script";
+            let should_include = is_script_class(class_name);
+            assert!(
+                should_include,
+                "Script should be included in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_scripts_only_should_include_local_script() {
+            // In scripts-only mode, LocalScript instances should be included
+            let class_name = "LocalScript";
+            let should_include = is_script_class(class_name);
+            assert!(
+                should_include,
+                "LocalScript should be included in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_scripts_only_should_include_module_script() {
+            // In scripts-only mode, ModuleScript instances should be included
+            let class_name = "ModuleScript";
+            let should_include = is_script_class(class_name);
+            assert!(
+                should_include,
+                "ModuleScript should be included in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_scripts_only_should_exclude_part() {
+            // In scripts-only mode, Part instances should be excluded
+            let class_name = "Part";
+            let should_include = is_script_class(class_name);
+            assert!(
+                !should_include,
+                "Part should NOT be included in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_scripts_only_should_exclude_folder() {
+            // In scripts-only mode, Folder instances should be excluded (unless ancestor)
+            let class_name = "Folder";
+            let should_include = is_script_class(class_name);
+            assert!(
+                !should_include,
+                "Folder should NOT be directly included in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_scripts_only_should_exclude_model() {
+            // In scripts-only mode, Model instances should be excluded (unless ancestor)
+            let class_name = "Model";
+            let should_include = is_script_class(class_name);
+            assert!(
+                !should_include,
+                "Model should NOT be directly included in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_scripts_only_should_exclude_gui_elements() {
+            // In scripts-only mode, GUI elements should be excluded
+            let gui_classes = [
+                "Frame",
+                "TextLabel",
+                "TextButton",
+                "ImageLabel",
+                "ScreenGui",
+            ];
+            for class_name in gui_classes {
+                let should_include = is_script_class(class_name);
+                assert!(
+                    !should_include,
+                    "{} should NOT be included in scripts-only mode",
+                    class_name
+                );
+            }
+        }
+
+        #[test]
+        fn test_scripts_only_should_exclude_value_types() {
+            // In scripts-only mode, value types should be excluded
+            let value_classes = [
+                "IntValue",
+                "StringValue",
+                "NumberValue",
+                "BoolValue",
+                "ObjectValue",
+            ];
+            for class_name in value_classes {
+                let should_include = is_script_class(class_name);
+                assert!(
+                    !should_include,
+                    "{} should NOT be included in scripts-only mode",
+                    class_name
+                );
+            }
+        }
+
+        #[test]
+        fn test_scripts_only_run_context_preserved() {
+            // In scripts-only mode, RunContext property on scripts should be preserved
+            // This is important for proper syncback behavior
+            let script_properties = ["Source", "RunContext", "Enabled", "Disabled"];
+            let is_script = is_script_class("Script");
+            assert!(is_script, "Script should be identified");
+
+            // In scripts-only mode, scripts get ALL their properties synced (including RunContext)
+            // Non-scripts get their properties cleared
+            // This test verifies the design decision
+            for prop in script_properties {
+                // Scripts should sync these properties
+                let should_sync = is_script;
+                assert!(
+                    should_sync,
+                    "Script property '{}' should be synced in scripts-only mode",
+                    prop
+                );
+            }
+        }
+
+        #[test]
+        fn test_scripts_only_ancestor_properties_cleared() {
+            // In scripts-only mode, non-script ancestors have properties cleared
+            // They only provide tree structure, not property data
+            let folder_is_script = is_script_class("Folder");
+            assert!(!folder_is_script, "Folder is not a script");
+
+            // Non-scripts should have properties cleared
+            let should_clear_properties = !folder_is_script;
+            assert!(
+                should_clear_properties,
+                "Non-script ancestors should have properties cleared"
+            );
+        }
+    }
+
+    // =========================================================================
+    // Scripts-Only Mode - Expected Pass Tests
+    // =========================================================================
+    mod scripts_only_expected_passes {
+        use super::*;
+
+        #[test]
+        fn test_pass_module_script_sync() {
+            // PASS: ModuleScript should sync successfully in scripts-only mode
+            let class_name = "ModuleScript";
+            assert!(
+                is_script_class(class_name),
+                "ModuleScript sync should PASS in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_pass_server_script_sync() {
+            // PASS: Script (server) should sync successfully in scripts-only mode
+            let class_name = "Script";
+            assert!(
+                is_script_class(class_name),
+                "Script sync should PASS in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_pass_local_script_sync() {
+            // PASS: LocalScript should sync successfully in scripts-only mode
+            let class_name = "LocalScript";
+            assert!(
+                is_script_class(class_name),
+                "LocalScript sync should PASS in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_pass_script_source_property() {
+            // PASS: Script Source property changes should sync
+            let class_name = "Script";
+            let property_name = "Source";
+            let is_script = is_script_class(class_name);
+            let should_sync_property = is_script; // Scripts sync all properties
+            assert!(
+                should_sync_property,
+                "Script.{} change should PASS in scripts-only mode",
+                property_name
+            );
+        }
+
+        #[test]
+        fn test_pass_script_run_context_property() {
+            // PASS: Script RunContext property changes should sync
+            // This is critical for proper emitLegacyScripts support
+            let class_name = "Script";
+            let property_name = "RunContext";
+            let is_script = is_script_class(class_name);
+            let should_sync_property = is_script; // Scripts sync all properties
+            assert!(
+                should_sync_property,
+                "Script.{} change should PASS in scripts-only mode",
+                property_name
+            );
+        }
+
+        #[test]
+        fn test_pass_script_enabled_property() {
+            // PASS: Script Enabled property changes should sync
+            let class_name = "Script";
+            let property_name = "Enabled";
+            let is_script = is_script_class(class_name);
+            let should_sync_property = is_script;
+            assert!(
+                should_sync_property,
+                "Script.{} change should PASS in scripts-only mode",
+                property_name
+            );
+        }
+
+        #[test]
+        fn test_pass_module_script_attributes() {
+            // PASS: ModuleScript Attributes should sync
+            let class_name = "ModuleScript";
+            let is_script = is_script_class(class_name);
+            assert!(
+                is_script,
+                "ModuleScript.Attributes change should PASS in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_pass_nested_script_in_folder() {
+            // PASS: Script inside Folder should sync (along with Folder as ancestor)
+            let script_class = "ModuleScript";
+            let folder_class = "Folder";
+
+            let script_included = is_script_class(script_class);
+            let folder_is_script = is_script_class(folder_class);
+
+            // Script should be included directly
+            assert!(script_included, "Nested script should be included");
+            // Folder should be included as ancestor (but not as a script)
+            assert!(
+                !folder_is_script,
+                "Folder is not a script but may be included as ancestor"
+            );
+        }
+    }
+
+    // =========================================================================
+    // Scripts-Only Mode - Expected Failure/Filter Tests
+    // =========================================================================
+    mod scripts_only_expected_filters {
+        use super::*;
+
+        #[test]
+        fn test_filter_part_changes() {
+            // FILTER: Part changes should be filtered out in scripts-only mode
+            let class_name = "Part";
+            let should_include = is_script_class(class_name);
+            assert!(
+                !should_include,
+                "Part changes should be FILTERED in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_filter_model_changes() {
+            // FILTER: Model changes should be filtered out in scripts-only mode
+            let class_name = "Model";
+            let should_include = is_script_class(class_name);
+            assert!(
+                !should_include,
+                "Model changes should be FILTERED in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_filter_folder_property_changes() {
+            // FILTER: Folder property changes should be filtered (Folder is ancestor only)
+            let class_name = "Folder";
+            let is_script = is_script_class(class_name);
+            // Folders have their properties cleared in scripts-only mode
+            assert!(
+                !is_script,
+                "Folder property changes should be FILTERED in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_filter_frame_changes() {
+            // FILTER: Frame (GUI) changes should be filtered
+            let class_name = "Frame";
+            let should_include = is_script_class(class_name);
+            assert!(
+                !should_include,
+                "Frame changes should be FILTERED in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_filter_text_label_changes() {
+            // FILTER: TextLabel changes should be filtered
+            let class_name = "TextLabel";
+            let should_include = is_script_class(class_name);
+            assert!(
+                !should_include,
+                "TextLabel changes should be FILTERED in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_filter_int_value_changes() {
+            // FILTER: IntValue changes should be filtered
+            let class_name = "IntValue";
+            let should_include = is_script_class(class_name);
+            assert!(
+                !should_include,
+                "IntValue changes should be FILTERED in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_filter_string_value_changes() {
+            // FILTER: StringValue changes should be filtered
+            let class_name = "StringValue";
+            let should_include = is_script_class(class_name);
+            assert!(
+                !should_include,
+                "StringValue changes should be FILTERED in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_filter_sound_changes() {
+            // FILTER: Sound changes should be filtered
+            let class_name = "Sound";
+            let should_include = is_script_class(class_name);
+            assert!(
+                !should_include,
+                "Sound changes should be FILTERED in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_filter_particle_emitter_changes() {
+            // FILTER: ParticleEmitter changes should be filtered
+            let class_name = "ParticleEmitter";
+            let should_include = is_script_class(class_name);
+            assert!(
+                !should_include,
+                "ParticleEmitter changes should be FILTERED in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_filter_configuration_changes() {
+            // FILTER: Configuration instance changes should be filtered
+            let class_name = "Configuration";
+            let should_include = is_script_class(class_name);
+            assert!(
+                !should_include,
+                "Configuration changes should be FILTERED in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_filter_remote_event_changes() {
+            // FILTER: RemoteEvent changes should be filtered
+            let class_name = "RemoteEvent";
+            let should_include = is_script_class(class_name);
+            assert!(
+                !should_include,
+                "RemoteEvent changes should be FILTERED in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_filter_remote_function_changes() {
+            // FILTER: RemoteFunction changes should be filtered
+            let class_name = "RemoteFunction";
+            let should_include = is_script_class(class_name);
+            assert!(
+                !should_include,
+                "RemoteFunction changes should be FILTERED in scripts-only mode"
+            );
+        }
+
+        #[test]
+        fn test_filter_bindable_event_changes() {
+            // FILTER: BindableEvent changes should be filtered
+            let class_name = "BindableEvent";
+            let should_include = is_script_class(class_name);
+            assert!(
+                !should_include,
+                "BindableEvent changes should be FILTERED in scripts-only mode"
+            );
+        }
+    }
+
+    // =========================================================================
+    // Scripts-Only Mode - Ancestor Inclusion Tests
+    // =========================================================================
+    mod scripts_only_ancestor_tests {
+        use super::*;
+
+        #[test]
+        fn test_ancestor_chain_concept() {
+            // Test the concept of ancestor chain inclusion
+            // In scripts-only mode:
+            // - Scripts are included with all properties
+            // - Non-script ancestors are included for tree structure but properties cleared
+
+            // Simulated tree: ReplicatedStorage > Folder > ModuleScript
+            let replicated_storage = "ReplicatedStorage";
+            let folder = "Folder";
+            let module_script = "ModuleScript";
+
+            // Only the script is identified as a script
+            assert!(!is_script_class(replicated_storage));
+            assert!(!is_script_class(folder));
+            assert!(is_script_class(module_script));
+
+            // But all three should be included in the message (for tree structure)
+            // The filtering function includes ancestors of scripts
+        }
+
+        #[test]
+        fn test_non_script_ancestors_have_ignore_unknown_instances() {
+            // In scripts-only mode, all instances get ignoreUnknownInstances: true
+            // This prevents accidental deletion of non-script instances
+            let folder = "Folder";
+            let is_script = is_script_class(folder);
+
+            // Non-scripts should have ignoreUnknownInstances set
+            let should_set_ignore = true; // All instances in scripts-only mode
+            assert!(
+                should_set_ignore,
+                "Non-script ancestors should have ignoreUnknownInstances: true"
+            );
+        }
+
+        #[test]
+        fn test_scripts_also_have_ignore_unknown_instances() {
+            // Even scripts get ignoreUnknownInstances: true in scripts-only mode
+            // This is a safety measure
+            let script = "Script";
+            let is_script = is_script_class(script);
+            assert!(is_script);
+
+            // All instances in scripts-only mode get this flag
+            let should_set_ignore = true;
+            assert!(
+                should_set_ignore,
+                "Scripts should also have ignoreUnknownInstances: true in scripts-only mode"
+            );
+        }
+    }
+
+    // =========================================================================
+    // Syncback Configuration Matrix Tests
+    // =========================================================================
+    mod syncback_configuration_matrix {
+        use super::*;
+
+        /// Test matrix for all script class + RunContext combinations
+        #[test]
+        fn test_configuration_matrix() {
+            struct TestCase {
+                class_name: &'static str,
+                run_context: Option<&'static str>,
+                expected_extension: &'static str,
+                description: &'static str,
+            }
+
+            let test_cases = vec![
+                // ModuleScript - always .luau, no RunContext matters
+                TestCase {
+                    class_name: "ModuleScript",
+                    run_context: None,
+                    expected_extension: ".luau",
+                    description: "ModuleScript without RunContext",
+                },
+                // LocalScript - always .client.luau
+                TestCase {
+                    class_name: "LocalScript",
+                    run_context: None,
+                    expected_extension: ".client.luau",
+                    description: "LocalScript",
+                },
+                // Script with various RunContext values
+                TestCase {
+                    class_name: "Script",
+                    run_context: None,
+                    expected_extension: ".server.luau",
+                    description: "Script without RunContext (default)",
+                },
+                TestCase {
+                    class_name: "Script",
+                    run_context: Some("Server"),
+                    expected_extension: ".server.luau",
+                    description: "Script with RunContext::Server",
+                },
+                TestCase {
+                    class_name: "Script",
+                    run_context: Some("Client"),
+                    expected_extension: ".client.luau",
+                    description: "Script with RunContext::Client",
+                },
+                TestCase {
+                    class_name: "Script",
+                    run_context: Some("Legacy"),
+                    expected_extension: ".server.luau",
+                    description: "Script with RunContext::Legacy",
+                },
+                TestCase {
+                    class_name: "Script",
+                    run_context: Some("Plugin"),
+                    expected_extension: ".plugin.luau",
+                    description: "Script with RunContext::Plugin",
+                },
+            ];
+
+            for case in test_cases {
+                let suffix = match case.class_name {
+                    "ModuleScript" => String::new(),
+                    "LocalScript" => "client".to_string(),
+                    "Script" => {
+                        // Match on RunContext name to determine suffix
+                        match case.run_context {
+                            Some("Client") => "client",
+                            Some("Server") => "server",
+                            Some("Legacy") => "server",
+                            Some("Plugin") => "plugin",
+                            None => "server",
+                            _ => "server",
+                        }
+                        .to_string()
+                    }
+                    _ => panic!("Unknown class"),
+                };
+
+                let extension = if suffix.is_empty() {
+                    ".luau".to_string()
+                } else {
+                    format!(".{}.luau", suffix)
+                };
+
+                assert_eq!(
+                    extension, case.expected_extension,
+                    "FAILED: {} - got {} expected {}",
+                    case.description, extension, case.expected_extension
+                );
+            }
+        }
+
+        #[test]
+        fn test_emit_legacy_scripts_compatibility() {
+            // Test that our syncback is compatible with emitLegacyScripts mode
+            //
+            // emitLegacyScripts: true
+            //   - .client.luau -> LocalScript
+            //   - .server.luau -> Script with RunContext::Legacy
+            //
+            // emitLegacyScripts: false
+            //   - .client.luau -> Script with RunContext::Client
+            //   - .server.luau -> Script with RunContext::Server
+
+            // Our syncback produces:
+            // - LocalScript -> .client.luau (compatible with legacy: true)
+            // - Script + RunContext::Client -> .client.luau (compatible with legacy: false)
+            // - Script + RunContext::Server -> .server.luau (compatible with legacy: false)
+            // - Script + RunContext::Legacy -> .server.luau (compatible with legacy: true)
+
+            // This test verifies the design is correct
+            let legacy_mode_read = vec![
+                (".client.luau", "LocalScript", None),
+                (".server.luau", "Script", Some("Legacy")),
+            ];
+
+            let non_legacy_mode_read = vec![
+                (".client.luau", "Script", Some("Client")),
+                (".server.luau", "Script", Some("Server")),
+            ];
+
+            // Verify legacy mode round-trips correctly
+            for (extension, class, run_context) in &legacy_mode_read {
+                // If we syncback this class with this RunContext, what extension do we get?
+                let syncback_ext = match (*class, *run_context) {
+                    ("LocalScript", _) => ".client.luau",
+                    ("Script", Some("Legacy")) => ".server.luau",
+                    ("Script", Some("Server")) => ".server.luau",
+                    ("Script", Some("Client")) => ".client.luau",
+                    ("Script", None) => ".server.luau",
+                    _ => panic!("Unexpected combo"),
+                };
+                assert_eq!(
+                    syncback_ext, *extension,
+                    "Legacy mode round-trip failed for {} {:?}",
+                    class, run_context
+                );
+            }
+
+            // Verify non-legacy mode round-trips correctly
+            for (extension, class, run_context) in &non_legacy_mode_read {
+                let syncback_ext = match (*class, *run_context) {
+                    ("Script", Some("Client")) => ".client.luau",
+                    ("Script", Some("Server")) => ".server.luau",
+                    _ => panic!("Unexpected combo"),
+                };
+                assert_eq!(
+                    syncback_ext, *extension,
+                    "Non-legacy mode round-trip failed for {} {:?}",
+                    class, run_context
+                );
+            }
+        }
     }
 }

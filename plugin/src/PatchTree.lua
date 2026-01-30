@@ -313,7 +313,7 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 		end
 
 		-- Add this node to tree
-		-- For Edit nodes, default to "push" (apply Rojo changes to Studio)
+		-- Default to nil (unselected) - user must explicitly choose Push/Pull/Skip
 		tree:addNode(instanceMap.fromInstances[instance.Parent], {
 			id = change.id,
 			patchType = "Edit",
@@ -322,7 +322,7 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 			instance = instance,
 			changeInfo = changeInfo,
 			changeList = changeList,
-			defaultSelection = "push",
+			defaultSelection = nil,
 		})
 	end
 	Timer.stop()
@@ -366,7 +366,7 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 		tree:buildAncestryNodes(previousId, ancestryIds, patch, instanceMap)
 
 		-- Add this node to tree
-		-- For Remove nodes, default to "push" (apply Rojo removal to Studio)
+		-- Default to nil (unselected) - user must explicitly choose Push/Pull/Skip
 		local nodeId = instanceMap.fromInstances[instance] or HttpService:GenerateGUID(false)
 		instanceMap:insert(nodeId, instance)
 		tree:addNode(instanceMap.fromInstances[instance.Parent], {
@@ -375,7 +375,7 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 			className = instance.ClassName,
 			name = instance.Name,
 			instance = instance,
-			defaultSelection = "push",
+			defaultSelection = nil,
 		})
 	end
 	Timer.stop()
@@ -444,7 +444,7 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 		end
 
 		-- Add this node to tree
-		-- For Add nodes, default to "push" (apply Rojo addition to Studio)
+		-- Default to nil (unselected) - user must explicitly choose Push/Pull/Skip
 		tree:addNode(change.Parent, {
 			id = change.Id,
 			patchType = "Add",
@@ -453,7 +453,7 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 			changeInfo = changeInfo,
 			changeList = changeList,
 			instance = instanceMap.fromIds[id],
-			defaultSelection = "push",
+			defaultSelection = nil,
 		})
 	end
 	Timer.stop()
@@ -472,6 +472,18 @@ function PatchTree.buildInitialSelections(tree)
 		end
 	end)
 	return selections
+end
+
+-- Gets the count of unselected items (nodes with patchType but no selection)
+-- Returns count of unselected items
+function PatchTree.countUnselected(tree, selections)
+	local count = 0
+	tree:forEach(function(node)
+		if node.patchType and selections[node.id] == nil then
+			count += 1
+		end
+	end)
+	return count
 end
 
 -- Gets all selectable node IDs (nodes that have a patchType)

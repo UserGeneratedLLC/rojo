@@ -35,7 +35,8 @@ function ConfirmingPage:init()
 		showingTableDiff = false,
 		oldTable = {},
 		newTable = {},
-		showingRejectConfirm = false,
+		showingAcceptConfirm = false,
+		unselectedCount = 0,
 		selections = initialSelections,
 	})
 
@@ -64,10 +65,30 @@ function ConfirmingPage:init()
 end
 
 function ConfirmingPage:didUpdate(prevProps)
-	-- If patchTree changed, reinitialize selections
+	-- If patchTree changed, update selections
 	if prevProps.patchTree ~= self.props.patchTree and self.props.patchTree then
-		local initialSelections = PatchTree.buildInitialSelections(self.props.patchTree)
-		self:setState({ selections = initialSelections })
+		-- Get the new items that need default selections
+		local newSelections = PatchTree.buildInitialSelections(self.props.patchTree)
+
+		-- Preserve existing selections, but unselect items that changed
+		local updatedSelections = {}
+		for id, selection in pairs(self.state.selections) do
+			-- Preserve selection only if the item wasn't changed
+			-- (Changed items must be re-reviewed, so leave them unselected)
+			local wasChanged = self.props.changedIds and self.props.changedIds[id]
+			if not wasChanged then
+				updatedSelections[id] = selection
+			end
+		end
+
+		-- Merge with any new default selections (new items get nil = unselected)
+		for id, selection in pairs(newSelections) do
+			if updatedSelections[id] == nil then
+				updatedSelections[id] = selection
+			end
+		end
+
+		self:setState({ selections = updatedSelections })
 	end
 end
 
@@ -165,15 +186,28 @@ function ConfirmingPage:render()
 					end,
 				}),
 
-				Commit = e(TextButton, {
-					text = "Commit",
+				Accept = e(TextButton, {
+					text = "Accept",
 					style = "Primary",
 					transparency = self.props.transparency,
 					layoutOrder = 5,
-					enabled = allSelected,
 					onClick = function()
-						if allSelected and self.props.onConfirm then
+						if not self.props.onConfirm then
+							return
+						end
+
+						-- Check if all items are selected
+						if allSelected then
+							-- All items selected, proceed immediately
 							self.props.onConfirm(self.state.selections)
+						else
+							-- Some items unselected, show confirmation popup
+							local unselectedCount =
+								PatchTree.countUnselected(self.props.patchTree, self.state.selections)
+							self:setState({
+								showingAcceptConfirm = true,
+								unselectedCount = unselectedCount,
+							})
 						end
 					end,
 				}),
@@ -270,6 +304,83 @@ function ConfirmingPage:render()
 
 							oldTable = self.state.oldTable,
 							newTable = self.state.newTable,
+						}),
+					}),
+				}),
+			}),
+
+			-- Accept confirmation popup for unselected items
+			AcceptConfirm = e(StudioPluginGui, {
+				id = "Rojo_AcceptConfirm",
+				title = "Unreviewed Items",
+				active = self.state.showingAcceptConfirm,
+				isEphemeral = true,
+
+				initDockState = Enum.InitialDockState.Float,
+				overridePreviousState = true,
+				floatingSize = Vector2.new(400, 150),
+				minimumSize = Vector2.new(350, 130),
+
+				zIndexBehavior = Enum.ZIndexBehavior.Sibling,
+
+				onClose = function()
+					self:setState({ showingAcceptConfirm = false })
+				end,
+			}, {
+				Content = e("Frame", {
+					Size = UDim2.fromScale(1, 1),
+					BackgroundColor3 = theme.Background2,
+					BorderSizePixel = 0,
+				}, {
+					Message = e("TextLabel", {
+						Text = string.format(
+							"%d item%s not been reviewed.\n\nAccept selected changes and skip the rest?",
+							self.state.unselectedCount,
+							self.state.unselectedCount == 1 and " has" or "s have"
+						),
+						FontFace = theme.Font.Regular,
+						TextSize = theme.TextSize.Body,
+						TextColor3 = theme.TextColor,
+						TextWrapped = true,
+						TextXAlignment = Enum.TextXAlignment.Center,
+						Size = UDim2.new(1, -20, 1, -60),
+						Position = UDim2.new(0, 10, 0, 10),
+						BackgroundTransparency = 1,
+					}),
+
+					Buttons = e("Frame", {
+						Size = UDim2.new(1, -20, 0, 34),
+						Position = UDim2.new(0, 10, 1, -44),
+						BackgroundTransparency = 1,
+					}, {
+						Cancel = e(TextButton, {
+							text = "Cancel",
+							style = "Bordered",
+							transparency = self.props.transparency,
+							layoutOrder = 1,
+							onClick = function()
+								self:setState({ showingAcceptConfirm = false })
+							end,
+						}),
+
+						AcceptAndSkip = e(TextButton, {
+							text = "Accept and Skip Rest",
+							style = "Primary",
+							transparency = self.props.transparency,
+							layoutOrder = 2,
+							onClick = function()
+								self:setState({ showingAcceptConfirm = false })
+								if self.props.onConfirm then
+									self.props.onConfirm(self.state.selections)
+								end
+							end,
+						}),
+
+						Layout = e("UIListLayout", {
+							HorizontalAlignment = Enum.HorizontalAlignment.Right,
+							FillDirection = Enum.FillDirection.Horizontal,
+							SortOrder = Enum.SortOrder.LayoutOrder,
+							Padding = UDim.new(0, 10),
 						}),
 					}),
 				}),

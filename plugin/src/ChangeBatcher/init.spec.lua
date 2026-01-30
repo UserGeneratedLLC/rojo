@@ -98,4 +98,74 @@ return function()
 			expect(changeBatcher:__flush()).to.equal(nil)
 		end)
 	end)
+
+	describe("pause/resume", function()
+		it("should start unpaused by default", function()
+			local changeBatcher = ChangeBatcher.new(InstanceMap.new(), noop)
+			expect(changeBatcher:isPaused()).to.equal(false)
+			changeBatcher:stop()
+		end)
+
+		it("should be pausable", function()
+			local changeBatcher = ChangeBatcher.new(InstanceMap.new(), noop)
+			changeBatcher:pause()
+			expect(changeBatcher:isPaused()).to.equal(true)
+			changeBatcher:stop()
+		end)
+
+		it("should be resumable after pause", function()
+			local changeBatcher = ChangeBatcher.new(InstanceMap.new(), noop)
+			changeBatcher:pause()
+			expect(changeBatcher:isPaused()).to.equal(true)
+			changeBatcher:resume()
+			expect(changeBatcher:isPaused()).to.equal(false)
+			changeBatcher:stop()
+		end)
+
+		it("should not flush when paused", function()
+			local flushed = false
+			local instanceMap = InstanceMap.new()
+			local changeBatcher = ChangeBatcher.new(instanceMap, function()
+				flushed = true
+			end)
+
+			local part = Instance.new("Part")
+			instanceMap:insert("PART", part)
+			changeBatcher.__pendingPropertyChanges[part] = { Name = true }
+
+			changeBatcher:pause()
+
+			-- Call __cycle with a large dt to trigger flush (normally 0.2s threshold)
+			changeBatcher:__cycle(1.0)
+
+			-- Should not have flushed because we're paused
+			expect(flushed).to.equal(false)
+
+			changeBatcher:stop()
+			part:Destroy()
+		end)
+
+		it("should flush after resume", function()
+			local flushed = false
+			local instanceMap = InstanceMap.new()
+			local changeBatcher = ChangeBatcher.new(instanceMap, function()
+				flushed = true
+			end)
+
+			local part = Instance.new("Part")
+			instanceMap:insert("PART", part)
+			changeBatcher.__pendingPropertyChanges[part] = { Name = true }
+
+			changeBatcher:pause()
+			changeBatcher:__cycle(1.0)
+			expect(flushed).to.equal(false)
+
+			changeBatcher:resume()
+			changeBatcher:__cycle(1.0)
+			expect(flushed).to.equal(true)
+
+			changeBatcher:stop()
+			part:Destroy()
+		end)
+	end)
 end

@@ -1,0 +1,10 @@
+{
+  "name": "syncback_write",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "$path": "src"
+    }
+  }
+}

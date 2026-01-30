@@ -13,6 +13,7 @@ local Timer = require(script.Parent.Timer)
 
 local ChangeBatcher = require(script.Parent.ChangeBatcher)
 local encodePatchUpdate = require(script.Parent.ChangeBatcher.encodePatchUpdate)
+local encodeInstance = require(script.Parent.ChangeBatcher.encodeInstance)
 local InstanceMap = require(script.Parent.InstanceMap)
 local PatchSet = require(script.Parent.PatchSet)
 local Reconciler = require(script.Parent.Reconciler)
@@ -119,6 +120,7 @@ function ServeSession.new(options)
 		__initialSyncCompleteCallback = nil,
 		__serverInfo = nil,
 		__confirmingPatch = nil,
+		__isConfirming = false, -- Explicit confirmation state flag for defense-in-depth
 		__connections = connections,
 		__precommitCallbacks = {},
 		__postcommitCallbacks = {},
@@ -225,27 +227,41 @@ function ServeSession:__onWebSocketMessage(messagesPacket)
 	end
 
 	-- If we're already waiting for confirmation, merge into the patch being confirmed
-	-- UNLESS we're in One-shot mode, where we ignore all further changes
+	-- Changes flow into the dialogue even in one-shot mode so user can see them
 	if self.__confirmingPatch ~= nil then
-		if Settings:get("oneShotSync") then
-			Log.info("One-shot mode: ignoring incoming changes while confirming (will be picked up on next connection)")
-			self.__apiContext:setMessageCursor(messagesPacket.messageCursor)
-			return
+		Log.trace("Already confirming, merging into current patch")
+
+		-- Collect IDs of items that are being changed (for unselecting in UI)
+		local changedIds = {}
+		for _, update in ipairs(combinedPatch.updated) do
+			changedIds[update.id] = true
+		end
+		for _, removed in ipairs(combinedPatch.removed) do
+			local id = if type(removed) == "string" then removed else self.__instanceMap.fromInstances[removed]
+			if id then
+				changedIds[id] = true
+			end
+		end
+		for id in pairs(combinedPatch.added) do
+			changedIds[id] = true
 		end
 
-		Log.trace("Already confirming, merging into current patch")
 		PatchSet.merge(self.__confirmingPatch, combinedPatch, self.__instanceMap)
-		-- Notify the UI to update the displayed patch
+		-- Notify the UI to update the displayed patch and unselect changed items
 		if self.__patchUpdateCallback ~= nil then
-			self.__patchUpdateCallback(self.__instanceMap, self.__confirmingPatch)
+			self.__patchUpdateCallback(self.__instanceMap, self.__confirmingPatch, changedIds)
 		end
 		self.__apiContext:setMessageCursor(messagesPacket.messageCursor)
 		return
 	end
 
-	-- Set confirming patch before spawning to prevent race condition
+	-- Set confirmation state flags before spawning to prevent race condition
 	-- where another message arrives before the spawned thread starts
+	self.__isConfirming = true
 	self.__confirmingPatch = combinedPatch
+
+	-- Pause ChangeBatcher during confirmation to prevent outgoing changes
+	self.__changeBatcher:pause()
 
 	-- Spawn a new thread to handle potentially yielding confirmation
 	task.spawn(function()
@@ -256,7 +272,13 @@ function ServeSession:__onWebSocketMessage(messagesPacket)
 		if self.__userConfirmCallback ~= nil then
 			userDecision = self.__userConfirmCallback(self.__instanceMap, combinedPatch, self.__serverInfo)
 		end
+
+		-- Clear confirmation state flags
 		self.__confirmingPatch = nil
+		self.__isConfirming = false
+
+		-- Resume ChangeBatcher after confirmation
+		self.__changeBatcher:resume()
 
 		Log.trace("WebSocket patch decision: {}", userDecision)
 
@@ -486,6 +508,13 @@ function ServeSession:__replaceInstances(idList)
 end
 
 function ServeSession:__applyPatch(patch)
+	-- Defense-in-depth: Prevent unexpected patch application during confirmation
+	-- The only valid case is applying the confirmingPatch itself after user approval
+	if self.__isConfirming and patch ~= self.__confirmingPatch then
+		Log.error("Attempted to apply unexpected patch while confirmation dialogue is open. This is a bug!")
+		return
+	end
+
 	local patchTimestamp = DateTime.now():FormatLocalTime("LTS", "en-us")
 	local historyRecording = ChangeHistoryService:TryBeginRecording("Rojo: Patch " .. patchTimestamp)
 	if not historyRecording then
@@ -610,11 +639,21 @@ end
 function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 	local userDecision = "Accept"
 	if self.__userConfirmCallback ~= nil then
-		-- Set confirming patch so WebSocket messages that arrive during
-		-- confirmation can be merged into this patch
+		-- Pause ChangeBatcher during confirmation to prevent change accumulation
+		self.__changeBatcher:pause()
+
+		-- Set confirmation state flags
+		self.__isConfirming = true
 		self.__confirmingPatch = catchUpPatch
+
 		userDecision = self.__userConfirmCallback(self.__instanceMap, catchUpPatch, serverInfo)
+
+		-- Clear confirmation state flags
 		self.__confirmingPatch = nil
+		self.__isConfirming = false
+
+		-- Resume ChangeBatcher after confirmation
+		self.__changeBatcher:resume()
 	end
 
 	if userDecision == "Abort" then
@@ -660,17 +699,42 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 			-- "ignore" items are skipped
 		end
 
-		-- Process removed items
+		-- Process removed items (instances in Studio that don't exist in Rojo)
 		for _, idOrInstance in catchUpPatch.removed do
+			-- For removed items, idOrInstance is the Studio Instance
+			local instance = if type(idOrInstance) == "Instance"
+				then idOrInstance
+				else self.__instanceMap.fromIds[idOrInstance]
+
+			-- Try to get an ID for selection lookup
 			local id = if type(idOrInstance) == "string"
 				then idOrInstance
 				else self.__instanceMap.fromInstances[idOrInstance]
-			local selection = selections[id]
+
+			-- If we don't have an ID, use the instance itself as the key
+			local selection = if id then selections[id] else selections[idOrInstance]
+
 			if selection == "push" then
-				-- Apply Rojo removal to Studio
+				-- Apply Rojo removal to Studio (delete the instance)
 				table.insert(pushPatch.removed, idOrInstance)
+			elseif selection == "pull" and self.__twoWaySync then
+				-- Syncback: Create file in Rojo from Studio instance
+				if instance and instance.Parent then
+					local parentId = self.__instanceMap.fromInstances[instance.Parent]
+					if parentId then
+						local encoded = encodeInstance(instance, parentId)
+						if encoded then
+							-- Generate a temporary ref for the new instance
+							local tempRef = tostring(instance:GetDebugId())
+							pullPatch.added[tempRef] = encoded
+							Log.info("Syncback: encoding {:?} for creation in Rojo", instance)
+						end
+					else
+						Log.warn("Cannot syncback {:?}: parent not in Rojo tree", instance)
+					end
+				end
 			end
-			-- "pull" skipped: can't easily "add back" to Rojo, same as "ignore"
+			-- "skip"/"ignore" items are skipped
 		end
 
 		-- Process added items
