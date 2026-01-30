@@ -151,6 +151,30 @@ local function shouldDeleteUnknownInstances(virtualInstance)
 	end
 end
 
+-- Script class names that should always be eligible for deletion,
+-- even when the parent has ignoreUnknownInstances: true (scripts-only mode)
+local SCRIPT_CLASS_NAMES = {
+	Script = true,
+	LocalScript = true,
+	ModuleScript = true,
+}
+
+local function shouldDeleteChild(virtualInstance, childInstance)
+	-- If the parent allows deleting unknown instances, always allow
+	if shouldDeleteUnknownInstances(virtualInstance) then
+		return true
+	end
+
+	-- In scripts-only mode (where parent has ignoreUnknownInstances: true),
+	-- we still want to allow deletion of scripts. This ensures deleted
+	-- script files show up in the sync diff.
+	if SCRIPT_CLASS_NAMES[childInstance.ClassName] then
+		return true
+	end
+
+	return false
+end
+
 local function diff(instanceMap, virtualInstances, rootId)
 	local patch = {
 		removed = {},
@@ -381,8 +405,9 @@ local function diff(instanceMap, virtualInstances, rootId)
 
 				-- This is an existing instance not present in the virtual DOM.
 				-- We can mark it for deletion unless the user has asked us not
-				-- to delete unknown stuff.
-				if shouldDeleteUnknownInstances(virtualInstance) then
+				-- to delete unknown stuff. Scripts are always eligible for deletion
+				-- even in scripts-only mode (where ignoreUnknownInstances is true).
+				if shouldDeleteChild(virtualInstance, childInstance) then
 					table.insert(patch.removed, childInstance)
 				end
 			else
