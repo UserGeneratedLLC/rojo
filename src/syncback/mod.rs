@@ -111,12 +111,12 @@ pub fn syncback_loop(
         strip_unknown_root_children(&mut new_tree, old_tree);
     }
 
-    // If ignoreHiddenServices is enabled, filter to only visible services
+    // If ignoreHiddenServices is enabled (default: true), filter to only visible services
     if project
         .syncback_rules
         .as_ref()
         .map(|rules| rules.ignore_hidden_services())
-        .unwrap_or(false)
+        .unwrap_or(true)
     {
         log::debug!("Filtering hidden services");
         strip_hidden_services(&mut new_tree);
@@ -442,7 +442,7 @@ pub struct SyncbackRules {
     /// When enabled, only "visible" services will be synced back. This includes
     /// commonly used services like Workspace, ReplicatedStorage, ServerScriptService,
     /// etc., while ignoring internal/hidden services like Chat, HttpService, etc.
-    /// Defaults to `false`.
+    /// Defaults to `true`.
     #[serde(skip_serializing_if = "Option::is_none")]
     ignore_hidden_services: Option<bool>,
 }
@@ -493,10 +493,10 @@ impl SyncbackRules {
 
     /// Returns whether hidden/internal services should be ignored during
     /// syncback. When `true`, only visible services like Workspace,
-    /// ReplicatedStorage, etc. will be synced. Defaults to `false`.
+    /// ReplicatedStorage, etc. will be synced. Defaults to `true`.
     #[inline]
     pub fn ignore_hidden_services(&self) -> bool {
-        self.ignore_hidden_services.unwrap_or(false)
+        self.ignore_hidden_services.unwrap_or(true)
     }
 }
 
