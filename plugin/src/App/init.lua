@@ -800,23 +800,10 @@ function App:startSession()
 
 		local result = self.confirmationEvent:Wait()
 
-		-- Track if this was the initial sync for this project
-		local isInitialSyncForProject = not self.knownProjects[serverInfo.projectName]
-
-		-- One-shot sync: disconnect immediately after confirmation
-		-- Skip the "Connected" UI state entirely to avoid flash
+		-- One-shot sync: Don't transition to Connected UI
+		-- The actual disconnect is handled by setInitialSyncCompleteCallback
+		-- to ensure any pending writes complete first
 		if Settings:get("oneShotSync") then
-			local resultType = if type(result) == "table" then result.type else result
-			if resultType == "Confirm" or resultType == "Accept" then
-				-- Use task.defer to disconnect after patch is applied (runs after current thread yields)
-				task.defer(function()
-					if self.serveSession then
-						Log.info("One-shot sync: disconnecting after sync")
-						self:endSession()
-					end
-				end)
-			end
-			-- Don't transition to Connected UI, just return result and let disconnect happen
 			return result
 		end
 
@@ -856,6 +843,15 @@ function App:startSession()
 		self:setState({
 			patchTree = PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" }),
 		})
+	end)
+
+	-- One-shot sync: disconnect after initial sync is fully complete (including any writes)
+	-- This ensures that "pull" changes are sent to the server before disconnecting
+	serveSession:setInitialSyncCompleteCallback(function()
+		if Settings:get("oneShotSync") and self.serveSession then
+			Log.info("One-shot sync: disconnecting after initial sync complete")
+			self:endSession()
+		end
 	end)
 
 	serveSession:start()

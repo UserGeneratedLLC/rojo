@@ -116,6 +116,7 @@ function ServeSession.new(options)
 		__statusChangedCallback = nil,
 		__userConfirmCallback = nil,
 		__patchUpdateCallback = nil,
+		__initialSyncCompleteCallback = nil,
 		__serverInfo = nil,
 		__confirmingPatch = nil,
 		__connections = connections,
@@ -154,6 +155,10 @@ end
 
 function ServeSession:setPatchUpdateCallback(callback)
 	self.__patchUpdateCallback = callback
+end
+
+function ServeSession:setInitialSyncCompleteCallback(callback)
+	self.__initialSyncCompleteCallback = callback
 end
 
 function ServeSession:setUpdateLoadingTextCallback(callback)
@@ -305,6 +310,12 @@ function ServeSession:start()
 				-- Now show confirmation and wait for user decision
 				return self:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 			end)
+		end)
+		:andThen(function()
+			-- Initial sync is fully complete (including any writes to the server)
+			if self.__initialSyncCompleteCallback ~= nil then
+				self.__initialSyncCompleteCallback()
+			end
 		end)
 		:catch(function(err)
 			if self.__status ~= Status.Disconnected then
@@ -658,11 +669,8 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 			if selection == "push" then
 				-- Apply Rojo removal to Studio
 				table.insert(pushPatch.removed, idOrInstance)
-			elseif selection == "pull" and self.__twoWaySync then
-				-- Don't remove in Studio, but we can't easily "add back" to Rojo
-				-- For now, just skip (similar to ignore)
 			end
-			-- "ignore" items are skipped
+			-- "pull" skipped: can't easily "add back" to Rojo, same as "ignore"
 		end
 
 		-- Process added items

@@ -14,7 +14,6 @@ local bindingUtil = require(Plugin.App.bindingUtil)
 local e = Roact.createElement
 
 local ChangeList = require(script.Parent.ChangeList)
-local Tooltip = require(Plugin.App.Components.Tooltip)
 local ClassIcon = require(Plugin.App.Components.ClassIcon)
 
 local function ChangeTag(props)
