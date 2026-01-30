@@ -1,6 +1,6 @@
 {
   "name": "json_as_lua",
   "tree": {
-    "$path": "make-me-a-script.json"
+    "$path": "make-me-a-script.json5"
   }
 }

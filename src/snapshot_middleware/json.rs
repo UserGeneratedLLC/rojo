@@ -75,7 +75,7 @@ mod test {
     fn instance_from_vfs() {
         let mut imfs = InMemoryFs::new();
         imfs.load_snapshot(
-            "/foo.json",
+            "/foo.json5",
             VfsSnapshot::file(
                 r#"{
                   "array": [1, 2, 3],
@@ -98,7 +98,7 @@ mod test {
         let instance_snapshot = snapshot_json(
             &InstanceContext::default(),
             &vfs,
-            Path::new("/foo.json"),
+            Path::new("/foo.json5"),
             "foo",
         )
         .unwrap()
@@ -111,7 +111,7 @@ mod test {
     fn with_metadata() {
         let mut imfs = InMemoryFs::new();
         imfs.load_snapshot(
-            "/foo.json",
+            "/foo.json5",
             VfsSnapshot::file(
                 r#"{
                     "array": [1, 2, 3],
@@ -136,7 +136,7 @@ mod test {
         let instance_snapshot = snapshot_json(
             &InstanceContext::default(),
             &vfs,
-            Path::new("/foo.json"),
+            Path::new("/foo.json5"),
             "foo",
         )
         .unwrap()

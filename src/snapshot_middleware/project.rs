@@ -354,12 +354,12 @@ pub fn syncback_project<'sync>(
             );
         }
 
-        // TODO handle meta.json files in this branch. Right now, we perform
+        // TODO handle meta.json5 files in this branch. Right now, we perform
         // syncback if a node has `$path` set but the Middleware aren't aware
-        // that the Instances they're running on originate in a project.json.
-        // As a result, the `meta.json` syncback code is hardcoded to not work
+        // that the Instances they're running on originate in a project.json5.
+        // As a result, the `meta.json5` syncback code is hardcoded to not work
         // if the Instance originates from a project file. However, we should
-        // ideally use a .meta.json over the project node if it exists already.
+        // ideally use a .meta.json5 over the project node if it exists already.
         if node.path.is_some() {
             // Since the node has a path, we have to run syncback on it.
             let node_path = node.path.as_ref().map(PathNode::path).expect(

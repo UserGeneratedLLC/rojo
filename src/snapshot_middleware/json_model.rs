@@ -36,7 +36,7 @@ pub fn snapshot_json_model(
     })?;
 
     if let Some(top_level_name) = &instance.name {
-        let new_name = format!("{}.model.json", top_level_name);
+        let new_name = format!("{}.model.json5", top_level_name);
 
         log::warn!(
             "Model at path {} had a top-level Name field. \
@@ -229,7 +229,7 @@ mod test {
     fn model_from_vfs() {
         let mut imfs = InMemoryFs::new();
         imfs.load_snapshot(
-            "/foo.model.json",
+            "/foo.model.json5",
             VfsSnapshot::file(
                 r#"
                     {
@@ -254,7 +254,7 @@ mod test {
         let instance_snapshot = snapshot_json_model(
             &InstanceContext::default(),
             &vfs,
-            Path::new("/foo.model.json"),
+            Path::new("/foo.model.json5"),
             "foo",
         )
         .unwrap()
@@ -267,7 +267,7 @@ mod test {
     fn model_from_vfs_legacy() {
         let mut imfs = InMemoryFs::new();
         imfs.load_snapshot(
-            "/foo.model.json",
+            "/foo.model.json5",
             VfsSnapshot::file(
                 r#"
                     {
@@ -292,7 +292,7 @@ mod test {
         let instance_snapshot = snapshot_json_model(
             &InstanceContext::default(),
             &vfs,
-            Path::new("/foo.model.json"),
+            Path::new("/foo.model.json5"),
             "foo",
         )
         .unwrap()

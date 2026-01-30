@@ -9,12 +9,11 @@ metadata:
     Path: /root
   relevant_paths:
     - /root
-    - /root/init.lua
     - /root/init.luau
-    - /root/init.server.lua
     - /root/init.server.luau
-    - /root/init.client.lua
     - /root/init.client.luau
+    - /root/init.local.luau
+    - /root/init.legacy.luau
     - /root/init.csv
     - /root/init.meta.json5
   context:

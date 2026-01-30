@@ -85,8 +85,8 @@ pub fn snapshot_lua(
 /// Attempts to snapshot an 'init' Lua script contained inside of a folder with
 /// the given name.
 ///
-/// Scripts named `init.lua`, `init.server.lua`, `init.client.lua`, `init.local.lua`,
-/// `init.legacy.lua`, or `init.plugin.lua` usurp their parents, which acts similarly
+/// Scripts named `init.luau`, `init.server.luau`, `init.client.luau`, `init.local.luau`,
+/// `init.legacy.luau`, or `init.plugin.luau` usurp their parents, which acts similarly
 /// to `__init__.py` from the Python world.
 pub fn snapshot_lua_init(
     context: &InstanceContext,

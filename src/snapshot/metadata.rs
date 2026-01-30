@@ -36,11 +36,11 @@ pub struct InstanceMetadata {
     ///
     /// A directory named bar/ might have these:
     /// - bar/
-    /// - bar/init.meta.json
-    /// - bar/init.lua
-    /// - bar/init.server.lua
-    /// - bar/init.client.lua
-    /// - bar/default.project.json
+    /// - bar/init.meta.json5
+    /// - bar/init.luau
+    /// - bar/init.server.luau
+    /// - bar/init.client.luau
+    /// - bar/default.project.json5
     ///
     /// This path is used to make sure that file changes update all instances
     /// that may need updates.

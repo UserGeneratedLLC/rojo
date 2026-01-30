@@ -6,9 +6,9 @@ snapshot_id: "00000000000000000000000000000000"
 metadata:
   ignore_unknown_instances: false
   instigating_source:
-    Path: /foo.json
+    Path: /foo.json5
   relevant_paths:
-    - /foo.json
+    - /foo.json5
     - /foo.meta.json5
   context:
     decode_windows_invalid_chars: true

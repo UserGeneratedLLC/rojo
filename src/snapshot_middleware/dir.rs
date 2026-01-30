@@ -33,7 +33,7 @@ pub fn snapshot_dir(
 
 /// Snapshot a directory without applying meta files; useful for if the
 /// directory's ClassName will change before metadata should be applied. For
-/// example, this can happen if the directory contains an `init.client.lua`
+/// example, this can happen if the directory contains an `init.client.luau`
 /// file.
 pub fn snapshot_dir_no_meta(
     context: &InstanceContext,
@@ -68,12 +68,11 @@ pub fn snapshot_dir_no_meta(
         // TODO: We shouldn't need to know about Lua existing in this
         // middleware. Should we figure out a way for that function to add
         // relevant paths to this middleware?
-        normalized_path.join("init.lua"),
         normalized_path.join("init.luau"),
-        normalized_path.join("init.server.lua"),
         normalized_path.join("init.server.luau"),
-        normalized_path.join("init.client.lua"),
         normalized_path.join("init.client.luau"),
+        normalized_path.join("init.local.luau"),
+        normalized_path.join("init.legacy.luau"),
         normalized_path.join("init.csv"),
     ];
 

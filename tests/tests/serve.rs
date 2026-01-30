@@ -42,7 +42,7 @@ fn scripts() {
             );
         });
 
-        fs::write(session.path().join("src/foo.lua"), "Updated foo!").unwrap();
+        fs::write(session.path().join("src/foo.luau"), "Updated foo!").unwrap();
 
         let socket_packet = session
             .get_api_socket_packet(SocketPacketType::Messages, 0)
@@ -140,7 +140,7 @@ fn edit_init() {
             read_response.intern_and_redact(&mut redactions, root_id)
         );
 
-        fs::write(session.path().join("src/init.lua"), b"-- Edited contents").unwrap();
+        fs::write(session.path().join("src/init.luau"), b"-- Edited contents").unwrap();
 
         let socket_packet = session
             .get_api_socket_packet(SocketPacketType::Messages, 0)

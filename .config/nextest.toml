@@ -1,0 +1,11 @@
+[profile.default]
+# Set a 10 second timeout for all tests
+slow-timeout = { period = "10s", terminate-after = 1 }
+
+# Fail fast on first test failure
+fail-fast = true
+
+[profile.ci]
+# CI profile with same timeout
+slow-timeout = { period = "10s", terminate-after = 1 }
+fail-fast = false

@@ -4,6 +4,6 @@
     "$path": "src"
   },
   "globIgnorePaths": [
-    "**/*.spec.lua"
+    "**/*.spec.luau"
   ]
 }

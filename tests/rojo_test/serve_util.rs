@@ -180,8 +180,15 @@ impl TestServeSession {
 
         let (mut socket, _response) = connect(url)?;
 
-        // Wait for messages with a timeout
+        // Set a read timeout on the underlying TCP stream to prevent blocking forever.
+        // Without this, socket.read() blocks indefinitely if no data arrives.
         let timeout = Duration::from_secs(10);
+        if let hyper_tungstenite::tungstenite::stream::MaybeTlsStream::Plain(ref stream) =
+            socket.get_ref()
+        {
+            stream.set_read_timeout(Some(Duration::from_millis(100)))?;
+        }
+
         let start = std::time::Instant::now();
 
         loop {
@@ -208,10 +215,10 @@ impl TestServeSession {
                     continue;
                 }
                 Err(hyper_tungstenite::tungstenite::Error::Io(e))
-                    if e.kind() == std::io::ErrorKind::WouldBlock =>
+                    if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut =>
                 {
-                    // No data available yet, sleep a bit and try again
-                    thread::sleep(Duration::from_millis(100));
+                    // No data available yet or read timed out, try again
                     continue;
                 }
                 Err(e) => {

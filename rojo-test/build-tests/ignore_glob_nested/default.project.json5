@@ -4,6 +4,6 @@
     "$path": "subproject"
   },
   "globIgnorePaths": [
-    "**/*.spec.lua"
+    "**/*.spec.luau"
   ]
 }

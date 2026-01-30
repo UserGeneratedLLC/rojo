@@ -27,7 +27,7 @@ const UNKNOWN_INPUT_KIND_ERR: &str = "Could not detect what kind of file was inp
 /// given.
 ///
 /// Syncback exists to convert Roblox files into a Rojo project automatically.
-/// It uses the project.json file provided to traverse the Roblox file passed as
+/// It uses the project.json5 file provided to traverse the Roblox file passed as
 /// to serialize Instances to the file system in a format that Rojo understands.
 ///
 /// To ease programmatic use, this command pipes all normal output to stderr.

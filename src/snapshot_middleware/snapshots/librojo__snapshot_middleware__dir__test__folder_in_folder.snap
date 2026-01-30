@@ -9,12 +9,11 @@ metadata:
     Path: /foo
   relevant_paths:
     - /foo
-    - /foo/init.lua
     - /foo/init.luau
-    - /foo/init.server.lua
     - /foo/init.server.luau
-    - /foo/init.client.lua
     - /foo/init.client.luau
+    - /foo/init.local.luau
+    - /foo/init.legacy.luau
     - /foo/init.csv
     - /foo/init.meta.json5
   context:
@@ -33,12 +32,11 @@ children:
         Path: /foo/Child
       relevant_paths:
         - /foo/Child
-        - /foo/Child/init.lua
         - /foo/Child/init.luau
-        - /foo/Child/init.server.lua
         - /foo/Child/init.server.luau
-        - /foo/Child/init.client.lua
         - /foo/Child/init.client.luau
+        - /foo/Child/init.local.luau
+        - /foo/Child/init.legacy.luau
         - /foo/Child/init.csv
         - /foo/Child/init.meta.json5
       context:
