@@ -35,8 +35,8 @@ syncback_tests! {
     // Ensures that syncback works with CSVs
     csv => ["src/csv_init/init.csv", "src/csv.csv"],
     // Ensures that if a RojoId is duplicated somewhere in the project, it's
-    // rewritten rather than synced back as a conflict (preserves existing .json)
-    duplicate_rojo_id => ["container.model.json"],
+    // rewritten rather than synced back as a conflict
+    duplicate_rojo_id => ["container.model.json5"],
     // Ensures that the `ignorePaths` setting works for additions (new files get .json5)
     ignore_paths_adding => ["src/int_value.model.json5", "src/subfolder/string_value.txt"],
     // Ensures that the `ignorePaths` setting works for `init` files
@@ -47,10 +47,10 @@ syncback_tests! {
     ignore_trees_adding => [],
     // Ensures that `ignoreTrees` works for removals
     ignore_trees_removing => [],
-    // Ensures that all of the JSON middlewares are handled as expected (preserves existing .json)
-    json_middlewares => ["src/dir_with_meta/init.meta.json", "src/model_json.model.json", "src/project_json.project.json"],
-    // Ensures projects that refer to other projects work as expected (preserves existing .json)
-    nested_projects => ["nested.project.json", "string_value.txt"],
+    // Ensures that all of the JSON middlewares are handled as expected
+    json_middlewares => ["src/dir_with_meta/init.meta.json5", "src/model_json.model.json5", "src/project_json.project.json5"],
+    // Ensures projects that refer to other projects work as expected
+    nested_projects => ["nested.project.json5", "string_value.txt"],
     // Ensures files that are ignored by nested projects are picked up if
     // they're included in second project. Unusual but perfectly workable
     // pattern that syncback has to support.
@@ -58,32 +58,32 @@ syncback_tests! {
     // Ensures that projects respect `init` files when they're directly referenced from a node
     project_init => ["src/init.luau"],
     // Ensures that projects can be reserialized by syncback and that
-    // default.project.json doesn't change unexpectedly (preserves existing .json)
-    project_reserialize => ["attribute_mismatch.luau", "property_mismatch.project.json"],
+    // default.project.json5 doesn't change unexpectedly
+    project_reserialize => ["attribute_mismatch.luau", "property_mismatch.project.json5"],
     // Confirms that Instances that cannot serialize as directories serialize as rbxms
     rbxm_fallback => [],
-    // Ensures that ref properties are linked properly on the file system (preserves existing .json)
-    ref_properties => ["src/pointer.model.json", "src/target.model.json"],
+    // Ensures that ref properties are linked properly on the file system
+    ref_properties => ["src/pointer.model.json5", "src/target.model.json5"],
     // Ensures that ref properties are linked when no attributes are manually
     // set in the DataModel (new files get .json5)
     ref_properties_blank => ["src/pointer.model.json5", "src/target.txt"],
-    // Ensures that if there is a conflict in RojoRefs, one of them is rewritten (preserves existing .json)
-    ref_properties_conflict => ["src/Pointer_2.model.json", "src/Target_2.model.json"],
+    // Ensures that if there is a conflict in RojoRefs, one of them is rewritten
+    ref_properties_conflict => ["src/Pointer_2.model.json5", "src/Target_2.model.json5"],
     // Ensures that having multiple pointers that are aimed at the same target doesn't trigger ref rewrites.
     ref_properties_duplicate => [],
     // Ensures that ref properties that point to nothing after the prune both
     // do not leave any trace of themselves (new files get .json5)
     ref_properties_pruned => ["src/Pointer1.model.json5", "src/Pointer2.model.json5", "src/Pointer3.model.json5"],
     // Ensures that the old middleware is respected during syncback
-    respect_old_middleware => ["default.project.json", "src/model_json.model.json", "src/rbxm.rbxm", "src/rbxmx.rbxmx"],
-    // Ensures that the `$schema` field roundtrips with syncback (preserves existing .json)
-    schema_roundtrip => ["default.project.json", "src/model.model.json", "src/init/init.meta.json", "src/adjacent.meta.json"],
+    respect_old_middleware => ["default.project.json5", "src/model_json.model.json5", "src/rbxm.rbxm", "src/rbxmx.rbxmx"],
+    // Ensures that the `$schema` field roundtrips with syncback
+    schema_roundtrip => ["default.project.json5", "src/model.model.json5", "src/init/init.meta.json5", "src/adjacent.meta.json5"],
     // Ensures that StringValues inside project files are written to the
     // project file, but only if they don't have `$path` set
-    string_value_project => ["default.project.json"],
+    string_value_project => ["default.project.json5"],
     // Ensures that sync rules are respected. This is really just a test to
     // ensure it uses the old path when possible, but we want the coverage.
     sync_rules => ["src/module.modulescript", "src/text.text"],
     // Ensures that the `syncUnscriptable` setting works
-    unscriptable_properties => ["default.project.json"],
+    unscriptable_properties => ["default.project.json5"],
 }

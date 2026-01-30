@@ -221,7 +221,7 @@ fn empty_json_model() {
         );
 
         fs::write(
-            session.path().join("src/test.model.json"),
+            session.path().join("src/test.model.json5"),
             r#"{"ClassName": "Model"}"#,
         )
         .unwrap();
@@ -378,7 +378,7 @@ fn no_name_top_level_project() {
             read_response.intern_and_redact(&mut redactions, root_id)
         );
 
-        let project_path = session.path().join("default.project.json");
+        let project_path = session.path().join("default.project.json5");
         let mut project_contents = fs::read_to_string(&project_path).unwrap();
         project_contents.push('\n');
         fs::write(&project_path, project_contents).unwrap();
@@ -427,7 +427,7 @@ fn ref_properties() {
         );
 
         fs::write(
-            session.path().join("ModelTarget.model.json"),
+            session.path().join("ModelTarget.model.json5"),
             r#"{
                 "className": "Folder",
                 "attributes": {
@@ -483,7 +483,7 @@ fn ref_properties_remove() {
             read_response.intern_and_redact(&mut redactions, root_id)
         );
 
-        fs::remove_file(session.path().join("src/target.model.json")).unwrap();
+        fs::remove_file(session.path().join("src/target.model.json5")).unwrap();
 
         let socket_packet = session
             .get_api_socket_packet(SocketPacketType::Messages, 0)
@@ -525,7 +525,7 @@ fn ref_properties_patch_update() {
             read_response.intern_and_redact(&mut redactions, root_id)
         );
 
-        let target_path = session.path().join("ModelTarget.model.json");
+        let target_path = session.path().join("ModelTarget.model.json5");
 
         // Inserting scale just to force the change processor to run
         fs::write(
@@ -579,7 +579,7 @@ fn model_pivot_migration() {
             read_response.intern_and_redact(&mut redactions, root_id)
         );
 
-        let project_path = session.path().join("default.project.json");
+        let project_path = session.path().join("default.project.json5");
 
         fs::write(
             project_path,
@@ -592,7 +592,7 @@ fn model_pivot_migration() {
                         "$className": "Model"
                     },
                     "Tool": {
-                        "$path": "Tool.model.json"
+                        "$path": "Tool.model.json5"
                     },
                     "Actor": {
                         "$className": "Actor"

@@ -1,1 +1,1 @@
-return "From folder/init.lua"
+return "From folder/init.luau"

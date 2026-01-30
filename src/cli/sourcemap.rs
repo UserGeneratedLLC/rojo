@@ -50,7 +50,7 @@ pub struct SourcemapCommand {
     /// Where to output the sourcemap. Omit this to use stdout instead of
     /// writing to a file.
     ///
-    /// Should end in .json.
+    /// Should end in .json5.
     #[clap(long, short)]
     pub output: Option<PathBuf>,
 
