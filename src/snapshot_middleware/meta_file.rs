@@ -64,7 +64,7 @@ impl AdjacentMetadata {
             .or_else(|| file_stem.strip_suffix(".local"))
             .or_else(|| file_stem.strip_suffix(".legacy"))
             .unwrap_or(file_stem);
-        
+
         // Try modern extension first, then fall back to legacy
         let meta_path_json5 = path.with_file_name(format!("{base_name}.meta.json5"));
         let meta_path_json = path.with_file_name(format!("{base_name}.meta.json"));
@@ -503,14 +503,14 @@ pub fn dir_meta(vfs: &Vfs, path: &Path) -> anyhow::Result<Option<DirectoryMetada
         let metadata = DirectoryMetadata::from_slice(&meta_contents, meta_path_json5)?;
         return Ok(Some(metadata));
     }
-    
+
     // Legacy fallback: init.meta.json
     let meta_path_json = path.join("init.meta.json");
     if let Some(meta_contents) = vfs.read(&meta_path_json).with_not_found()? {
         let metadata = DirectoryMetadata::from_slice(&meta_contents, meta_path_json)?;
         return Ok(Some(metadata));
     }
-    
+
     Ok(None)
 }
 
@@ -526,7 +526,7 @@ pub fn file_meta(vfs: &Vfs, path: &Path, name: &str) -> anyhow::Result<Option<Ad
         let metadata = AdjacentMetadata::from_slice(&meta_contents, meta_path_json5)?;
         return Ok(Some(metadata));
     }
-    
+
     // Legacy fallback: .meta.json
     let mut meta_path_json = path.with_file_name(name);
     meta_path_json.set_extension("meta.json");
@@ -534,7 +534,7 @@ pub fn file_meta(vfs: &Vfs, path: &Path, name: &str) -> anyhow::Result<Option<Ad
         let metadata = AdjacentMetadata::from_slice(&meta_contents, meta_path_json)?;
         return Ok(Some(metadata));
     }
-    
+
     Ok(None)
 }
 

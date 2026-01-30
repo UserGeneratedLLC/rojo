@@ -133,9 +133,11 @@ fn get_dir_middleware<'path>(
             (Middleware::LegacyScriptDir, "init.legacy.luau"),
             (Middleware::CsvDir, "init.csv"),
             // Legacy extensions (for backwards compatibility)
+            // init.server.lua → Script with RunContext.Legacy (old emitLegacyScripts behavior)
+            // init.client.lua → LocalScript (old emitLegacyScripts behavior)
             (Middleware::ModuleScriptDir, "init.lua"),
-            (Middleware::ServerScriptDir, "init.server.lua"),
-            (Middleware::ClientScriptDir, "init.client.lua"),
+            (Middleware::LegacyScriptDir, "init.server.lua"),
+            (Middleware::LocalScriptDir, "init.client.lua"),
         ]
     });
 
@@ -431,8 +433,12 @@ pub fn default_sync_rules() -> &'static [SyncRule] {
             sync_rule!("*.model.json5", JsonModel, ".model.json5"),
             sync_rule!("*.json5", Json, ".json5", "*.meta.json5"),
             // Legacy Lua extensions (for backwards compatibility)
-            sync_rule!("*.server.lua", ServerScript, ".server.lua"),
-            sync_rule!("*.client.lua", ClientScript, ".client.lua"),
+            // .server.lua → Script with RunContext.Legacy (old emitLegacyScripts behavior)
+            // .client.lua → LocalScript (old emitLegacyScripts behavior)
+            // .plugin.lua → Script with RunContext.Plugin
+            sync_rule!("*.server.lua", LegacyScript, ".server.lua"),
+            sync_rule!("*.client.lua", LocalScript, ".client.lua"),
+            sync_rule!("*.plugin.lua", PluginScript, ".plugin.lua"),
             sync_rule!("*.lua", ModuleScript),
             // Legacy JSON extensions (for backwards compatibility)
             sync_rule!("*.project.json", Project, ".project.json"),

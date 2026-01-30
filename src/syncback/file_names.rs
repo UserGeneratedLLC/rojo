@@ -38,7 +38,9 @@ pub fn name_for_inst<'old>(
             | Middleware::CsvDir
             | Middleware::ServerScriptDir
             | Middleware::ClientScriptDir
-            | Middleware::ModuleScriptDir => {
+            | Middleware::ModuleScriptDir
+            | Middleware::LocalScriptDir
+            | Middleware::LegacyScriptDir => {
                 let name = if encode_invalid_chars {
                     let encoded = encode_path_name(&new_inst.name);
                     // Validate for issues not fixed by encoding (trailing space/dot, control chars, reserved names)

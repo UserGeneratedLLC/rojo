@@ -74,8 +74,19 @@ fn main() -> Result<(), anyhow::Error> {
 
     let template_snapshot = snapshot_from_fs_path(&templates_dir)?;
 
+    // Try modern .json5 extension first, fall back to legacy .json
+    let plugin_project_path = {
+        let json5_path = root_dir.join("plugin.project.json5");
+        let json_path = root_dir.join("plugin.project.json");
+        if json5_path.exists() {
+            json5_path
+        } else {
+            json_path
+        }
+    };
+
     let plugin_snapshot = VfsSnapshot::dir(hashmap! {
-        "default.project.json5" => snapshot_from_fs_path(&root_dir.join("plugin.project.json5"))?,
+        "default.project.json5" => snapshot_from_fs_path(&plugin_project_path)?,
         "plugin" => VfsSnapshot::dir(hashmap! {
             "fmt" => snapshot_from_fs_path(&plugin_dir.join("fmt"))?,
             "http" => snapshot_from_fs_path(&plugin_dir.join("http"))?,

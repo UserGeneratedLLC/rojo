@@ -306,7 +306,14 @@ impl<'sync> SyncbackSnapshot<'sync> {
 
 pub fn filter_out_property(inst: &Instance, prop_name: &str) -> bool {
     match inst.class.as_str() {
-        "Script" | "LocalScript" | "ModuleScript" => {
+        "Script" => {
+            // These properties shouldn't be set by scripts that are created via
+            // `$path` or via being on the file system.
+            // RunContext is filtered because it's encoded in the file extension:
+            // .server.luau → Server, .client.luau → Client, .plugin.luau → Plugin, .legacy.luau → Legacy
+            prop_name == "Source" || prop_name == "ScriptGuid" || prop_name == "RunContext"
+        }
+        "LocalScript" | "ModuleScript" => {
             // These properties shouldn't be set by scripts that are created via
             // `$path` or via being on the file system.
             prop_name == "Source" || prop_name == "ScriptGuid"
