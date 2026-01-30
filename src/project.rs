@@ -16,7 +16,8 @@ use crate::{
 };
 
 /// Represents 'default' project names that act as `init` files
-pub static DEFAULT_PROJECT_NAMES: [&str; 1] = ["default.project.json5"];
+/// Includes legacy `.json` extension as fallback for backwards compatibility.
+pub static DEFAULT_PROJECT_NAMES: [&str; 2] = ["default.project.json5", "default.project.json"];
 
 /// Error type returned by any function that handles projects.
 #[derive(Debug, Error)]
@@ -140,7 +141,7 @@ impl Project {
     pub fn is_project_file(path: &Path) -> bool {
         path.file_name()
             .and_then(|name| name.to_str())
-            .map(|name| name.ends_with(".project.json5"))
+            .map(|name| name.ends_with(".project.json5") || name.ends_with(".project.json"))
             .unwrap_or(false)
     }
 

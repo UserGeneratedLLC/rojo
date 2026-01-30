@@ -94,8 +94,11 @@ pub fn snapshot_from_vfs(
 
         // TODO: Is this even necessary anymore?
         match file_name {
+            // Modern extensions
             "init.server.luau" | "init.client.luau" | "init.local.luau" | "init.legacy.luau"
-            | "init.luau" | "init.csv" => return Ok(None),
+            | "init.luau" | "init.csv" |
+            // Legacy extensions (for backwards compatibility)
+            "init.server.lua" | "init.client.lua" | "init.lua" => return Ok(None),
             _ => {}
         }
 
@@ -122,12 +125,17 @@ fn get_dir_middleware<'path>(
     static INIT_PATHS: OnceLock<Vec<(Middleware, &str)>> = OnceLock::new();
     let order = INIT_PATHS.get_or_init(|| {
         vec![
+            // Modern extensions (preferred)
             (Middleware::ModuleScriptDir, "init.luau"),
             (Middleware::ServerScriptDir, "init.server.luau"),
             (Middleware::ClientScriptDir, "init.client.luau"),
             (Middleware::LocalScriptDir, "init.local.luau"),
             (Middleware::LegacyScriptDir, "init.legacy.luau"),
             (Middleware::CsvDir, "init.csv"),
+            // Legacy extensions (for backwards compatibility)
+            (Middleware::ModuleScriptDir, "init.lua"),
+            (Middleware::ServerScriptDir, "init.server.lua"),
+            (Middleware::ClientScriptDir, "init.client.lua"),
         ]
     });
 
@@ -412,6 +420,7 @@ pub fn default_sync_rules() -> &'static [SyncRule] {
 
     DEFAULT_SYNC_RULES.get_or_init(|| {
         vec![
+            // Modern extensions (preferred)
             sync_rule!("*.server.luau", ServerScript, ".server.luau"),
             sync_rule!("*.client.luau", ClientScript, ".client.luau"),
             sync_rule!("*.plugin.luau", PluginScript, ".plugin.luau"),
@@ -421,6 +430,15 @@ pub fn default_sync_rules() -> &'static [SyncRule] {
             sync_rule!("*.project.json5", Project, ".project.json5"),
             sync_rule!("*.model.json5", JsonModel, ".model.json5"),
             sync_rule!("*.json5", Json, ".json5", "*.meta.json5"),
+            // Legacy Lua extensions (for backwards compatibility)
+            sync_rule!("*.server.lua", ServerScript, ".server.lua"),
+            sync_rule!("*.client.lua", ClientScript, ".client.lua"),
+            sync_rule!("*.lua", ModuleScript),
+            // Legacy JSON extensions (for backwards compatibility)
+            sync_rule!("*.project.json", Project, ".project.json"),
+            sync_rule!("*.model.json", JsonModel, ".model.json"),
+            sync_rule!("*.json", Json, ".json", "*.meta.json"),
+            // Other formats
             sync_rule!("*.toml", Toml),
             sync_rule!("*.csv", Csv),
             sync_rule!("*.txt", Text),

@@ -68,12 +68,17 @@ pub fn snapshot_dir_no_meta(
         // TODO: We shouldn't need to know about Lua existing in this
         // middleware. Should we figure out a way for that function to add
         // relevant paths to this middleware?
+        // Modern extensions (preferred)
         normalized_path.join("init.luau"),
         normalized_path.join("init.server.luau"),
         normalized_path.join("init.client.luau"),
         normalized_path.join("init.local.luau"),
         normalized_path.join("init.legacy.luau"),
         normalized_path.join("init.csv"),
+        // Legacy extensions (for backwards compatibility)
+        normalized_path.join("init.lua"),
+        normalized_path.join("init.server.lua"),
+        normalized_path.join("init.client.lua"),
     ];
 
     let snapshot = InstanceSnapshot::new()

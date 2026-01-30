@@ -64,15 +64,22 @@ impl AdjacentMetadata {
             .or_else(|| file_stem.strip_suffix(".local"))
             .or_else(|| file_stem.strip_suffix(".legacy"))
             .unwrap_or(file_stem);
-        let meta_path = path.with_file_name(format!("{base_name}.meta.json5"));
+        
+        // Try modern extension first, then fall back to legacy
+        let meta_path_json5 = path.with_file_name(format!("{base_name}.meta.json5"));
+        let meta_path_json = path.with_file_name(format!("{base_name}.meta.json"));
 
-        if let Some(meta_contents) = vfs.read(&meta_path).with_not_found()? {
-            let mut metadata = Self::from_slice(&meta_contents, meta_path.clone())?;
+        if let Some(meta_contents) = vfs.read(&meta_path_json5).with_not_found()? {
+            let mut metadata = Self::from_slice(&meta_contents, meta_path_json5.clone())?;
+            metadata.apply_all(snapshot)?;
+        } else if let Some(meta_contents) = vfs.read(&meta_path_json).with_not_found()? {
+            // Legacy fallback: .meta.json
+            let mut metadata = Self::from_slice(&meta_contents, meta_path_json.clone())?;
             metadata.apply_all(snapshot)?;
         }
 
         // Rather than pushing these in the snapshot middleware, we can just do it here.
-        snapshot.metadata.relevant_paths.push(meta_path);
+        snapshot.metadata.relevant_paths.push(meta_path_json5);
 
         Ok(())
     }
@@ -282,15 +289,21 @@ impl DirectoryMetadata {
         path: &Path,
         snapshot: &mut InstanceSnapshot,
     ) -> anyhow::Result<()> {
-        let meta_path = path.join("init.meta.json5");
+        // Try modern extension first, then fall back to legacy
+        let meta_path_json5 = path.join("init.meta.json5");
+        let meta_path_json = path.join("init.meta.json");
 
-        if let Some(meta_contents) = vfs.read(&meta_path).with_not_found()? {
-            let mut metadata = Self::from_slice(&meta_contents, meta_path.clone())?;
+        if let Some(meta_contents) = vfs.read(&meta_path_json5).with_not_found()? {
+            let mut metadata = Self::from_slice(&meta_contents, meta_path_json5.clone())?;
+            metadata.apply_all(snapshot)?;
+        } else if let Some(meta_contents) = vfs.read(&meta_path_json).with_not_found()? {
+            // Legacy fallback: init.meta.json
+            let mut metadata = Self::from_slice(&meta_contents, meta_path_json.clone())?;
             metadata.apply_all(snapshot)?;
         }
 
         // Rather than pushing these in the snapshot middleware, we can just do it here.
-        snapshot.metadata.relevant_paths.push(meta_path);
+        snapshot.metadata.relevant_paths.push(meta_path_json5);
 
         Ok(())
     }
@@ -484,11 +497,20 @@ impl DirectoryMetadata {
 /// Retrieves the meta file that should be applied for the provided directory,
 /// if it exists.
 pub fn dir_meta(vfs: &Vfs, path: &Path) -> anyhow::Result<Option<DirectoryMetadata>> {
-    let meta_path = path.join("init.meta.json5");
-    if let Some(meta_contents) = vfs.read(&meta_path).with_not_found()? {
-        let metadata = DirectoryMetadata::from_slice(&meta_contents, meta_path)?;
+    // Try modern extension first, then fall back to legacy
+    let meta_path_json5 = path.join("init.meta.json5");
+    if let Some(meta_contents) = vfs.read(&meta_path_json5).with_not_found()? {
+        let metadata = DirectoryMetadata::from_slice(&meta_contents, meta_path_json5)?;
         return Ok(Some(metadata));
     }
+    
+    // Legacy fallback: init.meta.json
+    let meta_path_json = path.join("init.meta.json");
+    if let Some(meta_contents) = vfs.read(&meta_path_json).with_not_found()? {
+        let metadata = DirectoryMetadata::from_slice(&meta_contents, meta_path_json)?;
+        return Ok(Some(metadata));
+    }
+    
     Ok(None)
 }
 
@@ -497,12 +519,22 @@ pub fn dir_meta(vfs: &Vfs, path: &Path) -> anyhow::Result<Option<DirectoryMetada
 ///
 /// The `name` field should be the name the metadata should have.
 pub fn file_meta(vfs: &Vfs, path: &Path, name: &str) -> anyhow::Result<Option<AdjacentMetadata>> {
-    let mut meta_path = path.with_file_name(name);
-    meta_path.set_extension("meta.json5");
-    if let Some(meta_contents) = vfs.read(&meta_path).with_not_found()? {
-        let metadata = AdjacentMetadata::from_slice(&meta_contents, meta_path)?;
+    // Try modern extension first, then fall back to legacy
+    let mut meta_path_json5 = path.with_file_name(name);
+    meta_path_json5.set_extension("meta.json5");
+    if let Some(meta_contents) = vfs.read(&meta_path_json5).with_not_found()? {
+        let metadata = AdjacentMetadata::from_slice(&meta_contents, meta_path_json5)?;
         return Ok(Some(metadata));
     }
+    
+    // Legacy fallback: .meta.json
+    let mut meta_path_json = path.with_file_name(name);
+    meta_path_json.set_extension("meta.json");
+    if let Some(meta_contents) = vfs.read(&meta_path_json).with_not_found()? {
+        let metadata = AdjacentMetadata::from_slice(&meta_contents, meta_path_json)?;
+        return Ok(Some(metadata));
+    }
+    
     Ok(None)
 }
 

@@ -15,6 +15,9 @@ metadata:
     - /root/init.local.luau
     - /root/init.legacy.luau
     - /root/init.csv
+    - /root/init.lua
+    - /root/init.server.lua
+    - /root/init.client.lua
     - /root/init.meta.json5
   context:
     decode_windows_invalid_chars: true
