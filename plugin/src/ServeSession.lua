@@ -3,6 +3,7 @@ local RunService = game:GetService("RunService")
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local SerializationService = game:GetService("SerializationService")
 local Selection = game:GetService("Selection")
+local HttpService = game:GetService("HttpService")
 
 local Packages = script.Parent.Parent.Packages
 local Log = require(Packages.Log)
@@ -702,12 +703,13 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 		-- Process removed items (instances in Studio that don't exist in Rojo)
 		for _, idOrInstance in catchUpPatch.removed do
 			-- For removed items, idOrInstance is the Studio Instance
-			local instance = if type(idOrInstance) == "Instance"
+			-- Note: use typeof() for Roblox Instances, not type() which returns "userdata"
+			local instance = if typeof(idOrInstance) == "Instance"
 				then idOrInstance
 				else self.__instanceMap.fromIds[idOrInstance]
 
 			-- Try to get an ID for selection lookup
-			local id = if type(idOrInstance) == "string"
+			local id = if typeof(idOrInstance) == "string"
 				then idOrInstance
 				else self.__instanceMap.fromInstances[idOrInstance]
 
@@ -725,7 +727,9 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 						local encoded = encodeInstance(instance, parentId)
 						if encoded then
 							-- Generate a temporary ref for the new instance
-							local tempRef = tostring(instance:GetDebugId())
+							-- Use HttpService:GenerateGUID() and strip dashes to get 32-char hex
+							local guid = HttpService:GenerateGUID(false)
+							local tempRef = string.gsub(guid, "-", ""):lower()
 							pullPatch.added[tempRef] = encoded
 							Log.info("Syncback: encoding {:?} for creation in Rojo", instance)
 						end

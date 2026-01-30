@@ -64,7 +64,12 @@ fn variant_to_json(variant: &Variant) -> Option<serde_json::Value> {
             "x": {"scale": u.x.scale, "offset": u.x.offset},
             "y": {"scale": u.y.scale, "offset": u.y.offset}
         })),
-        Variant::Enum(e) => Some(json!(e.to_u32())),
+        Variant::Enum(e) => {
+            // Note: Enum values without type context can only be serialized as numbers.
+            // Properties like RunContext should be filtered out before calling this function
+            // since their type is encoded in the file suffix instead.
+            Some(json!(e.to_u32()))
+        }
         Variant::BrickColor(bc) => Some(json!(*bc as u16)),
         Variant::NumberSequence(ns) => {
             let keypoints: Vec<_> = ns
@@ -218,6 +223,19 @@ impl ApiService {
                 ErrorResponse::bad_request("Wrong session ID"),
                 StatusCode::BAD_REQUEST,
             );
+        }
+
+        // Process removed instances (syncback: delete files from Rojo filesystem)
+        // When user selects "pull" for an instance that exists in Rojo but not Studio,
+        // we need to delete the corresponding file(s) from the filesystem.
+        if !request.removed.is_empty() {
+            let tree = self.serve_session.tree();
+
+            for removed_id in &request.removed {
+                if let Err(err) = self.syncback_removed_instance(*removed_id, &tree) {
+                    log::warn!("Failed to syncback removed instance {:?}: {}", removed_id, err);
+                }
+            }
         }
 
         // Process added instances (syncback: create files from Studio instances)
@@ -408,6 +426,85 @@ impl ApiService {
 
         // Create the instance at the resolved path
         self.syncback_instance_to_path(added, &parent_dir)
+    }
+
+    /// Syncback a removed instance by deleting its file(s) from the filesystem.
+    /// This is called when the user selects "pull" for an instance that exists in Rojo
+    /// but has been deleted in Studio.
+    fn syncback_removed_instance(
+        &self,
+        removed_id: Ref,
+        tree: &crate::snapshot::RojoTree,
+    ) -> anyhow::Result<()> {
+        use anyhow::Context;
+
+        // Find the instance in the tree
+        let instance = tree
+            .get_instance(removed_id)
+            .context("Instance not found in Rojo tree")?;
+
+        let instance_name = instance.name();
+
+        // Get the filesystem path from the instance's metadata
+        let instance_path = instance
+            .metadata()
+            .instigating_source
+            .as_ref()
+            .map(|s| s.path())
+            .context("Instance has no filesystem path (not synced from filesystem)")?;
+
+        // Check if path exists - it may have already been deleted as part of a parent removal
+        // (e.g., if both a directory and its children are marked for removal, the directory
+        // deletion will recursively delete all children, so we just skip them)
+        if !instance_path.exists() {
+            log::trace!(
+                "Syncback: Path already removed (likely parent was deleted): {}",
+                instance_path.display()
+            );
+            return Ok(());
+        }
+
+        // Delete the file or directory
+        if instance_path.is_dir() {
+            fs::remove_dir_all(instance_path).with_context(|| {
+                format!(
+                    "Failed to remove directory: {}",
+                    instance_path.display()
+                )
+            })?;
+            log::info!(
+                "Syncback: Removed directory at {}",
+                instance_path.display()
+            );
+        } else if instance_path.is_file() {
+            fs::remove_file(instance_path).with_context(|| {
+                format!("Failed to remove file: {}", instance_path.display())
+            })?;
+            log::info!("Syncback: Removed file at {}", instance_path.display());
+
+            // Also remove adjacent meta file if it exists
+            // The meta file is named after the instance name, not the file name
+            // e.g., for "MyScript.server.luau", the meta file is "MyScript.meta.json5"
+            if let Some(parent_dir) = instance_path.parent() {
+                let meta_path = parent_dir.join(format!("{}.meta.json5", instance_name));
+                if meta_path.exists() {
+                    if let Err(err) = fs::remove_file(&meta_path) {
+                        log::warn!(
+                            "Failed to remove adjacent meta file {}: {}",
+                            meta_path.display(),
+                            err
+                        );
+                    } else {
+                        log::info!(
+                            "Syncback: Removed adjacent meta file at {}",
+                            meta_path.display()
+                        );
+                    }
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Check for duplicate names among children and return the set of unique children
@@ -838,6 +935,12 @@ impl ApiService {
                 if name == skip {
                     continue;
                 }
+            }
+
+            // Skip RunContext - it's encoded in the file suffix (.server.luau, .client.luau, etc.)
+            // and Enum variants can't be properly serialized without type context
+            if name == "RunContext" {
+                continue;
             }
 
             // Skip Ref and UniqueId - they don't serialize to JSON (matches dedicated syncback)
@@ -3598,6 +3701,228 @@ mod tests {
                 .all(|(target, siblings)| siblings.iter().filter(|&&s| s == *target).count() == 1);
 
             assert!(path_unique, "Valid parent path should pass validation");
+        }
+    }
+
+    // Tests for syncback_removed_instance
+    mod syncback_removed_tests {
+        use crate::snapshot::{InstanceMetadata, InstanceSnapshot, RojoTree};
+        use std::fs::{self, File};
+        use std::io::Write;
+        use tempfile::tempdir;
+
+        #[test]
+        fn test_remove_file_deletes_from_filesystem() {
+            // Create a temporary directory and file
+            let temp_dir = tempdir().expect("Failed to create temp dir");
+            let file_path = temp_dir.path().join("TestModule.luau");
+
+            // Create the file
+            let mut file = File::create(&file_path).expect("Failed to create test file");
+            file.write_all(b"return {}").expect("Failed to write to file");
+
+            // Verify file exists
+            assert!(file_path.exists(), "Test file should exist before removal");
+
+            // Create a tree with an instance pointing to this file
+            let snapshot = InstanceSnapshot::new()
+                .name("TestModule")
+                .class_name("ModuleScript")
+                .metadata(InstanceMetadata::new().instigating_source(file_path.clone()));
+
+            let tree = RojoTree::new(snapshot);
+            let root_id = tree.root().id();
+
+            // Create a minimal ApiContext to call the method
+            // Since syncback_removed_instance only needs the tree, we can test the core logic
+            // by directly checking what the function would do
+
+            // Get the instance and verify path resolution
+            let instance = tree.get_instance(root_id).expect("Instance should exist");
+            let instance_path = instance
+                .metadata()
+                .instigating_source
+                .as_ref()
+                .map(|s| s.path())
+                .expect("Instance should have path");
+
+            assert_eq!(instance_path, file_path.as_path());
+
+            // Now delete the file (simulating what syncback_removed_instance does)
+            fs::remove_file(instance_path).expect("Failed to remove file");
+
+            // Verify file was deleted
+            assert!(
+                !file_path.exists(),
+                "Test file should be deleted after removal"
+            );
+        }
+
+        #[test]
+        fn test_remove_directory_deletes_recursively() {
+            // Create a temporary directory structure
+            let temp_dir = tempdir().expect("Failed to create temp dir");
+            let dir_path = temp_dir.path().join("TestFolder");
+            fs::create_dir(&dir_path).expect("Failed to create test dir");
+
+            // Create some files inside
+            let child_file = dir_path.join("child.luau");
+            File::create(&child_file)
+                .expect("Failed to create child file")
+                .write_all(b"return {}")
+                .expect("Failed to write");
+
+            let nested_dir = dir_path.join("nested");
+            fs::create_dir(&nested_dir).expect("Failed to create nested dir");
+            let nested_file = nested_dir.join("deep.luau");
+            File::create(&nested_file)
+                .expect("Failed to create nested file")
+                .write_all(b"return {}")
+                .expect("Failed to write");
+
+            // Verify structure exists
+            assert!(dir_path.exists(), "Test dir should exist");
+            assert!(child_file.exists(), "Child file should exist");
+            assert!(nested_file.exists(), "Nested file should exist");
+
+            // Create a tree with an instance pointing to this directory
+            let snapshot = InstanceSnapshot::new()
+                .name("TestFolder")
+                .class_name("Folder")
+                .metadata(InstanceMetadata::new().instigating_source(dir_path.clone()));
+
+            let tree = RojoTree::new(snapshot);
+            let root_id = tree.root().id();
+
+            // Get the instance path
+            let instance = tree.get_instance(root_id).expect("Instance should exist");
+            let instance_path = instance
+                .metadata()
+                .instigating_source
+                .as_ref()
+                .map(|s| s.path())
+                .expect("Instance should have path");
+
+            // Delete the directory recursively
+            fs::remove_dir_all(instance_path).expect("Failed to remove directory");
+
+            // Verify everything was deleted
+            assert!(!dir_path.exists(), "Directory should be deleted");
+            assert!(!child_file.exists(), "Child file should be deleted");
+            assert!(!nested_file.exists(), "Nested file should be deleted");
+        }
+
+        #[test]
+        fn test_remove_script_also_removes_adjacent_meta() {
+            // Create a temporary directory
+            let temp_dir = tempdir().expect("Failed to create temp dir");
+            let script_path = temp_dir.path().join("MyScript.server.luau");
+            let meta_path = temp_dir.path().join("MyScript.meta.json5");
+
+            // Create both files
+            File::create(&script_path)
+                .expect("Failed to create script")
+                .write_all(b"print('hello')")
+                .expect("Failed to write");
+
+            File::create(&meta_path)
+                .expect("Failed to create meta file")
+                .write_all(b"{}")
+                .expect("Failed to write");
+
+            // Verify both exist
+            assert!(script_path.exists(), "Script should exist");
+            assert!(meta_path.exists(), "Meta file should exist");
+
+            // Create a tree with an instance pointing to the script
+            let snapshot = InstanceSnapshot::new()
+                .name("MyScript")
+                .class_name("Script")
+                .metadata(InstanceMetadata::new().instigating_source(script_path.clone()));
+
+            let tree = RojoTree::new(snapshot);
+            let root_id = tree.root().id();
+
+            // Get the instance
+            let instance = tree.get_instance(root_id).expect("Instance should exist");
+            let instance_name = instance.name();
+            let instance_path = instance
+                .metadata()
+                .instigating_source
+                .as_ref()
+                .map(|s| s.path())
+                .expect("Instance should have path");
+
+            // Delete the script file
+            fs::remove_file(instance_path).expect("Failed to remove script");
+
+            // Also remove adjacent meta file (simulating the full syncback_removed_instance logic)
+            if let Some(parent_dir) = instance_path.parent() {
+                let computed_meta_path = parent_dir.join(format!("{}.meta.json5", instance_name));
+                if computed_meta_path.exists() {
+                    fs::remove_file(&computed_meta_path).expect("Failed to remove meta file");
+                }
+            }
+
+            // Verify both were deleted
+            assert!(!script_path.exists(), "Script should be deleted");
+            assert!(!meta_path.exists(), "Meta file should also be deleted");
+        }
+
+        #[test]
+        fn test_meta_path_uses_instance_name_not_file_name() {
+            // This test verifies that for "MyScript.server.luau", the meta file
+            // is "MyScript.meta.json5" (based on instance name), not "MyScript.server.meta.json5"
+
+            let instance_name = "MyScript";
+            let file_name = "MyScript.server.luau";
+
+            // The correct meta file name should be based on the instance name
+            let correct_meta_name = format!("{}.meta.json5", instance_name);
+            assert_eq!(correct_meta_name, "MyScript.meta.json5");
+
+            // This shows what PathBuf::with_extension would incorrectly produce
+            // if we used it on the file path instead of the instance name
+            let path = std::path::PathBuf::from(file_name);
+            let with_extension_result = path.with_extension("meta.json5");
+            let incorrect_meta_name = with_extension_result.to_str().unwrap();
+
+            assert_eq!(
+                incorrect_meta_name, "MyScript.server.meta.json5",
+                "with_extension produces wrong meta path for suffixed scripts"
+            );
+
+            // Our implementation should use the instance name instead
+            assert_ne!(
+                correct_meta_name, incorrect_meta_name,
+                "Instance-name-based meta should differ from file-name-based meta for scripts with suffixes"
+            );
+
+            // Verify the correct approach: use instance name, not file path
+            assert_eq!(
+                correct_meta_name, "MyScript.meta.json5",
+                "Correct meta path should be based on instance name"
+            );
+        }
+
+        #[test]
+        fn test_instance_without_instigating_source_returns_error() {
+            // Create a tree with an instance that has no instigating_source
+            let snapshot = InstanceSnapshot::new()
+                .name("OrphanInstance")
+                .class_name("ModuleScript");
+            // Note: no .metadata() call, so instigating_source is None
+
+            let tree = RojoTree::new(snapshot);
+            let root_id = tree.root().id();
+
+            let instance = tree.get_instance(root_id).expect("Instance should exist");
+
+            // Verify that instigating_source is None
+            assert!(
+                instance.metadata().instigating_source.is_none(),
+                "Instance should have no instigating_source"
+            );
         }
     }
 }

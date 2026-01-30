@@ -174,10 +174,21 @@ impl JobThreadContext {
             VfsEvent::Remove(path) => {
                 // MemoFS does not track parent removals yet, so we can canonicalize
                 // the parent path safely and then append the removed path's file name.
+                // However, if the parent was also deleted (e.g., when deleting a directory
+                // tree), canonicalize will fail - in that case, just skip this event.
                 let parent = path.parent().unwrap();
                 let file_name = path.file_name().unwrap();
-                let parent_normalized = self.vfs.canonicalize(parent).unwrap();
-                self.apply_patches(parent_normalized.join(file_name))
+                match self.vfs.canonicalize(parent) {
+                    Ok(parent_normalized) => self.apply_patches(parent_normalized.join(file_name)),
+                    Err(_) => {
+                        // Parent directory was also deleted, skip this event
+                        log::trace!(
+                            "Skipping remove event for {:?} - parent no longer exists",
+                            path
+                        );
+                        Vec::new()
+                    }
+                }
             }
             _ => {
                 log::warn!("Unhandled VFS event: {:?}", event);
