@@ -1,0 +1,16 @@
+---
+source: tests/tests/syncback.rs
+expression: default.project.json5
+---
+{
+  name: "respect_old_middleware",
+  tree: {
+    $path: "src",
+    project_node: {
+      $className: "BoolValue",
+      $properties: {
+        Value: true,
+      },
+    },
+  },
+}

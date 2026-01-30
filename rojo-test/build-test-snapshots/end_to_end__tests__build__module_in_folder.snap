@@ -7,5 +7,11 @@ expression: contents
     <Properties>
       <string name="Name">module_in_folder</string>
     </Properties>
+    <Item class="ModuleScript" referent="1">
+      <Properties>
+        <string name="Name">aModule</string>
+        <string name="Source">-- This is a Lua module</string>
+      </Properties>
+    </Item>
   </Item>
 </roblox>

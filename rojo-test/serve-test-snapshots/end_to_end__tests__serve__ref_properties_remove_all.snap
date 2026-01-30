@@ -3,114 +3,40 @@ source: tests/tests/serve.rs
 expression: "read_response.intern_and_redact(&mut redactions, root_id)"
 ---
 instances:
-  id-10:
+  id-2:
+    Children:
+      - id-3
+      - id-4
+    ClassName: Folder
+    Id: id-2
+    Metadata:
+      ignoreUnknownInstances: false
+    Name: ref_properties_remove
+    Parent: "00000000000000000000000000000000"
+    Properties: {}
+  id-3:
     Children: []
     ClassName: ObjectValue
-    Id: id-10
+    Id: id-3
     Metadata:
-      ignoreUnknownInstances: true
-    Name: ProjectPointer
-    Parent: id-9
+      ignoreUnknownInstances: false
+    Name: pointer
+    Parent: id-2
     Properties:
       Attributes:
         Attributes: {}
       Value:
-        Ref: id-9
-  id-2:
-    Children:
-      - id-3
-    ClassName: DataModel
-    Id: id-2
-    Metadata:
-      ignoreUnknownInstances: true
-    Name: ref_properties
-    Parent: "00000000000000000000000000000000"
-    Properties: {}
-  id-3:
-    Children:
-      - id-4
-      - id-5
-      - id-7
-      - id-9
-    ClassName: Workspace
-    Id: id-3
-    Metadata:
-      ignoreUnknownInstances: true
-    Name: Workspace
-    Parent: id-2
-    Properties:
-      NeedsPivotMigration:
-        Bool: false
+        Ref: id-4
   id-4:
     Children: []
     ClassName: ObjectValue
     Id: id-4
     Metadata:
-      ignoreUnknownInstances: true
-    Name: CrossFormatPointer
-    Parent: id-3
+      ignoreUnknownInstances: false
+    Name: target
+    Parent: id-2
     Properties:
       Attributes:
         Attributes: {}
-      Value:
-        Ref: id-5
-  id-5:
-    Children:
-      - id-6
-    ClassName: Folder
-    Id: id-5
-    Metadata:
-      ignoreUnknownInstances: false
-    Name: FolderTarget
-    Parent: id-3
-    Properties: {}
-  id-6:
-    Children: []
-    ClassName: ObjectValue
-    Id: id-6
-    Metadata:
-      ignoreUnknownInstances: false
-    Name: FolderPointer
-    Parent: id-5
-    Properties:
-      Attributes:
-        Attributes: {}
-      Value:
-        Ref: id-5
-  id-7:
-    Children:
-      - id-8
-    ClassName: Folder
-    Id: id-7
-    Metadata:
-      ignoreUnknownInstances: false
-    Name: ModelTarget
-    Parent: id-3
-    Properties: {}
-  id-8:
-    Children: []
-    ClassName: Model
-    Id: id-8
-    Metadata:
-      ignoreUnknownInstances: false
-    Name: ModelPointer
-    Parent: id-7
-    Properties:
-      Attributes:
-        Attributes: {}
-      NeedsPivotMigration:
-        Bool: false
-      PrimaryPart:
-        Ref: id-7
-  id-9:
-    Children:
-      - id-10
-    ClassName: Folder
-    Id: id-9
-    Metadata:
-      ignoreUnknownInstances: true
-    Name: ProjectTarget
-    Parent: id-3
-    Properties: {}
 messageCursor: 0
 sessionId: id-1

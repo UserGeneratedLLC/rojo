@@ -5,12 +5,14 @@ expression: "read_response.intern_and_redact(&mut redactions, root_id)"
 instances:
   id-2:
     Children: []
-    ClassName: Folder
+    ClassName: ModuleScript
     Id: id-2
     Metadata:
       ignoreUnknownInstances: false
     Name: edit_init
     Parent: "00000000000000000000000000000000"
-    Properties: {}
+    Properties:
+      Source:
+        String: "-- Original contents"
 messageCursor: 0
 sessionId: id-1

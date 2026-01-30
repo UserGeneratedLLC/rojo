@@ -1,0 +1,10 @@
+---
+source: tests/tests/syncback.rs
+expression: src/Target_2.model.json5
+---
+{
+  attributes: {
+    Rojo_Id: "identical ID",
+  },
+  className: "Folder",
+}

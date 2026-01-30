@@ -3,9 +3,10 @@ source: tests/tests/build.rs
 expression: contents
 ---
 <roblox version="4">
-  <Item class="Folder" referent="0">
+  <Item class="ModuleScript" referent="0">
     <Properties>
       <string name="Name">module_init</string>
+      <string name="Source">return "From folder/init.luau"</string>
     </Properties>
   </Item>
 </roblox>

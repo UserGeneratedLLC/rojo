@@ -11,11 +11,23 @@ expression: contents
       <Properties>
         <string name="Name">src</string>
       </Properties>
+      <Item class="ModuleScript" referent="2">
+        <Properties>
+          <string name="Name">outer.spec</string>
+          <string name="Source">-- This file should be included.</string>
+        </Properties>
+      </Item>
     </Item>
-    <Item class="Folder" referent="2">
+    <Item class="Folder" referent="3">
       <Properties>
         <string name="Name">subproject</string>
       </Properties>
+      <Item class="ModuleScript" referent="4">
+        <Properties>
+          <string name="Name">inner</string>
+          <string name="Source">-- This file should be included.</string>
+        </Properties>
+      </Item>
     </Item>
   </Item>
 </roblox>

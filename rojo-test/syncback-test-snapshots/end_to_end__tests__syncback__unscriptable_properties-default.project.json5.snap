@@ -1,0 +1,18 @@
+---
+source: tests/tests/syncback.rs
+expression: default.project.json5
+---
+{
+  name: "unscriptable_properties",
+  syncbackRules: {
+    syncUnscriptable: true,
+  },
+  tree: {
+    $className: "BinaryStringValue",
+    $properties: {
+      Value: {
+        BinaryString: "Rojo/is/cool",
+      },
+    },
+  },
+}

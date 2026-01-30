@@ -2,7 +2,7 @@
 source: tests/tests/serve.rs
 expression: redactions.redacted_yaml(info)
 ---
-projectName: scripts
+projectName: sync_rule_alone
 protocolVersion: 5
 rootInstanceId: id-2
 serverVersion: "[server-version]"

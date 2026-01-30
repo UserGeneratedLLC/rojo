@@ -1,0 +1,10 @@
+---
+source: tests/tests/syncback.rs
+expression: src/target.model.json5
+---
+{
+  attributes: {
+    Rojo_Id: "test referent id",
+  },
+  className: "Folder",
+}

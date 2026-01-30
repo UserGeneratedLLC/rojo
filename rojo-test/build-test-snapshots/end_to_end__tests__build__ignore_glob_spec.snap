@@ -7,5 +7,11 @@ expression: contents
     <Properties>
       <string name="Name">ignore_glob_spec</string>
     </Properties>
+    <Item class="ModuleScript" referent="1">
+      <Properties>
+        <string name="Name">shouldBeIncluded</string>
+        <string name="Source">-- this file should be present</string>
+      </Properties>
+    </Item>
   </Item>
 </roblox>
