@@ -4,7 +4,6 @@ local Packages = Rojo.Packages
 
 local Roact = require(Packages.Roact)
 
-local Settings = require(Plugin.Settings)
 local Theme = require(Plugin.App.Theme)
 local PatchTree = require(Plugin.PatchTree)
 local TextButton = require(Plugin.App.Components.TextButton)
@@ -154,17 +153,15 @@ function ConfirmingPage:render()
 					onClick = self.props.onAbort,
 				}),
 
-				PullAll = if Settings:get("twoWaySync")
-					then e(TextButton, {
-						text = "Pull All",
-						style = "Danger",
-						transparency = self.props.transparency,
-						layoutOrder = 2,
-						onClick = function()
-							self.setAllSelections("pull")
-						end,
-					})
-					else nil,
+			PullAll = e(TextButton, {
+				text = "Pull All",
+				style = "Danger",
+				transparency = self.props.transparency,
+				layoutOrder = 2,
+				onClick = function()
+					self.setAllSelections("pull")
+				end,
+			}),
 
 				SkipAll = e(TextButton, {
 					text = "Skip All",
