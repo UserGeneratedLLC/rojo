@@ -32,7 +32,7 @@ use crate::{
     web_api::{InstanceUpdate, RefPatchResponse, SerializeResponse},
 };
 
-/// Convert a Variant to a JSON-compatible value for .model.json files
+/// Convert a Variant to a JSON-compatible value for .model.json5 files
 fn variant_to_json(variant: &Variant) -> Option<serde_json::Value> {
     use serde_json::{json, Value};
 
@@ -1240,7 +1240,7 @@ impl ApiService {
     }
 }
 
-/// If this instance is represented by a script, try to find the correct .lua or .luau
+/// If this instance is represented by a script, try to find the correct .luau
 /// file to open to edit it.
 fn pick_script_path(instance: InstanceWithMeta<'_>) -> Option<PathBuf> {
     match instance.class_name().as_str() {
@@ -1248,16 +1248,15 @@ fn pick_script_path(instance: InstanceWithMeta<'_>) -> Option<PathBuf> {
         _ => return None,
     }
 
-    // Pick the first listed relevant path that has an extension of .lua or .luau that
+    // Pick the first listed relevant path that has an extension of .luau that
     // exists.
     instance
         .metadata()
         .relevant_paths
         .iter()
         .find(|path| {
-            // We should only ever open Lua or Luau files to be safe.
+            // We should only ever open Luau files to be safe.
             match path.extension().and_then(|ext| ext.to_str()) {
-                Some("lua") => {}
                 Some("luau") => {}
                 _ => return false,
             }
@@ -1708,7 +1707,7 @@ mod tests {
                 let file_name = match class_name {
                     "ModuleScript" => format!("{}.luau", name),
                     "LocalScript" => format!("{}.local.luau", name),
-                    _ => format!("{}.model.json", name),
+                    _ => format!("{}.model.json5", name),
                 };
                 assert_eq!(
                     file_name, expected,
@@ -1720,7 +1719,7 @@ mod tests {
 
         #[test]
         fn test_folder_creates_directory() {
-            // Folders should not create .model.json files
+            // Folders should not create .model.json5 files
             let class_name = "Folder";
             let should_create_file = class_name != "Folder";
             assert!(
@@ -1791,7 +1790,7 @@ mod tests {
         }
     }
 
-    // Tests for model.json structure
+    // Tests for model.json5 structure
     mod model_json_structure_tests {
         use serde_json::json;
 

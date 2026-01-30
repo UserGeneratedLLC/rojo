@@ -6,7 +6,7 @@ snapshot_id: "00000000000000000000000000000000"
 metadata:
   ignore_unknown_instances: false
   instigating_source:
-    Path: /root/init.lua
+    Path: /root/init.luau
   relevant_paths:
     - /root
     - /root/init.lua
@@ -16,8 +16,6 @@ metadata:
     - /root/init.client.lua
     - /root/init.client.luau
     - /root/init.csv
-    - /root/init.meta.json
-    - /root/init.meta.jsonc
     - /root/init.meta.json5
   context:
     decode_windows_invalid_chars: true

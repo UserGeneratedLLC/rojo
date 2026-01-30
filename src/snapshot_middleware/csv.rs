@@ -345,7 +345,7 @@ Ack,Ack!,,An exclamation of despair,¡Ay!"#,
         )
         .unwrap();
         imfs.load_snapshot(
-            "/foo.meta.json",
+            "/foo.meta.json5",
             VfsSnapshot::file(r#"{ "ignoreUnknownInstances": true }"#),
         )
         .unwrap();
@@ -411,7 +411,7 @@ Ack,Ack!,,An exclamation of despair,¡Ay!"#,
                     ),
                 ),
                 (
-                    "init.meta.json",
+                    "init.meta.json5",
                     VfsSnapshot::file(r#"{"id": "manually specified"}"#),
                 ),
             ]),

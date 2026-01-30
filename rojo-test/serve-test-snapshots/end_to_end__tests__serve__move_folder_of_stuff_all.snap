@@ -9,7 +9,7 @@ instances:
     Id: id-2
     Metadata:
       ignoreUnknownInstances: false
-    Name: move_folder_of_stuff
+    Name: edit_init
     Parent: "00000000000000000000000000000000"
     Properties: {}
 messageCursor: 0

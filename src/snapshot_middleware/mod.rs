@@ -81,7 +81,7 @@ pub fn snapshot_from_vfs(
         // TODO: Support user defined init paths
         // If and when we do, make sure to go support it in
         // `Project::set_file_name`, as right now it special-cases
-        // `default.project.json` as an `init` path.
+        // `default.project.json5` as an `init` path.
         match middleware {
             Middleware::Dir => middleware.snapshot(context, vfs, path, &decoded_name),
             _ => middleware.snapshot(context, vfs, &init_path, &decoded_name),
@@ -94,9 +94,8 @@ pub fn snapshot_from_vfs(
 
         // TODO: Is this even necessary anymore?
         match file_name {
-            "init.server.luau" | "init.server.lua" | "init.client.luau" | "init.client.lua"
-            | "init.local.luau" | "init.local.lua" | "init.legacy.luau" | "init.legacy.lua"
-            | "init.luau" | "init.lua" | "init.csv" => return Ok(None),
+            "init.server.luau" | "init.client.luau" | "init.local.luau" | "init.legacy.luau"
+            | "init.luau" | "init.csv" => return Ok(None),
             _ => {}
         }
 
@@ -124,15 +123,10 @@ fn get_dir_middleware<'path>(
     let order = INIT_PATHS.get_or_init(|| {
         vec![
             (Middleware::ModuleScriptDir, "init.luau"),
-            (Middleware::ModuleScriptDir, "init.lua"),
             (Middleware::ServerScriptDir, "init.server.luau"),
-            (Middleware::ServerScriptDir, "init.server.lua"),
             (Middleware::ClientScriptDir, "init.client.luau"),
-            (Middleware::ClientScriptDir, "init.client.lua"),
             (Middleware::LocalScriptDir, "init.local.luau"),
-            (Middleware::LocalScriptDir, "init.local.lua"),
             (Middleware::LegacyScriptDir, "init.legacy.luau"),
-            (Middleware::LegacyScriptDir, "init.legacy.lua"),
             (Middleware::CsvDir, "init.csv"),
         ]
     });
@@ -333,10 +327,10 @@ impl Middleware {
 
     /// Returns whether this particular middleware sets its own properties.
     /// This applies to things like `JsonModel` and `Project`, since they
-    /// set properties without needing a meta.json file.
+    /// set properties without needing a meta.json5 file.
     ///
     /// It does not cover middleware like `ServerScript` or `Csv` because they
-    /// need a meta.json file to set properties that aren't their designated
+    /// need a meta.json5 file to set properties that aren't their designated
     /// 'special' properties.
     #[inline]
     pub fn handles_own_properties(&self) -> bool {
@@ -418,25 +412,14 @@ pub fn default_sync_rules() -> &'static [SyncRule] {
 
     DEFAULT_SYNC_RULES.get_or_init(|| {
         vec![
-            sync_rule!("*.server.lua", ServerScript, ".server.lua"),
             sync_rule!("*.server.luau", ServerScript, ".server.luau"),
-            sync_rule!("*.client.lua", ClientScript, ".client.lua"),
             sync_rule!("*.client.luau", ClientScript, ".client.luau"),
-            sync_rule!("*.plugin.lua", PluginScript, ".plugin.lua"),
             sync_rule!("*.plugin.luau", PluginScript, ".plugin.luau"),
-            sync_rule!("*.legacy.lua", LegacyScript, ".legacy.lua"),
             sync_rule!("*.legacy.luau", LegacyScript, ".legacy.luau"),
-            sync_rule!("*.local.lua", LocalScript, ".local.lua"),
             sync_rule!("*.local.luau", LocalScript, ".local.luau"),
-            sync_rule!("*.{lua,luau}", ModuleScript),
-            sync_rule!("*.project.json", Project, ".project.json"),
-            sync_rule!("*.project.jsonc", Project, ".project.jsonc"),
+            sync_rule!("*.luau", ModuleScript),
             sync_rule!("*.project.json5", Project, ".project.json5"),
-            sync_rule!("*.model.json", JsonModel, ".model.json"),
-            sync_rule!("*.model.jsonc", JsonModel, ".model.jsonc"),
             sync_rule!("*.model.json5", JsonModel, ".model.json5"),
-            sync_rule!("*.json", Json, ".json", "*.meta.json"),
-            sync_rule!("*.jsonc", Json, ".jsonc", "*.meta.jsonc"),
             sync_rule!("*.json5", Json, ".json5", "*.meta.json5"),
             sync_rule!("*.toml", Toml),
             sync_rule!("*.csv", Csv),

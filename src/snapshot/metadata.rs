@@ -30,9 +30,9 @@ pub struct InstanceMetadata {
     /// even if they don't exist, since the presence of a file can change the
     /// outcome of a snapshot function.
     ///
-    /// For example, a file named foo.lua might have these relevant paths:
-    /// - foo.lua
-    /// - foo.meta.json (even if this file doesn't exist!)
+    /// For example, a file named foo.luau might have these relevant paths:
+    /// - foo.luau
+    /// - foo.meta.json5 (even if this file doesn't exist!)
     ///
     /// A directory named bar/ might have these:
     /// - bar/

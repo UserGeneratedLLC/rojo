@@ -4,7 +4,7 @@
     "$className": "DataModel",
     "ReplicatedStorage": {
       "container": {
-        "$path": "container.model.json"
+        "$path": "container.model.json5"
       }
     }
   }

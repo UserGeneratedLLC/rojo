@@ -10,7 +10,7 @@
         "$path": "attribute_mismatch.luau"
       },
       "property_mismatch": {
-        "$path": "property_mismatch.project.json"
+        "$path": "property_mismatch.project.json5"
       },
       "$properties": {
         "EditorLiveScripting": {

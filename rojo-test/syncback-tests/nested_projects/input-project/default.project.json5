@@ -4,7 +4,7 @@
     "$className": "DataModel",
     "ReplicatedStorage": {
       "Nested": {
-        "$path": "nested.project.json"
+        "$path": "nested.project.json5"
       }
     }
   }

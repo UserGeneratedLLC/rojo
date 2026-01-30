@@ -16,7 +16,7 @@
         }
       },
       "ModelTarget": {
-        "$path": "ModelTarget.model.json"
+        "$path": "ModelTarget.model.json5"
       },
       "FolderTarget": {
         "$path": "FolderTarget"

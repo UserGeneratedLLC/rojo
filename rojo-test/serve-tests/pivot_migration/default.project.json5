@@ -7,7 +7,7 @@
         "$className": "Model"
       },
       "Tool": {
-        "$path": "Tool.model.json"
+        "$path": "Tool.model.json5"
       }
     }
   }

@@ -692,7 +692,7 @@ mod test {
         imfs.load_snapshot(
             "/foo",
             VfsSnapshot::dir([(
-                "default.project.json",
+                "default.project.json5",
                 VfsSnapshot::file(
                     r#"
                     {
@@ -729,7 +729,7 @@ mod test {
         imfs.load_snapshot(
             "/foo",
             VfsSnapshot::dir([(
-                "hello.project.json",
+                "hello.project.json5",
                 VfsSnapshot::file(
                     r#"
                     {
@@ -749,7 +749,7 @@ mod test {
         let instance_snapshot = snapshot_project(
             &InstanceContext::default(),
             &vfs,
-            Path::new("/foo/hello.project.json"),
+            Path::new("/foo/hello.project.json5"),
             "NOT_IN_SNAPSHOT",
         )
         .expect("snapshot error")
@@ -764,7 +764,7 @@ mod test {
 
         let mut imfs = InMemoryFs::new();
         imfs.load_snapshot(
-            "/foo.project.json",
+            "/foo.project.json5",
             VfsSnapshot::file(
                 r#"
                     {
@@ -788,7 +788,7 @@ mod test {
         let instance_snapshot = snapshot_project(
             &InstanceContext::default(),
             &vfs,
-            Path::new("/foo.project.json"),
+            Path::new("/foo.project.json5"),
             "NOT_IN_SNAPSHOT",
         )
         .expect("snapshot error")
@@ -803,7 +803,7 @@ mod test {
 
         let mut imfs = InMemoryFs::new();
         imfs.load_snapshot(
-            "/foo.project.json",
+            "/foo.project.json5",
             VfsSnapshot::file(
                 r#"
                     {
@@ -825,7 +825,7 @@ mod test {
         let instance_snapshot = snapshot_project(
             &InstanceContext::default(),
             &vfs,
-            Path::new("/foo.project.json"),
+            Path::new("/foo.project.json5"),
             "NOT_IN_SNAPSHOT",
         )
         .expect("snapshot error")
@@ -840,7 +840,7 @@ mod test {
 
         let mut imfs = InMemoryFs::new();
         imfs.load_snapshot(
-            "/foo.project.json",
+            "/foo.project.json5",
             VfsSnapshot::file(
                 r#"
                     {
@@ -863,7 +863,7 @@ mod test {
         let instance_snapshot = snapshot_project(
             &InstanceContext::default(),
             &vfs,
-            Path::new("/foo.project.json"),
+            Path::new("/foo.project.json5"),
             "NOT_IN_SNAPSHOT",
         )
         .expect("snapshot error")
@@ -881,7 +881,7 @@ mod test {
             "/foo",
             VfsSnapshot::dir([
                 (
-                    "default.project.json",
+                    "default.project.json5",
                     VfsSnapshot::file(
                         r#"
                     {
@@ -903,7 +903,7 @@ mod test {
         let instance_snapshot = snapshot_project(
             &InstanceContext::default(),
             &vfs,
-            Path::new("/foo/default.project.json"),
+            Path::new("/foo/default.project.json5"),
             "NOT_IN_SNAPSHOT",
         )
         .expect("snapshot error")
@@ -921,20 +921,20 @@ mod test {
             "/foo",
             VfsSnapshot::dir([
                 (
-                    "default.project.json",
+                    "default.project.json5",
                     VfsSnapshot::file(
                         r#"
                     {
                         "name": "path-project",
                         "tree": {
-                            "$path": "other.project.json"
+                            "$path": "other.project.json5"
                         }
                     }
                 "#,
                     ),
                 ),
                 (
-                    "other.project.json",
+                    "other.project.json5",
                     VfsSnapshot::file(
                         r#"
                     {
@@ -955,7 +955,7 @@ mod test {
         let instance_snapshot = snapshot_project(
             &InstanceContext::default(),
             &vfs,
-            Path::new("/foo/default.project.json"),
+            Path::new("/foo/default.project.json5"),
             "NOT_IN_SNAPSHOT",
         )
         .expect("snapshot error")
@@ -973,20 +973,20 @@ mod test {
             "/foo",
             VfsSnapshot::dir([
                 (
-                    "default.project.json",
+                    "default.project.json5",
                     VfsSnapshot::file(
                         r#"
                     {
                         "name": "path-child-project",
                         "tree": {
-                            "$path": "other.project.json"
+                            "$path": "other.project.json5"
                         }
                     }
                 "#,
                     ),
                 ),
                 (
-                    "other.project.json",
+                    "other.project.json5",
                     VfsSnapshot::file(
                         r#"
                     {
@@ -1011,7 +1011,7 @@ mod test {
         let instance_snapshot = snapshot_project(
             &InstanceContext::default(),
             &vfs,
-            Path::new("/foo/default.project.json"),
+            Path::new("/foo/default.project.json5"),
             "NOT_IN_SNAPSHOT",
         )
         .expect("snapshot error")
@@ -1032,13 +1032,13 @@ mod test {
             "/foo",
             VfsSnapshot::dir([
                 (
-                    "default.project.json",
+                    "default.project.json5",
                     VfsSnapshot::file(
                         r#"
                     {
                         "name": "path-property-override",
                         "tree": {
-                            "$path": "other.project.json",
+                            "$path": "other.project.json5",
                             "$properties": {
                                 "Value": "Changed"
                             }
@@ -1048,7 +1048,7 @@ mod test {
                     ),
                 ),
                 (
-                    "other.project.json",
+                    "other.project.json5",
                     VfsSnapshot::file(
                         r#"
                     {
@@ -1072,7 +1072,7 @@ mod test {
         let instance_snapshot = snapshot_project(
             &InstanceContext::default(),
             &vfs,
-            Path::new("/foo/default.project.json"),
+            Path::new("/foo/default.project.json5"),
             "NOT_IN_SNAPSHOT",
         )
         .expect("snapshot error")
@@ -1089,7 +1089,7 @@ mod test {
         imfs.load_snapshot(
             "/foo",
             VfsSnapshot::dir([(
-                "default.project.json",
+                "default.project.json5",
                 VfsSnapshot::file(
                     r#"
                     {
@@ -1108,7 +1108,7 @@ mod test {
         let instance_snapshot = snapshot_project(
             &InstanceContext::default(),
             &vfs,
-            Path::new("/foo/default.project.json"),
+            Path::new("/foo/default.project.json5"),
             "no_name_project",
         )
         .expect("snapshot error")

@@ -1,7 +1,7 @@
 {
   "name": "sync_rule_nested_projects",
   "tree": {
-    "$path": "nested.project.json"
+    "$path": "nested.project.json5"
   },
   "syncRules": [
     {

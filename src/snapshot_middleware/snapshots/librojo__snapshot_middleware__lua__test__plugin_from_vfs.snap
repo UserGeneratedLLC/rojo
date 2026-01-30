@@ -6,11 +6,9 @@ snapshot_id: "00000000000000000000000000000000"
 metadata:
   ignore_unknown_instances: false
   instigating_source:
-    Path: /foo.plugin.lua
+    Path: /foo.plugin.luau
   relevant_paths:
-    - /foo.plugin.lua
-    - /foo.meta.json
-    - /foo.meta.jsonc
+    - /foo.plugin.luau
     - /foo.meta.json5
   context:
     decode_windows_invalid_chars: true

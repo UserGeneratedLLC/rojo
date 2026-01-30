@@ -110,7 +110,7 @@ mod test {
         imfs.load_snapshot("/foo.txt", VfsSnapshot::file("Hello there!"))
             .unwrap();
         imfs.load_snapshot(
-            "/foo.meta.json",
+            "/foo.meta.json5",
             VfsSnapshot::file(
                 r#"{
                     "id": "manually specified"

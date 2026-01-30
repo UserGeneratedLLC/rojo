@@ -53,9 +53,9 @@ pub struct ServeSession {
 
     /// The root project for the serve session.
     ///
-    /// This will be defined if a folder with a `default.project.json` file was
+    /// This will be defined if a folder with a `default.project.json5` file was
     /// used for starting the serve session, or if the user specified a full
-    /// path to a `.project.json` file.
+    /// path to a `.project.json5` file.
     root_project: Project,
 
     /// A randomly generated ID for this serve session. It's used to ensure that

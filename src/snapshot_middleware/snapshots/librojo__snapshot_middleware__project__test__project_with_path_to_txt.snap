@@ -6,13 +6,11 @@ snapshot_id: "00000000000000000000000000000000"
 metadata:
   ignore_unknown_instances: false
   instigating_source:
-    Path: /foo/default.project.json
+    Path: /foo/default.project.json5
   relevant_paths:
     - /foo/other.txt
-    - /foo/other.meta.json
-    - /foo/other.meta.jsonc
     - /foo/other.meta.json5
-    - /foo/default.project.json
+    - /foo/default.project.json5
   context:
     decode_windows_invalid_chars: true
   specified_id: ~

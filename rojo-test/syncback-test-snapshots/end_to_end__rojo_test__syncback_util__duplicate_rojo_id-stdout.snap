@@ -2,4 +2,4 @@
 source: tests/rojo_test/syncback_util.rs
 expression: "String::from_utf8_lossy(&output.stdout)"
 ---
-Writing container.model.json
+Writing container.model.json5

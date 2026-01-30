@@ -2,7 +2,7 @@
 source: tests/tests/serve.rs
 expression: redactions.redacted_yaml(&info)
 ---
-projectName: meshpart
+projectName: empty_folder
 protocolVersion: 5
 rootInstanceId: id-2
 serverVersion: "[server-version]"

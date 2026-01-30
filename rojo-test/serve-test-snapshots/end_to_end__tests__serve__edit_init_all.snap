@@ -1,20 +1,16 @@
 ---
 source: tests/tests/serve.rs
 expression: "read_response.intern_and_redact(&mut redactions, root_id)"
-
 ---
 instances:
   id-2:
     Children: []
-    ClassName: ModuleScript
+    ClassName: Folder
     Id: id-2
     Metadata:
       ignoreUnknownInstances: false
     Name: edit_init
     Parent: "00000000000000000000000000000000"
-    Properties:
-      Source:
-        String: "-- Original contents"
+    Properties: {}
 messageCursor: 0
 sessionId: id-1
-

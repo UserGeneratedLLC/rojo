@@ -75,7 +75,7 @@ fn main() -> Result<(), anyhow::Error> {
     let template_snapshot = snapshot_from_fs_path(&templates_dir)?;
 
     let plugin_snapshot = VfsSnapshot::dir(hashmap! {
-        "default.project.json" => snapshot_from_fs_path(&root_dir.join("plugin.project.json"))?,
+        "default.project.json5" => snapshot_from_fs_path(&root_dir.join("plugin.project.json5"))?,
         "plugin" => VfsSnapshot::dir(hashmap! {
             "fmt" => snapshot_from_fs_path(&plugin_dir.join("fmt"))?,
             "http" => snapshot_from_fs_path(&plugin_dir.join("http"))?,

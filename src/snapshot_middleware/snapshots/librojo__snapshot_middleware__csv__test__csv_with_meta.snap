@@ -9,8 +9,6 @@ metadata:
     Path: /foo.csv
   relevant_paths:
     - /foo.csv
-    - /foo.meta.json
-    - /foo.meta.jsonc
     - /foo.meta.json5
   context:
     decode_windows_invalid_chars: true

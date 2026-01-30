@@ -16,8 +16,6 @@ metadata:
     - /foo/init.client.lua
     - /foo/init.client.luau
     - /foo/init.csv
-    - /foo/init.meta.json
-    - /foo/init.meta.jsonc
     - /foo/init.meta.json5
   context:
     decode_windows_invalid_chars: true
@@ -42,8 +40,6 @@ children:
         - /foo/Child/init.client.lua
         - /foo/Child/init.client.luau
         - /foo/Child/init.csv
-        - /foo/Child/init.meta.json
-        - /foo/Child/init.meta.jsonc
         - /foo/Child/init.meta.json5
       context:
         decode_windows_invalid_chars: true

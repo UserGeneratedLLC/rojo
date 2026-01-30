@@ -6,9 +6,9 @@ snapshot_id: "00000000000000000000000000000000"
 metadata:
   ignore_unknown_instances: true
   instigating_source:
-    Path: /foo.project.json
+    Path: /foo.project.json5
   relevant_paths:
-    - /foo.project.json
+    - /foo.project.json5
   context:
     decode_windows_invalid_chars: true
   specified_id: ~
@@ -23,7 +23,7 @@ children:
       ignore_unknown_instances: true
       instigating_source:
         ProjectNode:
-          path: /foo.project.json
+          path: /foo.project.json5
           name: Child
           node:
             $className: Model

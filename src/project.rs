@@ -16,11 +16,7 @@ use crate::{
 };
 
 /// Represents 'default' project names that act as `init` files
-pub static DEFAULT_PROJECT_NAMES: [&str; 3] = [
-    "default.project.json",
-    "default.project.jsonc",
-    "default.project.json5",
-];
+pub static DEFAULT_PROJECT_NAMES: [&str; 1] = ["default.project.json5"];
 
 /// Error type returned by any function that handles projects.
 #[derive(Debug, Error)]
@@ -60,7 +56,7 @@ enum Error {
 
 /// Contains all of the configuration for a Rojo-managed project.
 ///
-/// Project files are stored in `.project.json` files.
+/// Project files are stored in `.project.json5` files.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct Project {
@@ -144,18 +140,14 @@ impl Project {
     pub fn is_project_file(path: &Path) -> bool {
         path.file_name()
             .and_then(|name| name.to_str())
-            .map(|name| {
-                name.ends_with(".project.json")
-                    || name.ends_with(".project.jsonc")
-                    || name.ends_with(".project.json5")
-            })
+            .map(|name| name.ends_with(".project.json5"))
             .unwrap_or(false)
     }
 
     /// Attempt to locate a project represented by the given path.
     ///
-    /// This will find a project if the path refers to a `.project.json` file,
-    /// or is a folder that contains a `default.project.json` file.
+    /// This will find a project if the path refers to a `.project.json5` file,
+    /// or is a folder that contains a `default.project.json5` file.
     fn locate(path: &Path) -> Option<PathBuf> {
         let meta = fs::metadata(path).ok()?;
 
@@ -184,7 +176,7 @@ impl Project {
 
     /// Sets the name of a project. The order it handles is as follows:
     ///
-    /// - If the project is a `default.project.json`, uses the folder's name
+    /// - If the project is a `default.project.json5`, uses the folder's name
     /// - If a fallback is specified, uses that blindly
     /// - Otherwise, loops through sync rules (including the default ones!) and
     ///   uses the name of the first one that matches and is a project file
@@ -222,7 +214,7 @@ impl Project {
             // If you're adding this codepath, make sure a test for it exists
             // and that it handles sync rules appropriately.
             todo!(
-                "set_file_name doesn't support loading project files that aren't default.project.json without a fallback provided"
+                "set_file_name doesn't support loading project files that aren't default.project.json5 without a fallback provided"
             );
         }
 
@@ -250,8 +242,8 @@ impl Project {
     }
 
     /// Loads a Project from a path. This will find the project if it refers to
-    /// a `.project.json` file or if it refers to a directory that contains a
-    /// file named `default.project.json`.
+    /// a `.project.json5` file or if it refers to a directory that contains a
+    /// file named `default.project.json5`.
     pub fn load_fuzzy(
         vfs: &Vfs,
         fuzzy_project_location: &Path,
@@ -421,8 +413,8 @@ pub struct ProjectNode {
     pub ignore_unknown_instances: Option<bool>,
 
     /// Defines that this instance should come from the given file path. This
-    /// path can point to any file type supported by Rojo, including Lua files
-    /// (`.lua`), Roblox models (`.rbxm`, `.rbxmx`), and localization table
+    /// path can point to any file type supported by Rojo, including Luau files
+    /// (`.luau`), Roblox models (`.rbxm`, `.rbxmx`), and localization table
     /// spreadsheets (`.csv`).
     #[serde(rename = "$path", skip_serializing_if = "Option::is_none")]
     pub path: Option<PathNode>,
@@ -569,16 +561,16 @@ mod test {
             "servePort": 34567,
             // Test glob parsing with comments
             "globIgnorePaths": [
-                "**/*.spec.lua", // Ignore test files
-                "**/*.test.lua",
+                "**/*.spec.luau", // Ignore test files
+                "**/*.test.luau",
             ],
             "syncRules": [
                 {
-                    "pattern": "*.data.json",
+                    "pattern": "*.data.json5",
                     "use": "json", // Trailing comma in object
                 },
                 {
-                    "pattern": "*.module.lua",
+                    "pattern": "*.module.luau",
                     "use": "moduleScript",
                 }, // Trailing comma in array
             ], // Another trailing comma
@@ -586,7 +578,7 @@ mod test {
 
         let project = Project::load_from_slice(
             project_json.as_bytes(),
-            PathBuf::from("/test/default.project.jsonc"),
+            PathBuf::from("/test/default.project.json5"),
             None,
         )
         .expect("Failed to parse project with JSONC features");
@@ -597,12 +589,12 @@ mod test {
 
         // Verify glob_ignore_paths were parsed correctly
         assert_eq!(project.glob_ignore_paths.len(), 2);
-        assert!(project.glob_ignore_paths[0].is_match("test/foo.spec.lua"));
-        assert!(project.glob_ignore_paths[1].is_match("test/bar.test.lua"));
+        assert!(project.glob_ignore_paths[0].is_match("test/foo.spec.luau"));
+        assert!(project.glob_ignore_paths[1].is_match("test/bar.test.luau"));
 
         // Verify sync_rules were parsed correctly
         assert_eq!(project.sync_rules.len(), 2);
-        assert!(project.sync_rules[0].include.is_match("data.data.json"));
-        assert!(project.sync_rules[1].include.is_match("init.module.lua"));
+        assert!(project.sync_rules[0].include.is_match("data.data.json5"));
+        assert!(project.sync_rules[1].include.is_match("init.module.luau"));
     }
 }

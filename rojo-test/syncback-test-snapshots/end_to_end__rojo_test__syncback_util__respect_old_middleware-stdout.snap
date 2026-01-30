@@ -2,7 +2,7 @@
 source: tests/rojo_test/syncback_util.rs
 expression: "String::from_utf8_lossy(&output.stdout)"
 ---
-Writing default.project.json
-Writing src/model_json.model.json
+Writing default.project.json5
+Writing src/model_json.model.json5
 Writing src/rbxm.rbxm
 Writing src/rbxmx.rbxmx

@@ -4,12 +4,12 @@
     "$className": "DataModel",
     "ReplicatedStorage": {
       "modules": {
-        "$path": "client-only.project.json"
+        "$path": "client-only.project.json5"
       }
     },
     "ServerStorage": {
       "modules": {
-        "$path": "server-only.project.json"
+        "$path": "server-only.project.json5"
       }
     }
   }

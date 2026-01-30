@@ -16,8 +16,6 @@ metadata:
     - /foo/init.client.lua
     - /foo/init.client.luau
     - /foo/init.csv
-    - /foo/init.meta.json
-    - /foo/init.meta.jsonc
     - /foo/init.meta.json5
   context:
     decode_windows_invalid_chars: true

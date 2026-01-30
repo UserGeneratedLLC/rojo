@@ -1,23 +1,18 @@
 ---
-source: src/snapshot_middleware/txt.rs
-expression: instance_snapshot
+source: src/snapshot_middleware/meta_file.rs
+expression: snapshot
 ---
 snapshot_id: "00000000000000000000000000000000"
 metadata:
   ignore_unknown_instances: false
-  instigating_source:
-    Path: /foo.txt
   relevant_paths:
-    - /foo.txt
-    - /foo.meta.json5
+    - /foo/init.meta.json5
   context:
     decode_windows_invalid_chars: true
   specified_id: manually specified
   middleware: ~
   schema: ~
-name: foo
-class_name: StringValue
-properties:
-  Value:
-    String: Hello there!
+name: DEFAULT
+class_name: DEFAULT
+properties: {}
 children: []

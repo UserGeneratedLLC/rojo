@@ -238,7 +238,7 @@ mod test {
     #[test]
     fn module_from_vfs() {
         let mut imfs = InMemoryFs::new();
-        imfs.load_snapshot("/foo.lua", VfsSnapshot::file("Hello there!"))
+        imfs.load_snapshot("/foo.luau", VfsSnapshot::file("Hello there!"))
             .unwrap();
 
         let vfs = Vfs::new(imfs);
@@ -246,7 +246,7 @@ mod test {
         let instance_snapshot = snapshot_lua(
             &InstanceContext::new(),
             &vfs,
-            Path::new("/foo.lua"),
+            Path::new("/foo.luau"),
             "foo",
             ScriptType::Module,
         )
@@ -261,7 +261,7 @@ mod test {
     #[test]
     fn plugin_from_vfs() {
         let mut imfs = InMemoryFs::new();
-        imfs.load_snapshot("/foo.plugin.lua", VfsSnapshot::file("Hello there!"))
+        imfs.load_snapshot("/foo.plugin.luau", VfsSnapshot::file("Hello there!"))
             .unwrap();
 
         let vfs = Vfs::new(imfs);
@@ -269,7 +269,7 @@ mod test {
         let instance_snapshot = snapshot_lua(
             &InstanceContext::new(),
             &vfs,
-            Path::new("/foo.plugin.lua"),
+            Path::new("/foo.plugin.luau"),
             "foo",
             ScriptType::Plugin,
         )
@@ -284,7 +284,7 @@ mod test {
     #[test]
     fn server_from_vfs() {
         let mut imfs = InMemoryFs::new();
-        imfs.load_snapshot("/foo.server.lua", VfsSnapshot::file("Hello there!"))
+        imfs.load_snapshot("/foo.server.luau", VfsSnapshot::file("Hello there!"))
             .unwrap();
 
         let vfs = Vfs::new(imfs);
@@ -292,7 +292,7 @@ mod test {
         let instance_snapshot = snapshot_lua(
             &InstanceContext::new(),
             &vfs,
-            Path::new("/foo.server.lua"),
+            Path::new("/foo.server.luau"),
             "foo",
             ScriptType::Server,
         )
@@ -307,7 +307,7 @@ mod test {
     #[test]
     fn client_from_vfs() {
         let mut imfs = InMemoryFs::new();
-        imfs.load_snapshot("/foo.client.lua", VfsSnapshot::file("Hello there!"))
+        imfs.load_snapshot("/foo.client.luau", VfsSnapshot::file("Hello there!"))
             .unwrap();
 
         let vfs = Vfs::new(imfs);
@@ -315,7 +315,7 @@ mod test {
         let instance_snapshot = snapshot_lua(
             &InstanceContext::new(),
             &vfs,
-            Path::new("/foo.client.lua"),
+            Path::new("/foo.client.luau"),
             "foo",
             ScriptType::Client,
         )
@@ -330,7 +330,7 @@ mod test {
     #[test]
     fn local_from_vfs() {
         let mut imfs = InMemoryFs::new();
-        imfs.load_snapshot("/foo.local.lua", VfsSnapshot::file("Hello there!"))
+        imfs.load_snapshot("/foo.local.luau", VfsSnapshot::file("Hello there!"))
             .unwrap();
 
         let vfs = Vfs::new(imfs);
@@ -338,7 +338,7 @@ mod test {
         let instance_snapshot = snapshot_lua(
             &InstanceContext::new(),
             &vfs,
-            Path::new("/foo.local.lua"),
+            Path::new("/foo.local.luau"),
             "foo",
             ScriptType::Local,
         )
@@ -353,7 +353,7 @@ mod test {
     #[test]
     fn legacy_from_vfs() {
         let mut imfs = InMemoryFs::new();
-        imfs.load_snapshot("/foo.legacy.lua", VfsSnapshot::file("Hello there!"))
+        imfs.load_snapshot("/foo.legacy.luau", VfsSnapshot::file("Hello there!"))
             .unwrap();
 
         let vfs = Vfs::new(imfs);
@@ -361,7 +361,7 @@ mod test {
         let instance_snapshot = snapshot_lua(
             &InstanceContext::new(),
             &vfs,
-            Path::new("/foo.legacy.lua"),
+            Path::new("/foo.legacy.luau"),
             "foo",
             ScriptType::Legacy,
         )
@@ -378,7 +378,7 @@ mod test {
         let mut imfs = InMemoryFs::new();
         imfs.load_snapshot(
             "/root",
-            VfsSnapshot::dir([("init.lua", VfsSnapshot::file("Hello!"))]),
+            VfsSnapshot::dir([("init.luau", VfsSnapshot::file("Hello!"))]),
         )
         .unwrap();
 
@@ -387,7 +387,7 @@ mod test {
         let instance_snapshot = snapshot_lua_init(
             &InstanceContext::new(),
             &vfs,
-            Path::new("/root/init.lua"),
+            Path::new("/root/init.luau"),
             "root",
             ScriptType::Module,
         )
@@ -405,9 +405,9 @@ mod test {
         imfs.load_snapshot(
             "/root",
             VfsSnapshot::dir([
-                ("init.lua", VfsSnapshot::file("Hello!")),
+                ("init.luau", VfsSnapshot::file("Hello!")),
                 (
-                    "init.meta.json",
+                    "init.meta.json5",
                     VfsSnapshot::file(r#"{"id": "manually specified"}"#),
                 ),
             ]),
@@ -419,7 +419,7 @@ mod test {
         let instance_snapshot = snapshot_lua_init(
             &InstanceContext::new(),
             &vfs,
-            Path::new("/root/init.lua"),
+            Path::new("/root/init.luau"),
             "root",
             ScriptType::Module,
         )
@@ -434,10 +434,10 @@ mod test {
     #[test]
     fn module_with_meta() {
         let mut imfs = InMemoryFs::new();
-        imfs.load_snapshot("/foo.lua", VfsSnapshot::file("Hello there!"))
+        imfs.load_snapshot("/foo.luau", VfsSnapshot::file("Hello there!"))
             .unwrap();
         imfs.load_snapshot(
-            "/foo.meta.json",
+            "/foo.meta.json5",
             VfsSnapshot::file(
                 r#"
                     {
@@ -453,7 +453,7 @@ mod test {
         let instance_snapshot = snapshot_lua(
             &InstanceContext::new(),
             &vfs,
-            Path::new("/foo.lua"),
+            Path::new("/foo.luau"),
             "foo",
             ScriptType::Module,
         )
@@ -468,10 +468,10 @@ mod test {
     #[test]
     fn server_with_meta() {
         let mut imfs = InMemoryFs::new();
-        imfs.load_snapshot("/foo.server.lua", VfsSnapshot::file("Hello there!"))
+        imfs.load_snapshot("/foo.server.luau", VfsSnapshot::file("Hello there!"))
             .unwrap();
         imfs.load_snapshot(
-            "/foo.meta.json",
+            "/foo.meta.json5",
             VfsSnapshot::file(
                 r#"
                     {
@@ -487,7 +487,7 @@ mod test {
         let instance_snapshot = snapshot_lua(
             &InstanceContext::new(),
             &vfs,
-            Path::new("/foo.server.lua"),
+            Path::new("/foo.server.luau"),
             "foo",
             ScriptType::Server,
         )
@@ -502,10 +502,10 @@ mod test {
     #[test]
     fn server_disabled() {
         let mut imfs = InMemoryFs::new();
-        imfs.load_snapshot("/bar.server.lua", VfsSnapshot::file("Hello there!"))
+        imfs.load_snapshot("/bar.server.luau", VfsSnapshot::file("Hello there!"))
             .unwrap();
         imfs.load_snapshot(
-            "/bar.meta.json",
+            "/bar.meta.json5",
             VfsSnapshot::file(
                 r#"
                     {
@@ -523,7 +523,7 @@ mod test {
         let instance_snapshot = snapshot_lua(
             &InstanceContext::new(),
             &vfs,
-            Path::new("/bar.server.lua"),
+            Path::new("/bar.server.luau"),
             "bar",
             ScriptType::Server,
         )
