@@ -20,7 +20,7 @@ use rbx_dom_weak::{
 
 use crate::{
     serve_session::ServeSession,
-    snapshot::{InstigatingSource, InstanceWithMeta, PatchSet, PatchUpdate},
+    snapshot::{InstanceWithMeta, InstigatingSource, PatchSet, PatchUpdate},
     web::{
         interface::{
             ErrorResponse, Instance, InstanceMetadata, MessagesPacket, OpenResponse, ReadResponse,
@@ -233,7 +233,11 @@ impl ApiService {
 
             for removed_id in &request.removed {
                 if let Err(err) = self.syncback_removed_instance(*removed_id, &tree) {
-                    log::warn!("Failed to syncback removed instance {:?}: {}", removed_id, err);
+                    log::warn!(
+                        "Failed to syncback removed instance {:?}: {}",
+                        removed_id,
+                        err
+                    );
                 }
             }
         }
@@ -490,19 +494,12 @@ impl ApiService {
         // Delete the file or directory
         if instance_path.is_dir() {
             fs::remove_dir_all(instance_path).with_context(|| {
-                format!(
-                    "Failed to remove directory: {}",
-                    instance_path.display()
-                )
+                format!("Failed to remove directory: {}", instance_path.display())
             })?;
-            log::info!(
-                "Syncback: Removed directory at {}",
-                instance_path.display()
-            );
+            log::info!("Syncback: Removed directory at {}", instance_path.display());
         } else if instance_path.is_file() {
-            fs::remove_file(instance_path).with_context(|| {
-                format!("Failed to remove file: {}", instance_path.display())
-            })?;
+            fs::remove_file(instance_path)
+                .with_context(|| format!("Failed to remove file: {}", instance_path.display()))?;
             log::info!("Syncback: Removed file at {}", instance_path.display());
 
             // Also remove adjacent meta file if it exists
@@ -885,7 +882,8 @@ impl ApiService {
     ) -> anyhow::Result<()> {
         use anyhow::Context;
 
-        let (properties, attributes) = self.filter_properties_for_meta(&added.class_name, &added.properties, None);
+        let (properties, attributes) =
+            self.filter_properties_for_meta(&added.class_name, &added.properties, None);
 
         if properties.is_empty() && attributes.is_empty() {
             return Ok(());
@@ -914,7 +912,8 @@ impl ApiService {
     ) -> anyhow::Result<()> {
         use anyhow::Context;
 
-        let (properties, attributes) = self.filter_properties_for_meta(&added.class_name, &added.properties, None);
+        let (properties, attributes) =
+            self.filter_properties_for_meta(&added.class_name, &added.properties, None);
 
         // For non-Folder classes, we need to include className
         let meta = self.build_meta_object(Some(&added.class_name), properties, attributes);
@@ -1145,7 +1144,8 @@ impl ApiService {
         use serde_json::json;
 
         // Filter properties matching dedicated syncback behavior
-        let (properties, attributes) = self.filter_properties_for_meta(&added.class_name, &added.properties, None);
+        let (properties, attributes) =
+            self.filter_properties_for_meta(&added.class_name, &added.properties, None);
 
         // Build the JSON model structure
         // Format: https://rojo.space/docs/v7/sync-details/#json-models
@@ -3766,7 +3766,8 @@ mod tests {
 
             // Create the file
             let mut file = File::create(&file_path).expect("Failed to create test file");
-            file.write_all(b"return {}").expect("Failed to write to file");
+            file.write_all(b"return {}")
+                .expect("Failed to write to file");
 
             // Verify file exists
             assert!(file_path.exists(), "Test file should exist before removal");
