@@ -216,9 +216,10 @@ impl TestServeSession {
                 }
                 Err(hyper_tungstenite::tungstenite::Error::Io(e))
                     if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut =>
+                        || e.kind() == std::io::ErrorKind::TimedOut
+                        || e.kind() == std::io::ErrorKind::Interrupted =>
                 {
-                    // No data available yet or read timed out, try again
+                    // No data available yet, read timed out, or interrupted by signal - try again
                     continue;
                 }
                 Err(e) => {
