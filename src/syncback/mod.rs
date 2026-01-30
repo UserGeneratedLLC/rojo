@@ -349,7 +349,10 @@ pub fn get_best_middleware(snapshot: &SyncbackSnapshot) -> Middleware {
     if let Some(override_middleware) = snapshot.middleware {
         return override_middleware;
     } else if let Some(old_middleware) = old_middleware {
-        return old_middleware;
+        // Use old middleware, but upgrade to *Dir variant if new instance has children
+        // This handles cases where the old file was a single file (e.g., Csv)
+        // but the new instance has children (needs CsvDir)
+        middleware = old_middleware;
     } else {
         // Specific classes that need special middleware, everything else defaults to JsonModel
         middleware = match inst.class.as_str() {
@@ -445,6 +448,12 @@ pub struct SyncbackRules {
     /// Defaults to `true`.
     #[serde(skip_serializing_if = "Option::is_none")]
     ignore_hidden_services: Option<bool>,
+    /// Whether to emit warnings when duplicate child names are encountered during
+    /// syncback. Duplicate names (case-insensitive) cannot be reliably synced to
+    /// the file system, so those children are skipped.
+    /// Defaults to `false` (warnings are suppressed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    warn_duplicate_names: Option<bool>,
 }
 
 impl SyncbackRules {
@@ -497,6 +506,13 @@ impl SyncbackRules {
     #[inline]
     pub fn ignore_hidden_services(&self) -> bool {
         self.ignore_hidden_services.unwrap_or(true)
+    }
+
+    /// Returns whether to emit warnings when duplicate child names are
+    /// encountered during syncback. Defaults to `false` (suppressed).
+    #[inline]
+    pub fn warn_duplicate_names(&self) -> bool {
+        self.warn_duplicate_names.unwrap_or(false)
     }
 }
 
@@ -572,7 +588,22 @@ fn descendants(dom: &WeakDom, root_ref: Ref) -> Vec<Ref> {
 /// Removes root children (services) that are not in the `VISIBLE_SERVICES` list.
 /// This is used when `ignoreHiddenServices` is enabled to filter out internal
 /// services like Chat, HttpService, etc.
+///
+/// This function only applies when the root is a DataModel (i.e., for place files).
+/// For model files, the root children are regular instances, not services, so
+/// filtering would incorrectly remove user content.
 fn strip_hidden_services(dom: &mut WeakDom) {
+    // Only apply service filtering when the root is a DataModel (place file)
+    // For model files (rbxm), the root is typically not a DataModel and
+    // children are regular instances, not services
+    if dom.root().class != "DataModel" {
+        log::trace!(
+            "Skipping hidden services filter: root class is '{}', not 'DataModel'",
+            dom.root().class
+        );
+        return;
+    }
+
     let root_children = dom.root().children().to_vec();
 
     for child_ref in root_children {

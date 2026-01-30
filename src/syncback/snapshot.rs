@@ -302,6 +302,18 @@ impl<'sync> SyncbackSnapshot<'sync> {
             .map(|rules| rules.encode_windows_invalid_chars())
             .unwrap_or(false)
     }
+
+    /// Returns whether to emit warnings when duplicate child names are
+    /// encountered during syncback. Defaults to `false` (suppressed).
+    #[inline]
+    pub fn warn_duplicate_names(&self) -> bool {
+        self.data
+            .project
+            .syncback_rules
+            .as_ref()
+            .map(|rules| rules.warn_duplicate_names())
+            .unwrap_or(false)
+    }
 }
 
 pub fn filter_out_property(inst: &Instance, prop_name: &str) -> bool {

@@ -153,7 +153,7 @@ pub fn syncback_dir_no_meta<'sync>(
         .map(|(name, _)| name)
         .collect();
 
-    if !duplicate_names.is_empty() {
+    if !duplicate_names.is_empty() && snapshot.warn_duplicate_names() {
         let inst_path = crate::syncback::inst_path(snapshot.new_tree(), snapshot.new);
         let duplicate_list: Vec<&str> = duplicate_names.iter().map(|s| s.as_str()).collect();
         log::warn!(
