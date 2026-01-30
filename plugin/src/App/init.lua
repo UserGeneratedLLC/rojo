@@ -571,22 +571,25 @@ function App:useRunningConnectionInfo()
 end
 
 function App:startSession()
-	local claimedLock, priorOwner = self:claimSyncLock()
-	if not claimedLock then
-		local msg = string.format("Could not sync because user '%s' is already syncing", tostring(priorOwner))
+	-- Skip session lock in one-shot mode since it's a quick sync-and-disconnect
+	if not Settings:get("oneShotSync") then
+		local claimedLock, priorOwner = self:claimSyncLock()
+		if not claimedLock then
+			local msg = string.format("Could not sync because user '%s' is already syncing", tostring(priorOwner))
 
-		Log.warn(msg)
-		self:addNotification({
-			text = msg,
-			timeout = 10,
-		})
-		self:setState({
-			appStatus = AppStatus.Error,
-			errorMessage = msg,
-			toolbarIcon = Assets.Images.PluginButtonWarning,
-		})
+			Log.warn(msg)
+			self:addNotification({
+				text = msg,
+				timeout = 10,
+			})
+			self:setState({
+				appStatus = AppStatus.Error,
+				errorMessage = msg,
+				toolbarIcon = Assets.Images.PluginButtonWarning,
+			})
 
-		return
+			return
+		end
 	end
 
 	local host, port = self:getHostAndPort()
@@ -671,7 +674,10 @@ function App:startSession()
 			})
 		elseif status == ServeSession.Status.Disconnected then
 			self.serveSession = nil
-			self:releaseSyncLock()
+			-- Only release lock if we claimed it (not in one-shot mode)
+			if not Settings:get("oneShotSync") then
+				self:releaseSyncLock()
+			end
 			self:clearRunningConnectionInfo()
 			self:setState({
 				patchData = {
@@ -709,6 +715,10 @@ function App:startSession()
 	end)
 
 	serveSession:setConfirmCallback(function(instanceMap, patch, serverInfo)
+		-- Filter out the DataModel name change from the patch
+		-- The project name (DataModel.Name) is managed by Studio independently
+		PatchSet.removeDataModelName(patch, instanceMap)
+
 		local isOneShotMode = Settings:get("oneShotSync")
 
 		-- ONE-SHOT MODE: Never auto-accept, always require explicit confirmation
@@ -756,24 +766,6 @@ function App:startSession()
 					end
 				elseif confirmationBehavior == "Never" then
 					Log.trace("Accepting patch without confirmation because behavior is set to Never")
-					return "Accept"
-				end
-			end
-
-			-- The datamodel name gets overwritten by Studio, making confirmation of it intrusive
-			-- and unnecessary. This special case allows it to be accepted without confirmation.
-			if
-				PatchSet.hasAdditions(patch) == false
-				and PatchSet.hasRemoves(patch) == false
-				and PatchSet.containsOnlyInstance(patch, instanceMap, game)
-			then
-				local datamodelUpdates = PatchSet.getUpdateForInstance(patch, instanceMap, game)
-				if
-					datamodelUpdates ~= nil
-					and next(datamodelUpdates.changedProperties) == nil
-					and datamodelUpdates.changedClassName == nil
-				then
-					Log.trace("Accepting patch without confirmation because it only contains a datamodel name change")
 					return "Accept"
 				end
 			end

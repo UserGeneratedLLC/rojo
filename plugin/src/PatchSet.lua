@@ -395,6 +395,34 @@ function PatchSet.updatedIdList(patchSet): { string }
 end
 
 --[[
+	Remove the Name property change from the DataModel update in the patch.
+	This prevents the project name from being synced, which is usually
+	unwanted as Studio manages the DataModel name independently.
+	Mutates the patch in place for efficiency.
+]]
+function PatchSet.removeDataModelName(patchSet, instanceMap)
+	local dataModelId = instanceMap.fromInstances[game]
+	if dataModelId == nil then
+		return
+	end
+
+	for i, update in ipairs(patchSet.updated) do
+		if update.id == dataModelId and update.changedName ~= nil then
+			update.changedName = nil
+			-- Remove update entirely if no other changes remain
+			if
+				update.changedClassName == nil
+				and update.changedMetadata == nil
+				and next(update.changedProperties) == nil
+			then
+				table.remove(patchSet.updated, i)
+			end
+			return
+		end
+	end
+end
+
+--[[
 	Create a list of human-readable statements summarizing the contents of this
 	patch, intended to be displayed to users.
 ]]

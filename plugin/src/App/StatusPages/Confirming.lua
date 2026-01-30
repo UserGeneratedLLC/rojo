@@ -153,15 +153,15 @@ function ConfirmingPage:render()
 					onClick = self.props.onAbort,
 				}),
 
-			PullAll = e(TextButton, {
-				text = "Pull All",
-				style = "Danger",
-				transparency = self.props.transparency,
-				layoutOrder = 2,
-				onClick = function()
-					self.setAllSelections("pull")
-				end,
-			}),
+				PullAll = e(TextButton, {
+					text = "Pull All",
+					style = "Danger",
+					transparency = self.props.transparency,
+					layoutOrder = 2,
+					onClick = function()
+						self.setAllSelections("pull")
+					end,
+				}),
 
 				SkipAll = e(TextButton, {
 					text = "Skip All",
