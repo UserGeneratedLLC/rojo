@@ -44,6 +44,26 @@ pub use snapshot::{inst_path, SyncbackData, SyncbackSnapshot};
 /// new files.
 const DEBUG_MODEL_FORMAT_VAR: &str = "ROJO_SYNCBACK_DEBUG";
 
+/// Services that are considered "visible" and will be included when
+/// `ignoreHiddenServices` is enabled. All other services will be ignored.
+const VISIBLE_SERVICES: &[&str] = &[
+    "Lighting",
+    "MaterialService",
+    "NetworkClient",
+    "ReplicatedFirst",
+    "ReplicatedStorage",
+    "ServerScriptService",
+    "ServerStorage",
+    "SoundService",
+    "StarterGui",
+    "StarterPack",
+    "StarterPlayer",
+    "Teams",
+    "TextChatService",
+    "VoiceChatService",
+    "Workspace",
+];
+
 /// A glob that can be used to tell if a path contains a `.git` folder.
 static GIT_IGNORE_GLOB: OnceLock<Glob> = OnceLock::new();
 
@@ -89,6 +109,17 @@ pub fn syncback_loop(
         // Services nobody cares about.
         log::debug!("Pruning new tree");
         strip_unknown_root_children(&mut new_tree, old_tree);
+    }
+
+    // If ignoreHiddenServices is enabled, filter to only visible services
+    if project
+        .syncback_rules
+        .as_ref()
+        .map(|rules| rules.ignore_hidden_services())
+        .unwrap_or(false)
+    {
+        log::debug!("Filtering hidden services");
+        strip_hidden_services(&mut new_tree);
     }
 
     log::debug!("Collecting referents for new DOM...");
@@ -408,6 +439,12 @@ pub struct SyncbackRules {
     /// Defaults to `false`.
     #[serde(skip_serializing_if = "Option::is_none")]
     encode_windows_invalid_chars: Option<bool>,
+    /// When enabled, only "visible" services will be synced back. This includes
+    /// commonly used services like Workspace, ReplicatedStorage, ServerScriptService,
+    /// etc., while ignoring internal/hidden services like Chat, HttpService, etc.
+    /// Defaults to `false`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    ignore_hidden_services: Option<bool>,
 }
 
 impl SyncbackRules {
@@ -452,6 +489,14 @@ impl SyncbackRules {
     #[inline]
     pub fn encode_windows_invalid_chars(&self) -> bool {
         self.encode_windows_invalid_chars.unwrap_or(true)
+    }
+
+    /// Returns whether hidden/internal services should be ignored during
+    /// syncback. When `true`, only visible services like Workspace,
+    /// ReplicatedStorage, etc. will be synced. Defaults to `false`.
+    #[inline]
+    pub fn ignore_hidden_services(&self) -> bool {
+        self.ignore_hidden_services.unwrap_or(false)
     }
 }
 
@@ -522,6 +567,29 @@ fn descendants(dom: &WeakDom, root_ref: Ref) -> Vec<Ref> {
     }
 
     ordered
+}
+
+/// Removes root children (services) that are not in the `VISIBLE_SERVICES` list.
+/// This is used when `ignoreHiddenServices` is enabled to filter out internal
+/// services like Chat, HttpService, etc.
+fn strip_hidden_services(dom: &mut WeakDom) {
+    let root_children = dom.root().children().to_vec();
+
+    for child_ref in root_children {
+        let child = dom
+            .get_by_ref(child_ref)
+            .expect("all children of the root should exist in the DOM");
+
+        // Check if this service is in the visible services list
+        if !VISIBLE_SERVICES.contains(&child.name.as_str()) {
+            log::trace!(
+                "Pruning hidden service {} of class {}",
+                child.name,
+                child.class
+            );
+            dom.destroy(child_ref);
+        }
+    }
 }
 
 /// Removes the children of `new`'s root that are not also children of `old`'s

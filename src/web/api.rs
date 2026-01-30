@@ -221,13 +221,24 @@ impl ApiService {
         }
 
         // Process added instances (syncback: create files from Studio instances)
-        for added in request.added.values() {
-            if let Err(err) = self.syncback_added_instance(added) {
-                log::warn!(
-                    "Failed to syncback added instance '{}': {}",
-                    added.name,
-                    err
-                );
+        // We hold the tree lock during the entire processing to ensure the cache
+        // remains consistent with the tree state being checked.
+        if !request.added.is_empty() {
+            let tree = self.serve_session.tree();
+            // Pre-compute duplicate sibling info in O(N) for efficient path uniqueness checks
+            // This makes all subsequent path checks O(d) instead of O(d × s)
+            let duplicate_siblings_cache = Self::compute_tree_refs_with_duplicate_siblings(&tree);
+
+            for added in request.added.values() {
+                if let Err(err) =
+                    self.syncback_added_instance(added, &tree, &duplicate_siblings_cache)
+                {
+                    log::warn!(
+                        "Failed to syncback added instance '{}': {}",
+                        added.name,
+                        err
+                    );
+                }
             }
         }
 
@@ -257,13 +268,73 @@ impl ApiService {
     /// Syncback an added instance by creating a file in the filesystem.
     /// The file watcher will pick up the change and update Rojo's tree.
     ///
-    /// Checks if a path in the Rojo tree is unique by verifying no duplicates exist
-    /// at ANY level of the path (similar to ref_properties::is_path_unique).
+    /// Pre-computes which instances have duplicate-named siblings in a RojoTree.
+    /// Returns a HashSet of Refs that have at least one sibling with the same name.
+    ///
+    /// This is O(N) where N is the number of instances, and allows subsequent
+    /// path uniqueness checks to be O(d) instead of O(d × s) where d=depth, s=siblings.
+    fn compute_tree_refs_with_duplicate_siblings(
+        tree: &crate::snapshot::RojoTree,
+    ) -> HashSet<Ref> {
+        use std::collections::VecDeque;
+
+        let mut has_duplicate_siblings = HashSet::new();
+        let mut queue = VecDeque::new();
+        queue.push_back(tree.root().id());
+
+        while let Some(inst_ref) = queue.pop_front() {
+            let inst = match tree.get_instance(inst_ref) {
+                Some(i) => i,
+                None => continue,
+            };
+
+            // Count children by name and collect their refs
+            let mut name_to_refs: HashMap<&str, Vec<Ref>> = HashMap::new();
+            for child_ref in inst.children() {
+                if let Some(child) = tree.get_instance(*child_ref) {
+                    name_to_refs.entry(child.name()).or_default().push(*child_ref);
+                }
+                queue.push_back(*child_ref);
+            }
+
+            // Mark refs that share a name with siblings
+            for (_name, refs) in name_to_refs {
+                if refs.len() > 1 {
+                    for r in refs {
+                        has_duplicate_siblings.insert(r);
+                    }
+                }
+            }
+        }
+
+        has_duplicate_siblings
+    }
+
+    /// Checks if a path in the Rojo tree is unique using pre-computed duplicate sibling info.
     /// Returns true if the path is unique, false if duplicates exist at any level.
-    fn is_tree_path_unique(&self, tree: &crate::snapshot::RojoTree, target_ref: Ref) -> bool {
+    /// This is O(d) where d is the depth of the instance.
+    fn is_tree_path_unique_with_cache(
+        tree: &crate::snapshot::RojoTree,
+        target_ref: Ref,
+        has_duplicate_siblings: &HashSet<Ref>,
+    ) -> bool {
         let mut current_ref = target_ref;
 
         loop {
+            // O(1) lookup instead of O(siblings) counting
+            if has_duplicate_siblings.contains(&current_ref) {
+                if let Some(current) = tree.get_instance(current_ref) {
+                    if let Some(parent) = tree.get_instance(current.parent()) {
+                        log::warn!(
+                            "Syncback: Path to '{}' is not unique - duplicate-named siblings at '{}'",
+                            current.name(),
+                            parent.name()
+                        );
+                    }
+                }
+                return false;
+            }
+
             let current = match tree.get_instance(current_ref) {
                 Some(inst) => inst,
                 None => return false,
@@ -275,31 +346,6 @@ impl ApiService {
                 return true;
             }
 
-            let parent = match tree.get_instance(parent_ref) {
-                Some(inst) => inst,
-                None => return true,
-            };
-
-            // Check if any sibling has the same name as current
-            let current_name = current.name();
-            let mut count = 0;
-            for child_ref in parent.children() {
-                if let Some(child) = tree.get_instance(*child_ref) {
-                    if child.name() == current_name {
-                        count += 1;
-                        if count > 1 {
-                            // Duplicate found at this level - path is not unique
-                            log::warn!(
-                                "Syncback: Path to '{}' is not unique - duplicate-named siblings at '{}'",
-                                current_name,
-                                parent.name()
-                            );
-                            return false;
-                        }
-                    }
-                }
-            }
-
             // Move up to parent and check the next level
             current_ref = parent_ref;
         }
@@ -307,9 +353,14 @@ impl ApiService {
 
     /// This follows the same middleware selection logic as the dedicated syncback
     /// system in `src/syncback/mod.rs` to ensure consistent behavior.
+    ///
+    /// Takes the tree reference and duplicate siblings cache as parameters to ensure
+    /// consistency - the cache was computed from this exact tree state.
     fn syncback_added_instance(
         &self,
         added: &crate::web::interface::AddedInstance,
+        tree: &crate::snapshot::RojoTree,
+        duplicate_siblings_cache: &HashSet<Ref>,
     ) -> anyhow::Result<()> {
         use crate::syncback::validate_file_name;
         use anyhow::Context;
@@ -323,13 +374,13 @@ impl ApiService {
         })?;
 
         // Find the parent instance to get its filesystem path
-        let tree = self.serve_session.tree();
         let parent_instance = tree
             .get_instance(added.parent)
             .context("Parent instance not found in Rojo tree")?;
 
         // Check if the parent path is unique (no duplicate-named siblings at any level)
-        if !self.is_tree_path_unique(&tree, added.parent) {
+        // Uses pre-computed cache for O(d) instead of O(d × s) complexity
+        if !Self::is_tree_path_unique_with_cache(tree, added.parent, duplicate_siblings_cache) {
             anyhow::bail!(
                 "Cannot sync instance '{}' - parent path contains duplicate-named siblings",
                 added.name

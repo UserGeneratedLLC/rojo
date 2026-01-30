@@ -51,13 +51,60 @@ pub fn collect_all_paths(dom: &WeakDom) -> HashMap<Ref, String> {
     paths
 }
 
-/// Checks if a path is unique in the DOM by verifying no duplicates exist
-/// at ANY level of the path (target, parent, grandparent, etc.).
-fn is_path_unique(dom: &WeakDom, target_ref: Ref) -> bool {
+/// Pre-computes which instances have duplicate-named siblings.
+/// Returns a HashSet of Refs that have at least one sibling with the same name.
+///
+/// This is O(N) where N is the number of instances, and allows subsequent
+/// path uniqueness checks to be O(d) instead of O(d × s) where d=depth, s=siblings.
+fn compute_refs_with_duplicate_siblings(dom: &WeakDom) -> HashSet<Ref> {
+    let mut has_duplicate_siblings = HashSet::new();
+    let mut queue = VecDeque::new();
+    queue.push_back(dom.root_ref());
+
+    while let Some(inst_ref) = queue.pop_front() {
+        let inst = match dom.get_by_ref(inst_ref) {
+            Some(i) => i,
+            None => continue,
+        };
+
+        // Count children by name and collect their refs
+        let mut name_to_refs: HashMap<&str, Vec<Ref>> = HashMap::new();
+        for child_ref in inst.children() {
+            if let Some(child) = dom.get_by_ref(*child_ref) {
+                name_to_refs.entry(&child.name).or_default().push(*child_ref);
+            }
+            queue.push_back(*child_ref);
+        }
+
+        // Mark refs that share a name with siblings
+        for (_name, refs) in name_to_refs {
+            if refs.len() > 1 {
+                for r in refs {
+                    has_duplicate_siblings.insert(r);
+                }
+            }
+        }
+    }
+
+    has_duplicate_siblings
+}
+
+/// Checks if a path is unique using pre-computed duplicate sibling info.
+/// This is O(d) where d is the depth of the instance.
+fn is_path_unique_with_cache(
+    dom: &WeakDom,
+    target_ref: Ref,
+    has_duplicate_siblings: &HashSet<Ref>,
+) -> bool {
     let mut current_ref = target_ref;
 
-    // Walk up the tree checking each level for duplicate names among siblings
+    // Walk up the tree checking each level using the pre-computed cache
     loop {
+        // O(1) lookup instead of O(siblings) counting
+        if has_duplicate_siblings.contains(&current_ref) {
+            return false;
+        }
+
         let current = match dom.get_by_ref(current_ref) {
             Some(inst) => inst,
             None => return false,
@@ -67,26 +114,6 @@ fn is_path_unique(dom: &WeakDom, target_ref: Ref) -> bool {
         if parent_ref.is_none() {
             // Reached root - path is unique at all levels
             return true;
-        }
-
-        let parent = match dom.get_by_ref(parent_ref) {
-            Some(inst) => inst,
-            None => return true,
-        };
-
-        // Check if any sibling has the same name as current
-        let current_name = &current.name;
-        let mut count = 0;
-        for child_ref in parent.children() {
-            if let Some(child) = dom.get_by_ref(*child_ref) {
-                if &child.name == current_name {
-                    count += 1;
-                    if count > 1 {
-                        // Duplicate found at this level - path is not unique
-                        return false;
-                    }
-                }
-            }
         }
 
         // Move up to parent and check the next level
@@ -105,6 +132,13 @@ pub fn collect_referents(dom: &WeakDom, pre_prune_paths: &HashMap<Ref, String>) 
     let mut id_links: HashMap<Ref, Vec<IdRefLink>> = HashMap::new();
     let mut targets_needing_id: HashSet<Ref> = HashSet::new();
 
+    // Pre-compute duplicate sibling info in O(N) - this makes all subsequent
+    // path uniqueness checks O(d) instead of O(d × s) where d=depth, s=siblings
+    let has_duplicate_siblings = compute_refs_with_duplicate_siblings(dom);
+
+    // Cache path uniqueness results to avoid re-checking the same target
+    let mut path_unique_cache: HashMap<Ref, bool> = HashMap::new();
+
     let mut queue = VecDeque::new();
     queue.push_back(dom.root_ref());
 
@@ -122,8 +156,12 @@ pub fn collect_referents(dom: &WeakDom, pre_prune_paths: &HashMap<Ref, String>) 
 
             // Check if target exists in current DOM
             if let Some(_target) = dom.get_by_ref(*target_ref) {
-                // Target exists - check if path is unique
-                if is_path_unique(dom, *target_ref) {
+                // Target exists - check if path is unique (with caching)
+                let is_unique = *path_unique_cache
+                    .entry(*target_ref)
+                    .or_insert_with(|| is_path_unique_with_cache(dom, *target_ref, &has_duplicate_siblings));
+
+                if is_unique {
                     // Path is unique - use path-based system
                     let target_path = inst_path(dom, *target_ref);
                     path_links.entry(inst_ref).or_default().push(PathRefLink {
