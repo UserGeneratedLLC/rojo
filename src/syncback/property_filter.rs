@@ -77,7 +77,9 @@ pub fn filter_properties_preallocated<'inst>(
     }
 }
 
-fn should_property_serialize(class_name: &str, prop_name: &str) -> bool {
+/// Checks if a property should serialize based on the reflection database.
+/// Returns false for properties with DoesNotSerialize serialization, true otherwise.
+pub fn should_property_serialize(class_name: &str, prop_name: &str) -> bool {
     let database = rbx_reflection_database::get().unwrap();
     let mut current_class_name = class_name;
 

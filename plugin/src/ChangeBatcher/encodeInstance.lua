@@ -29,22 +29,35 @@ local SCRIPT_CLASS_NAMES = {
 	ModuleScript = true,
 }
 
--- Properties to skip when encoding (internal Roblox properties)
+-- Properties to always skip when encoding (internal Roblox properties that never serialize)
 local SKIP_PROPERTIES = {
 	Parent = true,
 	Name = true, -- We handle this separately
 	Archivable = true,
 }
 
--- Classes that become directories but may have properties (like Attributes)
-local DIRECTORY_CLASSES = {
-	Folder = true,
-	Configuration = true,
-	Tool = true,
-	ScreenGui = true,
-	SurfaceGui = true,
-	BillboardGui = true,
-	AdGui = true,
+-- Properties to skip per class (matches filter_out_property in Rust syncback)
+-- These are properties whose values are encoded in the file itself, not metadata
+local SKIP_PROPERTIES_BY_CLASS = {
+	Script = {
+		Source = true, -- Encoded in the .luau file
+		ScriptGuid = true, -- Internal
+		RunContext = true, -- Encoded in file suffix (.server.luau, .client.luau, etc.)
+	},
+	LocalScript = {
+		Source = true, -- Encoded in the .luau file
+		ScriptGuid = true, -- Internal
+	},
+	ModuleScript = {
+		Source = true, -- Encoded in the .luau file
+		ScriptGuid = true, -- Internal
+	},
+	LocalizationTable = {
+		Contents = true, -- Encoded in the .csv file
+	},
+	StringValue = {
+		Value = true, -- Encoded in the .txt file
+	},
 }
 
 -- Finds duplicate names among a list of instances
@@ -126,6 +139,25 @@ local function encodeAttributes(instance, properties)
 	end
 end
 
+-- Encode Tags if present on any instance
+local function encodeTags(instance, properties)
+	-- Try to get Tags - this works for all instance types
+	local success, tags = pcall(function()
+		return instance:GetTags()
+	end)
+
+	if success and tags and #tags > 0 then
+		-- Tags need to be encoded specially
+		local tagDescriptor = RbxDom.findCanonicalPropertyDescriptor(instance.ClassName, "Tags")
+		if tagDescriptor then
+			local encodeSuccess, encodeResult = encodeProperty(instance, "Tags", tagDescriptor)
+			if encodeSuccess and encodeResult ~= nil then
+				properties.Tags = encodeResult
+			end
+		end
+	end
+end
+
 encodeInstance = function(instance, parentId, _skipPathCheck)
 	-- Check if the entire path to this instance is unique (unless we're in a recursive call)
 	-- For top-level instances, we check the entire ancestor chain for duplicates
@@ -143,11 +175,12 @@ encodeInstance = function(instance, parentId, _skipPathCheck)
 
 	local properties = {}
 
-	-- Always try to encode Attributes for any instance type
+	-- Always try to encode Attributes and Tags for any instance type
 	encodeAttributes(instance, properties)
+	encodeTags(instance, properties)
 
+	-- For scripts, encode the Source property first (required for script files)
 	if SCRIPT_CLASS_NAMES[instance.ClassName] then
-		-- For scripts, encode the Source property (required)
 		local sourceDescriptor = RbxDom.findCanonicalPropertyDescriptor(instance.ClassName, "Source")
 		if sourceDescriptor then
 			local encodeSuccess, encodeResult = encodeProperty(instance, "Source", sourceDescriptor)
@@ -161,46 +194,42 @@ encodeInstance = function(instance, parentId, _skipPathCheck)
 			Log.warn("Could not find Source property descriptor for {:?}", instance)
 			return nil
 		end
+	end
 
-		-- Also encode other script properties (Disabled, LinkedSource, etc.)
-		-- These go into the .meta.json5 file
-		local classDescriptor = RbxDom.findClassDescriptor(instance.ClassName)
-		if classDescriptor then
-			for propertyName, propertyDescriptor in classDescriptor.properties do
-				-- Skip properties we handle separately or should ignore
-				if SKIP_PROPERTIES[propertyName] then
-					continue
-				end
-				if propertyName == "Source" or propertyName == "Attributes" then
-					continue
-				end
+	-- Encode ALL properties for ANY instance type (matching Rust syncback behavior)
+	-- The server handles filtering defaults and serialization
+	local classDescriptor = RbxDom.findClassDescriptor(instance.ClassName)
+	if classDescriptor then
+		-- Get class-specific properties to skip
+		local classSkipProps = SKIP_PROPERTIES_BY_CLASS[instance.ClassName] or {}
 
-				-- Only encode serializable properties
-				if propertyDescriptor.scriptability == "ReadWrite" or propertyDescriptor.scriptability == "Read" then
-					local encodeSuccess, encodeResult = encodeProperty(instance, propertyName, propertyDescriptor)
-					if encodeSuccess and encodeResult ~= nil then
-						properties[propertyName] = encodeResult
-					end
-				end
+		for propertyName, propertyMeta in pairs(classDescriptor.properties) do
+			-- Skip universally skipped properties
+			if SKIP_PROPERTIES[propertyName] then
+				continue
 			end
-		end
-	elseif not DIRECTORY_CLASSES[instance.ClassName] then
-		-- For non-directory, non-script classes, encode all relevant properties
-		local classDescriptor = RbxDom.findClassDescriptor(instance.ClassName)
-		if classDescriptor then
-			for propertyName, propertyDescriptor in classDescriptor.properties do
-				if SKIP_PROPERTIES[propertyName] then
-					continue
-				end
 
-				-- Skip Attributes here since we handle it separately above
-				if propertyName == "Attributes" then
-					continue
-				end
+			-- Skip class-specific properties (Source, RunContext for scripts, etc.)
+			if classSkipProps[propertyName] then
+				continue
+			end
 
-				-- Only encode serializable properties
-				if propertyDescriptor.scriptability == "ReadWrite" or propertyDescriptor.scriptability == "Read" then
-					local encodeSuccess, encodeResult = encodeProperty(instance, propertyName, propertyDescriptor)
+			-- Skip Attributes and Tags since we handle them separately above
+			if propertyName == "Attributes" or propertyName == "Tags" then
+				continue
+			end
+
+			-- Only encode properties that:
+			-- 1. Are readable (ReadWrite or Read scriptability)
+			-- 2. Actually serialize (not "DoesNotSerialize")
+			local isReadable = propertyMeta.scriptability == "ReadWrite" or propertyMeta.scriptability == "Read"
+			local doesSerialize = propertyMeta.serialization ~= "DoesNotSerialize"
+
+			if isReadable and doesSerialize then
+				-- Get the full PropertyDescriptor for encoding
+				local descriptor = RbxDom.findCanonicalPropertyDescriptor(instance.ClassName, propertyName)
+				if descriptor then
+					local encodeSuccess, encodeResult = encodeProperty(instance, propertyName, descriptor)
 					if encodeSuccess and encodeResult ~= nil then
 						properties[propertyName] = encodeResult
 					end
@@ -208,7 +237,6 @@ encodeInstance = function(instance, parentId, _skipPathCheck)
 			end
 		end
 	end
-	-- For directory classes (Folder, Configuration, etc.), we only encode Attributes (done above)
 
 	-- Recursively encode children, skipping those with duplicate names
 	local children = {}

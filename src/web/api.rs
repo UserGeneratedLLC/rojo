@@ -20,7 +20,7 @@ use rbx_dom_weak::{
 
 use crate::{
     serve_session::ServeSession,
-    snapshot::{InstanceWithMeta, PatchSet, PatchUpdate},
+    snapshot::{InstigatingSource, InstanceWithMeta, PatchSet, PatchUpdate},
     web::{
         interface::{
             ErrorResponse, Instance, InstanceMetadata, MessagesPacket, OpenResponse, ReadResponse,
@@ -392,14 +392,19 @@ impl ApiService {
             )
         })?;
 
+        // Get the parent Ref (required for top-level added instances)
+        let parent_ref = added
+            .parent
+            .context("Top-level added instance must have a parent")?;
+
         // Find the parent instance to get its filesystem path
         let parent_instance = tree
-            .get_instance(added.parent)
+            .get_instance(parent_ref)
             .context("Parent instance not found in Rojo tree")?;
 
         // Check if the parent path is unique (no duplicate-named siblings at any level)
         // Uses pre-computed cache for O(d) instead of O(d × s) complexity
-        if !Self::is_tree_path_unique_with_cache(tree, added.parent, duplicate_siblings_cache) {
+        if !Self::is_tree_path_unique_with_cache(tree, parent_ref, duplicate_siblings_cache) {
             anyhow::bail!(
                 "Cannot sync instance '{}' - parent path contains duplicate-named siblings",
                 added.name
@@ -445,13 +450,31 @@ impl ApiService {
 
         let instance_name = instance.name();
 
-        // Get the filesystem path from the instance's metadata
-        let instance_path = instance
+        // Get the instigating source and handle each variant appropriately
+        let instigating_source = instance
             .metadata()
             .instigating_source
             .as_ref()
-            .map(|s| s.path())
             .context("Instance has no filesystem path (not synced from filesystem)")?;
+
+        // Only delete instances that originate from filesystem paths, not from project nodes
+        let instance_path = match instigating_source {
+            InstigatingSource::Path(path) => path,
+            InstigatingSource::ProjectNode { name, .. } => {
+                // Instances defined in project files cannot be removed via syncback
+                // because that would require modifying the project file structure
+                log::warn!(
+                    "Syncback: Cannot remove instance '{}' (id: {:?}) - it is defined in a project file",
+                    name,
+                    removed_id
+                );
+                anyhow::bail!(
+                    "Cannot remove instance '{}' because it is defined in a project file. \
+                     To remove this instance, edit the project file directly.",
+                    name
+                );
+            }
+        };
 
         // Check if path exists - it may have already been deleted as part of a parent removal
         // (e.g., if both a directory and its children are marked for removal, the directory
@@ -832,7 +855,7 @@ impl ApiService {
         // Check if there are any properties besides Source that need to be saved
         // Use IndexMap for consistent ordering (like dedicated syncback)
         let (properties, attributes) =
-            self.filter_properties_for_meta(&added.properties, Some("Source"));
+            self.filter_properties_for_meta(&added.class_name, &added.properties, Some("Source"));
 
         if properties.is_empty() && attributes.is_empty() {
             return Ok(());
@@ -862,7 +885,7 @@ impl ApiService {
     ) -> anyhow::Result<()> {
         use anyhow::Context;
 
-        let (properties, attributes) = self.filter_properties_for_meta(&added.properties, None);
+        let (properties, attributes) = self.filter_properties_for_meta(&added.class_name, &added.properties, None);
 
         if properties.is_empty() && attributes.is_empty() {
             return Ok(());
@@ -891,7 +914,7 @@ impl ApiService {
     ) -> anyhow::Result<()> {
         use anyhow::Context;
 
-        let (properties, attributes) = self.filter_properties_for_meta(&added.properties, None);
+        let (properties, attributes) = self.filter_properties_for_meta(&added.class_name, &added.properties, None);
 
         // For non-Folder classes, we need to include className
         let meta = self.build_meta_object(Some(&added.class_name), properties, attributes);
@@ -915,19 +938,29 @@ impl ApiService {
     /// Filters out:
     /// - Ref and UniqueId properties (don't serialize to JSON)
     /// - The skip_property if specified (e.g., "Source" for scripts)
+    /// - Properties that don't serialize (DoesNotSerialize in reflection database)
+    /// - Properties that match their default value
     /// - Internal RBX* prefixed attributes
     fn filter_properties_for_meta(
         &self,
+        class_name: &str,
         props: &HashMap<String, Variant>,
         skip_property: Option<&str>,
     ) -> (
         indexmap::IndexMap<String, serde_json::Value>,
         indexmap::IndexMap<String, serde_json::Value>,
     ) {
+        use crate::syncback::should_property_serialize;
+        use crate::variant_eq::variant_eq;
         use indexmap::IndexMap;
 
         let mut properties: IndexMap<String, serde_json::Value> = IndexMap::new();
         let mut attributes: IndexMap<String, serde_json::Value> = IndexMap::new();
+
+        // Get reflection database for default value comparison
+        let class_data = rbx_reflection_database::get()
+            .ok()
+            .and_then(|db| db.classes.get(class_name));
 
         for (name, value) in props {
             // Skip the specified property (e.g., Source for scripts)
@@ -960,6 +993,20 @@ impl ApiService {
                     }
                 }
                 continue;
+            }
+
+            // Check if property should serialize (matches dedicated syncback property_filter.rs)
+            if !should_property_serialize(class_name, name) {
+                continue;
+            }
+
+            // Skip properties that match their default value (matches dedicated syncback)
+            if let Some(data) = class_data {
+                if let Some(default) = data.default_properties.get(name.as_str()) {
+                    if variant_eq(value, default) {
+                        continue;
+                    }
+                }
             }
 
             // Convert other properties
@@ -1067,7 +1114,7 @@ impl ApiService {
 
         // Filter properties, skipping Source (it's in the .luau file)
         let (properties, attributes) =
-            self.filter_properties_for_meta(&added.properties, Some("Source"));
+            self.filter_properties_for_meta(&added.class_name, &added.properties, Some("Source"));
 
         if properties.is_empty() && attributes.is_empty() {
             return Ok(());
@@ -1098,7 +1145,7 @@ impl ApiService {
         use serde_json::json;
 
         // Filter properties matching dedicated syncback behavior
-        let (properties, attributes) = self.filter_properties_for_meta(&added.properties, None);
+        let (properties, attributes) = self.filter_properties_for_meta(&added.class_name, &added.properties, None);
 
         // Build the JSON model structure
         // Format: https://rojo.space/docs/v7/sync-details/#json-models

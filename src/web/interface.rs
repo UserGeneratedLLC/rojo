@@ -253,7 +253,10 @@ pub struct ReadResponse<'a> {
 #[serde(rename_all = "camelCase")]
 pub struct AddedInstance {
     /// The parent instance's Ref (must exist in Rojo's tree)
-    pub parent: Ref,
+    /// For top-level added instances, this is required.
+    /// For nested children, this can be omitted (parent is implied by nesting).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<Ref>,
     /// The instance name
     pub name: String,
     /// The class name (e.g., "ModuleScript", "Script", "LocalScript")
