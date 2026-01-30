@@ -6,15 +6,14 @@ snapshot_id: "00000000000000000000000000000000"
 metadata:
   ignore_unknown_instances: false
   instigating_source:
-    Path: /foo.server.lua
+    Path: /foo.plugin.lua
   relevant_paths:
-    - /foo.server.lua
+    - /foo.plugin.lua
     - /foo.meta.json
     - /foo.meta.jsonc
     - /foo.meta.json5
   context:
-    emit_legacy_scripts: true
-    decode_windows_invalid_chars: false
+    decode_windows_invalid_chars: true
   specified_id: ~
   middleware: ~
   schema: ~
@@ -22,7 +21,7 @@ name: foo
 class_name: Script
 properties:
   RunContext:
-    Enum: 0
+    Enum: 3
   Source:
     String: Hello there!
 children: []

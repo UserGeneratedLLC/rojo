@@ -8,11 +8,7 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    glob::Glob,
-    path_serializer,
-    project::ProjectNode,
-    snapshot_middleware::{emit_legacy_scripts_default, Middleware},
-    RojoRef,
+    glob::Glob, path_serializer, project::ProjectNode, snapshot_middleware::Middleware, RojoRef,
 };
 
 /// Rojo-specific metadata that can be associated with an instance or a snapshot
@@ -142,32 +138,26 @@ impl Default for InstanceMetadata {
 pub struct InstanceContext {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub path_ignore_rules: Arc<Vec<PathIgnoreRule>>,
-    pub emit_legacy_scripts: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sync_rules: Vec<SyncRule>,
-    /// Whether to decode Windows-invalid characters in file names.
-    /// Characters like `%LT%`, `%GT%`, `%COLON%`, etc. will be decoded
-    /// back to `<`, `>`, `:`, etc. in instance names sent to the plugin.
-    #[serde(default)]
+    /// Whether to decode special characters in file names.
+    /// Characters like `%DOT%`, `%LT%`, `%GT%`, `%COLON%`, etc. will be decoded
+    /// back to `.`, `<`, `>`, `:`, etc. in instance names sent to the plugin.
+    /// Defaults to true.
+    #[serde(default = "decode_windows_invalid_chars_default")]
     pub decode_windows_invalid_chars: bool,
+}
+
+fn decode_windows_invalid_chars_default() -> bool {
+    true
 }
 
 impl InstanceContext {
     pub fn new() -> Self {
         Self {
             path_ignore_rules: Arc::new(Vec::new()),
-            emit_legacy_scripts: emit_legacy_scripts_default().unwrap(),
             sync_rules: Vec::new(),
-            decode_windows_invalid_chars: false,
-        }
-    }
-
-    pub fn with_emit_legacy_scripts(emit_legacy_scripts: Option<bool>) -> Self {
-        Self {
-            emit_legacy_scripts: emit_legacy_scripts
-                .or_else(emit_legacy_scripts_default)
-                .unwrap(),
-            ..Self::new()
+            decode_windows_invalid_chars: true,
         }
     }
 
@@ -204,10 +194,6 @@ impl InstanceContext {
     /// Clears all sync rules for this InstanceContext
     pub fn clear_sync_rules(&mut self) {
         self.sync_rules.clear();
-    }
-
-    pub fn set_emit_legacy_scripts(&mut self, emit_legacy_scripts: bool) {
-        self.emit_legacy_scripts = emit_legacy_scripts;
     }
 
     /// Returns the middleware specified by the first sync rule that

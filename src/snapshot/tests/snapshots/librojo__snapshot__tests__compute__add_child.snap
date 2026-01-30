@@ -11,8 +11,7 @@ added_instances:
         ignore_unknown_instances: false
         relevant_paths: []
         context:
-          emit_legacy_scripts: true
-          decode_windows_invalid_chars: false
+          decode_windows_invalid_chars: true
         specified_id: ~
         middleware: ~
         schema: ~

@@ -53,10 +53,7 @@ use self::{
     yaml::snapshot_yaml,
 };
 
-pub use self::{
-    lua::ScriptType, project::snapshot_project_node, util::emit_legacy_scripts_default,
-    util::PathExt,
-};
+pub use self::{lua::ScriptType, project::snapshot_project_node, util::PathExt};
 
 /// Returns an `InstanceSnapshot` for the provided path.
 /// This will inspect the path and find the appropriate middleware for it,
@@ -98,6 +95,7 @@ pub fn snapshot_from_vfs(
         // TODO: Is this even necessary anymore?
         match file_name {
             "init.server.luau" | "init.server.lua" | "init.client.luau" | "init.client.lua"
+            | "init.local.luau" | "init.local.lua" | "init.legacy.luau" | "init.legacy.lua"
             | "init.luau" | "init.lua" | "init.csv" => return Ok(None),
             _ => {}
         }
@@ -131,6 +129,10 @@ fn get_dir_middleware<'path>(
             (Middleware::ServerScriptDir, "init.server.lua"),
             (Middleware::ClientScriptDir, "init.client.luau"),
             (Middleware::ClientScriptDir, "init.client.lua"),
+            (Middleware::LocalScriptDir, "init.local.luau"),
+            (Middleware::LocalScriptDir, "init.local.lua"),
+            (Middleware::LegacyScriptDir, "init.legacy.luau"),
+            (Middleware::LegacyScriptDir, "init.legacy.lua"),
             (Middleware::CsvDir, "init.csv"),
         ]
     });
@@ -197,10 +199,8 @@ pub enum Middleware {
     ClientScript,
     ModuleScript,
     PluginScript,
-    LegacyClientScript,
-    LegacyServerScript,
-    RunContextServerScript,
-    RunContextClientScript,
+    LocalScript,
+    LegacyScript,
     Project,
     Rbxm,
     Rbxmx,
@@ -217,6 +217,10 @@ pub enum Middleware {
     ClientScriptDir,
     #[serde(skip_deserializing)]
     ModuleScriptDir,
+    #[serde(skip_deserializing)]
+    LocalScriptDir,
+    #[serde(skip_deserializing)]
+    LegacyScriptDir,
     #[serde(skip_deserializing)]
     CsvDir,
 }
@@ -239,18 +243,8 @@ impl Middleware {
             Self::ClientScript => snapshot_lua(context, vfs, path, name, ScriptType::Client),
             Self::ModuleScript => snapshot_lua(context, vfs, path, name, ScriptType::Module),
             Self::PluginScript => snapshot_lua(context, vfs, path, name, ScriptType::Plugin),
-            Self::LegacyClientScript => {
-                snapshot_lua(context, vfs, path, name, ScriptType::LegacyClient)
-            }
-            Self::LegacyServerScript => {
-                snapshot_lua(context, vfs, path, name, ScriptType::LegacyServer)
-            }
-            Self::RunContextClientScript => {
-                snapshot_lua(context, vfs, path, name, ScriptType::RunContextClient)
-            }
-            Self::RunContextServerScript => {
-                snapshot_lua(context, vfs, path, name, ScriptType::RunContextServer)
-            }
+            Self::LocalScript => snapshot_lua(context, vfs, path, name, ScriptType::Local),
+            Self::LegacyScript => snapshot_lua(context, vfs, path, name, ScriptType::Legacy),
             Self::Project => snapshot_project(context, vfs, path, name),
             Self::Rbxm => snapshot_rbxm(context, vfs, path, name),
             Self::Rbxmx => snapshot_rbxmx(context, vfs, path, name),
@@ -268,6 +262,10 @@ impl Middleware {
             }
             Self::ModuleScriptDir => {
                 snapshot_lua_init(context, vfs, path, name, ScriptType::Module)
+            }
+            Self::LocalScriptDir => snapshot_lua_init(context, vfs, path, name, ScriptType::Local),
+            Self::LegacyScriptDir => {
+                snapshot_lua_init(context, vfs, path, name, ScriptType::Legacy)
             }
             Self::CsvDir => snapshot_csv_init(context, vfs, path, name),
         };
@@ -299,6 +297,9 @@ impl Middleware {
             Middleware::ServerScript => syncback_lua(snapshot),
             Middleware::ClientScript => syncback_lua(snapshot),
             Middleware::ModuleScript => syncback_lua(snapshot),
+            Middleware::PluginScript => syncback_lua(snapshot),
+            Middleware::LocalScript => syncback_lua(snapshot),
+            Middleware::LegacyScript => syncback_lua(snapshot),
             Middleware::Rbxm => syncback_rbxm(snapshot),
             Middleware::Rbxmx => syncback_rbxmx(snapshot),
             Middleware::Toml => anyhow::bail!("cannot syncback Toml middleware"),
@@ -309,15 +310,9 @@ impl Middleware {
             Middleware::ServerScriptDir => syncback_lua_init(ScriptType::Server, snapshot),
             Middleware::ClientScriptDir => syncback_lua_init(ScriptType::Client, snapshot),
             Middleware::ModuleScriptDir => syncback_lua_init(ScriptType::Module, snapshot),
+            Middleware::LocalScriptDir => syncback_lua_init(ScriptType::Local, snapshot),
+            Middleware::LegacyScriptDir => syncback_lua_init(ScriptType::Legacy, snapshot),
             Middleware::CsvDir => syncback_csv_init(snapshot),
-
-            Middleware::PluginScript
-            | Middleware::LegacyServerScript
-            | Middleware::LegacyClientScript
-            | Middleware::RunContextServerScript
-            | Middleware::RunContextClientScript => {
-                anyhow::bail!("syncback is not implemented for {self:?} yet")
-            }
         }
     }
 
@@ -330,6 +325,8 @@ impl Middleware {
                 | Middleware::ServerScriptDir
                 | Middleware::ClientScriptDir
                 | Middleware::ModuleScriptDir
+                | Middleware::LocalScriptDir
+                | Middleware::LegacyScriptDir
                 | Middleware::CsvDir
         )
     }
@@ -427,6 +424,10 @@ pub fn default_sync_rules() -> &'static [SyncRule] {
             sync_rule!("*.client.luau", ClientScript, ".client.luau"),
             sync_rule!("*.plugin.lua", PluginScript, ".plugin.lua"),
             sync_rule!("*.plugin.luau", PluginScript, ".plugin.luau"),
+            sync_rule!("*.legacy.lua", LegacyScript, ".legacy.lua"),
+            sync_rule!("*.legacy.luau", LegacyScript, ".legacy.luau"),
+            sync_rule!("*.local.lua", LocalScript, ".local.lua"),
+            sync_rule!("*.local.luau", LocalScript, ".local.luau"),
             sync_rule!("*.{lua,luau}", ModuleScript),
             sync_rule!("*.project.json", Project, ".project.json"),
             sync_rule!("*.project.jsonc", Project, ".project.jsonc"),

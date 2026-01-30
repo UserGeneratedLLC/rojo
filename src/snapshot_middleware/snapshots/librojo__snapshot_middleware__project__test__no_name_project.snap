@@ -10,8 +10,7 @@ metadata:
   relevant_paths:
     - /foo/default.project.json
   context:
-    emit_legacy_scripts: true
-    decode_windows_invalid_chars: false
+    decode_windows_invalid_chars: true
   specified_id: ~
   middleware: ~
   schema: ~

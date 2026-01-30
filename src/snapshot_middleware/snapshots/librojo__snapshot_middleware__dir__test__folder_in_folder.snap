@@ -20,8 +20,7 @@ metadata:
     - /foo/init.meta.jsonc
     - /foo/init.meta.json5
   context:
-    emit_legacy_scripts: true
-    decode_windows_invalid_chars: false
+    decode_windows_invalid_chars: true
   specified_id: ~
   middleware: ~
   schema: ~
@@ -47,8 +46,7 @@ children:
         - /foo/Child/init.meta.jsonc
         - /foo/Child/init.meta.json5
       context:
-        emit_legacy_scripts: true
-        decode_windows_invalid_chars: false
+        decode_windows_invalid_chars: true
       specified_id: ~
       middleware: dir
       schema: ~

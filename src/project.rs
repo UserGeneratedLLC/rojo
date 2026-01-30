@@ -110,12 +110,6 @@ pub struct Project {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub serve_address: Option<IpAddr>,
 
-    /// Determines if Rojo should emit scripts with the appropriate `RunContext`
-    /// for `*.client.lua` and `*.server.lua` files in the project instead of
-    /// using `Script` and `LocalScript` Instances.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub emit_legacy_scripts: Option<bool>,
-
     /// A list of globs, relative to the folder the project file is in, that
     /// match files that should be excluded if Rojo encounters them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -573,7 +567,6 @@ mod test {
                 "$path": "src", // Comment after value
             },
             "servePort": 34567,
-            "emitLegacyScripts": false,
             // Test glob parsing with comments
             "globIgnorePaths": [
                 "**/*.spec.lua", // Ignore test files
@@ -601,7 +594,6 @@ mod test {
         // Verify the parsed values
         assert_eq!(project.name, Some("TestProject".to_string()));
         assert_eq!(project.serve_port, Some(34567));
-        assert_eq!(project.emit_legacy_scripts, Some(false));
 
         // Verify glob_ignore_paths were parsed correctly
         assert_eq!(project.glob_ignore_paths.len(), 2);

@@ -325,8 +325,21 @@ pub fn get_best_middleware(snapshot: &SyncbackSnapshot) -> Middleware {
             "Folder" | "Configuration" | "Tool" | "ScreenGui" | "SurfaceGui" | "BillboardGui"
             | "AdGui" => Middleware::Dir,
             "StringValue" => Middleware::Text,
-            "Script" => Middleware::ServerScript,
-            "LocalScript" => Middleware::ClientScript,
+            "Script" => {
+                // Check RunContext to determine which middleware to use
+                // RunContext enum values: Legacy = 0, Server = 1, Client = 2, Plugin = 3
+                match inst.properties.get(&ustr("RunContext")) {
+                    Some(Variant::Enum(e)) => match e.to_u32() {
+                        0 => Middleware::LegacyScript,
+                        1 => Middleware::ServerScript,
+                        2 => Middleware::ClientScript,
+                        3 => Middleware::PluginScript,
+                        _ => Middleware::LegacyScript, // Unknown RunContext, default to Legacy
+                    },
+                    _ => Middleware::LegacyScript, // No RunContext property, default to Legacy
+                }
+            }
+            "LocalScript" => Middleware::LocalScript,
             "ModuleScript" => Middleware::ModuleScript,
             "LocalizationTable" => Middleware::Csv,
             // Default: use JsonModel for everything else (becomes Dir if has children)
@@ -339,6 +352,9 @@ pub fn get_best_middleware(snapshot: &SyncbackSnapshot) -> Middleware {
             Middleware::ServerScript => Middleware::ServerScriptDir,
             Middleware::ClientScript => Middleware::ClientScriptDir,
             Middleware::ModuleScript => Middleware::ModuleScriptDir,
+            Middleware::PluginScript => Middleware::ServerScriptDir, // Plugin scripts with children use server script dir for now
+            Middleware::LegacyScript => Middleware::LegacyScriptDir,
+            Middleware::LocalScript => Middleware::LocalScriptDir,
             Middleware::Csv => Middleware::CsvDir,
             Middleware::JsonModel | Middleware::Text => Middleware::Dir,
             _ => middleware,
@@ -431,11 +447,11 @@ impl SyncbackRules {
         Ok(globs)
     }
 
-    /// Returns whether Windows-invalid characters should be encoded in file
-    /// names during syncback. Defaults to `false`.
+    /// Returns whether special characters (including periods) should be encoded
+    /// in file names during syncback. Defaults to `true`.
     #[inline]
     pub fn encode_windows_invalid_chars(&self) -> bool {
-        self.encode_windows_invalid_chars.unwrap_or(false)
+        self.encode_windows_invalid_chars.unwrap_or(true)
     }
 }
 

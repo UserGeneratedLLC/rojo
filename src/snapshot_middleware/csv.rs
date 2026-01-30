@@ -383,7 +383,7 @@ Ack,Ack!,,An exclamation of despair,¡Ay!"#,
         let vfs = Vfs::new(imfs);
 
         let instance_snapshot = snapshot_csv_init(
-            &InstanceContext::with_emit_legacy_scripts(Some(true)),
+            &InstanceContext::new(),
             &vfs,
             Path::new("/root/init.csv"),
             "root",
@@ -421,7 +421,7 @@ Ack,Ack!,,An exclamation of despair,¡Ay!"#,
         let vfs = Vfs::new(imfs);
 
         let instance_snapshot = snapshot_csv_init(
-            &InstanceContext::with_emit_legacy_scripts(Some(true)),
+            &InstanceContext::new(),
             &vfs,
             Path::new("/root/init.csv"),
             "root",

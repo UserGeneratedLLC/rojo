@@ -55,13 +55,14 @@ impl AdjacentMetadata {
         // Use the file stem from the actual path (which has encoded chars)
         // rather than the decoded name, so meta files are found correctly
         // when encodeWindowsInvalidChars is enabled.
-        // Strip known script type suffixes (.server, .client, .plugin) to get
-        // the base name for the meta file.
+        // Strip known script type suffixes to get the base name for the meta file.
         let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         let base_name = file_stem
             .strip_suffix(".server")
             .or_else(|| file_stem.strip_suffix(".client"))
             .or_else(|| file_stem.strip_suffix(".plugin"))
+            .or_else(|| file_stem.strip_suffix(".local"))
+            .or_else(|| file_stem.strip_suffix(".legacy"))
             .unwrap_or(file_stem);
         let meta_path_json = path.with_file_name(format!("{base_name}.meta.json"));
         let meta_path_jsonc = path.with_file_name(format!("{base_name}.meta.jsonc"));

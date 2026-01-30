@@ -10,8 +10,7 @@ metadata:
     - /foo/bar.meta.jsonc
     - /foo/bar.meta.json5
   context:
-    emit_legacy_scripts: true
-    decode_windows_invalid_chars: false
+    decode_windows_invalid_chars: true
   specified_id: manually specified
   middleware: ~
   schema: ~

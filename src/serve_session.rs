@@ -110,10 +110,9 @@ impl ServeSession {
             .syncback_rules
             .as_ref()
             .map(|rules| rules.encode_windows_invalid_chars())
-            .unwrap_or(false);
+            .unwrap_or(true);
 
-        let mut instance_context =
-            InstanceContext::with_emit_legacy_scripts(root_project.emit_legacy_scripts);
+        let mut instance_context = InstanceContext::new();
         instance_context.set_decode_windows_invalid_chars(decode_windows_invalid_chars);
 
         log::trace!("Generating snapshot of instances from VFS");

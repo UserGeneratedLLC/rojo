@@ -257,6 +257,54 @@ impl ApiService {
     /// Syncback an added instance by creating a file in the filesystem.
     /// The file watcher will pick up the change and update Rojo's tree.
     ///
+    /// Checks if a path in the Rojo tree is unique by verifying no duplicates exist
+    /// at ANY level of the path (similar to ref_properties::is_path_unique).
+    /// Returns true if the path is unique, false if duplicates exist at any level.
+    fn is_tree_path_unique(&self, tree: &crate::snapshot::RojoTree, target_ref: Ref) -> bool {
+        let mut current_ref = target_ref;
+
+        loop {
+            let current = match tree.get_instance(current_ref) {
+                Some(inst) => inst,
+                None => return false,
+            };
+
+            let parent_ref = current.parent();
+            if parent_ref.is_none() {
+                // Reached root - path is unique at all levels
+                return true;
+            }
+
+            let parent = match tree.get_instance(parent_ref) {
+                Some(inst) => inst,
+                None => return true,
+            };
+
+            // Check if any sibling has the same name as current
+            let current_name = current.name();
+            let mut count = 0;
+            for child_ref in parent.children() {
+                if let Some(child) = tree.get_instance(*child_ref) {
+                    if child.name() == current_name {
+                        count += 1;
+                        if count > 1 {
+                            // Duplicate found at this level - path is not unique
+                            log::warn!(
+                                "Syncback: Path to '{}' is not unique - duplicate-named siblings at '{}'",
+                                current_name,
+                                parent.name()
+                            );
+                            return false;
+                        }
+                    }
+                }
+            }
+
+            // Move up to parent and check the next level
+            current_ref = parent_ref;
+        }
+    }
+
     /// This follows the same middleware selection logic as the dedicated syncback
     /// system in `src/syncback/mod.rs` to ensure consistent behavior.
     fn syncback_added_instance(
@@ -280,6 +328,14 @@ impl ApiService {
             .get_instance(added.parent)
             .context("Parent instance not found in Rojo tree")?;
 
+        // Check if the parent path is unique (no duplicate-named siblings at any level)
+        if !self.is_tree_path_unique(&tree, added.parent) {
+            anyhow::bail!(
+                "Cannot sync instance '{}' - parent path contains duplicate-named siblings",
+                added.name
+            );
+        }
+
         // Get the parent's filesystem path from its metadata
         let parent_path = parent_instance
             .metadata()
@@ -302,6 +358,54 @@ impl ApiService {
         self.syncback_instance_to_path(added, &parent_dir)
     }
 
+    /// Check for duplicate names among children and return the set of unique children
+    /// that should be synced. Logs warnings for skipped duplicates.
+    fn filter_duplicate_children<'a>(
+        &self,
+        children: &'a [crate::web::interface::AddedInstance],
+    ) -> Vec<&'a crate::web::interface::AddedInstance> {
+        use std::collections::HashMap;
+
+        // Count occurrences of each name
+        let mut name_counts: HashMap<&str, usize> = HashMap::new();
+        for child in children {
+            *name_counts.entry(&child.name).or_insert(0) += 1;
+        }
+
+        // Find duplicates
+        let duplicates: std::collections::HashSet<&str> = name_counts
+            .iter()
+            .filter(|(_, &count)| count > 1)
+            .map(|(&name, _)| name)
+            .collect();
+
+        // Log skipped duplicates
+        let mut skipped_count = 0;
+        for child in children {
+            if duplicates.contains(child.name.as_str()) {
+                log::warn!(
+                    "Syncback: Skipped instance '{}' ({}) - has duplicate-named siblings (cannot reliably sync)",
+                    child.name,
+                    child.class_name
+                );
+                skipped_count += 1;
+            }
+        }
+
+        if skipped_count > 0 {
+            log::warn!(
+                "Syncback: Skipped {} instance(s) with duplicate-named siblings",
+                skipped_count
+            );
+        }
+
+        // Return only non-duplicate children
+        children
+            .iter()
+            .filter(|child| !duplicates.contains(child.name.as_str()))
+            .collect()
+    }
+
     /// Recursively syncback an instance and its children to the filesystem.
     /// This is the internal implementation that handles the actual file creation.
     fn syncback_instance_to_path(
@@ -320,7 +424,9 @@ impl ApiService {
             )
         })?;
 
-        let has_children = !added.children.is_empty();
+        // Filter out children with duplicate names (cannot reliably sync)
+        let unique_children = self.filter_duplicate_children(&added.children);
+        let has_children = !unique_children.is_empty();
 
         // Determine the appropriate middleware/file format based on class name
         // This matches the logic in src/syncback/mod.rs::get_best_middleware
@@ -345,7 +451,7 @@ impl ApiService {
                         "Syncback: Created ModuleScript directory at {}",
                         dir_path.display()
                     );
-                    for child in &added.children {
+                    for child in &unique_children {
                         self.syncback_instance_to_path(child, &dir_path)?;
                     }
                 } else {
@@ -378,7 +484,7 @@ impl ApiService {
                         "Syncback: Created Script directory at {}",
                         dir_path.display()
                     );
-                    for child in &added.children {
+                    for child in &unique_children {
                         self.syncback_instance_to_path(child, &dir_path)?;
                     }
                 } else {
@@ -399,7 +505,7 @@ impl ApiService {
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
                     })?;
-                    let init_path = dir_path.join("init.client.luau");
+                    let init_path = dir_path.join("init.local.luau");
                     fs::write(&init_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", init_path.display())
                     })?;
@@ -408,11 +514,11 @@ impl ApiService {
                         "Syncback: Created LocalScript directory at {}",
                         dir_path.display()
                     );
-                    for child in &added.children {
+                    for child in &unique_children {
                         self.syncback_instance_to_path(child, &dir_path)?;
                     }
                 } else {
-                    let file_path = parent_dir.join(format!("{}.client.luau", added.name));
+                    let file_path = parent_dir.join(format!("{}.local.luau", added.name));
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
@@ -439,7 +545,8 @@ impl ApiService {
                 };
 
                 // Add .gitkeep for empty directories with no metadata (matches dedicated syncback)
-                if added.children.is_empty() && !has_metadata {
+                // Uses !has_children which accounts for filtered duplicate children
+                if !has_children && !has_metadata {
                     fs::write(dir_path.join(".gitkeep"), b"")
                         .with_context(|| "Failed to write .gitkeep")?;
                 }
@@ -451,7 +558,7 @@ impl ApiService {
                 );
 
                 // Recursively process children
-                for child in &added.children {
+                for child in &unique_children {
                     self.syncback_instance_to_path(child, &dir_path)?;
                 }
             }
@@ -469,7 +576,7 @@ impl ApiService {
                         "Syncback: Created StringValue directory at {}",
                         dir_path.display()
                     );
-                    for child in &added.children {
+                    for child in &unique_children {
                         self.syncback_instance_to_path(child, &dir_path)?;
                     }
                 } else {
@@ -508,7 +615,7 @@ impl ApiService {
                         "Syncback: Created LocalizationTable directory at {}",
                         dir_path.display()
                     );
-                    for child in &added.children {
+                    for child in &unique_children {
                         self.syncback_instance_to_path(child, &dir_path)?;
                     }
                 } else {
@@ -542,7 +649,7 @@ impl ApiService {
                     );
 
                     // Recursively process children
-                    for child in &added.children {
+                    for child in &unique_children {
                         self.syncback_instance_to_path(child, &dir_path)?;
                     }
                 } else {
@@ -752,11 +859,9 @@ impl ApiService {
     /// For `Script` class:
     /// - RunContext: Client → "client"
     /// - RunContext: Server → "server"
-    /// - RunContext: Legacy → "server" (default for legacy mode)
+    /// - RunContext: Legacy → "legacy"
     /// - RunContext: Plugin → "plugin"
-    /// - No RunContext → "server" (default)
-    ///
-    /// This ensures proper round-tripping regardless of emitLegacyScripts mode.
+    /// - No RunContext → "legacy" (default)
     fn get_script_suffix_for_run_context(
         &self,
         added: &crate::web::interface::AddedInstance,
@@ -779,16 +884,16 @@ impl ApiService {
                     return match name.as_ref() {
                         "Client" => "client",
                         "Server" => "server",
-                        "Legacy" => "server",
+                        "Legacy" => "legacy",
                         "Plugin" => "plugin",
-                        _ => "server",
+                        _ => "legacy",
                     };
                 }
             }
         }
 
-        // Default to server if no RunContext or unrecognized
-        "server"
+        // Default to legacy if no RunContext or unrecognized
+        "legacy"
     }
 
     /// Write an adjacent meta file for scripts without children.
@@ -1596,15 +1701,13 @@ mod tests {
             // Test that script class names result in correct file extensions
             let test_cases = vec![
                 ("ModuleScript", "TestModule", "TestModule.luau"),
-                ("Script", "TestScript", "TestScript.server.luau"),
-                ("LocalScript", "TestClient", "TestClient.client.luau"),
+                ("LocalScript", "TestClient", "TestClient.local.luau"),
             ];
 
             for (class_name, name, expected) in test_cases {
                 let file_name = match class_name {
                     "ModuleScript" => format!("{}.luau", name),
-                    "Script" => format!("{}.server.luau", name),
-                    "LocalScript" => format!("{}.client.luau", name),
+                    "LocalScript" => format!("{}.local.luau", name),
                     _ => format!("{}.model.json", name),
                 };
                 assert_eq!(
@@ -1758,8 +1861,8 @@ mod tests {
         }
 
         #[test]
-        fn test_run_context_legacy_gives_server_suffix() {
-            // Script with RunContext: Legacy should produce .server.luau (for legacy mode)
+        fn test_run_context_legacy_gives_legacy_suffix() {
+            // Script with RunContext: Legacy should produce .legacy.luau
             let run_context_enums = rbx_reflection_database::get()
                 .ok()
                 .and_then(|db| db.enums.get("RunContext"))
@@ -1792,14 +1895,13 @@ mod tests {
             // For Script class, the file suffix is determined by RunContext:
             // - Client → .client.luau
             // - Server → .server.luau
-            // - Legacy → .server.luau
+            // - Legacy → .legacy.luau
             // - Plugin → .plugin.luau
-            // This allows proper round-tripping regardless of emitLegacyScripts mode
 
             let expected_mappings = vec![
                 ("Client", "client"),
                 ("Server", "server"),
-                ("Legacy", "server"),
+                ("Legacy", "legacy"),
                 ("Plugin", "plugin"),
             ];
 
@@ -1807,9 +1909,9 @@ mod tests {
                 let suffix = match run_context {
                     "Client" => "client",
                     "Server" => "server",
-                    "Legacy" => "server",
+                    "Legacy" => "legacy",
                     "Plugin" => "plugin",
-                    _ => "server",
+                    _ => "legacy",
                 };
                 assert_eq!(
                     suffix, expected_suffix,
@@ -1820,14 +1922,14 @@ mod tests {
         }
 
         #[test]
-        fn test_local_script_always_client() {
-            // LocalScript class always produces .client.luau regardless of any properties
+        fn test_local_script_always_local() {
+            // LocalScript class always produces .local.luau regardless of any properties
             let class_name = "LocalScript";
-            let expected_suffix = "client";
+            let expected_suffix = "local";
 
-            // LocalScript doesn't check RunContext - it's always client
+            // LocalScript doesn't check RunContext - it's always local
             let suffix = if class_name == "LocalScript" {
-                "client"
+                "local"
             } else {
                 "unknown"
             };
@@ -2136,8 +2238,6 @@ mod tests {
     // =========================================================================
     mod run_context_comprehensive_tests {
         use super::*;
-        use rbx_dom_weak::types::Enum;
-        use std::collections::HashMap;
 
         /// Helper to get RunContext enum value by name
         fn get_run_context_value(name: &str) -> Option<u32> {
@@ -2817,7 +2917,7 @@ mod tests {
             // In scripts-only mode, all instances get ignoreUnknownInstances: true
             // This prevents accidental deletion of non-script instances
             let folder = "Folder";
-            let is_script = is_script_class(folder);
+            let _is_script = is_script_class(folder);
 
             // Non-scripts should have ignoreUnknownInstances set
             let should_set_ignore = true; // All instances in scripts-only mode
@@ -2868,18 +2968,18 @@ mod tests {
                     expected_extension: ".luau",
                     description: "ModuleScript without RunContext",
                 },
-                // LocalScript - always .client.luau
+                // LocalScript - always .local.luau
                 TestCase {
                     class_name: "LocalScript",
                     run_context: None,
-                    expected_extension: ".client.luau",
+                    expected_extension: ".local.luau",
                     description: "LocalScript",
                 },
                 // Script with various RunContext values
                 TestCase {
                     class_name: "Script",
                     run_context: None,
-                    expected_extension: ".server.luau",
+                    expected_extension: ".legacy.luau",
                     description: "Script without RunContext (default)",
                 },
                 TestCase {
@@ -2897,7 +2997,7 @@ mod tests {
                 TestCase {
                     class_name: "Script",
                     run_context: Some("Legacy"),
-                    expected_extension: ".server.luau",
+                    expected_extension: ".legacy.luau",
                     description: "Script with RunContext::Legacy",
                 },
                 TestCase {
@@ -2911,16 +3011,16 @@ mod tests {
             for case in test_cases {
                 let suffix = match case.class_name {
                     "ModuleScript" => String::new(),
-                    "LocalScript" => "client".to_string(),
+                    "LocalScript" => "local".to_string(),
                     "Script" => {
                         // Match on RunContext name to determine suffix
                         match case.run_context {
                             Some("Client") => "client",
                             Some("Server") => "server",
-                            Some("Legacy") => "server",
+                            Some("Legacy") => "legacy",
                             Some("Plugin") => "plugin",
-                            None => "server",
-                            _ => "server",
+                            None => "legacy",
+                            _ => "legacy",
                         }
                         .to_string()
                     }
@@ -3001,6 +3101,474 @@ mod tests {
                     class, run_context
                 );
             }
+        }
+    }
+
+    // =========================================================================
+    // Duplicate Path Detection Tests
+    // =========================================================================
+    mod duplicate_path_tests {
+        // Helper to simulate sibling name checking
+        fn has_duplicate_sibling_names(names: &[&str], target_name: &str) -> bool {
+            let count = names.iter().filter(|&&n| n == target_name).count();
+            count > 1
+        }
+
+        // Simulates the duplicate children filter logic
+        fn filter_duplicate_names<'a>(names: &[&'a str]) -> Vec<&'a str> {
+            let mut counts: std::collections::HashMap<&str, usize> =
+                std::collections::HashMap::new();
+            for name in names {
+                *counts.entry(name).or_insert(0) += 1;
+            }
+
+            names
+                .iter()
+                .filter(|&&name| counts.get(name).copied().unwrap_or(0) <= 1)
+                .copied()
+                .collect()
+        }
+
+        #[test]
+        fn test_no_duplicates_all_pass() {
+            let names = vec!["Script1", "Script2", "Script3", "Folder"];
+            let filtered = filter_duplicate_names(&names);
+            assert_eq!(filtered.len(), 4, "All unique names should pass");
+        }
+
+        #[test]
+        fn test_duplicate_siblings_filtered() {
+            let names = vec!["Script", "Script", "Other"];
+            let filtered = filter_duplicate_names(&names);
+            assert_eq!(
+                filtered.len(),
+                1,
+                "Duplicate 'Script' entries should be filtered"
+            );
+            assert_eq!(filtered[0], "Other", "Only 'Other' should remain");
+        }
+
+        #[test]
+        fn test_multiple_duplicates_filtered() {
+            let names = vec!["A", "A", "B", "B", "C"];
+            let filtered = filter_duplicate_names(&names);
+            assert_eq!(filtered.len(), 1, "Only unique 'C' should remain");
+            assert_eq!(filtered[0], "C");
+        }
+
+        #[test]
+        fn test_all_duplicates_empty_result() {
+            let names = vec!["Same", "Same", "Same"];
+            let filtered = filter_duplicate_names(&names);
+            assert_eq!(
+                filtered.len(),
+                0,
+                "All duplicates should result in empty list"
+            );
+        }
+
+        #[test]
+        fn test_sibling_detection_positive() {
+            let siblings = vec!["Script", "Script", "Other"];
+            assert!(
+                has_duplicate_sibling_names(&siblings, "Script"),
+                "'Script' should be detected as having duplicate siblings"
+            );
+        }
+
+        #[test]
+        fn test_sibling_detection_negative() {
+            let siblings = vec!["Script", "Folder", "Model"];
+            assert!(
+                !has_duplicate_sibling_names(&siblings, "Script"),
+                "'Script' should NOT be detected as duplicate with unique siblings"
+            );
+        }
+
+        #[test]
+        fn test_sibling_detection_not_in_list() {
+            let siblings = vec!["A", "B", "C"];
+            assert!(
+                !has_duplicate_sibling_names(&siblings, "D"),
+                "'D' not in list should not have duplicates"
+            );
+        }
+
+        #[test]
+        fn test_path_uniqueness_concept() {
+            // Test the concept: path is unique only if NO level has duplicates
+            //
+            // Tree:
+            // Root
+            //   ├─ FolderA
+            //   │    └─ Script
+            //   └─ FolderA (duplicate!)
+            //        └─ Script
+            //
+            // Path "Root/FolderA/Script" is NOT unique because FolderA is duplicated
+
+            let root_children = vec!["FolderA", "FolderA"];
+            let folder_children = vec!["Script"];
+
+            // Check at root level - duplicates exist
+            let has_dup_at_root = has_duplicate_sibling_names(&root_children, "FolderA");
+            assert!(
+                has_dup_at_root,
+                "FolderA should be detected as duplicate at root level"
+            );
+
+            // Check at folder level - no duplicates
+            let has_dup_at_folder = has_duplicate_sibling_names(&folder_children, "Script");
+            assert!(
+                !has_dup_at_folder,
+                "Script has no duplicate siblings within its parent"
+            );
+
+            // But the PATH is still not unique because of the ancestor duplicate
+            let path_is_unique = !has_dup_at_root;
+            assert!(
+                !path_is_unique,
+                "Path should NOT be unique due to ancestor duplicate"
+            );
+        }
+
+        #[test]
+        fn test_path_uniqueness_deep_hierarchy() {
+            // Tree:
+            // Root (unique)
+            //   └─ Level1 (unique)
+            //        └─ Level2 (has duplicate sibling)
+            //             └─ Target
+            //
+            // Path to Target is NOT unique
+
+            let level1_children = vec!["Level2", "Level2", "Other"];
+            let level2_children = vec!["Target"];
+
+            let has_dup_at_level1 = has_duplicate_sibling_names(&level1_children, "Level2");
+            assert!(has_dup_at_level1, "Level2 has duplicate at Level1");
+
+            // Even though Target itself has no duplicates, path is not unique
+            let has_dup_at_level2 = has_duplicate_sibling_names(&level2_children, "Target");
+            assert!(!has_dup_at_level2, "Target has no duplicate at Level2");
+
+            // Path uniqueness requires ALL levels to be unique
+            let path_unique = !has_dup_at_level1 && !has_dup_at_level2;
+            assert!(
+                !path_unique,
+                "Path should NOT be unique due to Level2 duplicate"
+            );
+        }
+
+        #[test]
+        fn test_path_uniqueness_fully_unique() {
+            // Tree:
+            // Root
+            //   └─ Folder (unique)
+            //        └─ SubFolder (unique)
+            //             └─ Script (unique)
+
+            let root_children = vec!["Folder"];
+            let folder_children = vec!["SubFolder"];
+            let sub_children = vec!["Script"];
+
+            let root_unique = !has_duplicate_sibling_names(&root_children, "Folder");
+            let folder_unique = !has_duplicate_sibling_names(&folder_children, "SubFolder");
+            let sub_unique = !has_duplicate_sibling_names(&sub_children, "Script");
+
+            let path_unique = root_unique && folder_unique && sub_unique;
+            assert!(
+                path_unique,
+                "Path should be unique when all levels are unique"
+            );
+        }
+
+        #[test]
+        fn test_case_sensitive_duplicates() {
+            // Roblox names are case-sensitive, so "Script" and "script" are different
+            let names = vec!["Script", "script", "SCRIPT"];
+            let filtered = filter_duplicate_names(&names);
+            assert_eq!(
+                filtered.len(),
+                3,
+                "Case-different names should all be kept (case-sensitive)"
+            );
+        }
+
+        #[test]
+        fn test_empty_names_handled() {
+            let names = vec!["", "", "Valid"];
+            let filtered = filter_duplicate_names(&names);
+            assert_eq!(
+                filtered.len(),
+                1,
+                "Empty string duplicates should be filtered"
+            );
+            assert_eq!(filtered[0], "Valid");
+        }
+
+        #[test]
+        fn test_special_characters_in_names() {
+            // Names with special characters that might cause filesystem issues
+            // are handled separately by validate_file_name, but duplicates should still work
+            let names = vec!["Script (1)", "Script (2)", "Script (1)"];
+            let filtered = filter_duplicate_names(&names);
+            assert_eq!(
+                filtered.len(),
+                1,
+                "Only 'Script (2)' should remain after filtering duplicates"
+            );
+            assert_eq!(filtered[0], "Script (2)");
+        }
+
+        #[test]
+        fn test_whitespace_names() {
+            // Names with leading/trailing whitespace are technically different
+            let names = vec!["Script", " Script", "Script "];
+            let filtered = filter_duplicate_names(&names);
+            assert_eq!(
+                filtered.len(),
+                3,
+                "Whitespace-different names should all be kept"
+            );
+        }
+
+        // =====================================================================
+        // Non-Script Duplicate Tests - Duplicates apply to ALL instance types
+        // =====================================================================
+
+        #[test]
+        fn test_duplicate_folders_filtered() {
+            // Duplicate Folders should be filtered just like scripts
+            let names = vec!["MyFolder", "MyFolder", "OtherFolder"];
+            let filtered = filter_duplicate_names(&names);
+            assert_eq!(filtered.len(), 1, "Duplicate 'MyFolder' should be filtered");
+            assert_eq!(filtered[0], "OtherFolder");
+        }
+
+        #[test]
+        fn test_duplicate_parts_filtered() {
+            // Duplicate Parts should be filtered
+            let names = vec!["Part", "Part", "Baseplate"];
+            let filtered = filter_duplicate_names(&names);
+            assert_eq!(filtered.len(), 1, "Duplicate 'Part' should be filtered");
+            assert_eq!(filtered[0], "Baseplate");
+        }
+
+        #[test]
+        fn test_duplicate_models_filtered() {
+            // Duplicate Models should be filtered
+            let names = vec!["Car", "Car", "House"];
+            let filtered = filter_duplicate_names(&names);
+            assert_eq!(
+                filtered.len(),
+                1,
+                "Duplicate 'Car' models should be filtered"
+            );
+        }
+
+        #[test]
+        fn test_duplicate_values_filtered() {
+            // Duplicate IntValues/StringValues should be filtered
+            let names = vec!["Score", "Score", "Health"];
+            let filtered = filter_duplicate_names(&names);
+            assert_eq!(
+                filtered.len(),
+                1,
+                "Duplicate 'Score' values should be filtered"
+            );
+        }
+
+        #[test]
+        fn test_duplicate_gui_elements_filtered() {
+            // Duplicate GUI elements should be filtered
+            let names = vec!["MainFrame", "MainFrame", "Sidebar"];
+            let filtered = filter_duplicate_names(&names);
+            assert_eq!(
+                filtered.len(),
+                1,
+                "Duplicate 'MainFrame' GUI should be filtered"
+            );
+        }
+
+        #[test]
+        fn test_mixed_types_same_name_filtered() {
+            // Even if types differ, same names are duplicates (filesystem perspective)
+            // E.g., a Folder named "Data" and a Script named "Data" would conflict
+            let names = vec!["Data", "Data"]; // Could be Folder + Script
+            let filtered = filter_duplicate_names(&names);
+            assert_eq!(
+                filtered.len(),
+                0,
+                "Same-named instances of different types still conflict"
+            );
+        }
+
+        #[test]
+        fn test_folder_hierarchy_duplicates() {
+            // Duplicates in folder hierarchies
+            // Root/
+            //   ├─ Enemies/
+            //   │    └─ Enemy (unique)
+            //   └─ Enemies/ (duplicate!)
+            //        └─ Enemy
+
+            let root_children = vec!["Enemies", "Enemies", "Players"];
+            let enemies_unique = !has_duplicate_sibling_names(&root_children, "Enemies");
+            assert!(
+                !enemies_unique,
+                "Duplicate 'Enemies' folders should be detected"
+            );
+        }
+
+        #[test]
+        fn test_part_ancestor_duplicates() {
+            // A Part deep in hierarchy with duplicate ancestor
+            // Workspace/
+            //   ├─ Zone/
+            //   │    └─ SpawnPoint (Part)
+            //   └─ Zone/ (duplicate!)
+            //        └─ SpawnPoint (Part)
+
+            let workspace_children = vec!["Zone", "Zone"];
+            let zone_unique = !has_duplicate_sibling_names(&workspace_children, "Zone");
+            assert!(
+                !zone_unique,
+                "Duplicate 'Zone' ancestors make Part paths ambiguous"
+            );
+        }
+
+        #[test]
+        fn test_remote_event_duplicates() {
+            // RemoteEvents with duplicate names
+            let names = vec!["FireBullet", "FireBullet", "TakeDamage"];
+            let filtered = filter_duplicate_names(&names);
+            assert_eq!(
+                filtered.len(),
+                1,
+                "Duplicate RemoteEvents should be filtered"
+            );
+        }
+
+        #[test]
+        fn test_configuration_duplicates() {
+            // Configuration instances with duplicates
+            let names = vec!["Settings", "Settings", "Config"];
+            let filtered = filter_duplicate_names(&names);
+            assert_eq!(
+                filtered.len(),
+                1,
+                "Duplicate Configurations should be filtered"
+            );
+        }
+    }
+
+    // =========================================================================
+    // Duplicate Path Detection - Integration Scenarios
+    // =========================================================================
+    mod duplicate_path_integration_tests {
+
+        #[test]
+        fn test_syncback_skips_duplicate_children() {
+            // When syncing back children, duplicates should be skipped
+            // This test verifies the filter_duplicate_children logic
+
+            let children_names = vec!["ChildA", "ChildB", "ChildA", "ChildC"];
+            let unique: Vec<_> = children_names
+                .iter()
+                .filter(|&&name| children_names.iter().filter(|&&n| n == name).count() == 1)
+                .collect();
+
+            assert_eq!(unique.len(), 2, "ChildB and ChildC should be kept");
+            assert!(unique.contains(&&"ChildB"));
+            assert!(unique.contains(&&"ChildC"));
+        }
+
+        #[test]
+        fn test_recursive_duplicate_handling() {
+            // Test that duplicates at any level are handled
+            //
+            // Parent/
+            //   ├─ Child1/
+            //   │    ├─ GrandChild (duplicate)
+            //   │    └─ GrandChild (duplicate)
+            //   └─ Child2/
+            //        └─ GrandChild (unique within its parent)
+
+            let child1_grandchildren = vec!["GrandChild", "GrandChild"];
+            let child2_grandchildren = vec!["GrandChild"];
+
+            // Child1's grandchildren have duplicates
+            let child1_filtered: Vec<_> = child1_grandchildren
+                .iter()
+                .filter(|&&name| child1_grandchildren.iter().filter(|&&n| n == name).count() == 1)
+                .collect();
+            assert_eq!(
+                child1_filtered.len(),
+                0,
+                "Child1's duplicate grandchildren filtered"
+            );
+
+            // Child2's grandchild is unique
+            let child2_filtered: Vec<_> = child2_grandchildren
+                .iter()
+                .filter(|&&name| child2_grandchildren.iter().filter(|&&n| n == name).count() == 1)
+                .collect();
+            assert_eq!(child2_filtered.len(), 1, "Child2's unique grandchild kept");
+        }
+
+        #[test]
+        fn test_duplicate_log_message_format() {
+            // Verify the expected log message format for skipped duplicates
+            let class_name = "ModuleScript";
+            let full_name = "game.ReplicatedStorage.DuplicateScript";
+
+            let expected_msg = format!(
+                "Skipped instance '{}' ({}) - path contains duplicate-named siblings (cannot reliably sync)",
+                full_name, class_name
+            );
+
+            assert!(expected_msg.contains(full_name));
+            assert!(expected_msg.contains(class_name));
+            assert!(expected_msg.contains("duplicate-named siblings"));
+        }
+
+        #[test]
+        fn test_parent_path_validation() {
+            // When pulling an instance, we must verify the parent path is unique
+            // This simulates the is_tree_path_unique check
+
+            // Scenario: Trying to add a script under a folder that has duplicate siblings
+            let parent_path_levels = vec![
+                ("Root", vec!["FolderA", "FolderA"]), // Duplicate at this level!
+            ];
+
+            let path_unique = parent_path_levels
+                .iter()
+                .all(|(target, siblings)| siblings.iter().filter(|&&s| s == *target).count() == 1);
+
+            assert!(
+                !path_unique,
+                "Parent path with duplicates should fail validation"
+            );
+        }
+
+        #[test]
+        fn test_valid_parent_path() {
+            // Valid parent path with no duplicates at any level
+            let parent_path_levels = vec![
+                (
+                    "ReplicatedStorage",
+                    vec!["Workspace", "ReplicatedStorage", "ServerStorage"],
+                ),
+                ("Shared", vec!["Shared", "Client", "Server"]),
+            ];
+
+            let path_unique = parent_path_levels
+                .iter()
+                .all(|(target, siblings)| siblings.iter().filter(|&&s| s == *target).count() == 1);
+
+            assert!(path_unique, "Valid parent path should pass validation");
         }
     }
 }

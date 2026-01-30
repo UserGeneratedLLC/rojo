@@ -1,6 +1,5 @@
 ---
 source: tests/tests/build.rs
-assertion_line: 104
 expression: contents
 ---
 <roblox version="4">
@@ -11,13 +10,14 @@ expression: contents
     <Item class="Script" referent="1">
       <Properties>
         <string name="Name">bar</string>
-        <token name="RunContext">0</token>
+        <token name="RunContext">1</token>
         <string name="Source">-- Hello, from bar (a Script)!</string>
       </Properties>
     </Item>
-    <Item class="LocalScript" referent="2">
+    <Item class="Script" referent="2">
       <Properties>
         <string name="Name">baz</string>
+        <token name="RunContext">2</token>
         <string name="Source">-- Hello, from baz (a LocalScript)!</string>
       </Properties>
     </Item>

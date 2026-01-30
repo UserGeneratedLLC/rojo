@@ -91,6 +91,8 @@ pub fn extension_for_middleware(middleware: Middleware) -> &'static str {
         Middleware::ClientScript => "client.luau",
         Middleware::ModuleScript => "luau",
         Middleware::PluginScript => "plugin.luau",
+        Middleware::LocalScript => "local.luau",
+        Middleware::LegacyScript => "legacy.luau",
         Middleware::Project => "project.json5",
         Middleware::Rbxm => "rbxm",
         Middleware::Rbxmx => "rbxmx",
@@ -98,12 +100,6 @@ pub fn extension_for_middleware(middleware: Middleware) -> &'static str {
         Middleware::Text => "txt",
         Middleware::Yaml => "yml",
 
-        Middleware::LegacyServerScript
-        | Middleware::LegacyClientScript
-        | Middleware::RunContextServerScript
-        | Middleware::RunContextClientScript => {
-            todo!("syncback does not work on the middleware {middleware:?} yet")
-        }
         // These are manually specified and not `_` to guard against future
         // middleware additions missing this function.
         Middleware::Ignore => unimplemented!("syncback does not work on Ignore middleware"),
@@ -111,7 +107,9 @@ pub fn extension_for_middleware(middleware: Middleware) -> &'static str {
         | Middleware::CsvDir
         | Middleware::ServerScriptDir
         | Middleware::ClientScriptDir
-        | Middleware::ModuleScriptDir => {
+        | Middleware::ModuleScriptDir
+        | Middleware::LocalScriptDir
+        | Middleware::LegacyScriptDir => {
             unimplemented!("directory middleware requires special treatment")
         }
     }

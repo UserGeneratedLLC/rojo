@@ -3,9 +3,10 @@ source: tests/tests/build.rs
 expression: contents
 ---
 <roblox version="4">
-  <Item class="LocalScript" referent="0">
+  <Item class="Script" referent="0">
     <Properties>
       <string name="Name">client_init</string>
+      <token name="RunContext">2</token>
       <string name="Source">return "From folder/init.client.lua"</string>
     </Properties>
   </Item>

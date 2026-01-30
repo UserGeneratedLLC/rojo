@@ -48,8 +48,3 @@ where
             .with_context(|| format!("Path does not have a parent: {}", path.display()))
     }
 }
-
-// TEMP function until rojo 8.0, when it can be replaced with bool::default (aka false)
-pub fn emit_legacy_scripts_default() -> Option<bool> {
-    Some(true)
-}
