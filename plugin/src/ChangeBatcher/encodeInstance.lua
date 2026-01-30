@@ -147,7 +147,7 @@ encodeInstance = function(instance, parentId, _skipPathCheck)
 	encodeAttributes(instance, properties)
 
 	if SCRIPT_CLASS_NAMES[instance.ClassName] then
-		-- For scripts, encode the Source property
+		-- For scripts, encode the Source property (required)
 		local sourceDescriptor = RbxDom.findCanonicalPropertyDescriptor(instance.ClassName, "Source")
 		if sourceDescriptor then
 			local encodeSuccess, encodeResult = encodeProperty(instance, "Source", sourceDescriptor)
@@ -162,14 +162,25 @@ encodeInstance = function(instance, parentId, _skipPathCheck)
 			return nil
 		end
 
-		-- For Script class specifically, also encode RunContext property
-		-- This determines the file suffix (.server.luau, .client.luau, .plugin.luau, .legacy.luau)
-		if instance.ClassName == "Script" then
-			local runContextDescriptor = RbxDom.findCanonicalPropertyDescriptor("Script", "RunContext")
-			if runContextDescriptor then
-				local encodeSuccess, encodeResult = encodeProperty(instance, "RunContext", runContextDescriptor)
-				if encodeSuccess and encodeResult ~= nil then
-					properties.RunContext = encodeResult
+		-- Also encode other script properties (Disabled, LinkedSource, etc.)
+		-- These go into the .meta.json5 file
+		local classDescriptor = RbxDom.findClassDescriptor(instance.ClassName)
+		if classDescriptor then
+			for propertyName, propertyDescriptor in classDescriptor.properties do
+				-- Skip properties we handle separately or should ignore
+				if SKIP_PROPERTIES[propertyName] then
+					continue
+				end
+				if propertyName == "Source" or propertyName == "Attributes" then
+					continue
+				end
+
+				-- Only encode serializable properties
+				if propertyDescriptor.scriptability == "ReadWrite" or propertyDescriptor.scriptability == "Read" then
+					local encodeSuccess, encodeResult = encodeProperty(instance, propertyName, propertyDescriptor)
+					if encodeSuccess and encodeResult ~= nil then
+						properties[propertyName] = encodeResult
+					end
 				end
 			end
 		end
