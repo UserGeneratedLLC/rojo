@@ -71,7 +71,10 @@ fn compute_refs_with_duplicate_siblings(dom: &WeakDom) -> HashSet<Ref> {
         let mut name_to_refs: HashMap<&str, Vec<Ref>> = HashMap::new();
         for child_ref in inst.children() {
             if let Some(child) = dom.get_by_ref(*child_ref) {
-                name_to_refs.entry(&child.name).or_default().push(*child_ref);
+                name_to_refs
+                    .entry(&child.name)
+                    .or_default()
+                    .push(*child_ref);
             }
             queue.push_back(*child_ref);
         }
@@ -157,9 +160,9 @@ pub fn collect_referents(dom: &WeakDom, pre_prune_paths: &HashMap<Ref, String>) 
             // Check if target exists in current DOM
             if let Some(_target) = dom.get_by_ref(*target_ref) {
                 // Target exists - check if path is unique (with caching)
-                let is_unique = *path_unique_cache
-                    .entry(*target_ref)
-                    .or_insert_with(|| is_path_unique_with_cache(dom, *target_ref, &has_duplicate_siblings));
+                let is_unique = *path_unique_cache.entry(*target_ref).or_insert_with(|| {
+                    is_path_unique_with_cache(dom, *target_ref, &has_duplicate_siblings)
+                });
 
                 if is_unique {
                     // Path is unique - use path-based system

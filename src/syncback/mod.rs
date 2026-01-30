@@ -383,7 +383,7 @@ pub fn get_best_middleware(snapshot: &SyncbackSnapshot) -> Middleware {
             Middleware::ServerScript => Middleware::ServerScriptDir,
             Middleware::ClientScript => Middleware::ClientScriptDir,
             Middleware::ModuleScript => Middleware::ModuleScriptDir,
-            Middleware::PluginScript => Middleware::ServerScriptDir, // Plugin scripts with children use server script dir for now
+            Middleware::PluginScript => Middleware::PluginScriptDir,
             Middleware::LegacyScript => Middleware::LegacyScriptDir,
             Middleware::LocalScript => Middleware::LocalScriptDir,
             Middleware::Csv => Middleware::CsvDir,

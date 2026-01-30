@@ -273,9 +273,7 @@ impl ApiService {
     ///
     /// This is O(N) where N is the number of instances, and allows subsequent
     /// path uniqueness checks to be O(d) instead of O(d × s) where d=depth, s=siblings.
-    fn compute_tree_refs_with_duplicate_siblings(
-        tree: &crate::snapshot::RojoTree,
-    ) -> HashSet<Ref> {
+    fn compute_tree_refs_with_duplicate_siblings(tree: &crate::snapshot::RojoTree) -> HashSet<Ref> {
         use std::collections::VecDeque;
 
         let mut has_duplicate_siblings = HashSet::new();
@@ -292,7 +290,10 @@ impl ApiService {
             let mut name_to_refs: HashMap<&str, Vec<Ref>> = HashMap::new();
             for child_ref in inst.children() {
                 if let Some(child) = tree.get_instance(*child_ref) {
-                    name_to_refs.entry(child.name()).or_default().push(*child_ref);
+                    name_to_refs
+                        .entry(child.name())
+                        .or_default()
+                        .push(*child_ref);
                 }
                 queue.push_back(*child_ref);
             }
@@ -2295,7 +2296,7 @@ mod tests {
                 .and_then(|e| e.items.get(name).copied())
         }
 
-        /// Simulates suffix determination logic
+        /// Simulates suffix determination logic (matches get_script_suffix_for_run_context)
         fn determine_suffix_from_run_context(run_context_value: Option<u32>) -> &'static str {
             let run_context_enums = rbx_reflection_database::get()
                 .ok()
@@ -2308,14 +2309,14 @@ mod tests {
                         return match name.as_ref() {
                             "Client" => "client",
                             "Server" => "server",
-                            "Legacy" => "server",
+                            "Legacy" => "legacy",
                             "Plugin" => "plugin",
-                            _ => "server",
+                            _ => "legacy",
                         };
                     }
                 }
             }
-            "server"
+            "legacy"
         }
 
         #[test]
@@ -2354,13 +2355,13 @@ mod tests {
         }
 
         #[test]
-        fn test_run_context_legacy_produces_server_suffix() {
+        fn test_run_context_legacy_produces_legacy_suffix() {
             let value = get_run_context_value("Legacy");
             assert!(value.is_some(), "Legacy RunContext should exist");
             let suffix = determine_suffix_from_run_context(value);
             assert_eq!(
-                suffix, "server",
-                "RunContext::Legacy should produce 'server' suffix"
+                suffix, "legacy",
+                "RunContext::Legacy should produce 'legacy' suffix"
             );
         }
 
@@ -2376,21 +2377,21 @@ mod tests {
         }
 
         #[test]
-        fn test_no_run_context_defaults_to_server() {
+        fn test_no_run_context_defaults_to_legacy() {
             let suffix = determine_suffix_from_run_context(None);
             assert_eq!(
-                suffix, "server",
-                "No RunContext should default to 'server' suffix"
+                suffix, "legacy",
+                "No RunContext should default to 'legacy' suffix"
             );
         }
 
         #[test]
-        fn test_invalid_run_context_defaults_to_server() {
+        fn test_invalid_run_context_defaults_to_legacy() {
             // Some unlikely value that doesn't match any known RunContext
             let suffix = determine_suffix_from_run_context(Some(99999));
             assert_eq!(
-                suffix, "server",
-                "Invalid RunContext should default to 'server' suffix"
+                suffix, "legacy",
+                "Invalid RunContext should default to 'legacy' suffix"
             );
         }
 
@@ -2399,18 +2400,18 @@ mod tests {
             // Verify expected file extension patterns
             let test_cases = vec![
                 ("ModuleScript", None, ".luau"),
-                ("LocalScript", None, ".client.luau"),
+                ("LocalScript", None, ".local.luau"),
                 ("Script", get_run_context_value("Server"), ".server.luau"),
                 ("Script", get_run_context_value("Client"), ".client.luau"),
-                ("Script", get_run_context_value("Legacy"), ".server.luau"),
+                ("Script", get_run_context_value("Legacy"), ".legacy.luau"),
                 ("Script", get_run_context_value("Plugin"), ".plugin.luau"),
-                ("Script", None, ".server.luau"),
+                ("Script", None, ".legacy.luau"),
             ];
 
             for (class_name, run_context, expected_ext) in test_cases {
                 let suffix = match class_name {
                     "ModuleScript" => "",
-                    "LocalScript" => "client",
+                    "LocalScript" => "local",
                     "Script" => determine_suffix_from_run_context(run_context),
                     _ => panic!("Unknown class"),
                 };
@@ -2434,7 +2435,7 @@ mod tests {
             // Verify init file patterns for scripts with children
             let test_cases = vec![
                 ("ModuleScript", None, "init.luau"),
-                ("LocalScript", None, "init.client.luau"),
+                ("LocalScript", None, "init.local.luau"),
                 (
                     "Script",
                     get_run_context_value("Server"),
@@ -2448,7 +2449,7 @@ mod tests {
                 (
                     "Script",
                     get_run_context_value("Legacy"),
-                    "init.server.luau",
+                    "init.legacy.luau",
                 ),
                 (
                     "Script",
@@ -2460,7 +2461,7 @@ mod tests {
             for (class_name, run_context, expected_init) in test_cases {
                 let suffix = match class_name {
                     "ModuleScript" => "",
-                    "LocalScript" => "client",
+                    "LocalScript" => "local",
                     "Script" => determine_suffix_from_run_context(run_context),
                     _ => panic!("Unknown class"),
                 };
@@ -3088,62 +3089,44 @@ mod tests {
         }
 
         #[test]
-        fn test_emit_legacy_scripts_compatibility() {
-            // Test that our syncback is compatible with emitLegacyScripts mode
+        fn test_new_script_naming_convention() {
+            // Test that syncback produces the correct file extensions with the new naming convention
             //
-            // emitLegacyScripts: true
-            //   - .client.luau -> LocalScript
-            //   - .server.luau -> Script with RunContext::Legacy
+            // New naming convention (emitLegacyScripts removed):
+            //   - LocalScript -> .local.luau
+            //   - Script + RunContext::Server -> .server.luau
+            //   - Script + RunContext::Client -> .client.luau
+            //   - Script + RunContext::Plugin -> .plugin.luau
+            //   - Script + RunContext::Legacy -> .legacy.luau
+            //   - Script (no RunContext) -> .legacy.luau (default)
             //
-            // emitLegacyScripts: false
-            //   - .client.luau -> Script with RunContext::Client
-            //   - .server.luau -> Script with RunContext::Server
+            // Backwards compatibility for READING old files:
+            //   - .client.lua -> LocalScript
+            //   - .server.lua -> Script with RunContext::Legacy
 
-            // Our syncback produces:
-            // - LocalScript -> .client.luau (compatible with legacy: true)
-            // - Script + RunContext::Client -> .client.luau (compatible with legacy: false)
-            // - Script + RunContext::Server -> .server.luau (compatible with legacy: false)
-            // - Script + RunContext::Legacy -> .server.luau (compatible with legacy: true)
-
-            // This test verifies the design is correct
-            let legacy_mode_read = vec![
-                (".client.luau", "LocalScript", None),
-                (".server.luau", "Script", Some("Legacy")),
+            // Test expected syncback extensions
+            let test_cases = vec![
+                ("LocalScript", None, ".local.luau"),
+                ("Script", Some("Server"), ".server.luau"),
+                ("Script", Some("Client"), ".client.luau"),
+                ("Script", Some("Plugin"), ".plugin.luau"),
+                ("Script", Some("Legacy"), ".legacy.luau"),
+                ("Script", None, ".legacy.luau"),
             ];
 
-            let non_legacy_mode_read = vec![
-                (".client.luau", "Script", Some("Client")),
-                (".server.luau", "Script", Some("Server")),
-            ];
-
-            // Verify legacy mode round-trips correctly
-            for (extension, class, run_context) in &legacy_mode_read {
-                // If we syncback this class with this RunContext, what extension do we get?
+            for (class, run_context, expected_ext) in &test_cases {
                 let syncback_ext = match (*class, *run_context) {
-                    ("LocalScript", _) => ".client.luau",
-                    ("Script", Some("Legacy")) => ".server.luau",
+                    ("LocalScript", _) => ".local.luau",
                     ("Script", Some("Server")) => ".server.luau",
                     ("Script", Some("Client")) => ".client.luau",
-                    ("Script", None) => ".server.luau",
+                    ("Script", Some("Plugin")) => ".plugin.luau",
+                    ("Script", Some("Legacy")) => ".legacy.luau",
+                    ("Script", None) => ".legacy.luau",
                     _ => panic!("Unexpected combo"),
                 };
                 assert_eq!(
-                    syncback_ext, *extension,
-                    "Legacy mode round-trip failed for {} {:?}",
-                    class, run_context
-                );
-            }
-
-            // Verify non-legacy mode round-trips correctly
-            for (extension, class, run_context) in &non_legacy_mode_read {
-                let syncback_ext = match (*class, *run_context) {
-                    ("Script", Some("Client")) => ".client.luau",
-                    ("Script", Some("Server")) => ".server.luau",
-                    _ => panic!("Unexpected combo"),
-                };
-                assert_eq!(
-                    syncback_ext, *extension,
-                    "Non-legacy mode round-trip failed for {} {:?}",
+                    syncback_ext, *expected_ext,
+                    "New naming convention failed for {} {:?}",
                     class, run_context
                 );
             }

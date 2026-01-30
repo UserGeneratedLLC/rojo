@@ -39,6 +39,7 @@ pub fn name_for_inst<'old>(
             | Middleware::ServerScriptDir
             | Middleware::ClientScriptDir
             | Middleware::ModuleScriptDir
+            | Middleware::PluginScriptDir
             | Middleware::LocalScriptDir
             | Middleware::LegacyScriptDir => {
                 let name = if encode_invalid_chars {
@@ -110,6 +111,7 @@ pub fn extension_for_middleware(middleware: Middleware) -> &'static str {
         | Middleware::ServerScriptDir
         | Middleware::ClientScriptDir
         | Middleware::ModuleScriptDir
+        | Middleware::PluginScriptDir
         | Middleware::LocalScriptDir
         | Middleware::LegacyScriptDir => {
             unimplemented!("directory middleware requires special treatment")

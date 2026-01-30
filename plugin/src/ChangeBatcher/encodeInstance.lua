@@ -161,6 +161,18 @@ encodeInstance = function(instance, parentId, _skipPathCheck)
 			Log.warn("Could not find Source property descriptor for {:?}", instance)
 			return nil
 		end
+
+		-- For Script class specifically, also encode RunContext property
+		-- This determines the file suffix (.server.luau, .client.luau, .plugin.luau, .legacy.luau)
+		if instance.ClassName == "Script" then
+			local runContextDescriptor = RbxDom.findCanonicalPropertyDescriptor("Script", "RunContext")
+			if runContextDescriptor then
+				local encodeSuccess, encodeResult = encodeProperty(instance, "RunContext", runContextDescriptor)
+				if encodeSuccess and encodeResult ~= nil then
+					properties.RunContext = encodeResult
+				end
+			end
+		end
 	elseif not DIRECTORY_CLASSES[instance.ClassName] then
 		-- For non-directory, non-script classes, encode all relevant properties
 		local classDescriptor = RbxDom.findClassDescriptor(instance.ClassName)

@@ -96,7 +96,7 @@ pub fn snapshot_from_vfs(
         match file_name {
             // Modern extensions
             "init.server.luau" | "init.client.luau" | "init.local.luau" | "init.legacy.luau"
-            | "init.luau" | "init.csv" |
+            | "init.plugin.luau" | "init.luau" | "init.csv" |
             // Legacy extensions (for backwards compatibility)
             "init.server.lua" | "init.client.lua" | "init.lua" => return Ok(None),
             _ => {}
@@ -129,6 +129,7 @@ fn get_dir_middleware<'path>(
             (Middleware::ModuleScriptDir, "init.luau"),
             (Middleware::ServerScriptDir, "init.server.luau"),
             (Middleware::ClientScriptDir, "init.client.luau"),
+            (Middleware::PluginScriptDir, "init.plugin.luau"),
             (Middleware::LocalScriptDir, "init.local.luau"),
             (Middleware::LegacyScriptDir, "init.legacy.luau"),
             (Middleware::CsvDir, "init.csv"),
@@ -222,6 +223,8 @@ pub enum Middleware {
     #[serde(skip_deserializing)]
     ModuleScriptDir,
     #[serde(skip_deserializing)]
+    PluginScriptDir,
+    #[serde(skip_deserializing)]
     LocalScriptDir,
     #[serde(skip_deserializing)]
     LegacyScriptDir,
@@ -266,6 +269,9 @@ impl Middleware {
             }
             Self::ModuleScriptDir => {
                 snapshot_lua_init(context, vfs, path, name, ScriptType::Module)
+            }
+            Self::PluginScriptDir => {
+                snapshot_lua_init(context, vfs, path, name, ScriptType::Plugin)
             }
             Self::LocalScriptDir => snapshot_lua_init(context, vfs, path, name, ScriptType::Local),
             Self::LegacyScriptDir => {
@@ -316,6 +322,7 @@ impl Middleware {
             Middleware::ModuleScriptDir => syncback_lua_init(ScriptType::Module, snapshot),
             Middleware::LocalScriptDir => syncback_lua_init(ScriptType::Local, snapshot),
             Middleware::LegacyScriptDir => syncback_lua_init(ScriptType::Legacy, snapshot),
+            Middleware::PluginScriptDir => syncback_lua_init(ScriptType::Plugin, snapshot),
             Middleware::CsvDir => syncback_csv_init(snapshot),
         }
     }
@@ -329,6 +336,7 @@ impl Middleware {
                 | Middleware::ServerScriptDir
                 | Middleware::ClientScriptDir
                 | Middleware::ModuleScriptDir
+                | Middleware::PluginScriptDir
                 | Middleware::LocalScriptDir
                 | Middleware::LegacyScriptDir
                 | Middleware::CsvDir

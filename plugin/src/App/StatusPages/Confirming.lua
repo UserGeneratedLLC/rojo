@@ -327,18 +327,18 @@ function ConfirmingPage:render()
 					self:setState({ showingAcceptConfirm = false })
 				end,
 			}, {
-			Content = e("Frame", {
-				Size = UDim2.fromScale(1, 1),
-				BackgroundColor3 = theme.BackgroundColor,
-				BorderSizePixel = 0,
-			}, {
-				Message = e("TextLabel", {
-					Text = string.format(
-						"%d item%s not been reviewed.\n\nAccept selected changes and skip the rest?",
-						self.state.unselectedCount,
-						self.state.unselectedCount == 1 and " has" or "s have"
-					),
-					FontFace = theme.Font.Main,
+				Content = e("Frame", {
+					Size = UDim2.fromScale(1, 1),
+					BackgroundColor3 = theme.BackgroundColor,
+					BorderSizePixel = 0,
+				}, {
+					Message = e("TextLabel", {
+						Text = string.format(
+							"%d item%s not been reviewed.\n\nAccept selected changes and skip the rest?",
+							self.state.unselectedCount,
+							self.state.unselectedCount == 1 and " has" or "s have"
+						),
+						FontFace = theme.Font.Main,
 						TextSize = theme.TextSize.Body,
 						TextColor3 = theme.TextColor,
 						TextWrapped = true,
