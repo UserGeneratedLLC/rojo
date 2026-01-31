@@ -83,12 +83,32 @@ pub fn syncback_json_model<'sync>(
         model.schema = old_inst.metadata().schema.clone();
     }
 
+    let serialized = match crate::json::to_vec_pretty_sorted(&model) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            // Provide more detail about what's in the model
+            let prop_details: Vec<_> = model
+                .properties
+                .iter()
+                .map(|(k, v)| format!("{}={:?}", k.as_str(), v))
+                .collect();
+            let attr_names: Vec<_> = model.attributes.keys().map(|k| k.as_str()).collect();
+            log::error!(
+                "Failed to serialize JSON model for class '{}': properties=[{}], attributes={:?}, error: {}",
+                model.class_name,
+                prop_details.join(", "),
+                attr_names,
+                e
+            );
+            return Err(e.context(format!(
+                "failed to serialize new JSON Model for class '{}'",
+                model.class_name
+            )));
+        }
+    };
+
     Ok(SyncbackReturn {
-        fs_snapshot: FsSnapshot::new().with_added_file(
-            &snapshot.path,
-            crate::json::to_vec_pretty_sorted(&model)
-                .context("failed to serialize new JSON Model")?,
-        ),
+        fs_snapshot: FsSnapshot::new().with_added_file(&snapshot.path, serialized),
         children: Vec::new(),
         removed_children: Vec::new(),
     })

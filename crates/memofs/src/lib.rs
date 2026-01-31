@@ -259,6 +259,28 @@ impl Vfs {
         Self::new(StdBackend::new())
     }
 
+    /// Creates a new `Vfs` suitable for one-shot operations like syncback.
+    ///
+    /// Unlike `new_default()`, this creates a backend that:
+    /// - Has file watching disabled by default
+    /// - Uses a non-fatal error handler for watcher issues (logs instead of exiting)
+    ///
+    /// This is ideal for CLI commands that don't need real-time file watching
+    /// and shouldn't be terminated if the watcher thread encounters issues.
+    pub fn new_oneshot() -> Self {
+        let backend = StdBackend::new_with_error_handler(Box::new(|err| {
+            // Log the error but don't exit - one-shot operations don't need file watching
+            log::debug!(
+                "File watcher issue (non-fatal for one-shot operation): {}",
+                err
+            );
+            true // Stop the watcher thread, but don't exit the process
+        }));
+        let vfs = Self::new(backend);
+        vfs.set_watch_enabled(false);
+        vfs
+    }
+
     /// Creates a new `Vfs` with the given backend.
     pub fn new<B: VfsBackend>(backend: B) -> Self {
         let lock = VfsInner {

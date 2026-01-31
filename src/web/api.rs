@@ -1823,14 +1823,14 @@ mod tests {
 
         #[test]
         fn test_float32() {
-            let variant = Variant::Float32(3.14);
+            let variant = Variant::Float32(3.125); // Use a non-constant value
             let result = variant_to_json(&variant);
             assert!(result.is_some());
         }
 
         #[test]
         fn test_float64() {
-            let variant = Variant::Float64(2.71828);
+            let variant = Variant::Float64(2.5); // Use a non-constant value
             let result = variant_to_json(&variant);
             assert!(result.is_some());
         }
@@ -1959,7 +1959,7 @@ mod tests {
             // Configuration creates a directory instead
             let json5_types = vec!["Part", "Frame", "TextLabel", "Model"];
             for class_name in json5_types {
-                let file_name = format!("Test.model.json5");
+                let file_name = "Test.model.json5";
                 assert!(
                     file_name.ends_with(".model.json5"),
                     "{} should create .model.json5 file",
@@ -2062,10 +2062,8 @@ mod tests {
                 .map(|e| &e.items);
 
             if let Some(enums) = run_context_enums {
-                if let Some(&client_value) = enums.get("Client") {
-                    // Verify the enum value exists
-                    assert!(client_value > 0 || client_value == 0);
-                }
+                // Verify the enum value exists - just getting it is the test
+                assert!(enums.get("Client").is_some());
             }
         }
 
@@ -2078,9 +2076,7 @@ mod tests {
                 .map(|e| &e.items);
 
             if let Some(enums) = run_context_enums {
-                if let Some(&server_value) = enums.get("Server") {
-                    assert!(server_value > 0 || server_value == 0);
-                }
+                assert!(enums.get("Server").is_some());
             }
         }
 
@@ -2093,9 +2089,7 @@ mod tests {
                 .map(|e| &e.items);
 
             if let Some(enums) = run_context_enums {
-                if let Some(&legacy_value) = enums.get("Legacy") {
-                    assert!(legacy_value > 0 || legacy_value == 0);
-                }
+                assert!(enums.get("Legacy").is_some());
             }
         }
 
@@ -2108,9 +2102,7 @@ mod tests {
                 .map(|e| &e.items);
 
             if let Some(enums) = run_context_enums {
-                if let Some(&plugin_value) = enums.get("Plugin") {
-                    assert!(plugin_value > 0 || plugin_value == 0);
-                }
+                assert!(enums.get("Plugin").is_some());
             }
         }
 
@@ -3675,7 +3667,7 @@ mod tests {
             // When syncing back children, duplicates should be skipped
             // This test verifies the filter_duplicate_children logic
 
-            let children_names = vec!["ChildA", "ChildB", "ChildA", "ChildC"];
+            let children_names = ["ChildA", "ChildB", "ChildA", "ChildC"];
             let unique: Vec<_> = children_names
                 .iter()
                 .filter(|&&name| children_names.iter().filter(|&&n| n == name).count() == 1)
@@ -3697,8 +3689,8 @@ mod tests {
             //   └─ Child2/
             //        └─ GrandChild (unique within its parent)
 
-            let child1_grandchildren = vec!["GrandChild", "GrandChild"];
-            let child2_grandchildren = vec!["GrandChild"];
+            let child1_grandchildren = ["GrandChild", "GrandChild"];
+            let child2_grandchildren = ["GrandChild"];
 
             // Child1's grandchildren have duplicates
             let child1_filtered: Vec<_> = child1_grandchildren
@@ -3741,7 +3733,7 @@ mod tests {
             // This simulates the is_tree_path_unique check
 
             // Scenario: Trying to add a script under a folder that has duplicate siblings
-            let parent_path_levels = vec![
+            let parent_path_levels = [
                 ("Root", vec!["FolderA", "FolderA"]), // Duplicate at this level!
             ];
 
@@ -3758,7 +3750,7 @@ mod tests {
         #[test]
         fn test_valid_parent_path() {
             // Valid parent path with no duplicates at any level
-            let parent_path_levels = vec![
+            let parent_path_levels = [
                 (
                     "ReplicatedStorage",
                     vec!["Workspace", "ReplicatedStorage", "ServerStorage"],

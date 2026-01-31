@@ -69,8 +69,9 @@ impl SyncbackCommand {
             dom_start_timer.elapsed().as_secs_f32()
         );
 
-        let vfs = Vfs::new_default();
-        vfs.set_watch_enabled(false);
+        // Use oneshot Vfs for syncback - file watching isn't needed and
+        // watcher errors shouldn't terminate the process
+        let vfs = Vfs::new_oneshot();
 
         let project_start_timer = Instant::now();
         let session_old = ServeSession::new(vfs, path_old.clone())?;
