@@ -669,6 +669,24 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 		-- New: Apply based on per-item selections
 		local selections = userDecision.selections or {}
 
+		-- Log selection summary (debug level)
+		local pushCount, pullCount, ignoreCount = 0, 0, 0
+		for _, selection in pairs(selections) do
+			if selection == "push" then
+				pushCount += 1
+			elseif selection == "pull" then
+				pullCount += 1
+			else
+				ignoreCount += 1
+			end
+		end
+		Log.debug(
+			"User selections: {} push, {} pull, {} ignored",
+			pushCount,
+			pullCount,
+			ignoreCount
+		)
+
 		-- Build partial patches based on selections
 		local pushPatch = PatchSet.newEmpty() -- Items to apply to Studio
 		local pullPatch = PatchSet.newEmpty() -- Items to send back to Rojo
@@ -676,12 +694,15 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 		-- Process updated items
 		for _, change in catchUpPatch.updated do
 			local selection = selections[change.id]
+			local instance = self.__instanceMap.fromIds[change.id]
+			local instancePath = if instance then instance:GetFullName() else "ID:" .. tostring(change.id)
+
 			if selection == "push" then
 				-- Apply Rojo changes to Studio
+				Log.trace("[Push] Update: {}", instancePath)
 				table.insert(pushPatch.updated, change)
 			elseif selection == "pull" and self.__twoWaySync then
 				-- Send Studio state back to Rojo
-				local instance = self.__instanceMap.fromIds[change.id]
 				if instance then
 					local propertiesToSync = change.changedProperties
 					if self.__syncSourceOnly then
@@ -691,6 +712,7 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 							continue
 						end
 					end
+					Log.trace("[Pull] Update: {}", instancePath)
 					local update = encodePatchUpdate(instance, change.id, propertiesToSync)
 					if update then
 						table.insert(pullPatch.updated, update)
@@ -716,8 +738,12 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 			-- If we don't have an ID, use the instance itself as the key
 			local selection = if id then selections[id] else selections[idOrInstance]
 
+			local instancePath = if instance then instance:GetFullName() else "ID:" .. tostring(idOrInstance)
+			local instanceClass = if instance then instance.ClassName else "unknown"
+
 			if selection == "push" then
 				-- Apply Rojo removal to Studio (delete the instance)
+				Log.trace("[Push] Delete: {}", instancePath)
 				table.insert(pushPatch.removed, idOrInstance)
 			elseif selection == "pull" and self.__twoWaySync then
 				-- Syncback: Create file in Rojo from Studio instance
@@ -731,7 +757,8 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 							local guid = HttpService:GenerateGUID(false)
 							local tempRef = string.gsub(guid, "-", ""):lower()
 							pullPatch.added[tempRef] = encoded
-							Log.info("Syncback: encoding {:?} for creation in Rojo", instance)
+							-- Log at info level since this is a major file creation operation
+							Log.info("[Pull] Create file: {} ({})", instancePath, instanceClass)
 						end
 					else
 						Log.warn("Cannot syncback {:?}: parent not in Rojo tree", instance)
@@ -744,11 +771,19 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 		-- Process added items
 		for id, change in catchUpPatch.added do
 			local selection = selections[id]
+			local instanceName = change.Name or "unknown"
+			local instanceClass = change.ClassName or "unknown"
+			local parentInstance = self.__instanceMap.fromIds[change.Parent]
+			local parentPath = if parentInstance then parentInstance:GetFullName() else "ID:" .. tostring(change.Parent)
+
 			if selection == "push" then
 				-- Apply Rojo addition to Studio
+				Log.trace("[Push] Add: {}.{}", parentPath, instanceName)
 				pushPatch.added[id] = change
 			elseif selection == "pull" and self.__twoWaySync then
 				-- Don't add in Studio, remove from Rojo
+				-- Log at info level since this is a major file deletion operation
+				Log.info("[Pull] Delete file: {}.{} ({})", parentPath, instanceName, instanceClass)
 				table.insert(pullPatch.removed, id)
 			end
 			-- "ignore" items are skipped
@@ -760,11 +795,31 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 
 		-- Apply push items to Studio
 		if not PatchSet.isEmpty(pushPatch) then
+			local addCount = 0
+			for _ in pairs(pushPatch.added) do
+				addCount += 1
+			end
+			Log.debug(
+				"Applying to Studio: {} additions, {} removals, {} updates",
+				addCount,
+				#pushPatch.removed,
+				#pushPatch.updated
+			)
 			self:__applyPatch(pushPatch)
 		end
 
 		-- Send pull items back to Rojo server
 		if self.__twoWaySync and not PatchSet.isEmpty(pullPatch) then
+			local addCount = 0
+			for _ in pairs(pullPatch.added) do
+				addCount += 1
+			end
+			Log.info(
+				"Sending to Rojo: {} file creations, {} file deletions, {} updates",
+				addCount,
+				#pullPatch.removed,
+				#pullPatch.updated
+			)
 			return self.__apiContext:write(pullPatch)
 		end
 

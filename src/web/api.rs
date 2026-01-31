@@ -264,6 +264,29 @@ impl ApiService {
             }
         }
 
+        // Log property updates being synced back
+        for update in &request.updated {
+            let prop_names: Vec<&str> = update
+                .changed_properties
+                .keys()
+                .map(|k| k.as_str())
+                .collect();
+            if !prop_names.is_empty() {
+                log::info!(
+                    "Syncback: Updating properties for instance {:?}: {}",
+                    update.id,
+                    prop_names.join(", ")
+                );
+            }
+            if update.changed_name.is_some() {
+                log::info!(
+                    "Syncback: Renaming instance {:?} to {:?}",
+                    update.id,
+                    update.changed_name
+                );
+            }
+        }
+
         let updated_instances = request
             .updated
             .into_iter()

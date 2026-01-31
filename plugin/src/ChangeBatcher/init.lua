@@ -5,6 +5,9 @@
 
 local RunService = game:GetService("RunService")
 
+local Packages = script.Parent.Parent.Packages
+local Log = require(Packages.Log)
+
 local PatchSet = require(script.Parent.PatchSet)
 
 local createPatchSet = require(script.createPatchSet)
@@ -64,8 +67,10 @@ function ChangeBatcher:add(instance, propertyName)
 	if not properties then
 		properties = {}
 		self.__pendingPropertyChanges[instance] = properties
+		Log.trace("ChangeBatcher: tracking changes to {}", instance:GetFullName())
 	end
 
+	Log.trace("ChangeBatcher: property '{}' changed on {}", propertyName, instance:GetFullName())
 	properties[propertyName] = true
 end
 
@@ -96,10 +101,23 @@ function ChangeBatcher:__flush()
 	end
 
 	local patch = createPatchSet(self.__instanceMap, self.__pendingPropertyChanges, self.__syncSourceOnly)
+	self.__pendingPropertyChanges = {}
 
 	if PatchSet.isEmpty(patch) then
 		return nil
 	end
+
+	-- Log summary at debug level
+	local addedCount = 0
+	for _ in pairs(patch.added) do
+		addedCount += 1
+	end
+	Log.debug(
+		"Two-way sync: {} updates, {} additions, {} removals",
+		#patch.updated,
+		addedCount,
+		#patch.removed
+	)
 
 	return patch
 end

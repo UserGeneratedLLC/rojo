@@ -158,7 +158,13 @@ impl JobThreadContext {
     }
 
     fn handle_vfs_event(&self, event: VfsEvent) {
-        log::trace!("Vfs event: {:?}", event);
+        // Log VFS events at debug level (not too verbose, but visible when needed)
+        match &event {
+            VfsEvent::Create(path) => log::debug!("VFS: File created: {}", path.display()),
+            VfsEvent::Write(path) => log::debug!("VFS: File modified: {}", path.display()),
+            VfsEvent::Remove(path) => log::debug!("VFS: File removed: {}", path.display()),
+            _ => log::trace!("VFS: Other event: {:?}", event),
+        }
 
         // Update the VFS immediately with the event.
         self.vfs
@@ -169,7 +175,19 @@ impl JobThreadContext {
         // of the tree. Calculate and apply all of these changes.
         let applied_patches = match event {
             VfsEvent::Create(path) | VfsEvent::Write(path) => {
-                self.apply_patches(self.vfs.canonicalize(&path).unwrap())
+                // The path might have been deleted before we could process this event
+                // (e.g., during syncback when directories are being removed).
+                // In that case, just skip this event.
+                match self.vfs.canonicalize(&path) {
+                    Ok(canonical_path) => self.apply_patches(canonical_path),
+                    Err(_) => {
+                        log::trace!(
+                            "Skipping create/write event for {:?} - path no longer exists",
+                            path
+                        );
+                        Vec::new()
+                    }
+                }
             }
             VfsEvent::Remove(path) => {
                 // MemoFS does not track parent removals yet, so we can canonicalize
@@ -196,13 +214,34 @@ impl JobThreadContext {
             }
         };
 
+        // Log patch application summary at debug level
+        if !applied_patches.is_empty() {
+            let total_added: usize = applied_patches.iter().map(|p| p.added.len()).sum();
+            let total_removed: usize = applied_patches.iter().map(|p| p.removed.len()).sum();
+            let total_updated: usize = applied_patches.iter().map(|p| p.updated.len()).sum();
+            if total_added > 0 || total_removed > 0 || total_updated > 0 {
+                log::debug!(
+                    "VFS event applied: {} added, {} removed, {} updated",
+                    total_added,
+                    total_removed,
+                    total_updated
+                );
+            }
+        }
+
         // Notify anyone listening to the message queue about the changes we
         // just made.
         self.message_queue.push_messages(&applied_patches);
     }
 
     fn handle_tree_event(&self, patch_set: PatchSet) {
-        log::trace!("Applying PatchSet from client: {:#?}", patch_set);
+        // Log incoming patch summary at debug level
+        log::debug!(
+            "Processing client patch: {} removed, {} added, {} updated",
+            patch_set.removed_instances.len(),
+            patch_set.added_instances.len(),
+            patch_set.updated_instances.len()
+        );
 
         let applied_patch = {
             let mut tree = self.tree.lock().unwrap();
@@ -212,6 +251,7 @@ impl JobThreadContext {
                     if let Some(instigating_source) = &instance.metadata().instigating_source {
                         match instigating_source {
                             InstigatingSource::Path(path) => {
+                                log::info!("Two-way sync: Removing file {}", path.display());
                                 if let Err(err) = fs::remove_file(path) {
                                     log::error!(
                                         "Failed to remove file {:?} for instance {:?}: {}",
@@ -264,6 +304,10 @@ impl JobThreadContext {
                                 match instigating_source {
                                     InstigatingSource::Path(path) => {
                                         if let Some(Variant::String(value)) = changed_value {
+                                            log::info!(
+                                                "Two-way sync: Writing Source to {}",
+                                                path.display()
+                                            );
                                             if let Err(err) = fs::write(path, value) {
                                                 log::error!(
                                                     "Failed to write Source to {:?} for instance {:?}: {}",
@@ -290,7 +334,7 @@ impl JobThreadContext {
                                 );
                             }
                         } else {
-                            log::warn!("Cannot change properties besides BaseScript.Source.");
+                            log::trace!("Skipping non-Source property change: {}", key);
                         }
                     }
                 } else {

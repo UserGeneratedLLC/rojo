@@ -177,6 +177,43 @@ end
 function ApiContext:write(patch)
 	local url = ("%s/api/write"):format(self.__baseUrl)
 
+	-- Log what we're sending to the server (syncback/pull)
+	local addedCount = 0
+	for _ in pairs(patch.added) do
+		addedCount += 1
+	end
+	
+	-- Only log summary at debug level to reduce verbosity
+	if #patch.removed > 0 or addedCount > 0 or #patch.updated > 0 then
+		Log.debug(
+			"Sending to server: {} removals, {} additions, {} updates",
+			#patch.removed,
+			addedCount,
+			#patch.updated
+		)
+	end
+
+	-- Log individual operations at trace level (very detailed)
+	for _, removed in ipairs(patch.removed) do
+		Log.trace("[Syncback] Remove ID: {}", tostring(removed))
+	end
+
+	for _, addedInstance in pairs(patch.added) do
+		local instanceName = addedInstance.name or addedInstance.Name or "unknown"
+		local instanceClass = addedInstance.className or addedInstance.ClassName or "unknown"
+		Log.trace("[Syncback] Add {} ({})", instanceName, instanceClass)
+	end
+
+	for _, update in ipairs(patch.updated) do
+		local propCount = 0
+		if update.changedProperties then
+			for _ in pairs(update.changedProperties) do
+				propCount += 1
+			end
+		end
+		Log.trace("[Syncback] Update ID {} ({} properties)", update.id, propCount)
+	end
+
 	local updated = {}
 	for _, update in ipairs(patch.updated) do
 		local fixedUpdate = {

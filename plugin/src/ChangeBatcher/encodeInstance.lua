@@ -173,6 +173,11 @@ encodeInstance = function(instance, parentId, _skipPathCheck)
 		return nil
 	end
 
+	-- Log encoding at trace level (very detailed)
+	if not _skipPathCheck then
+		Log.trace("Encoding for syncback: {} ({})", instance:GetFullName(), instance.ClassName)
+	end
+
 	local properties = {}
 
 	-- Always try to encode Attributes and Tags for any instance type
@@ -261,6 +266,18 @@ encodeInstance = function(instance, parentId, _skipPathCheck)
 			table.insert(children, encodedChild)
 		end
 	end
+
+	-- Log property count for debugging
+	local propCount = 0
+	for _ in pairs(properties) do
+		propCount += 1
+	end
+	Log.trace(
+		"  Encoded {} with {} properties, {} children",
+		instance.Name,
+		propCount,
+		#children
+	)
 
 	return {
 		parent = parentId,

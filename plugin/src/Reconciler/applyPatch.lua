@@ -27,6 +27,20 @@ local function applyPatch(instanceMap, patch)
 	-- to ensure that referents can be mapped to instances correctly.
 	local deferredRefs = {}
 
+	-- Log summary of patch being applied (debug level for summary)
+	local addCount = 0
+	for _ in pairs(patch.added) do
+		addCount += 1
+	end
+	if #patch.removed > 0 or addCount > 0 or #patch.updated > 0 then
+		Log.debug(
+			"Applying patch to Studio: {} removals, {} additions, {} updates",
+			#patch.removed,
+			addCount,
+			#patch.updated
+		)
+	end
+
 	for _, removedIdOrInstance in ipairs(patch.removed) do
 		-- Skip auto-created instances that shouldn't be synced
 		local instance = if Types.RbxId(removedIdOrInstance)
@@ -36,6 +50,11 @@ local function applyPatch(instanceMap, patch)
 			continue
 		end
 
+		-- Log the removal (info level for major operations)
+		local instancePath = if instance then instance:GetFullName() else tostring(removedIdOrInstance)
+		local instanceClass = if instance then instance.ClassName else "unknown"
+		Log.info("[Studio] Remove: {} ({})", instancePath, instanceClass)
+
 		local removeInstanceSuccess = pcall(function()
 			if Types.RbxId(removedIdOrInstance) then
 				instanceMap:destroyId(removedIdOrInstance)
@@ -44,6 +63,7 @@ local function applyPatch(instanceMap, patch)
 			end
 		end)
 		if not removeInstanceSuccess then
+			Log.warn("[Studio] Remove failed: {}", instancePath)
 			table.insert(unappliedPatch.removed, removedIdOrInstance)
 		end
 	end
@@ -81,9 +101,14 @@ local function applyPatch(instanceMap, patch)
 			)
 		end
 
+		-- Log the addition (info level for major operations)
+		local parentPath = parentInstance:GetFullName()
+		Log.info("[Studio] Add: {}.{} ({})", parentPath, virtualInstance.Name, virtualInstance.ClassName)
+
 		local failedToReify = reifyInstance(deferredRefs, instanceMap, patch.added, id, parentInstance)
 
 		if not PatchSet.isEmpty(failedToReify) then
+			Log.warn("[Studio] Add failed: {}.{}", parentPath, virtualInstance.Name)
 			Log.debug("Failed to reify as part of applying a patch: {:#?}", failedToReify)
 			PatchSet.assign(unappliedPatch, failedToReify)
 		end
@@ -94,9 +119,26 @@ local function applyPatch(instanceMap, patch)
 
 		if instance == nil then
 			-- We can't update an instance that doesn't exist.
+			Log.warn("[Studio] Update failed: Instance with ID {} not found", update.id)
 			table.insert(unappliedPatch.updated, update)
 			continue
 		end
+
+		-- Log the update (debug level for property details to reduce verbosity)
+		local instancePath = instance:GetFullName()
+		local propList = {}
+		if update.changedName then
+			table.insert(propList, "Name")
+		end
+		if update.changedClassName then
+			table.insert(propList, "ClassName")
+		end
+		if update.changedProperties then
+			for propName, _ in pairs(update.changedProperties) do
+				table.insert(propList, propName)
+			end
+		end
+		Log.debug("[Studio] Update: {} - {}", instancePath, table.concat(propList, ", "))
 
 		-- Pause updates on this instance to avoid picking up our changes when
 		-- two-way sync is enabled.
