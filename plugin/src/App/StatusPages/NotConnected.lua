@@ -124,9 +124,9 @@ function NotConnectedPage:render()
 				}),
 			}),
 
-		Connect = e(TextButton, {
-			text = "Sync",
-			style = "Solid",
+			Connect = e(TextButton, {
+				text = "Sync",
+				style = "Solid",
 				transparency = self.props.transparency,
 				layoutOrder = 2,
 				onClick = self.props.onConnect,

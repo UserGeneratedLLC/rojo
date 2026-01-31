@@ -272,12 +272,7 @@ encodeInstance = function(instance, parentId, _skipPathCheck)
 	for _ in pairs(properties) do
 		propCount += 1
 	end
-	Log.trace(
-		"  Encoded {} with {} properties, {} children",
-		instance.Name,
-		propCount,
-		#children
-	)
+	Log.trace("  Encoded {} with {} properties, {} children", instance.Name, propCount, #children)
 
 	return {
 		parent = parentId,

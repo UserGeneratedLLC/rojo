@@ -182,7 +182,7 @@ function ApiContext:write(patch)
 	for _ in pairs(patch.added) do
 		addedCount += 1
 	end
-	
+
 	-- Only log summary at debug level to reduce verbosity
 	if #patch.removed > 0 or addedCount > 0 or #patch.updated > 0 then
 		Log.debug(

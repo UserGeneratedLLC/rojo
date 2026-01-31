@@ -112,12 +112,7 @@ function ChangeBatcher:__flush()
 	for _ in pairs(patch.added) do
 		addedCount += 1
 	end
-	Log.debug(
-		"Two-way sync: {} updates, {} additions, {} removals",
-		#patch.updated,
-		addedCount,
-		#patch.removed
-	)
+	Log.debug("Two-way sync: {} updates, {} additions, {} removals", #patch.updated, addedCount, #patch.removed)
 
 	return patch
 end

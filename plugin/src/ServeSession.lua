@@ -680,12 +680,7 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 				ignoreCount += 1
 			end
 		end
-		Log.debug(
-			"User selections: {} push, {} pull, {} ignored",
-			pushCount,
-			pullCount,
-			ignoreCount
-		)
+		Log.debug("User selections: {} push, {} pull, {} ignored", pushCount, pullCount, ignoreCount)
 
 		-- Build partial patches based on selections
 		local pushPatch = PatchSet.newEmpty() -- Items to apply to Studio
