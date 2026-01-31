@@ -48,7 +48,14 @@ const SPACE_ENCODING: &str = "%SPACE%";
 /// with their encoded representations like `%DOT%`, `%LT%`, `%GT%`, etc.
 /// Literal `%` is escaped as `%%`. Leading and trailing spaces are encoded as `%SPACE%`.
 pub fn encode_path_name(name: &str) -> String {
-    // Count leading and trailing spaces first (before any modifications)
+    let trimmed = name.trim_matches(' ');
+
+    // Handle the case where the string is entirely spaces (or empty)
+    if trimmed.is_empty() {
+        return SPACE_ENCODING.repeat(name.len());
+    }
+
+    // Count leading and trailing spaces
     let leading_spaces = name.len() - name.trim_start_matches(' ').len();
     let trailing_spaces = name.len() - name.trim_end_matches(' ').len();
 
@@ -307,5 +314,29 @@ mod tests {
         let encoded = encode_path_name(original);
         let decoded = decode_path_name(&encoded);
         assert_eq!(decoded, original);
+    }
+
+    #[test]
+    fn test_single_space() {
+        let input = " ";
+        let encoded = encode_path_name(input);
+        assert_eq!(encoded, "%SPACE%");
+        assert_eq!(decode_path_name(&encoded), input);
+    }
+
+    #[test]
+    fn test_multiple_spaces_only() {
+        let input = "   ";
+        let encoded = encode_path_name(input);
+        assert_eq!(encoded, "%SPACE%%SPACE%%SPACE%");
+        assert_eq!(decode_path_name(&encoded), input);
+    }
+
+    #[test]
+    fn test_empty_string() {
+        let input = "";
+        let encoded = encode_path_name(input);
+        assert_eq!(encoded, "");
+        assert_eq!(decode_path_name(&encoded), input);
     }
 }
