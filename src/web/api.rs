@@ -1476,6 +1476,16 @@ impl ApiService {
                         StatusCode::INTERNAL_SERVER_ERROR,
                     )
                 }
+                _ => {
+                    return msgpack(
+                        ErrorResponse::internal_error(format!(
+                            "Failed to open {}: {}",
+                            script_path.display(),
+                            error
+                        )),
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                    )
+                }
             },
         };
 

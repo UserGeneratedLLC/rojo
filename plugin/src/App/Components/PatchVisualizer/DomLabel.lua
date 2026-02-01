@@ -68,21 +68,17 @@ function SelectionOption:render()
 		local isParentOnly = props.isParentOnly
 		local hasChildren = props.hasChildren
 
-		-- Determine if we should show the caret:
-		-- - Parent-only nodes: always show caret (they only do subtree operations)
-		-- - Normal nodes with children: show caret when already selected AND hovering
-		local showCaret = if isParentOnly then true elseif hasChildren and isSelected and isHovered then true else false
-
 		local bgColor = if isSelected
 			then (if props.optionType == "push"
-				then Color3.fromHex("27AE60")
+				then Color3.fromHex("335FFF")
 				elseif props.optionType == "pull" then Color3.fromHex("E74C3C")
 				else Color3.fromHex("7F8C8D"))
 			else theme.BorderedContainer.BackgroundColor
 		local textColor = if isSelected then Color3.new(1, 1, 1) else theme.TextColor
 
-		local displayText = if showCaret then props.text .. " ▼" else props.text
-		local buttonWidth = if showCaret then 48 else 36
+		local displayText = props.text
+		-- Use wider button for "Studio" text (6 chars vs 4 for others)
+		local buttonWidth = if props.text == "Studio" then 44 else 36
 
 		-- Transparency logic:
 		-- - Parent-only nodes: more transparent when not hovered, less so when hovering button
@@ -376,9 +372,8 @@ function DomLabel:render()
 				PaddingLeft = UDim.new(0, 10),
 				PaddingRight = UDim.new(0, 10),
 			}),
-			Button = e("TextButton", {
+			Button = e("Frame", {
 				BackgroundTransparency = 1,
-				Text = "",
 				Size = UDim2.new(1, 0, 1, 0),
 				[Roact.Event.MouseEnter] = function()
 					self:setState({ isHovered = true })
@@ -386,30 +381,40 @@ function DomLabel:render()
 				[Roact.Event.MouseLeave] = function()
 					self:setState({ isHovered = false })
 				end,
-				[Roact.Event.Activated] = function(_rbx: Instance, _input: InputObject, clickCount: number)
-					if clickCount == 1 then
+				[Roact.Event.InputBegan] = function(_rbx: Instance, input: InputObject)
+					if input.UserInputType ~= Enum.UserInputType.MouseButton1 then
+						return
+					end
+
+					-- Check for double click
+					local now = os.clock()
+					local lastClickTime = self.lastClickTime or 0
+					self.lastClickTime = now
+
+					if now - lastClickTime < 0.3 then
 						-- Double click opens the instance in explorer
-						self.lastDoubleClickTime = os.clock()
+						self.lastDoubleClickTime = now
 						if props.instance then
 							SelectionService:Set({ props.instance })
 						end
-					elseif clickCount == 0 then
-						-- Single click expands the changes
-						task.wait(0.25)
-						if os.clock() - (self.lastDoubleClickTime or 0) <= 0.25 then
-							-- This is a double click, so don't expand
-							return
-						end
+					else
+						-- Single click expands the changes (after a delay to check for double click)
+						task.delay(0.3, function()
+							if os.clock() - (self.lastDoubleClickTime or 0) <= 0.35 then
+								-- This was a double click, so don't expand
+								return
+							end
 
-						if props.changeList then
-							self.expanded = not self.expanded
-							local goalHeight = 24
-								+ (if self.expanded then math.clamp(#props.changeList * 24, 24, 24 * 6) else 0)
-							self.motor:setGoal(Flipper.Spring.new(goalHeight, {
-								frequency = 5,
-								dampingRatio = 1,
-							}))
-						end
+							if props.changeList then
+								self.expanded = not self.expanded
+								local goalHeight = 24
+									+ (if self.expanded then math.clamp(#props.changeList * 24, 24, 24 * 6) else 0)
+								self.motor:setGoal(Flipper.Spring.new(goalHeight, {
+									frequency = 5,
+									dampingRatio = 1,
+								}))
+							end
+						end)
 					end
 				end,
 			}),

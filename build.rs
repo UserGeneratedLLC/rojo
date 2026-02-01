@@ -107,7 +107,7 @@ fn main() -> Result<(), anyhow::Error> {
 
     println!("cargo:rerun-if-changed=build/windows/rojo-manifest.rc");
     println!("cargo:rerun-if-changed=build/windows/rojo.manifest");
-    embed_resource::compile("build/windows/rojo-manifest.rc");
+    let _ = embed_resource::compile("build/windows/rojo-manifest.rc", embed_resource::NONE);
 
     Ok(())
 }

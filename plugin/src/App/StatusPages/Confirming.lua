@@ -173,9 +173,9 @@ function ConfirmingPage:render()
 					})
 					else nil,
 
-				Accept = e(TextButton, {
-					text = if hasChanges then "Accept" else "OK",
-					style = if hasChanges then "Primary" else "Success",
+			Accept = e(TextButton, {
+				text = if hasChanges then "Accept" else "OK",
+				style = "Primary",
 					transparency = self.props.transparency,
 					layoutOrder = 2,
 					onClick = function()
