@@ -82,10 +82,11 @@ local function Header(props)
 		}, {
 			Logo = e("ImageLabel", {
 				Image = Assets.Images.Logo,
-				ImageColor3 = theme.Header.LogoColor,
+				ImageColor3 = Color3.new(1, 1, 1),
 				ImageTransparency = props.transparency,
+				ScaleType = Enum.ScaleType.Fit,
 
-				Size = UDim2.new(0, 60, 0, 27),
+				Size = UDim2.new(0, 122, 0, 27),
 
 				LayoutOrder = 1,
 				BackgroundTransparency = 1,

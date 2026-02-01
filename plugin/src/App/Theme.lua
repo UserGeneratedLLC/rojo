@@ -23,7 +23,7 @@ local Roact = require(Packages.Roact)
 
 local strict = require(script.Parent.Parent.strict)
 
-local BRAND_COLOR = Color3.fromHex("E13835")
+local BRAND_COLOR = Color3.fromHex("335FFF")
 
 local Context = Roact.createContext({})
 

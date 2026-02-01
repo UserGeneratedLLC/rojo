@@ -2,7 +2,6 @@
 	"Reifies" a virtual DOM, constructing a real DOM with the same shape.
 ]]
 
-local invariant = require(script.Parent.Parent.invariant)
 local PatchSet = require(script.Parent.Parent.PatchSet)
 local setProperty = require(script.Parent.setProperty)
 local decodeValue = require(script.Parent.decodeValue)
@@ -13,6 +12,12 @@ local decodeValue = require(script.Parent.decodeValue)
 ]]
 local function addAllToPatch(patchSet, virtualInstances, id)
 	local virtualInstance = virtualInstances[id]
+
+	-- Skip instances that were excluded from the patch (e.g., ambiguous paths)
+	if virtualInstance == nil then
+		return
+	end
+
 	patchSet.added[id] = virtualInstance
 
 	for _, childId in ipairs(virtualInstance.Children) do
@@ -38,7 +43,11 @@ function reifyInstanceInner(unappliedPatch, deferredRefs, instanceMap, virtualIn
 	local virtualInstance = virtualInstances[id]
 
 	if virtualInstance == nil then
-		invariant("Cannot reify an instance not present in virtualInstances\nID: {}", id)
+		-- This instance was intentionally excluded from the patch (e.g., due to
+		-- ambiguous paths with duplicate-named siblings). Skip it gracefully
+		-- rather than throwing an error. The parent's Children array may still
+		-- reference this ID even though it wasn't included in the additions.
+		return
 	end
 
 	-- Instance.new can fail if we're passing in something that can't be
