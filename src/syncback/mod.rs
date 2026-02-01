@@ -411,12 +411,53 @@ pub fn syncback_loop_with_stats(
             std::fs::canonicalize(project_path).unwrap_or_else(|_| project_path.to_path_buf());
         let canonical_project_path = strip_unc_prefix(canonical_project_path);
 
+        // Helper to canonicalize a path that may not exist yet.
+        // Tries to canonicalize the full path, then falls back to canonicalizing
+        // the nearest existing ancestor and appending the remaining components.
+        fn canonicalize_maybe_nonexistent(p: &Path) -> PathBuf {
+            // Try full canonicalization first (works if path exists)
+            if let Ok(canonical) = std::fs::canonicalize(p) {
+                return strip_unc_prefix(canonical);
+            }
+
+            // Path doesn't exist - find the nearest existing ancestor and canonicalize that,
+            // then append the remaining path components.
+            let mut existing_ancestor = p.to_path_buf();
+            let mut suffix_components = Vec::new();
+
+            while !existing_ancestor.as_os_str().is_empty() {
+                if existing_ancestor.exists() {
+                    break;
+                }
+                if let Some(file_name) = existing_ancestor.file_name() {
+                    suffix_components.push(file_name.to_owned());
+                }
+                if !existing_ancestor.pop() {
+                    break;
+                }
+            }
+
+            // Canonicalize the existing ancestor
+            let canonical_ancestor = std::fs::canonicalize(&existing_ancestor)
+                .map(strip_unc_prefix)
+                .unwrap_or(existing_ancestor);
+
+            // Append the suffix components in reverse order
+            let mut result = canonical_ancestor;
+            for component in suffix_components.into_iter().rev() {
+                result.push(component);
+            }
+            result
+        }
+
         // Convert added_paths to absolute paths by joining with canonicalized project base path.
         // fs_snapshot paths are relative to the project folder.
+        // We must also canonicalize the result to resolve any symlinks within the project
+        // directory structure, ensuring consistent comparison with canonicalized existing paths.
         let added_paths: HashSet<PathBuf> = fs_snapshot
             .added_paths()
             .into_iter()
-            .map(|p| canonical_project_path.join(p))
+            .map(|p| canonicalize_maybe_nonexistent(&canonical_project_path.join(p)))
             .collect();
 
         // Get the project file path to exclude it from removal
