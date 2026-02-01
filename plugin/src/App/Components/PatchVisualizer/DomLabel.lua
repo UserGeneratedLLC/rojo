@@ -376,7 +376,7 @@ function DomLabel:render()
 				PaddingRight = UDim.new(0, 10),
 			}),
 			Button = e("Frame", {
-				Active = true,  -- Required for InputBegan to work on Frames
+				Active = true, -- Required for InputBegan to work on Frames
 				BackgroundTransparency = 1,
 				Size = UDim2.new(1, 0, 1, 0),
 				[Roact.Event.MouseEnter] = function()
