@@ -80,9 +80,7 @@ function SelectionOption:render()
 		-- Use wider button for "Studio" text (6 chars vs 4 for others)
 		local buttonWidth = if props.text == "Studio" then 44 else 36
 
-		-- Transparency logic:
-		-- - Parent-only nodes: more transparent when not hovered, less so when hovering button
-		-- - Normal nodes: standard transparency based on selection
+		-- Transparency logic with hover effect
 		local bgTransparency, txtTransparency
 		if isParentOnly then
 			-- Parent-only: partially transparent, less so when hovering the button
@@ -93,8 +91,13 @@ function SelectionOption:render()
 				return if isHovered then 0 + t else 0.3 + (0.7 * t)
 			end)
 		else
+			-- Normal buttons: show hover effect by reducing transparency
 			bgTransparency = props.transparency:map(function(t)
-				return if isSelected then 0.1 + (0.9 * t) else 0.7 + (0.3 * t)
+				if isSelected then
+					return if isHovered then 0 + (1 * t) else 0.1 + (0.9 * t)
+				else
+					return if isHovered then 0.5 + (0.5 * t) else 0.7 + (0.3 * t)
+				end
 			end)
 			txtTransparency = props.transparency
 		end
@@ -373,6 +376,7 @@ function DomLabel:render()
 				PaddingRight = UDim.new(0, 10),
 			}),
 			Button = e("Frame", {
+				Active = true,  -- Required for InputBegan to work on Frames
 				BackgroundTransparency = 1,
 				Size = UDim2.new(1, 0, 1, 0),
 				[Roact.Event.MouseEnter] = function()

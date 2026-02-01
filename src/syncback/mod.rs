@@ -385,33 +385,47 @@ pub fn syncback_loop_with_stats(
     if !incremental && !existing_paths.is_empty() {
         log::debug!("Clean mode: checking for orphaned files to remove");
 
-        // Helper to normalize a path by stripping UNC prefix on Windows
-        // This is needed because paths may have different prefixes (\\?\ vs regular)
-        fn normalize_path(p: &Path) -> PathBuf {
-            // Strip Windows UNC prefix if present
+        // Helper to strip UNC prefix on Windows
+        fn strip_unc_prefix(p: PathBuf) -> PathBuf {
             let path_str = p.to_string_lossy();
             if path_str.starts_with(r"\\?\") || path_str.starts_with("//?/") {
                 PathBuf::from(&path_str[4..])
             } else {
-                p.to_path_buf()
+                p
             }
         }
 
-        // Convert added_paths to absolute paths by joining with project base path.
+        // Helper to normalize a path by:
+        // 1. Canonicalizing to resolve symlinks (important on macOS where /var -> /private/var)
+        // 2. Stripping UNC prefix on Windows
+        fn normalize_existing_path(p: &Path) -> PathBuf {
+            // First try to canonicalize to resolve symlinks
+            // This is important on macOS where /var is a symlink to /private/var
+            let canonicalized = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+            strip_unc_prefix(canonicalized)
+        }
+
+        // Canonicalize the project path base to resolve symlinks consistently
+        // This is important on macOS where /var -> /private/var
+        let canonical_project_path =
+            std::fs::canonicalize(project_path).unwrap_or_else(|_| project_path.to_path_buf());
+        let canonical_project_path = strip_unc_prefix(canonical_project_path);
+
+        // Convert added_paths to absolute paths by joining with canonicalized project base path.
         // fs_snapshot paths are relative to the project folder.
         let added_paths: HashSet<PathBuf> = fs_snapshot
             .added_paths()
             .into_iter()
-            .map(|p| normalize_path(&project_path.join(p)))
+            .map(|p| canonical_project_path.join(p))
             .collect();
 
         // Get the project file path to exclude it from removal
-        let project_file = normalize_path(&project.file_location);
+        let project_file = normalize_existing_path(&project.file_location);
 
         // First pass: collect normalized paths to remove (deduplicated)
         let mut paths_to_remove: HashSet<PathBuf> = HashSet::new();
         for old_path in &existing_paths {
-            let old_path_norm = normalize_path(old_path);
+            let old_path_norm = normalize_existing_path(old_path);
 
             // Never remove the project file itself
             if old_path_norm == project_file {
@@ -454,7 +468,6 @@ pub fn syncback_loop_with_stats(
         // Skip any path that is inside another path we're removing,
         // since remove_dir_all will handle the contents.
         let paths_vec: Vec<_> = paths_to_remove.iter().collect();
-        let normalized_project_path = normalize_path(project_path);
         for old_path in &paths_vec {
             // Check if this path is inside another path we're removing
             let is_nested = paths_vec
@@ -468,7 +481,7 @@ pub fn syncback_loop_with_stats(
             // Convert absolute path to relative path for FsSnapshot.
             // FsSnapshot expects relative paths and joins them with base_path in write_to_vfs.
             let relative_path = old_path
-                .strip_prefix(&normalized_project_path)
+                .strip_prefix(&canonical_project_path)
                 .unwrap_or(old_path);
 
             log::debug!("Removing orphaned path: {}", relative_path.display());
