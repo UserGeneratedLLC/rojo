@@ -61,24 +61,40 @@ local function SelectionOption(props)
 				else Color3.fromHex("7F8C8D"))
 			else theme.BorderedContainer.BackgroundColor
 		local textColor = if isSelected then Color3.new(1, 1, 1) else theme.TextColor
+		-- Add caret if this button can cascade to children
+		local displayText = if props.showCaret then props.text .. " ▼" else props.text
+		local buttonWidth = if props.showCaret then 48 else 36
 
 		return e("TextButton", {
-			Size = UDim2.new(0, 36, 0, 18),
+			Size = UDim2.new(0, buttonWidth, 0, 18),
 			BackgroundColor3 = bgColor,
 			BackgroundTransparency = props.transparency:map(function(t)
 				return if isSelected then 0.1 + (0.9 * t) else 0.7 + (0.3 * t)
 			end),
 			BorderSizePixel = 0,
-			Text = props.text,
+			Text = displayText,
 			FontFace = if isSelected then theme.Font.Bold else theme.Font.Main,
 			TextSize = theme.TextSize.Small,
 			TextColor3 = textColor,
 			TextTransparency = props.transparency,
 			LayoutOrder = props.layoutOrder,
 			ZIndex = 10,
-			[Roact.Event.Activated] = function()
-				if props.onClick then
-					props.onClick()
+			[Roact.Event.Activated] = function(_rbx, _input, clickCount)
+				-- For parent-only nodes, any click triggers subtree selection
+				if props.isParentOnly then
+					if props.onDoubleClick then
+						props.onDoubleClick()
+					end
+				elseif clickCount == 1 then
+					-- Double click: apply to subtree
+					if props.onDoubleClick then
+						props.onDoubleClick()
+					end
+				else
+					-- Single click: apply to this node only
+					if props.onClick then
+						props.onClick()
+					end
 				end
 			end,
 		}, {
@@ -95,8 +111,12 @@ local function SelectionRadio(props)
 		return nil
 	end
 
+	local showCaret = props.hasChildren
+	local frameWidth = if showCaret then 154 else 118
+	local isParentOnly = props.isParentOnly
+
 	return e("Frame", {
-		Size = UDim2.new(0, 118, 0, 18),
+		Size = UDim2.new(0, frameWidth, 0, 18),
 		BackgroundTransparency = 1,
 		Position = UDim2.new(1, -5, 0, 3),
 		AnchorPoint = Vector2.new(1, 0),
@@ -109,15 +129,22 @@ local function SelectionRadio(props)
 			SortOrder = Enum.SortOrder.LayoutOrder,
 			Padding = UDim.new(0, 4),
 		}),
-		Pull = e(SelectionOption, {
-			text = "Pull",
+		Studio = e(SelectionOption, {
+			text = "Studio",
 			optionType = "pull",
 			isSelected = props.selection == "pull",
 			transparency = props.transparency,
 			layoutOrder = 1,
+			showCaret = showCaret,
+			isParentOnly = isParentOnly,
 			onClick = function()
 				if props.onSelectionChange then
 					props.onSelectionChange(props.nodeId, "pull")
+				end
+			end,
+			onDoubleClick = function()
+				if props.onSubtreeSelectionChange then
+					props.onSubtreeSelectionChange(props.nodeId, "pull")
 				end
 			end,
 		}),
@@ -127,21 +154,35 @@ local function SelectionRadio(props)
 			isSelected = props.selection == "ignore",
 			transparency = props.transparency,
 			layoutOrder = 2,
+			showCaret = showCaret,
+			isParentOnly = isParentOnly,
 			onClick = function()
 				if props.onSelectionChange then
 					props.onSelectionChange(props.nodeId, "ignore")
 				end
 			end,
+			onDoubleClick = function()
+				if props.onSubtreeSelectionChange then
+					props.onSubtreeSelectionChange(props.nodeId, "ignore")
+				end
+			end,
 		}),
-		Push = e(SelectionOption, {
-			text = "Push",
+		Rojo = e(SelectionOption, {
+			text = "Rojo",
 			optionType = "push",
 			isSelected = props.selection == "push",
 			transparency = props.transparency,
 			layoutOrder = 3,
+			showCaret = showCaret,
+			isParentOnly = isParentOnly,
 			onClick = function()
 				if props.onSelectionChange then
 					props.onSelectionChange(props.nodeId, "push")
+				end
+			end,
+			onDoubleClick = function()
+				if props.onSubtreeSelectionChange then
+					props.onSubtreeSelectionChange(props.nodeId, "push")
 				end
 			end,
 		}),
@@ -183,6 +224,7 @@ function DomLabel:init()
 
 	self:setState({
 		renderExpansion = self.expanded,
+		isHovered = false,
 	})
 	self.motorStepConnection = self.motor:onStep(function(value)
 		if not self.isMounted then
@@ -301,6 +343,12 @@ function DomLabel:render()
 				BackgroundTransparency = 1,
 				Text = "",
 				Size = UDim2.new(1, 0, 1, 0),
+				[Roact.Event.MouseEnter] = function()
+					self:setState({ isHovered = true })
+				end,
+				[Roact.Event.MouseLeave] = function()
+					self:setState({ isHovered = false })
+				end,
 				[Roact.Event.Activated] = function(_rbx: Instance, _input: InputObject, clickCount: number)
 					if clickCount == 1 then
 						-- Double click opens the instance in explorer
@@ -413,11 +461,17 @@ function DomLabel:render()
 					else nil,
 			}),
 			SelectionRadio = e(SelectionRadio, {
-				visible = props.patchType ~= nil and props.onSelectionChange ~= nil,
+				-- Visible for nodes with patchType, or for parent-only nodes on hover
+				visible = (props.patchType ~= nil and props.onSelectionChange ~= nil)
+					or (props.patchType == nil and props.hasChildren and self.state.isHovered and props.onSubtreeSelectionChange ~= nil),
 				nodeId = props.nodeId,
 				selection = props.selection,
 				transparency = props.transparency,
+				hasChildren = props.hasChildren,
+				-- For parent-only nodes (no patchType), only subtree selection makes sense
+				isParentOnly = props.patchType == nil,
 				onSelectionChange = props.onSelectionChange,
+				onSubtreeSelectionChange = props.onSubtreeSelectionChange,
 			}),
 			LineGuides = e("Folder", nil, lineGuides),
 		})

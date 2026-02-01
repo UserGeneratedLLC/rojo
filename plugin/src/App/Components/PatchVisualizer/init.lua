@@ -104,6 +104,7 @@ function PatchVisualizer:render()
 				nodeId = node.id,
 				selection = self.props.selections and self.props.selections[node.id],
 				onSelectionChange = self.props.onSelectionChange,
+				onSubtreeSelectionChange = self.props.onSubtreeSelectionChange,
 			})
 
 			if isFinalChild then

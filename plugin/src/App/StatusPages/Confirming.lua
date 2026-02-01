@@ -48,18 +48,31 @@ function ConfirmingPage:init()
 		end)
 	end
 
-	-- Set all selections to a specific value
-	self.setAllSelections = function(value)
+	-- Set selection for a node and all its descendants (subtree)
+	self.onSubtreeSelectionChange = function(nodeId, selection)
 		if not self.props.patchTree then
 			return
 		end
-		local newSelections = {}
-		self.props.patchTree:forEach(function(node)
+
+		local node = self.props.patchTree:getNode(nodeId)
+		if not node then
+			return
+		end
+
+		self:setState(function(state)
+			local newSelections = table.clone(state.selections)
+			-- Set this node if it has a patchType
 			if node.patchType then
-				newSelections[node.id] = value
+				newSelections[nodeId] = selection
 			end
+			-- Set all descendants
+			self.props.patchTree:forEach(function(childNode)
+				if childNode.patchType then
+					newSelections[childNode.id] = selection
+				end
+			end, node)
+			return { selections = newSelections }
 		end)
-		self:setState({ selections = newSelections })
 	end
 end
 
@@ -123,6 +136,7 @@ function ConfirmingPage:render()
 				patchTree = self.props.patchTree,
 				selections = self.state.selections,
 				onSelectionChange = self.onSelectionChange,
+				onSubtreeSelectionChange = self.onSubtreeSelectionChange,
 
 				showStringDiff = function(currentString: string, incomingString: string)
 					self:setState({
@@ -153,41 +167,11 @@ function ConfirmingPage:render()
 					onClick = self.props.onAbort,
 				}),
 
-				PullAll = e(TextButton, {
-					text = "Pull All",
-					style = "Danger",
-					transparency = self.props.transparency,
-					layoutOrder = 2,
-					onClick = function()
-						self.setAllSelections("pull")
-					end,
-				}),
-
-				SkipAll = e(TextButton, {
-					text = "Skip All",
-					style = "Neutral",
-					transparency = self.props.transparency,
-					layoutOrder = 3,
-					onClick = function()
-						self.setAllSelections("ignore")
-					end,
-				}),
-
-				PushAll = e(TextButton, {
-					text = "Push All",
-					style = "Success",
-					transparency = self.props.transparency,
-					layoutOrder = 4,
-					onClick = function()
-						self.setAllSelections("push")
-					end,
-				}),
-
 				Accept = e(TextButton, {
 					text = "Accept",
 					style = "Primary",
 					transparency = self.props.transparency,
-					layoutOrder = 5,
+					layoutOrder = 2,
 					onClick = function()
 						if not self.props.onConfirm then
 							return
