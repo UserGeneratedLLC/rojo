@@ -45,12 +45,15 @@ fn run_syncback(project_path: &Path, input_path: &Path, incremental: bool) -> bo
     output.status.success()
 }
 
-/// Test that clean mode removes orphaned files that don't exist in the input
+/// Test that clean mode removes orphaned files that don't exist in the input.
+/// Uses the sync_rules test case which has custom extensions (.modulescript, .text)
+/// that get replaced with standard extensions (.luau, .txt) in clean mode.
 #[test]
 fn clean_mode_removes_orphaned_files() {
     let _ = env_logger::try_init();
 
-    // Use the sync_rules test case and add an orphaned file
+    // Use the sync_rules test case - it has files with custom extensions
+    // that become orphaned when replaced with standard extensions
     let source_path = Path::new(SYNCBACK_TESTS_PATH)
         .join("sync_rules")
         .join("input-project");
@@ -64,14 +67,14 @@ fn clean_mode_removes_orphaned_files() {
     fs_err::create_dir(&project_path).expect("Couldn't create project directory");
     copy_recursive(&source_path, &project_path).expect("Couldn't copy project");
 
-    // Create an orphaned file that doesn't match anything in the input
-    let orphaned_file = project_path.join("src").join("OrphanedFile.luau");
-    fs_err::write(&orphaned_file, "-- This is orphaned").expect("Couldn't create orphaned file");
-
+    // The original files with custom extensions should exist
+    let modulescript_file = project_path.join("src").join("module.modulescript");
+    let text_file = project_path.join("src").join("text.text");
     assert!(
-        orphaned_file.exists(),
-        "Orphaned file should exist before syncback"
+        modulescript_file.exists(),
+        "module.modulescript should exist before syncback"
     );
+    assert!(text_file.exists(), "text.text should exist before syncback");
 
     // Run syncback in clean mode (default)
     assert!(
@@ -79,19 +82,25 @@ fn clean_mode_removes_orphaned_files() {
         "Syncback should succeed"
     );
 
-    // The orphaned file should be removed in clean mode
-    // (the input doesn't have "OrphanedFile" script)
+    // The old custom extension files should be removed in clean mode
+    // (they are orphaned because new files with standard extensions replace them)
     assert!(
-        !orphaned_file.exists(),
-        "Orphaned file should be removed in clean mode"
+        !modulescript_file.exists(),
+        "module.modulescript should be removed in clean mode"
+    );
+    assert!(
+        !text_file.exists(),
+        "text.text should be removed in clean mode"
     );
 
-    // The expected files should exist
+    // The new files with standard extensions should exist
     let module_file = project_path.join("src").join("module.luau");
+    let txt_file = project_path.join("src").join("text.txt");
     assert!(
         module_file.exists(),
         "module.luau should be created by syncback"
     );
+    assert!(txt_file.exists(), "text.txt should be created by syncback");
 }
 
 /// Test that clean mode doesn't remove files that are being written to

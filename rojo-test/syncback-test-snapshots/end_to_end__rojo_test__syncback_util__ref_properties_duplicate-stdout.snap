@@ -1,9 +1,9 @@
 ---
 source: tests/rojo_test/syncback_util.rs
-expression: "String::from_utf8_lossy(&output.stdout)"
+expression: normalized_stdout
 ---
 Writing src/Pointer_1.model.json5
 Writing src/Pointer_2.model.json5
 Writing src/Target/init.meta.json5
 Writing src/Target
-Removing C:/Users/Joe/AppData/Local/Temp/.tmpA4y8vf/ref_properties_duplicate/src/Target.model.json5
+Removing src/Target.model.json5

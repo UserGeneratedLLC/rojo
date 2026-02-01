@@ -119,6 +119,7 @@ criterion = "0.3.6"
 insta = { version = "1.46.2", features = ["redactions", "yaml"] }
 paste = "1.0.15"
 pretty_assertions = "1.4.1"
+regex = "1"
 serde_yaml = "0.8.26"
 tempfile = "3.24.0"
 walkdir = "2.5.0"

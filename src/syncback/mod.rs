@@ -4,6 +4,7 @@ mod hash;
 mod property_filter;
 mod ref_properties;
 mod snapshot;
+mod stats;
 
 use anyhow::Context;
 use indexmap::IndexMap;
@@ -35,6 +36,7 @@ pub use property_filter::{
     filter_properties, filter_properties_preallocated, should_property_serialize,
 };
 pub use snapshot::{inst_path, SyncbackData, SyncbackSnapshot};
+pub use stats::SyncbackStats;
 
 /// The name of an enviroment variable to use to override the behavior of
 /// syncback on model files.
@@ -72,10 +74,27 @@ static GIT_IGNORE_GLOB: OnceLock<Glob> = OnceLock::new();
 pub fn syncback_loop(
     vfs: &Vfs,
     old_tree: &mut RojoTree,
-    mut new_tree: WeakDom,
+    new_tree: WeakDom,
     project: &Project,
     incremental: bool,
 ) -> anyhow::Result<FsSnapshot> {
+    syncback_loop_with_stats(vfs, old_tree, new_tree, project, incremental, None)
+}
+
+/// Runs the syncback loop with an optional external stats tracker.
+/// If no stats are provided, an internal one is created and logged at the end.
+pub fn syncback_loop_with_stats(
+    vfs: &Vfs,
+    old_tree: &mut RojoTree,
+    mut new_tree: WeakDom,
+    project: &Project,
+    incremental: bool,
+    external_stats: Option<&SyncbackStats>,
+) -> anyhow::Result<FsSnapshot> {
+    // Create internal stats if not provided externally
+    let internal_stats = SyncbackStats::new();
+    let stats = external_stats.unwrap_or(&internal_stats);
+
     let ignore_patterns = project
         .syncback_rules
         .as_ref()
@@ -223,6 +242,7 @@ pub fn syncback_loop(
         new_tree: &new_tree,
         project,
         incremental,
+        stats,
     };
 
     // Always start with old reference for the Project middleware.
@@ -304,10 +324,8 @@ pub fn syncback_loop(
                     extension_for_middleware(new_middleware)
                 ));
                 let new_snapshot = snapshot.with_new_path(path, snapshot.new, snapshot.old);
-                log::warn!(
-                    "Could not syncback {inst_path} as a Directory because: {err}.\n\
-                    It will instead be synced back as a {new_middleware:?}."
-                );
+                // Record the fallback in stats instead of warning directly
+                stats.record_rbxm_fallback(&inst_path, &err.to_string());
                 let new_syncback_result = new_middleware
                     .syncback(&new_snapshot)
                     .with_context(|| format!("Failed to syncback {inst_path}"));
@@ -428,6 +446,7 @@ pub fn syncback_loop(
         // Skip any path that is inside another path we're removing,
         // since remove_dir_all will handle the contents.
         let paths_vec: Vec<_> = paths_to_remove.iter().collect();
+        let normalized_project_path = normalize_path(project_path);
         for old_path in &paths_vec {
             // Check if this path is inside another path we're removing
             let is_nested = paths_vec
@@ -438,13 +457,24 @@ pub fn syncback_loop(
                 continue;
             }
 
-            log::debug!("Removing orphaned path: {}", old_path.display());
+            // Convert absolute path to relative path for FsSnapshot.
+            // FsSnapshot expects relative paths and joins them with base_path in write_to_vfs.
+            let relative_path = old_path
+                .strip_prefix(&normalized_project_path)
+                .unwrap_or(old_path);
+
+            log::debug!("Removing orphaned path: {}", relative_path.display());
             if old_path.is_dir() {
-                fs_snapshot.remove_dir(old_path);
+                fs_snapshot.remove_dir(relative_path);
             } else {
-                fs_snapshot.remove_file(old_path);
+                fs_snapshot.remove_file(relative_path);
             }
         }
+    }
+
+    // Log stats summary if using internal stats (not provided externally)
+    if external_stats.is_none() {
+        stats.log_summary();
     }
 
     Ok(fs_snapshot)

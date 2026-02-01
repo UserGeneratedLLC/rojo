@@ -3,6 +3,8 @@ use rbx_reflection::{PropertyKind, PropertySerialization, Scriptability};
 
 use crate::{variant_eq::variant_eq, Project};
 
+use super::SyncbackStats;
+
 /// Returns a map of properties from `inst` that are both allowed under the
 /// user-provided settings, are not their default value, and serialize.
 pub fn filter_properties<'inst>(
@@ -22,23 +24,40 @@ pub fn filter_properties_preallocated<'inst>(
     inst: &'inst Instance,
     allocation: &mut Vec<(Ustr, &'inst Variant)>,
 ) {
+    filter_properties_with_stats(project, inst, allocation, None);
+}
+
+/// Fills `allocation` with a list of properties from `inst` that are
+/// user-provided settings, are not their default value, and serialize.
+/// Optionally tracks unknown classes and properties via the stats tracker.
+pub fn filter_properties_with_stats<'inst>(
+    project: &Project,
+    inst: &'inst Instance,
+    allocation: &mut Vec<(Ustr, &'inst Variant)>,
+    stats: Option<&SyncbackStats>,
+) {
     let sync_unscriptable = project
         .syncback_rules
         .as_ref()
         .and_then(|s| s.sync_unscriptable)
         .unwrap_or(true);
 
-    let class_data = rbx_reflection_database::get()
-        .unwrap()
-        .classes
-        .get(inst.class.as_str());
+    let database = rbx_reflection_database::get().unwrap();
+    let class_data = database.classes.get(inst.class.as_str());
+
+    // Track unknown class if not found
+    if class_data.is_none() {
+        if let Some(stats) = stats {
+            stats.record_unknown_class(&inst.class);
+        }
+    }
 
     let predicate = |prop_name: &Ustr, prop_value: &Variant| {
         // We don't want to serialize Ref or UniqueId properties in JSON files
         if matches!(prop_value, Variant::Ref(_) | Variant::UniqueId(_)) {
             return true;
         }
-        if !should_property_serialize(&inst.class, prop_name) {
+        if !should_property_serialize_with_stats(&inst.class, prop_name, stats) {
             return true;
         }
         if !sync_unscriptable {
@@ -80,13 +99,30 @@ pub fn filter_properties_preallocated<'inst>(
 /// Checks if a property should serialize based on the reflection database.
 /// Returns false for properties with DoesNotSerialize serialization, true otherwise.
 pub fn should_property_serialize(class_name: &str, prop_name: &str) -> bool {
+    should_property_serialize_with_stats(class_name, prop_name, None)
+}
+
+/// Checks if a property should serialize based on the reflection database.
+/// Returns false for properties with DoesNotSerialize serialization, true otherwise.
+/// Optionally tracks unknown properties via the stats tracker.
+pub fn should_property_serialize_with_stats(
+    class_name: &str,
+    prop_name: &str,
+    stats: Option<&SyncbackStats>,
+) -> bool {
     let database = rbx_reflection_database::get().unwrap();
     let mut current_class_name = class_name;
 
     loop {
         let class_data = match database.classes.get(current_class_name) {
             Some(data) => data,
-            None => return true,
+            None => {
+                // Unknown class - track it if stats provided
+                if let Some(stats) = stats {
+                    stats.record_unknown_class(current_class_name);
+                }
+                return true;
+            }
         };
         if let Some(data) = class_data.properties.get(prop_name) {
             log::trace!("found {class_name}.{prop_name} on {current_class_name}");
@@ -94,7 +130,7 @@ pub fn should_property_serialize(class_name: &str, prop_name: &str) -> bool {
                 // It's not really clear if this can ever happen but I want to
                 // support it just in case!
                 PropertyKind::Alias { alias_for } => {
-                    should_property_serialize(current_class_name, alias_for)
+                    should_property_serialize_with_stats(current_class_name, alias_for, stats)
                 }
                 // Migrations and aliases are happily handled for us by parsers
                 // so we don't really need to handle them.
@@ -109,5 +145,11 @@ pub fn should_property_serialize(class_name: &str, prop_name: &str) -> bool {
             break;
         }
     }
+
+    // Property not found in class hierarchy - track it if stats provided
+    if let Some(stats) = stats {
+        stats.record_unknown_property(class_name, prop_name);
+    }
+
     true
 }

@@ -2264,6 +2264,7 @@ dependencies = [
  "rbx_reflection",
  "rbx_reflection_database",
  "rbx_xml",
+ "regex",
  "reqwest",
  "ritz",
  "rmp-serde",

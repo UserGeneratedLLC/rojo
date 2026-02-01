@@ -13,7 +13,9 @@ use rbx_dom_weak::{
     Instance, Ustr, UstrMap, WeakDom,
 };
 
-use super::{get_best_middleware, name_for_inst, property_filter::filter_properties};
+use super::{
+    get_best_middleware, name_for_inst, property_filter::filter_properties, SyncbackStats,
+};
 
 #[derive(Clone, Copy)]
 pub struct SyncbackData<'sync> {
@@ -24,6 +26,8 @@ pub struct SyncbackData<'sync> {
     /// When true, preserves existing file structure and middleware formats.
     /// When false (clean mode), all child instances are treated as new.
     pub(super) incremental: bool,
+    /// Statistics tracker for syncback issues.
+    pub(super) stats: &'sync SyncbackStats,
 }
 
 pub struct SyncbackSnapshot<'sync> {
@@ -326,6 +330,12 @@ impl<'sync> SyncbackSnapshot<'sync> {
             .as_ref()
             .map(|rules| rules.warn_duplicate_names())
             .unwrap_or(false)
+    }
+
+    /// Returns a reference to the syncback statistics tracker.
+    #[inline]
+    pub fn stats(&self) -> &'sync SyncbackStats {
+        self.data.stats
     }
 }
 

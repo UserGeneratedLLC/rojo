@@ -1,8 +1,8 @@
 ---
 source: tests/rojo_test/syncback_util.rs
-expression: "String::from_utf8_lossy(&output.stdout)"
+expression: normalized_stdout
 ---
 Writing src/modules/ClientModule.luau
 Writing src/modules/ServerModule.luau
-Removing C:/Users/Joe/AppData/Local/Temp/.tmpLKd1Ar/nested_projects_weird/client-only.project.json5
-Removing C:/Users/Joe/AppData/Local/Temp/.tmpLKd1Ar/nested_projects_weird/server-only.project.json5
+Removing client-only.project.json5
+Removing server-only.project.json5

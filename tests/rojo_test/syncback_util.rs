@@ -1,6 +1,7 @@
 use std::{io::Write as _, path::Path, process::Command};
 
 use insta::{assert_snapshot, assert_yaml_snapshot};
+use regex::Regex;
 use tempfile::tempdir;
 
 use crate::rojo_test::io_util::SYNCBACK_TESTS_PATH;
@@ -115,12 +116,14 @@ fn run_syncback_test_impl(name: &str, incremental: bool, callback: impl FnOnce(&
     settings.set_snapshot_path(snapshot_path);
     settings.set_sort_maps(true);
 
-    settings.bind(|| {
-        assert_snapshot!(
-            format!("{name}-stdout"),
-            String::from_utf8_lossy(&output.stdout)
-        )
-    });
+    // Normalize temp directory paths in the output to make snapshots deterministic.
+    // Paths like "C:/Users/Joe/AppData/Local/Temp/.tmpXXXXXX/test_name/..."
+    // become "<TEMP>/test_name/..."
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let temp_path_regex = Regex::new(r"[A-Za-z]:/[^\s]*/\.tmp[^/]*/").expect("Invalid regex");
+    let normalized_stdout = temp_path_regex.replace_all(&stdout, "<TEMP>/");
+
+    settings.bind(|| assert_snapshot!(format!("{name}-stdout"), normalized_stdout));
 
     settings.bind(|| callback(project_path.as_path()))
 }

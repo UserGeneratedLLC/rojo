@@ -139,7 +139,7 @@ pub fn syncback_dir_no_meta<'sync>(
     let mut removed_children = Vec::new();
 
     // Detect duplicate child names (case-insensitive for file system safety).
-    // We skip duplicates instead of failing, logging them for the user.
+    // We skip duplicates instead of failing, tracking them in stats.
     let mut child_name_counts: HashMap<String, usize> = HashMap::new();
     for child_ref in new_inst.children() {
         let child = snapshot.get_new_instance(*child_ref).unwrap();
@@ -153,14 +153,21 @@ pub fn syncback_dir_no_meta<'sync>(
         .map(|(name, _)| name)
         .collect();
 
-    if !duplicate_names.is_empty() && snapshot.warn_duplicate_names() {
+    // Record duplicate names in stats tracker
+    if !duplicate_names.is_empty() {
         let inst_path = crate::syncback::inst_path(snapshot.new_tree(), snapshot.new);
+        // Count total instances being skipped (sum of all duplicates)
+        let mut total_skipped = 0;
+        for child_ref in new_inst.children() {
+            let child = snapshot.get_new_instance(*child_ref).unwrap();
+            if duplicate_names.contains(&child.name.to_lowercase()) {
+                total_skipped += 1;
+            }
+        }
         let duplicate_list: Vec<&str> = duplicate_names.iter().map(|s| s.as_str()).collect();
-        log::warn!(
-            "Skipping children with duplicate names at '{}' (cannot reliably sync): {:?}",
-            inst_path,
-            duplicate_list
-        );
+        snapshot
+            .stats()
+            .record_duplicate_names_batch(&inst_path, &duplicate_list, total_skipped);
     }
 
     if let Some(old_inst) = snapshot.old_inst() {

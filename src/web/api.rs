@@ -245,6 +245,9 @@ impl ApiService {
         // Process added instances (syncback: create files from Studio instances)
         // We hold the tree lock during the entire processing to ensure the cache
         // remains consistent with the tree state being checked.
+        // Create a stats tracker for this syncback operation
+        let stats = crate::syncback::SyncbackStats::new();
+
         if !request.added.is_empty() {
             let tree = self.serve_session.tree();
             // Pre-compute duplicate sibling info in O(N) for efficient path uniqueness checks
@@ -253,7 +256,7 @@ impl ApiService {
 
             for added in request.added.values() {
                 if let Err(err) =
-                    self.syncback_added_instance(added, &tree, &duplicate_siblings_cache)
+                    self.syncback_added_instance(added, &tree, &duplicate_siblings_cache, &stats)
                 {
                     log::warn!(
                         "Failed to syncback added instance '{}': {}",
@@ -263,6 +266,9 @@ impl ApiService {
                 }
             }
         }
+
+        // Log summary of any syncback issues
+        stats.log_summary();
 
         // Log property updates being synced back
         for update in &request.updated {
@@ -359,10 +365,12 @@ impl ApiService {
     /// Checks if a path in the Rojo tree is unique using pre-computed duplicate sibling info.
     /// Returns true if the path is unique, false if duplicates exist at any level.
     /// This is O(d) where d is the depth of the instance.
+    /// Records any duplicate path issues via the stats tracker.
     fn is_tree_path_unique_with_cache(
         tree: &crate::snapshot::RojoTree,
         target_ref: Ref,
         has_duplicate_siblings: &HashSet<Ref>,
+        stats: &crate::syncback::SyncbackStats,
     ) -> bool {
         let mut current_ref = target_ref;
 
@@ -371,11 +379,9 @@ impl ApiService {
             if has_duplicate_siblings.contains(&current_ref) {
                 if let Some(current) = tree.get_instance(current_ref) {
                     if let Some(parent) = tree.get_instance(current.parent()) {
-                        log::warn!(
-                            "Syncback: Path to '{}' is not unique - duplicate-named siblings at '{}'",
-                            current.name(),
-                            parent.name()
-                        );
+                        // Build the path for the stats tracker
+                        let inst_path = format!("{}/{}", parent.name(), current.name());
+                        stats.record_duplicate_name(&inst_path, current.name());
                     }
                 }
                 return false;
@@ -407,6 +413,7 @@ impl ApiService {
         added: &crate::web::interface::AddedInstance,
         tree: &crate::snapshot::RojoTree,
         duplicate_siblings_cache: &HashSet<Ref>,
+        stats: &crate::syncback::SyncbackStats,
     ) -> anyhow::Result<()> {
         use crate::syncback::validate_file_name;
         use anyhow::Context;
@@ -431,7 +438,8 @@ impl ApiService {
 
         // Check if the parent path is unique (no duplicate-named siblings at any level)
         // Uses pre-computed cache for O(d) instead of O(d × s) complexity
-        if !Self::is_tree_path_unique_with_cache(tree, parent_ref, duplicate_siblings_cache) {
+        if !Self::is_tree_path_unique_with_cache(tree, parent_ref, duplicate_siblings_cache, stats)
+        {
             anyhow::bail!(
                 "Cannot sync instance '{}' - parent path contains duplicate-named siblings",
                 added.name
@@ -457,7 +465,7 @@ impl ApiService {
         };
 
         // Create the instance at the resolved path
-        self.syncback_instance_to_path(added, &parent_dir)
+        self.syncback_instance_to_path_with_stats(added, &parent_dir, stats)
     }
 
     /// Syncback a removed instance by deleting its file(s) from the filesystem.
@@ -551,10 +559,12 @@ impl ApiService {
     }
 
     /// Check for duplicate names among children and return the set of unique children
-    /// that should be synced. Logs warnings for skipped duplicates.
+    /// that should be synced. Records skipped instances via stats tracker.
     fn filter_duplicate_children<'a>(
         &self,
         children: &'a [crate::web::interface::AddedInstance],
+        parent_path: &str,
+        stats: &crate::syncback::SyncbackStats,
     ) -> Vec<&'a crate::web::interface::AddedInstance> {
         use std::collections::HashMap;
 
@@ -571,24 +581,16 @@ impl ApiService {
             .map(|(&name, _)| name)
             .collect();
 
-        // Log skipped duplicates
-        let mut skipped_count = 0;
-        for child in children {
-            if duplicates.contains(child.name.as_str()) {
-                log::warn!(
-                    "Syncback: Skipped instance '{}' ({}) - has duplicate-named siblings (cannot reliably sync)",
-                    child.name,
-                    child.class_name
-                );
-                skipped_count += 1;
+        // Record skipped duplicates in stats
+        if !duplicates.is_empty() {
+            let mut skipped_count = 0;
+            for child in children {
+                if duplicates.contains(child.name.as_str()) {
+                    skipped_count += 1;
+                }
             }
-        }
-
-        if skipped_count > 0 {
-            log::warn!(
-                "Syncback: Skipped {} instance(s) with duplicate-named siblings",
-                skipped_count
-            );
+            let duplicate_list: Vec<&str> = duplicates.iter().copied().collect();
+            stats.record_duplicate_names_batch(parent_path, &duplicate_list, skipped_count);
         }
 
         // Return only non-duplicate children
@@ -600,10 +602,25 @@ impl ApiService {
 
     /// Recursively syncback an instance and its children to the filesystem.
     /// This is the internal implementation that handles the actual file creation.
+    #[allow(dead_code)]
     fn syncback_instance_to_path(
         &self,
         added: &crate::web::interface::AddedInstance,
         parent_dir: &std::path::Path,
+    ) -> anyhow::Result<()> {
+        // Use a default stats tracker for backwards compatibility
+        let stats = crate::syncback::SyncbackStats::new();
+        self.syncback_instance_to_path_with_stats(added, parent_dir, &stats)
+    }
+
+    /// Recursively syncback an instance and its children to the filesystem.
+    /// This is the internal implementation that handles the actual file creation.
+    /// Uses the provided stats tracker for recording issues.
+    fn syncback_instance_to_path_with_stats(
+        &self,
+        added: &crate::web::interface::AddedInstance,
+        parent_dir: &std::path::Path,
+        stats: &crate::syncback::SyncbackStats,
     ) -> anyhow::Result<()> {
         use crate::syncback::validate_file_name;
         use anyhow::Context;
@@ -616,8 +633,11 @@ impl ApiService {
             )
         })?;
 
+        // Build path string for stats
+        let inst_path = format!("{}/{}", parent_dir.display(), added.name);
+
         // Filter out children with duplicate names (cannot reliably sync)
-        let unique_children = self.filter_duplicate_children(&added.children);
+        let unique_children = self.filter_duplicate_children(&added.children, &inst_path, stats);
         let has_children = !unique_children.is_empty();
 
         // Determine the appropriate middleware/file format based on class name
@@ -644,7 +664,7 @@ impl ApiService {
                         dir_path.display()
                     );
                     for child in &unique_children {
-                        self.syncback_instance_to_path(child, &dir_path)?;
+                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
                     }
                 } else {
                     let file_path = parent_dir.join(format!("{}.luau", added.name));
@@ -677,7 +697,7 @@ impl ApiService {
                         dir_path.display()
                     );
                     for child in &unique_children {
-                        self.syncback_instance_to_path(child, &dir_path)?;
+                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
                     }
                 } else {
                     let file_path =
@@ -707,7 +727,7 @@ impl ApiService {
                         dir_path.display()
                     );
                     for child in &unique_children {
-                        self.syncback_instance_to_path(child, &dir_path)?;
+                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
                     }
                 } else {
                     let file_path = parent_dir.join(format!("{}.local.luau", added.name));
@@ -751,7 +771,7 @@ impl ApiService {
 
                 // Recursively process children
                 for child in &unique_children {
-                    self.syncback_instance_to_path(child, &dir_path)?;
+                    self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
                 }
             }
 
@@ -769,7 +789,7 @@ impl ApiService {
                         dir_path.display()
                     );
                     for child in &unique_children {
-                        self.syncback_instance_to_path(child, &dir_path)?;
+                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
                     }
                 } else {
                     let value = added
@@ -808,7 +828,7 @@ impl ApiService {
                         dir_path.display()
                     );
                     for child in &unique_children {
-                        self.syncback_instance_to_path(child, &dir_path)?;
+                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
                     }
                 } else {
                     let file_path = parent_dir.join(format!("{}.csv", added.name));
@@ -842,7 +862,7 @@ impl ApiService {
 
                     // Recursively process children
                     for child in &unique_children {
-                        self.syncback_instance_to_path(child, &dir_path)?;
+                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
                     }
                 } else {
                     let content = self.serialize_instance_to_model_json(added)?;
