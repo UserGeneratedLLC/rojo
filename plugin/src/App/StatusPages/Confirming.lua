@@ -163,13 +163,15 @@ function ConfirmingPage:render()
 				BackgroundTransparency = 1,
 			}, {
 				-- Only show Abort button when there are changes
-				Abort = if hasChanges then e(TextButton, {
-					text = "Abort",
-					style = "Bordered",
-					transparency = self.props.transparency,
-					layoutOrder = 1,
-					onClick = self.props.onAbort,
-				}) else nil,
+				Abort = if hasChanges
+					then e(TextButton, {
+						text = "Abort",
+						style = "Bordered",
+						transparency = self.props.transparency,
+						layoutOrder = 1,
+						onClick = self.props.onAbort,
+					})
+					else nil,
 
 				Accept = e(TextButton, {
 					text = if hasChanges then "Accept" else "OK",

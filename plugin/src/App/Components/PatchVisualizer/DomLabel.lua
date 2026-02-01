@@ -71,10 +71,7 @@ function SelectionOption:render()
 		-- Determine if we should show the caret:
 		-- - Parent-only nodes: always show caret (they only do subtree operations)
 		-- - Normal nodes with children: show caret when already selected AND hovering
-		local showCaret = if isParentOnly
-			then true
-			elseif hasChildren and isSelected and isHovered then true
-			else false
+		local showCaret = if isParentOnly then true elseif hasChildren and isSelected and isHovered then true else false
 
 		local bgColor = if isSelected
 			then (if props.optionType == "push"
@@ -125,13 +122,8 @@ function SelectionOption:render()
 				self:setState({ isHovered = false })
 			end,
 			[Roact.Event.Activated] = function()
-				if isParentOnly then
-					-- Parent-only: single click applies to subtree
-					if props.onSubtreeClick then
-						props.onSubtreeClick()
-					end
-				elseif isSelected and hasChildren then
-					-- Already selected with children: click applies to subtree
+				if isParentOnly or (isSelected and hasChildren) then
+					-- Parent-only or already selected with children: click applies to subtree
 					if props.onSubtreeClick then
 						props.onSubtreeClick()
 					end
@@ -508,7 +500,12 @@ function DomLabel:render()
 			SelectionRadio = e(SelectionRadio, {
 				-- Visible for nodes with patchType, or for parent-only nodes on hover
 				visible = (props.patchType ~= nil and props.onSelectionChange ~= nil)
-					or (props.patchType == nil and props.hasChildren and self.state.isHovered and props.onSubtreeSelectionChange ~= nil),
+					or (
+						props.patchType == nil
+						and props.hasChildren
+						and self.state.isHovered
+						and props.onSubtreeSelectionChange ~= nil
+					),
 				nodeId = props.nodeId,
 				selection = props.selection,
 				transparency = props.transparency,
