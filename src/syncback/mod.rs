@@ -418,6 +418,14 @@ pub fn syncback_loop_with_stats(
                 log::debug!("Skipping project file: {}", old_path.display());
                 continue;
             }
+            // Never remove any nested project files - they define project structure
+            // and may be referenced via $path from other project files
+            if let Some(file_name) = old_path_norm.file_name().and_then(|n| n.to_str()) {
+                if file_name.ends_with(".project.json5") || file_name.ends_with(".project.json") {
+                    log::debug!("Skipping nested project file: {}", old_path.display());
+                    continue;
+                }
+            }
             // Skip if this exact path is being written to
             if added_paths.contains(&old_path_norm) {
                 continue;

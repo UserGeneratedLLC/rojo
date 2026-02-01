@@ -4,5 +4,3 @@ expression: normalized_stdout
 ---
 Writing src/modules/ClientModule.luau
 Writing src/modules/ServerModule.luau
-Removing client-only.project.json5
-Removing server-only.project.json5
