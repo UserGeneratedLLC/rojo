@@ -871,7 +871,7 @@ function App:endSession()
 end
 
 function App:render()
-	local pluginName = "Rojo " .. Version.display(Config.version)
+	local pluginName = "Atlas " .. Version.display(Config.version)
 
 	local function createPageElement(appStatus, additionalProps)
 		additionalProps = additionalProps or {}
@@ -1010,9 +1010,9 @@ function App:render()
 			}),
 
 			toggleAction = e(StudioPluginAction, {
-				name = "RojoConnection",
-				title = "Rojo: Connect/Disconnect",
-				description = "Toggles the server for a Rojo sync session",
+				name = "AtlasConnection",
+				title = "Atlas: Connect/Disconnect",
+				description = "Toggles the server for an Atlas sync session",
 				icon = Assets.Images.PluginButton,
 				bindable = true,
 				onTriggered = function()
@@ -1027,9 +1027,9 @@ function App:render()
 			}),
 
 			connectAction = e(StudioPluginAction, {
-				name = "RojoConnect",
-				title = "Rojo: Connect",
-				description = "Connects the server for a Rojo sync session",
+				name = "AtlasConnect",
+				title = "Atlas: Connect",
+				description = "Connects the server for an Atlas sync session",
 				icon = Assets.Images.PluginButton,
 				bindable = true,
 				onTriggered = function()
@@ -1040,9 +1040,9 @@ function App:render()
 			}),
 
 			disconnectAction = e(StudioPluginAction, {
-				name = "RojoDisconnect",
-				title = "Rojo: Disconnect",
-				description = "Disconnects the server for a Rojo sync session",
+				name = "AtlasDisconnect",
+				title = "Atlas: Disconnect",
+				description = "Disconnects the server for an Atlas sync session",
 				icon = Assets.Images.PluginButton,
 				bindable = true,
 				onTriggered = function()
@@ -1056,8 +1056,8 @@ function App:render()
 				name = pluginName,
 			}, {
 				button = e(StudioToggleButton, {
-					name = "Rojo",
-					tooltip = "Show or hide the Rojo panel",
+					name = "Atlas",
+					tooltip = "Show or hide the Atlas panel",
 					icon = self.state.toolbarIcon,
 					active = self.state.guiEnabled,
 					enabled = true,

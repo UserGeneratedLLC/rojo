@@ -517,7 +517,7 @@ function ServeSession:__applyPatch(patch)
 	end
 
 	local patchTimestamp = DateTime.now():FormatLocalTime("LTS", "en-us")
-	local historyRecording = ChangeHistoryService:TryBeginRecording("Rojo: Patch " .. patchTimestamp)
+	local historyRecording = ChangeHistoryService:TryBeginRecording("Atlas: Patch " .. patchTimestamp)
 	if not historyRecording then
 		-- There can only be one recording at a time
 		Log.debug("Failed to begin history recording for " .. patchTimestamp .. ". Another recording is in progress.")

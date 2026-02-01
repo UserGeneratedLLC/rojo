@@ -3,11 +3,11 @@ Error.__index = Error
 
 Error.Kind = {
 	HttpNotEnabled = {
-		message = "Rojo requires HTTP access, which is not enabled.\n"
+		message = "Atlas requires HTTP access, which is not enabled.\n"
 			.. "Check your game settings, located in the 'Home' tab of Studio.",
 	},
 	ConnectFailed = {
-		message = "Couldn't connect to the Rojo server.\n"
+		message = "Couldn't connect to the Atlas server.\n"
 			.. "Make sure the server is running — use 'rojo serve' to run it!",
 	},
 	Timeout = {

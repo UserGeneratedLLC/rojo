@@ -3,11 +3,11 @@ local plugin = plugin or script:FindFirstAncestorWhichIsA("Plugin")
 local widget = nil
 if plugin then
 	widget = plugin:CreateDockWidgetPluginGui(
-		"Rojo_soundPlayer",
+		"Atlas_soundPlayer",
 		DockWidgetPluginGuiInfo.new(Enum.InitialDockState.Float, false, true, 10, 10, 10, 10)
 	)
-	widget.Name = "Rojo_soundPlayer"
-	widget.Title = "Rojo Sound Player"
+	widget.Name = "Atlas_soundPlayer"
+	widget.Title = "Atlas Sound Player"
 end
 
 local SoundPlayer = {}

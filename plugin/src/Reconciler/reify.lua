@@ -2,6 +2,7 @@
 	"Reifies" a virtual DOM, constructing a real DOM with the same shape.
 ]]
 
+local invariant = require(script.Parent.Parent.invariant)
 local PatchSet = require(script.Parent.Parent.PatchSet)
 local setProperty = require(script.Parent.setProperty)
 local decodeValue = require(script.Parent.decodeValue)
@@ -31,6 +32,12 @@ function reifyInstance(deferredRefs, instanceMap, virtualInstances, rootId, pare
 	-- properties that could not be assigned.
 	local unappliedPatch = PatchSet.newEmpty()
 
+	-- The root ID must exist - if not, it's a programming error
+	local rootInstance = virtualInstances[rootId]
+	if rootInstance == nil then
+		invariant("Cannot reify an instance not present in virtualInstances\nID: {}", rootId)
+	end
+
 	reifyInstanceInner(unappliedPatch, deferredRefs, instanceMap, virtualInstances, rootId, parentInstance)
 
 	return unappliedPatch
@@ -43,10 +50,10 @@ function reifyInstanceInner(unappliedPatch, deferredRefs, instanceMap, virtualIn
 	local virtualInstance = virtualInstances[id]
 
 	if virtualInstance == nil then
-		-- This instance was intentionally excluded from the patch (e.g., due to
-		-- ambiguous paths with duplicate-named siblings). Skip it gracefully
-		-- rather than throwing an error. The parent's Children array may still
-		-- reference this ID even though it wasn't included in the additions.
+		-- This child was intentionally excluded from the patch (e.g., due to
+		-- ambiguous paths with duplicate-named siblings). Skip it gracefully.
+		-- The parent's Children array may still reference this ID even though
+		-- it wasn't included in the additions.
 		return
 	end
 

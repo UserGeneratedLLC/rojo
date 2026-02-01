@@ -203,8 +203,8 @@ local function SelectionRadio(props)
 				end
 			end,
 		}),
-		Rojo = e(SelectionOption, {
-			text = "Rojo",
+		Atlas = e(SelectionOption, {
+			text = "Atlas",
 			optionType = "push",
 			isSelected = props.selection == "push",
 			transparency = props.transparency,
