@@ -91,10 +91,10 @@ impl SyncbackCommand {
         let path_new = match &self.download {
             Some(place_id) => {
                 // --download=PLACEID: always download this specific place
-                eprintln!("Downloading place {}...", place_id);
+                log::info!("Downloading place {}...", place_id);
                 let download_timer = Instant::now();
                 let temp = download_place(*place_id)?;
-                eprintln!(
+                log::info!(
                     "Downloaded in {:.02}s",
                     download_timer.elapsed().as_secs_f32()
                 );
@@ -110,14 +110,14 @@ impl SyncbackCommand {
             None => {
                 // No --download flag, input file doesn't exist: auto-download
                 let place_id = get_place_id_from_project(&path_old)?;
-                eprintln!(
+                log::info!(
                     "Input file '{}' not found, downloading place {}...",
                     resolved_input.display(),
                     place_id
                 );
                 let download_timer = Instant::now();
                 let temp = download_place(place_id)?;
-                eprintln!(
+                log::info!(
                     "Downloaded in {:.02}s",
                     download_timer.elapsed().as_secs_f32()
                 );
@@ -166,9 +166,9 @@ impl SyncbackCommand {
 
         let syncback_timer = Instant::now();
         if self.incremental {
-            eprintln!("Beginning incremental syncback...");
+            log::info!("Beginning incremental syncback...");
         } else {
-            eprintln!("Beginning syncback (clean mode)...");
+            log::info!("Beginning syncback (clean mode)...");
         }
         let snapshot = syncback_loop(
             session_old.vfs(),
@@ -208,30 +208,40 @@ impl SyncbackCommand {
                     return Ok(());
                 }
             }
-            eprintln!("Writing to the file system...");
+            log::info!("Writing to the file system...");
             snapshot.write_to_vfs(base_path, session_old.vfs())?;
-            eprintln!("Finished syncback.");
+            log::info!(
+                "Finished syncback: wrote {} files/folders, removed {}.",
+                snapshot.added_paths().len(),
+                snapshot.removed_paths().len()
+            );
 
-            // Generate sourcemap after successful syncback
+            // Generate sourcemap after successful syncback.
+            // We need a fresh session that reads the post-syncback filesystem state,
+            // since session_old contains the pre-syncback tree.
             let sourcemap_path = base_path.join("sourcemap.json");
+            let sourcemap_vfs = Vfs::new_oneshot();
+            let sourcemap_session = ServeSession::new(sourcemap_vfs, path_old.clone())?;
             write_sourcemap(
-                &session_old,
+                &sourcemap_session,
                 Some(&sourcemap_path),
                 filter_nothing,
                 false,
                 true,
             )?;
-            eprintln!("Generated sourcemap at {}", sourcemap_path.display());
+            log::info!("Generated sourcemap at {}", sourcemap_path.display());
+            // Avoid expensive drop
+            forget(sourcemap_session);
 
             // Refresh git index if in a git repository
             refresh_git_index(base_path);
         } else {
-            eprintln!(
+            log::info!(
                 "Would write {} files/folders and remove {} files/folders.",
                 snapshot.added_paths().len(),
                 snapshot.removed_paths().len()
             );
-            eprintln!("Aborting before writing to file system due to `--dry-run`");
+            log::info!("Aborting before writing to file system due to `--dry-run`");
         }
 
         // It is potentially prohibitively expensive to drop a ServeSession,
@@ -334,7 +344,7 @@ fn refresh_git_index(project_dir: &Path) {
     }
 
     if is_git_repo {
-        log::debug!("Refreshing git index...");
+        log::info!("Refreshing git index...");
         let result = Command::new("git")
             .args(["update-index", "--refresh"])
             .current_dir(project_dir)
@@ -344,14 +354,18 @@ fn refresh_git_index(project_dir: &Path) {
 
         match result {
             Ok(status) => {
-                if !status.success() {
-                    log::debug!("git update-index --refresh exited with: {}", status);
+                if status.success() {
+                    log::info!("Git index refreshed.");
+                } else {
+                    log::warn!("git update-index --refresh exited with: {}", status);
                 }
             }
             Err(e) => {
                 log::warn!("Failed to run git update-index --refresh: {}", e);
             }
         }
+    } else {
+        log::debug!("Not a git repository, skipping index refresh.");
     }
 }
 
