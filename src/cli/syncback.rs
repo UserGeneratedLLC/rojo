@@ -214,7 +214,14 @@ impl SyncbackCommand {
 
             // Generate sourcemap after successful syncback
             let sourcemap_path = base_path.join("sourcemap.json");
-            write_sourcemap(&session_old, Some(&sourcemap_path), filter_nothing, false)?;
+            write_sourcemap(
+                &session_old,
+                Some(&sourcemap_path),
+                filter_nothing,
+                false,
+                true,
+            )?;
+            eprintln!("Generated sourcemap at {}", sourcemap_path.display());
 
             // Refresh git index if in a git repository
             refresh_git_index(base_path);

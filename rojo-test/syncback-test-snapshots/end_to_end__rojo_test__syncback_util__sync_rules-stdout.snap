@@ -4,4 +4,3 @@ expression: normalized_stdout
 ---
 Writing src/module.modulescript
 Writing src/text.text
-Created sourcemap at <TEMP>/sync_rules\sourcemap.json

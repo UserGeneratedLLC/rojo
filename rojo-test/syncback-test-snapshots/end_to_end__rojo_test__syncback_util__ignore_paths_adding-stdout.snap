@@ -6,4 +6,3 @@ Writing src/ignored_part.model.json5
 Writing src/int_value.model.json5
 Writing src/subfolder/string_value.txt
 Writing src/subfolder
-Created sourcemap at <TEMP>/ignore_paths_adding\sourcemap.json

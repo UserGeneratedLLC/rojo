@@ -4,4 +4,3 @@ expression: normalized_stdout
 ---
 Writing src/init.luau
 Writing src
-Created sourcemap at <TEMP>/project_init\sourcemap.json

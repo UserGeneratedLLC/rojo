@@ -4,4 +4,3 @@ expression: normalized_stdout
 ---
 Writing src/pointer.model.json5
 Writing src/target.model.json5
-Created sourcemap at <TEMP>/ref_properties\sourcemap.json

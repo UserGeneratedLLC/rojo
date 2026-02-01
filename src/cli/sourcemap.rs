@@ -91,7 +91,13 @@ impl SourcemapCommand {
             .build_global()
             .unwrap();
 
-        write_sourcemap(&session, self.output.as_deref(), filter, self.absolute)?;
+        write_sourcemap(
+            &session,
+            self.output.as_deref(),
+            filter,
+            self.absolute,
+            false,
+        )?;
 
         if self.watch {
             let rt = Runtime::new().unwrap();
@@ -102,7 +108,13 @@ impl SourcemapCommand {
                 cursor = new_cursor;
 
                 if patch_set_affects_sourcemap(&session, &patch_set, filter) {
-                    write_sourcemap(&session, self.output.as_deref(), filter, self.absolute)?;
+                    write_sourcemap(
+                        &session,
+                        self.output.as_deref(),
+                        filter,
+                        self.absolute,
+                        false,
+                    )?;
                 }
             }
         }
@@ -234,6 +246,7 @@ pub(crate) fn write_sourcemap(
     output: Option<&Path>,
     filter: fn(&InstanceWithMeta) -> bool,
     use_absolute_paths: bool,
+    quiet: bool,
 ) -> anyhow::Result<()> {
     let tree = session.tree();
 
@@ -252,7 +265,9 @@ pub(crate) fn write_sourcemap(
         file.write_all(json_output.as_bytes())?;
         file.flush()?;
 
-        println!("Created sourcemap at {}", output_path.display());
+        if !quiet {
+            println!("Created sourcemap at {}", output_path.display());
+        }
     } else {
         // Use standard JSON (not JSON5) for sourcemaps - required by external tools like LSPs
         let output = serde_json::to_string(&root_node)?;

@@ -3,4 +3,3 @@ source: tests/rojo_test/syncback_util.rs
 expression: normalized_stdout
 ---
 Writing src/Message.model.json5
-Created sourcemap at <TEMP>/ignore_paths_removing\sourcemap.json

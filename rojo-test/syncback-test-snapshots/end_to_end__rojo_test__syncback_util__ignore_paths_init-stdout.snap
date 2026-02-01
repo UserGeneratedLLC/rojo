@@ -4,4 +4,3 @@ expression: normalized_stdout
 ---
 Writing src/non-init.luau
 Writing src/init-file
-Created sourcemap at <TEMP>/ignore_paths_init\sourcemap.json

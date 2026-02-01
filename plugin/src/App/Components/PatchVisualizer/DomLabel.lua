@@ -50,10 +50,32 @@ local function ChangeTag(props)
 	end)
 end
 
--- Radio button option for selection
-local function SelectionOption(props)
+-- Radio button option for selection (as a component to track hover state)
+local SelectionOption = Roact.Component:extend("SelectionOption")
+
+function SelectionOption:init()
+	self:setState({
+		isHovered = false,
+	})
+end
+
+function SelectionOption:render()
+	local props = self.props
+	local isHovered = self.state.isHovered
+
 	return Theme.with(function(theme)
 		local isSelected = props.isSelected
+		local isParentOnly = props.isParentOnly
+		local hasChildren = props.hasChildren
+
+		-- Determine if we should show the caret:
+		-- - Parent-only nodes: always show caret (they only do subtree operations)
+		-- - Normal nodes with children: show caret when already selected AND hovering
+		local showCaret = if isParentOnly
+			then true
+			elseif hasChildren and isSelected and isHovered then true
+			else false
+
 		local bgColor = if isSelected
 			then (if props.optionType == "push"
 				then Color3.fromHex("27AE60")
@@ -61,37 +83,60 @@ local function SelectionOption(props)
 				else Color3.fromHex("7F8C8D"))
 			else theme.BorderedContainer.BackgroundColor
 		local textColor = if isSelected then Color3.new(1, 1, 1) else theme.TextColor
-		-- Add caret if this button can cascade to children
-		local displayText = if props.showCaret then props.text .. " ▼" else props.text
-		local buttonWidth = if props.showCaret then 48 else 36
+
+		local displayText = if showCaret then props.text .. " ▼" else props.text
+		local buttonWidth = if showCaret then 48 else 36
+
+		-- Transparency logic:
+		-- - Parent-only nodes: more transparent when not hovered, less so when hovering button
+		-- - Normal nodes: standard transparency based on selection
+		local bgTransparency, txtTransparency
+		if isParentOnly then
+			-- Parent-only: partially transparent, less so when hovering the button
+			bgTransparency = props.transparency:map(function(t)
+				return if isHovered then 0.2 + (0.8 * t) else 0.5 + (0.5 * t)
+			end)
+			txtTransparency = props.transparency:map(function(t)
+				return if isHovered then 0 + t else 0.3 + (0.7 * t)
+			end)
+		else
+			bgTransparency = props.transparency:map(function(t)
+				return if isSelected then 0.1 + (0.9 * t) else 0.7 + (0.3 * t)
+			end)
+			txtTransparency = props.transparency
+		end
 
 		return e("TextButton", {
 			Size = UDim2.new(0, buttonWidth, 0, 18),
 			BackgroundColor3 = bgColor,
-			BackgroundTransparency = props.transparency:map(function(t)
-				return if isSelected then 0.1 + (0.9 * t) else 0.7 + (0.3 * t)
-			end),
+			BackgroundTransparency = bgTransparency,
 			BorderSizePixel = 0,
 			Text = displayText,
 			FontFace = if isSelected then theme.Font.Bold else theme.Font.Main,
 			TextSize = theme.TextSize.Small,
 			TextColor3 = textColor,
-			TextTransparency = props.transparency,
+			TextTransparency = txtTransparency,
 			LayoutOrder = props.layoutOrder,
 			ZIndex = 10,
-			[Roact.Event.Activated] = function(_rbx, _input, clickCount)
-				-- For parent-only nodes, any click triggers subtree selection
-				if props.isParentOnly then
-					if props.onDoubleClick then
-						props.onDoubleClick()
+			[Roact.Event.MouseEnter] = function()
+				self:setState({ isHovered = true })
+			end,
+			[Roact.Event.MouseLeave] = function()
+				self:setState({ isHovered = false })
+			end,
+			[Roact.Event.Activated] = function()
+				if isParentOnly then
+					-- Parent-only: single click applies to subtree
+					if props.onSubtreeClick then
+						props.onSubtreeClick()
 					end
-				elseif clickCount == 1 then
-					-- Double click: apply to subtree
-					if props.onDoubleClick then
-						props.onDoubleClick()
+				elseif isSelected and hasChildren then
+					-- Already selected with children: click applies to subtree
+					if props.onSubtreeClick then
+						props.onSubtreeClick()
 					end
 				else
-					-- Single click: apply to this node only
+					-- Normal click: select this node only
 					if props.onClick then
 						props.onClick()
 					end
@@ -111,12 +156,12 @@ local function SelectionRadio(props)
 		return nil
 	end
 
-	local showCaret = props.hasChildren
-	local frameWidth = if showCaret then 154 else 118
+	local hasChildren = props.hasChildren
 	local isParentOnly = props.isParentOnly
 
 	return e("Frame", {
-		Size = UDim2.new(0, frameWidth, 0, 18),
+		Size = UDim2.new(0, 0, 0, 18),
+		AutomaticSize = Enum.AutomaticSize.X,
 		BackgroundTransparency = 1,
 		Position = UDim2.new(1, -5, 0, 3),
 		AnchorPoint = Vector2.new(1, 0),
@@ -135,14 +180,14 @@ local function SelectionRadio(props)
 			isSelected = props.selection == "pull",
 			transparency = props.transparency,
 			layoutOrder = 1,
-			showCaret = showCaret,
+			hasChildren = hasChildren,
 			isParentOnly = isParentOnly,
 			onClick = function()
 				if props.onSelectionChange then
 					props.onSelectionChange(props.nodeId, "pull")
 				end
 			end,
-			onDoubleClick = function()
+			onSubtreeClick = function()
 				if props.onSubtreeSelectionChange then
 					props.onSubtreeSelectionChange(props.nodeId, "pull")
 				end
@@ -154,14 +199,14 @@ local function SelectionRadio(props)
 			isSelected = props.selection == "ignore",
 			transparency = props.transparency,
 			layoutOrder = 2,
-			showCaret = showCaret,
+			hasChildren = hasChildren,
 			isParentOnly = isParentOnly,
 			onClick = function()
 				if props.onSelectionChange then
 					props.onSelectionChange(props.nodeId, "ignore")
 				end
 			end,
-			onDoubleClick = function()
+			onSubtreeClick = function()
 				if props.onSubtreeSelectionChange then
 					props.onSubtreeSelectionChange(props.nodeId, "ignore")
 				end
@@ -173,14 +218,14 @@ local function SelectionRadio(props)
 			isSelected = props.selection == "push",
 			transparency = props.transparency,
 			layoutOrder = 3,
-			showCaret = showCaret,
+			hasChildren = hasChildren,
 			isParentOnly = isParentOnly,
 			onClick = function()
 				if props.onSelectionChange then
 					props.onSelectionChange(props.nodeId, "push")
 				end
 			end,
-			onDoubleClick = function()
+			onSubtreeClick = function()
 				if props.onSubtreeSelectionChange then
 					props.onSubtreeSelectionChange(props.nodeId, "push")
 				end

@@ -4,4 +4,3 @@ expression: normalized_stdout
 ---
 Writing OnlyOneCopy/child_of_one.luau
 Writing ReplicatedStorage/child_replicated_storage.luau
-Created sourcemap at <TEMP>/child_but_not\sourcemap.json

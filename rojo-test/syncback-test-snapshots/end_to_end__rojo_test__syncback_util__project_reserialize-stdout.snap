@@ -4,4 +4,3 @@ expression: normalized_stdout
 ---
 Writing attribute_mismatch.luau
 Writing property_mismatch.project.json5
-Created sourcemap at <TEMP>/project_reserialize\sourcemap.json

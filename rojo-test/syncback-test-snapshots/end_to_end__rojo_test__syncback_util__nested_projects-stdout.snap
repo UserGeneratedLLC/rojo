@@ -4,4 +4,3 @@ expression: normalized_stdout
 ---
 Writing nested.project.json5
 Writing string_value.txt
-Created sourcemap at <TEMP>/nested_projects\sourcemap.json

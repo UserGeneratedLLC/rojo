@@ -4,4 +4,3 @@ expression: normalized_stdout
 ---
 Writing default.project.json5
 Writing string_value.txt
-Created sourcemap at <TEMP>/string_value_project\sourcemap.json

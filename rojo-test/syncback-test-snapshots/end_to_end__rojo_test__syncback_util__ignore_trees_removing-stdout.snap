@@ -3,4 +3,3 @@ source: tests/rojo_test/syncback_util.rs
 expression: normalized_stdout
 ---
 Removing src
-Created sourcemap at <TEMP>/ignore_trees_removing\sourcemap.json

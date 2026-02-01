@@ -4,4 +4,3 @@ expression: normalized_stdout
 ---
 Writing src/IncludeMe/.gitkeep
 Writing src/IncludeMe
-Created sourcemap at <TEMP>/ignore_trees_adding\sourcemap.json
