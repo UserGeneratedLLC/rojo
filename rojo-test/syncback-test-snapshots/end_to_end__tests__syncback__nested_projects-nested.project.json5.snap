@@ -9,11 +9,11 @@ expression: nested.project.json5
     BoolValue: {
       $className: "BoolValue",
       $properties: {
-        Value: true,
-      },
+        Value: true
+      }
     },
     StringValue: {
-      $path: "string_value.txt",
-    },
-  },
+      $path: "string_value.txt"
+    }
+  }
 }

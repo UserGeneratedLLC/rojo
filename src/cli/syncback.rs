@@ -54,6 +54,12 @@ pub struct SyncbackCommand {
     /// If provided, the prompt for writing to the file system is skipped.
     #[clap(long, short = 'y')]
     pub non_interactive: bool,
+
+    /// If provided, syncback will preserve existing file structure and middleware
+    /// formats when possible. Without this flag (default), syncback creates a fresh
+    /// project layout that exactly matches the input file, removing any orphaned files.
+    #[clap(long, short = 'n')]
+    pub incremental: bool,
 }
 
 impl SyncbackCommand {
@@ -99,12 +105,17 @@ impl SyncbackCommand {
         }
 
         let syncback_timer = Instant::now();
-        eprintln!("Beginning syncback...");
+        if self.incremental {
+            eprintln!("Beginning incremental syncback...");
+        } else {
+            eprintln!("Beginning syncback (clean mode)...");
+        }
         let snapshot = syncback_loop(
             session_old.vfs(),
             &mut dom_old,
             dom_new,
             session_old.root_project(),
+            self.incremental,
         )?;
         log::debug!(
             "Syncback finished in {:.02}s!",

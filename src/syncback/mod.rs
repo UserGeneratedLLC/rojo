@@ -14,9 +14,9 @@ use rbx_dom_weak::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     env,
-    path::Path,
+    path::{Path, PathBuf},
     sync::OnceLock,
 };
 
@@ -74,6 +74,7 @@ pub fn syncback_loop(
     old_tree: &mut RojoTree,
     mut new_tree: WeakDom,
     project: &Project,
+    incremental: bool,
 ) -> anyhow::Result<FsSnapshot> {
     let ignore_patterns = project
         .syncback_rules
@@ -192,13 +193,40 @@ pub fn syncback_loop(
 
     let project_path = project.folder_location();
 
+    // In clean mode, collect all existing paths from old tree for cleanup.
+    // These will be compared against new paths to remove orphaned files.
+    let existing_paths: HashSet<PathBuf> = if !incremental {
+        log::debug!("Clean mode: collecting existing paths for cleanup");
+        let mut paths = HashSet::new();
+        for ref_id in descendants(old_tree.inner(), old_tree.get_root_id()) {
+            if let Some(inst) = old_tree.get_instance(ref_id) {
+                for path in inst.metadata().relevant_paths.iter() {
+                    // Skip paths matching ignore patterns
+                    if is_valid_path(&ignore_patterns, project_path, path) {
+                        // Only include paths that actually exist on disk
+                        if path.exists() {
+                            paths.insert(path.clone());
+                        }
+                    }
+                }
+            }
+        }
+        log::debug!("Collected {} existing paths", paths.len());
+        paths
+    } else {
+        HashSet::new()
+    };
+
     let syncback_data = SyncbackData {
         vfs,
         old_tree,
         new_tree: &new_tree,
         project,
+        incremental,
     };
 
+    // Always start with old reference for the Project middleware.
+    // In clean mode, child snapshots will have old=None (handled by SyncbackSnapshot methods).
     let mut snapshots = vec![SyncbackSnapshot {
         data: syncback_data,
         old: Some(old_tree.get_root_id()),
@@ -211,19 +239,22 @@ pub fn syncback_loop(
 
     'syncback: while let Some(snapshot) = snapshots.pop() {
         let inst_path = snapshot.get_new_inst_path(snapshot.new);
-        // We can quickly check that two subtrees are identical and if they are,
-        // skip reconciling them.
-        if let Some(old_ref) = snapshot.old {
-            match (old_hashes.get(&old_ref), new_hashes.get(&snapshot.new)) {
-                (Some(old), Some(new)) => {
-                    if old == new {
-                        log::trace!(
-                            "Skipping {inst_path} due to it being identically hashed as {old:?}"
-                        );
-                        continue;
+        // In incremental mode, we can quickly check that two subtrees are identical
+        // and if they are, skip reconciling them. In clean mode, we always process
+        // all instances to ensure fresh structure.
+        if incremental {
+            if let Some(old_ref) = snapshot.old {
+                match (old_hashes.get(&old_ref), new_hashes.get(&snapshot.new)) {
+                    (Some(old), Some(new)) => {
+                        if old == new {
+                            log::trace!(
+                                "Skipping {inst_path} due to it being identically hashed as {old:?}"
+                            );
+                            continue;
+                        }
                     }
+                    _ => unreachable!("All Instances in both DOMs should have hashes"),
                 }
-                _ => unreachable!("All Instances in both DOMs should have hashes"),
             }
         }
 
@@ -329,6 +360,91 @@ pub fn syncback_loop(
         });
 
         snapshots.extend(syncback.children);
+    }
+
+    // In clean mode, remove any existing paths that weren't overwritten by new structure.
+    // This ensures no orphaned files remain from the old project layout.
+    if !incremental && !existing_paths.is_empty() {
+        log::debug!("Clean mode: checking for orphaned files to remove");
+
+        // Helper to normalize a path by stripping UNC prefix on Windows
+        // This is needed because paths may have different prefixes (\\?\ vs regular)
+        fn normalize_path(p: &Path) -> PathBuf {
+            // Strip Windows UNC prefix if present
+            let path_str = p.to_string_lossy();
+            if path_str.starts_with(r"\\?\") || path_str.starts_with("//?/") {
+                PathBuf::from(&path_str[4..])
+            } else {
+                p.to_path_buf()
+            }
+        }
+
+        // Convert added_paths to absolute paths by joining with project base path.
+        // fs_snapshot paths are relative to the project folder.
+        let added_paths: HashSet<PathBuf> = fs_snapshot
+            .added_paths()
+            .into_iter()
+            .map(|p| normalize_path(&project_path.join(p)))
+            .collect();
+
+        // Get the project file path to exclude it from removal
+        let project_file = normalize_path(&project.file_location);
+
+        // First pass: collect normalized paths to remove (deduplicated)
+        let mut paths_to_remove: HashSet<PathBuf> = HashSet::new();
+        for old_path in &existing_paths {
+            let old_path_norm = normalize_path(old_path);
+
+            // Never remove the project file itself
+            if old_path_norm == project_file {
+                log::debug!("Skipping project file: {}", old_path.display());
+                continue;
+            }
+            // Skip if this exact path is being written to
+            if added_paths.contains(&old_path_norm) {
+                continue;
+            }
+            // Skip if a parent of this path is being added
+            // (e.g., the new structure will replace it)
+            if added_paths
+                .iter()
+                .any(|added| old_path_norm.starts_with(added))
+            {
+                continue;
+            }
+            // Skip if this path is an ancestor of something being written to
+            // (e.g., a directory that will contain new files)
+            if added_paths
+                .iter()
+                .any(|added| added.starts_with(&old_path_norm))
+            {
+                continue;
+            }
+            // Use normalized path to avoid duplicates from UNC vs regular paths
+            paths_to_remove.insert(old_path_norm);
+        }
+
+        // Second pass: only remove top-level orphaned paths.
+        // Skip any path that is inside another path we're removing,
+        // since remove_dir_all will handle the contents.
+        let paths_vec: Vec<_> = paths_to_remove.iter().collect();
+        for old_path in &paths_vec {
+            // Check if this path is inside another path we're removing
+            let is_nested = paths_vec
+                .iter()
+                .any(|other| *other != *old_path && old_path.starts_with(*other));
+
+            if is_nested {
+                continue;
+            }
+
+            log::debug!("Removing orphaned path: {}", old_path.display());
+            if old_path.is_dir() {
+                fs_snapshot.remove_dir(old_path);
+            } else {
+                fs_snapshot.remove_file(old_path);
+            }
+        }
     }
 
     Ok(fs_snapshot)

@@ -6,7 +6,7 @@ expression: src/dir_with_meta/init.meta.json5
   className: "Configuration",
   properties: {
     Tags: [
-      "This tag on dir_with_meta",
-    ],
-  },
+      "This tag on dir_with_meta"
+    ]
+  }
 }

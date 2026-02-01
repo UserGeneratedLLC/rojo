@@ -8,8 +8,8 @@ expression: property_mismatch.project.json5
     $className: "BrickColorValue",
     $properties: {
       Value: {
-        BrickColor: 345,
-      },
-    },
-  },
+        BrickColor: 345
+      }
+    }
+  }
 }

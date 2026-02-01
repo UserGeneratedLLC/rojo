@@ -1,0 +1,10 @@
+{
+  "name": "clean_mode_orphan_removal",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "$path": "src"
+    }
+  }
+}

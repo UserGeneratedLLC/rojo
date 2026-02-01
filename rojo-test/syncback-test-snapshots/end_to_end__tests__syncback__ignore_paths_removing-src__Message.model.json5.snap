@@ -5,6 +5,6 @@ expression: src/Message.model.json5
 {
   className: "Message",
   properties: {
-    Text: "This message should be written to the disk.",
-  },
+    Text: "This message should be written to the disk."
+  }
 }

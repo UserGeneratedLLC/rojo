@@ -8,13 +8,13 @@ expression: default.project.json5
   tree: {
     $className: "Folder",
     src: {
-      $path: "src",
+      $path: "src"
     },
     trigger_reserialization: {
       $className: "BoolValue",
       $properties: {
-        Value: true,
-      },
-    },
-  },
+        Value: true
+      }
+    }
+  }
 }

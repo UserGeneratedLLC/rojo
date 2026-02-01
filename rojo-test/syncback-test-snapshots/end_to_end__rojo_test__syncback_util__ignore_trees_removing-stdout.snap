@@ -2,4 +2,4 @@
 source: tests/rojo_test/syncback_util.rs
 expression: "String::from_utf8_lossy(&output.stdout)"
 ---
-
+Removing C:/Users/Joe/AppData/Local/Temp/.tmpGY4Eb8/ignore_trees_removing/src

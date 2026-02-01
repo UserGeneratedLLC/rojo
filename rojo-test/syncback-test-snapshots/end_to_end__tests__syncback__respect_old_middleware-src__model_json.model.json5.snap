@@ -5,6 +5,6 @@ expression: src/model_json.model.json5
 {
   className: "StringValue",
   properties: {
-    Value: "This should be a .model.json file",
-  },
+    Value: "This should be a .model.json file"
+  }
 }

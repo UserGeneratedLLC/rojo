@@ -10,8 +10,8 @@ expression: src/project_json.project.json5
       Value: [
         1337,
         -1337,
-        1337,
-      ],
-    },
-  },
+        1337
+      ]
+    }
+  }
 }

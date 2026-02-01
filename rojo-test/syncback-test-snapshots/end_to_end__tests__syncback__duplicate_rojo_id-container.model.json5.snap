@@ -7,19 +7,19 @@ expression: container.model.json5
     {
       attributes: {
         Rojo_Id: "value_1",
-        Rojo_Ref_Value: "ReplicatedStorage/container/value_1",
+        Rojo_Ref_Value: "ReplicatedStorage/container/value_1"
       },
       className: "ObjectValue",
-      name: "value_1",
+      name: "value_1"
     },
     {
       attributes: {
         Rojo_Id: "value_1",
-        Rojo_Ref_Value: "ReplicatedStorage/container/value_2",
+        Rojo_Ref_Value: "ReplicatedStorage/container/value_2"
       },
       className: "ObjectValue",
-      name: "value_2",
-    },
+      name: "value_2"
+    }
   ],
-  className: "Folder",
+  className: "Folder"
 }

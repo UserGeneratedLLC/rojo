@@ -5,6 +5,6 @@ expression: src/int_value.model.json5
 {
   className: "IntValue",
   properties: {
-    Value: 1337,
-  },
+    Value: 1337
+  }
 }

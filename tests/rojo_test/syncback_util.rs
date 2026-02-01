@@ -11,7 +11,7 @@ const INPUT_FILE_PROJECT: &str = "input-project";
 const INPUT_FILE_PLACE: &str = "input.rbxl";
 const INPUT_FILE_MODEL: &str = "input.rbxm";
 
-/// Convenience method to run a `rojo syncback` test.
+/// Convenience method to run a `rojo syncback` test in clean mode (default).
 ///
 /// Test projects should be defined in the `syncback-tests` folder; their filename
 /// should be given as the first parameter.
@@ -19,6 +19,18 @@ const INPUT_FILE_MODEL: &str = "input.rbxm";
 /// The passed in callback is where the actual test body should go. Setup and
 /// cleanup happens automatically.
 pub fn run_syncback_test(name: &str, callback: impl FnOnce(&Path)) {
+    run_syncback_test_impl(name, false, callback)
+}
+
+/// Convenience method to run a `rojo syncback` test in incremental mode.
+///
+/// Use this for tests that depend on preserving existing file structure and
+/// middleware formats.
+pub fn run_syncback_test_incremental(name: &str, callback: impl FnOnce(&Path)) {
+    run_syncback_test_impl(name, true, callback)
+}
+
+fn run_syncback_test_impl(name: &str, incremental: bool, callback: impl FnOnce(&Path)) {
     let _ = env_logger::try_init();
 
     // let working_dir = get_working_dir_path();
@@ -55,21 +67,27 @@ pub fn run_syncback_test(name: &str, callback: impl FnOnce(&Path)) {
             .expect("Couldn't copy project to temporary directory");
     };
 
+    let mut args = vec![
+        "--color",
+        "never",
+        "syncback",
+        project_path.to_str().unwrap(),
+        "--input",
+        input_file.to_str().unwrap(),
+        "--non-interactive",
+        "--list",
+    ];
+
+    if incremental {
+        args.push("--incremental");
+    }
+
     let output = Command::new(ROJO_PATH)
         // I don't really understand why setting the working directory breaks this, but it does.
         // It's a bit concerning but I'm more interested in writing tests than debugging it right now.
         // TODO: Figure out why and fix it.
         // .current_dir(working_dir)
-        .args([
-            "--color",
-            "never",
-            "syncback",
-            project_path.to_str().unwrap(),
-            "--input",
-            input_file.to_str().unwrap(),
-            "--non-interactive",
-            "--list",
-        ])
+        .args(args)
         .output()
         .expect("Couldn't spawn syncback process");
 

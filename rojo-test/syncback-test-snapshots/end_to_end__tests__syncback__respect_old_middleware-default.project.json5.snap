@@ -9,8 +9,8 @@ expression: default.project.json5
     project_node: {
       $className: "BoolValue",
       $properties: {
-        Value: true,
-      },
-    },
-  },
+        Value: true
+      }
+    }
+  }
 }

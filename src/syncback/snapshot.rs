@@ -21,6 +21,9 @@ pub struct SyncbackData<'sync> {
     pub(super) old_tree: &'sync RojoTree,
     pub(super) new_tree: &'sync WeakDom,
     pub(super) project: &'sync Project,
+    /// When true, preserves existing file structure and middleware formats.
+    /// When false (clean mode), all child instances are treated as new.
+    pub(super) incremental: bool,
 }
 
 pub struct SyncbackSnapshot<'sync> {
@@ -35,11 +38,16 @@ impl<'sync> SyncbackSnapshot<'sync> {
     /// Constructs a SyncbackSnapshot from the provided refs
     /// while inheriting this snapshot's path and data. This should be used for
     /// directories.
+    ///
+    /// In clean mode (incremental=false), old_ref is ignored and set to None,
+    /// ensuring fresh filenames and middleware choices for all children.
     #[inline]
     pub fn with_joined_path(&self, new_ref: Ref, old_ref: Option<Ref>) -> anyhow::Result<Self> {
+        // In clean mode, ignore old_ref to ensure fresh structure
+        let effective_old_ref = if self.data.incremental { old_ref } else { None };
         let mut snapshot = Self {
             data: self.data,
-            old: old_ref,
+            old: effective_old_ref,
             new: new_ref,
             path: PathBuf::new(),
             middleware: None,
@@ -62,6 +70,9 @@ impl<'sync> SyncbackSnapshot<'sync> {
     ///
     /// The actual path of the snapshot is made by getting a file name for the
     /// snapshot and then appending it to the provided base path.
+    ///
+    /// In clean mode (incremental=false), old_ref is ignored and set to None,
+    /// ensuring fresh filenames and middleware choices for all children.
     #[inline]
     pub fn with_base_path(
         &self,
@@ -69,9 +80,11 @@ impl<'sync> SyncbackSnapshot<'sync> {
         new_ref: Ref,
         old_ref: Option<Ref>,
     ) -> anyhow::Result<Self> {
+        // In clean mode, ignore old_ref to ensure fresh structure
+        let effective_old_ref = if self.data.incremental { old_ref } else { None };
         let mut snapshot = Self {
             data: self.data,
-            old: old_ref,
+            old: effective_old_ref,
             new: new_ref,
             path: PathBuf::new(),
             middleware: None,
