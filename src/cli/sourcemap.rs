@@ -115,7 +115,7 @@ impl SourcemapCommand {
     }
 }
 
-fn filter_nothing(_instance: &InstanceWithMeta) -> bool {
+pub(crate) fn filter_nothing(_instance: &InstanceWithMeta) -> bool {
     true
 }
 
@@ -229,7 +229,7 @@ fn recurse_create_node<'a>(
     })
 }
 
-fn write_sourcemap(
+pub(crate) fn write_sourcemap(
     session: &ServeSession,
     output: Option<&Path>,
     filter: fn(&InstanceWithMeta) -> bool,

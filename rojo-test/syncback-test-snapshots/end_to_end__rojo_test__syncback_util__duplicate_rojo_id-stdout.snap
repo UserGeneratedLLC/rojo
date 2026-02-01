@@ -1,5 +1,6 @@
 ---
 source: tests/rojo_test/syncback_util.rs
-expression: "String::from_utf8_lossy(&output.stdout)"
+expression: normalized_stdout
 ---
 Writing container.model.json5
+Created sourcemap at <TEMP>/duplicate_rojo_id\sourcemap.json

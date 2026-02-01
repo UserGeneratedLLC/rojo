@@ -1,8 +1,9 @@
 ---
 source: tests/rojo_test/syncback_util.rs
-expression: "String::from_utf8_lossy(&output.stdout)"
+expression: normalized_stdout
 ---
 Writing src/dir_with_meta/init.meta.json5
 Writing src/model_json.model.json5
 Writing src/project_json.project.json5
 Writing src/dir_with_meta
+Created sourcemap at <TEMP>/json_middlewares\sourcemap.json

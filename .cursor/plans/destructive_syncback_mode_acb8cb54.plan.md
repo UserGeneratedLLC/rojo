@@ -5,7 +5,7 @@ todos: []
 isProject: false
 ---
 
-# Destructive Syncback Mode
+# Destructive Syncback Mode (Clean by Default)
 
 ## Root Cause Analysis
 
@@ -50,27 +50,34 @@ if let Some(old_child) = old_child_map.remove(new_child.name.as_str()) {
 }
 ```
 
-## Solution: Add `--clean` Flag
+## Solution: Clean Mode by Default with `--incremental` Flag
 
-Add a `--clean` flag that makes syncback treat all instances as "new" by setting `old` references to `None`, ensuring consistent output regardless of existing filesystem state.
+Make clean (destructive) mode the default behavior, with an `--incremental` flag to opt into the legacy structure-preserving behavior.
+
+### Ensuring No Residue Files
+
+The key challenge: if we set `old = None`, the `removed_children` logic won't work (nothing to compare against). We need a two-phase approach:
+
+1. **Phase 1**: Collect ALL existing paths from the old tree before syncback
+2. **Phase 2**: After computing new paths, remove any old paths that aren't in the new set
+
+This guarantees no orphaned files remain.
 
 ### Changes Required
 
 #### 1. Add CLI Flag (`[src/cli/syncback.rs](src/cli/syncback.rs)`)
 
-Add `--clean` flag to the command definition:
+Add `--incremental` flag (clean mode is now default):
 
 ```rust
-/// If provided, syncback will ignore existing file structure and create
-/// a fresh project layout. This ensures consistent output regardless of
-/// existing filesystem state.
-#[clap(long)]
-pub clean: bool,
+/// If provided, syncback will preserve existing file structure and middleware
+/// formats when possible. Without this flag, syncback creates a fresh project
+/// layout that exactly matches the input file.
+#[clap(long, short = 'n')]
+pub incremental: bool,
 ```
 
 #### 2. Pass Flag to `syncback_loop` (`[src/cli/syncback.rs](src/cli/syncback.rs)`)
-
-Modify the `syncback_loop` call to pass the clean flag:
 
 ```rust
 let snapshot = syncback_loop(
@@ -78,13 +85,11 @@ let snapshot = syncback_loop(
     &mut dom_old,
     dom_new,
     session_old.root_project(),
-    self.clean,  // New parameter
+    self.incremental,  // false = clean mode (default)
 )?;
 ```
 
-#### 3. Modify `syncback_loop` (`[src/syncback/mod.rs](src/syncback/mod.rs)`)
-
-Update function signature and initial snapshot:
+#### 3. Modify `syncback_loop` Signature (`[src/syncback/mod.rs](src/syncback/mod.rs)`)
 
 ```rust
 pub fn syncback_loop(
@@ -92,67 +97,120 @@ pub fn syncback_loop(
     old_tree: &mut RojoTree,
     mut new_tree: WeakDom,
     project: &Project,
-    clean_mode: bool,  // New parameter
+    incremental: bool,  // false = clean mode (default)
 ) -> anyhow::Result<FsSnapshot>
 ```
 
-When `clean_mode` is true, set the initial `old` reference to `None`:
+#### 4. Collect Existing Paths Before Syncback (`[src/syncback/mod.rs](src/syncback/mod.rs)`)
+
+Before the main loop, collect all existing filesystem paths (respecting ignore patterns):
+
+```rust
+// Collect all existing paths from old tree for cleanup in clean mode
+let existing_paths: HashSet<PathBuf> = if !incremental {
+    let mut paths = HashSet::new();
+    for ref_id in descendants(old_tree.inner(), old_tree.get_root_id()) {
+        if let Some(inst) = old_tree.get_instance(ref_id) {
+            for path in inst.metadata().relevant_paths.iter() {
+                // Skip paths matching ignore patterns
+                if is_valid_path(&ignore_patterns, project_path, path) {
+                    paths.insert(path.clone());
+                }
+            }
+        }
+    }
+    paths
+} else {
+    HashSet::new()
+};
+```
+
+#### 5. Set `old = None` in Clean Mode (`[src/syncback/mod.rs](src/syncback/mod.rs)`)
 
 ```rust
 let mut snapshots = vec![SyncbackSnapshot {
     data: syncback_data,
-    old: if clean_mode { None } else { Some(old_tree.get_root_id()) },
+    old: if incremental { Some(old_tree.get_root_id()) } else { None },
     new: new_tree.root_ref(),
     path: project.file_location.clone(),
     middleware: Some(Middleware::Project),
 }];
 ```
 
-#### 4. Track Removed Files in Clean Mode (`[src/syncback/mod.rs](src/syncback/mod.rs)`)
+#### 6. Remove Orphaned Files After Syncback (`[src/syncback/mod.rs](src/syncback/mod.rs)`)
 
-In clean mode, we need to remove all existing files in the target paths. Add logic to collect existing paths for removal:
+After the main loop, remove any existing paths that weren't written to:
 
 ```rust
-if clean_mode {
-    // Collect all existing paths under the project tree for removal
-    for ref_id in descendants(old_tree.inner(), old_tree.get_root_id()) {
-        if let Some(inst) = old_tree.get_instance(ref_id) {
-            for path in inst.metadata().relevant_paths.iter() {
-                if path.is_dir() {
-                    fs_snapshot.remove_dir(path);
-                } else {
-                    fs_snapshot.remove_file(path);
-                }
-            }
+// In clean mode, remove any existing paths that weren't overwritten
+if !incremental {
+    let added_paths: HashSet<&Path> = fs_snapshot.added_paths().iter().map(|p| p.as_path()).collect();
+    
+    for old_path in &existing_paths {
+        // Skip if this path (or a parent) is being written to
+        if added_paths.contains(old_path.as_path()) {
+            continue;
+        }
+        // Skip if a parent directory is being added (the new structure will replace it)
+        if added_paths.iter().any(|p| old_path.starts_with(p)) {
+            continue;
+        }
+        
+        if old_path.is_dir() {
+            fs_snapshot.remove_dir(old_path);
+        } else {
+            fs_snapshot.remove_file(old_path);
         }
     }
 }
 ```
 
-#### 5. Update Child Snapshot Creation (`[src/snapshot_middleware/dir.rs](src/snapshot_middleware/dir.rs)`)
+#### 7. Skip Hash Comparison in Clean Mode (`[src/syncback/mod.rs](src/syncback/mod.rs)`)
 
-The `SyncbackSnapshot::with_joined_path` method already handles `old = None` correctly - it will create a fresh child snapshot without old references.
+The hash-based skipping should be disabled in clean mode since we want to rewrite everything:
+
+```rust
+// Skip hash comparison in clean mode - we want to rewrite everything
+if incremental {
+    if let Some(old_ref) = snapshot.old {
+        match (old_hashes.get(&old_ref), new_hashes.get(&snapshot.new)) {
+            (Some(old), Some(new)) => {
+                if old == new {
+                    log::trace!(
+                        "Skipping {inst_path} due to it being identically hashed as {old:?}"
+                    );
+                    continue;
+                }
+            }
+            _ => unreachable!("All Instances in both DOMs should have hashes"),
+        }
+    }
+}
+```
 
 ### Data Flow Diagram
 
 ```mermaid
 flowchart TD
-    subgraph currentBehavior [Current Behavior]
-        A1[Syncback on Existing Files] --> B1{Old Instance Exists?}
-        B1 -->|Yes| C1[Preserve Filename]
-        B1 -->|Yes| D1[Preserve Middleware]
-        B1 -->|Yes| E1[Match Children by Name]
-        C1 --> F1[Inconsistent Structure]
-        D1 --> F1
-        E1 --> F1
+    subgraph cleanMode [Default: Clean Mode]
+        A1[rojo syncback -i game.rbxl] --> B1[Collect existing paths]
+        B1 --> C1[Set old = None for all snapshots]
+        C1 --> D1[Generate fresh filenames]
+        C1 --> E1[Choose best middleware]
+        C1 --> F1[All children treated as new]
+        D1 --> G1[Compute new paths]
+        E1 --> G1
+        F1 --> G1
+        G1 --> H1[Remove orphaned files]
+        H1 --> I1[Consistent 1:1 Structure]
     end
     
-    subgraph cleanMode [Clean Mode]
-        A2[Syncback with --clean] --> B2[Set old = None]
-        B2 --> C2[Generate Fresh Filename]
-        B2 --> D2[Choose Best Middleware]
-        B2 --> E2[All Children Are New]
-        C2 --> F2[Consistent 1:1 Structure]
+    subgraph incrementalMode [With --incremental Flag]
+        A2[rojo syncback -i game.rbxl --incremental] --> B2{Old Instance Exists?}
+        B2 -->|Yes| C2[Preserve Filename]
+        B2 -->|Yes| D2[Preserve Middleware]
+        B2 -->|Yes| E2[Match Children by Name]
+        C2 --> F2[Legacy Behavior]
         D2 --> F2
         E2 --> F2
     end
@@ -163,16 +221,30 @@ flowchart TD
 ### Usage
 
 ```bash
-# Current behavior (preserves existing structure)
+# Default: Clean mode (creates fresh, consistent layout)
 rojo syncback -i game.rbxl
 
-# Destructive mode (ignores existing structure, creates fresh layout)
-rojo syncback -i game.rbxl --clean
+# Preview what clean mode would do
+rojo syncback -i game.rbxl --list --dry-run
 
-# Combine with other flags
-rojo syncback -i game.rbxl --clean --list --dry-run
+# Legacy behavior (preserves existing structure)
+rojo syncback -i game.rbxl --incremental
+rojo syncback -i game.rbxl -n
+
+# Combine flags
+rojo syncback -i game.rbxl --incremental --list
 ```
 
-### Alternative Consideration
+### Project-Level Configuration (Optional Enhancement)
 
-If you also want to support project-level configuration (so you don't need to pass `--clean` every time), we could add a `syncbackRules.cleanMode: true` option in the project file. Let me know if you'd prefer that approach.
+If you want to make incremental mode the default for a specific project without passing the flag, we could also add:
+
+```json5
+{
+  "syncbackRules": {
+    "incremental": true  // Opt into legacy behavior per-project
+  }
+}
+```
+
+This would be read in `syncback_loop` and combined with the CLI flag (CLI takes precedence).

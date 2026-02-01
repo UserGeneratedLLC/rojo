@@ -75,7 +75,6 @@ fn run_syncback_test_impl(name: &str, incremental: bool, callback: impl FnOnce(&
         project_path.to_str().unwrap(),
         "--input",
         input_file.to_str().unwrap(),
-        "--non-interactive",
         "--list",
     ];
 
@@ -118,10 +117,19 @@ fn run_syncback_test_impl(name: &str, incremental: bool, callback: impl FnOnce(&
 
     // Normalize temp directory paths in the output to make snapshots deterministic.
     // Paths like "C:/Users/Joe/AppData/Local/Temp/.tmpXXXXXX/test_name/..."
+    // or "\\?\C:\Users\Joe\AppData\Local\Temp\.tmpXXXXXX\test_name\..."
     // become "<TEMP>/test_name/..."
     let stdout = String::from_utf8_lossy(&output.stdout);
+
+    // Handle forward slash paths (Unix-style)
     let temp_path_regex = Regex::new(r"[A-Za-z]:/[^\s]*/\.tmp[^/]*/").expect("Invalid regex");
     let normalized_stdout = temp_path_regex.replace_all(&stdout, "<TEMP>/");
+
+    // Handle backslash paths with optional UNC prefix (Windows-style)
+    // Matches: \\?\C:\...\temp dir\  or C:\...\temp dir\
+    let windows_temp_regex =
+        Regex::new(r"(?:\\\\?\?\\)?[A-Za-z]:\\[^\s]*\\\.tmp[^\\]*\\").expect("Invalid regex");
+    let normalized_stdout = windows_temp_regex.replace_all(&normalized_stdout, "<TEMP>/");
 
     settings.bind(|| assert_snapshot!(format!("{name}-stdout"), normalized_stdout));
 

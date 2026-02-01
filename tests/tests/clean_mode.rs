@@ -24,7 +24,6 @@ fn run_syncback(project_path: &Path, input_path: &Path, incremental: bool) -> bo
         project_path.to_str().unwrap(),
         "--input",
         input_path.to_str().unwrap(),
-        "--non-interactive",
     ];
 
     if incremental {

@@ -72,11 +72,16 @@ log = "0.4.29"
 num_cpus = "1.17.0"
 opener = "0.5.2"
 rayon = "1.11.0"
+rbx_cookie = "0.1.5"
 reqwest = { version = "0.11.27", default-features = false, features = [
     "blocking",
     "json",
     "rustls-tls",
+    "gzip",
+    "brotli",
+    "deflate",
 ] }
+tempfile = "3.24.0"
 ritz = "0.1.0"
 roblox_install = "1.0.0"
 serde = { version = "1.0.228", features = ["derive", "rc"] }
@@ -121,5 +126,4 @@ paste = "1.0.15"
 pretty_assertions = "1.4.1"
 regex = "1"
 serde_yaml = "0.8.26"
-tempfile = "3.24.0"
 walkdir = "2.5.0"

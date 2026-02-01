@@ -1,6 +1,7 @@
 ---
 source: tests/rojo_test/syncback_util.rs
-expression: "String::from_utf8_lossy(&output.stdout)"
+expression: normalized_stdout
 ---
 Writing attribute_mismatch.luau
 Writing property_mismatch.project.json5
+Created sourcemap at <TEMP>/project_reserialize\sourcemap.json
