@@ -240,7 +240,7 @@ impl SyncbackStats {
 
         // Helpful hint about debug logging
         if duplicate_count > 0 || rbxm_count > 0 {
-            log::info!(
+            log::warn!(
                 "    Enable debug logging (RUST_LOG=debug) to see individual instance details"
             );
         }

@@ -111,6 +111,9 @@ function ConfirmingPage:render()
 		allSelected = PatchTree.allNodesSelected(self.props.patchTree, self.state.selections)
 	end
 
+	-- Check if there are any changes at all
+	local hasChanges = self.props.patchTree and self.props.patchTree:getCount() > 0
+
 	return Theme.with(function(theme)
 		local pageContent = Roact.createFragment({
 			Title = e("TextLabel", {
@@ -159,17 +162,18 @@ function ConfirmingPage:render()
 				LayoutOrder = 4,
 				BackgroundTransparency = 1,
 			}, {
-				Abort = e(TextButton, {
+				-- Only show Abort button when there are changes
+				Abort = if hasChanges then e(TextButton, {
 					text = "Abort",
 					style = "Bordered",
 					transparency = self.props.transparency,
 					layoutOrder = 1,
 					onClick = self.props.onAbort,
-				}),
+				}) else nil,
 
 				Accept = e(TextButton, {
-					text = "Accept",
-					style = "Primary",
+					text = if hasChanges then "Accept" else "OK",
+					style = if hasChanges then "Primary" else "Success",
 					transparency = self.props.transparency,
 					layoutOrder = 2,
 					onClick = function()
