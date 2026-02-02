@@ -30,6 +30,16 @@ pub struct SyncbackData<'sync> {
     pub(super) stats: &'sync SyncbackStats,
 }
 
+impl<'sync> SyncbackData<'sync> {
+    /// Returns whether syncback is running in incremental mode.
+    /// In incremental mode, existing file structure is preserved.
+    /// In clean mode (non-incremental), all children are treated as new.
+    #[inline]
+    pub fn is_incremental(&self) -> bool {
+        self.incremental
+    }
+}
+
 pub struct SyncbackSnapshot<'sync> {
     pub data: SyncbackData<'sync>,
     pub old: Option<Ref>,

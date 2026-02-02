@@ -230,17 +230,20 @@ pub fn syncback_loop_with_stats(
         // not just instigating_source metadata (which may point to project file).
         let mut dirs_to_scan: Vec<PathBuf> = Vec::new();
         
-        // Helper to recursively collect $path entries from project tree
+        // Helper to recursively collect $path DIRECTORY entries from project tree
+        // Only directories need to be scanned for orphan detection; single files
+        // don't contain orphans that need to be removed.
         fn collect_paths_from_project(
             node: &crate::project::ProjectNode,
             base_path: &Path,
             paths: &mut Vec<PathBuf>,
         ) {
-            // If this node has a $path, add it
+            // If this node has a $path that points to a directory, add it
             if let Some(ref path_node) = node.path {
                 let resolved = base_path.join(path_node.path());
-                log::trace!("Found $path in project: {}", resolved.display());
-                if resolved.exists() && !paths.contains(&resolved) {
+                // Only add directories - single files don't need orphan scanning
+                if resolved.is_dir() && !paths.contains(&resolved) {
+                    log::trace!("Found $path directory in project: {}", resolved.display());
                     paths.push(resolved);
                 }
             }
@@ -336,12 +339,8 @@ pub fn syncback_loop_with_stats(
         for dir in &dirs_to_scan {
             if dir.is_dir() {
                 scan_directory(dir, &mut paths, &ignore_patterns, project_path);
-            } else if dir.exists() {
-                // It's a file, add it directly
-                if is_valid_path(&ignore_patterns, project_path, dir) {
-                    paths.insert(dir.clone());
-                }
             }
+            // Note: We only add directories to dirs_to_scan now, so no else branch needed
         }
 
         log::debug!("Scanned {} existing paths from filesystem", paths.len());

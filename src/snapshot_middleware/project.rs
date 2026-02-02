@@ -27,6 +27,34 @@ use crate::{
 
 use super::snapshot_from_vfs;
 
+/// Checks if a class transition is recoverable in clean mode.
+///
+/// Recoverable transitions:
+/// - Folder -> Script (creates init.luau)
+/// - Script -> Folder (removes init.luau)
+/// - Script -> Script (changes init.server/client.luau type)
+fn can_transition_class(old_class: &str, new_class: &str) -> bool {
+    let is_script = |c: &str| matches!(c, "ModuleScript" | "Script" | "LocalScript");
+    let is_folder = |c: &str| c == "Folder";
+
+    // Folder can become a script (by creating init file)
+    if is_folder(old_class) && is_script(new_class) {
+        return true;
+    }
+
+    // Script can become Folder (by removing init file - handled by orphan removal)
+    if is_script(old_class) && is_folder(new_class) {
+        return true;
+    }
+
+    // Script can change type (e.g., ModuleScript -> LocalScript)
+    if is_script(old_class) && is_script(new_class) {
+        return true;
+    }
+
+    false
+}
+
 pub fn snapshot_project(
     context: &InstanceContext,
     vfs: &Vfs,
@@ -344,14 +372,26 @@ pub fn syncback_project<'sync>(
     while let Some((node, old_inst, new_inst)) = node_queue.pop_front() {
         log::debug!("Processing node {}", old_inst.name());
         if old_inst.class_name() != new_inst.class {
-            anyhow::bail!(
-                "Cannot change the class of {} in project file {}.\n\
-                Current class is {}, it is a {} in the input file.",
-                old_inst.name(),
-                project_path.display(),
-                old_inst.class_name(),
-                new_inst.class
-            );
+            // In clean mode, allow recoverable class transitions
+            // (e.g., Folder -> ModuleScript by creating init.luau)
+            let can_recover = can_transition_class(old_inst.class_name().as_str(), new_inst.class.as_str());
+            if !snapshot.data.is_incremental() && can_recover {
+                log::debug!(
+                    "Clean mode: allowing class transition {} -> {} for {}",
+                    old_inst.class_name(),
+                    new_inst.class,
+                    old_inst.name()
+                );
+            } else {
+                anyhow::bail!(
+                    "Cannot change the class of {} in project file {}.\n\
+                    Current class is {}, it is a {} in the input file.",
+                    old_inst.name(),
+                    project_path.display(),
+                    old_inst.class_name(),
+                    new_inst.class
+                );
+            }
         }
 
         // TODO handle meta.json5 files in this branch. Right now, we perform
@@ -372,19 +412,64 @@ pub fn syncback_project<'sync>(
                 base_path.join(node_path)
             };
 
-            let middleware = match Middleware::middleware_for_path(
+            let mut middleware = match Middleware::middleware_for_path(
                 snapshot.vfs(),
                 &project.sync_rules,
                 &full_path,
             )? {
                 Some(middleware) => middleware,
-                // The only way this can happen at this point is if the path does
-                // not exist on the file system or there's no middleware for it.
-                None => anyhow::bail!(
-                    "path does not exist or could not be turned into a file Rojo understands: {}",
-                    full_path.display()
-                ),
+                None => {
+                    // Path doesn't exist on filesystem. In clean mode, we can
+                    // determine the middleware from the new instance and let
+                    // syncback create the necessary files/directories.
+                    if !snapshot.data.is_incremental() {
+                        // Determine middleware based on new instance class
+                        let inferred_middleware = match new_inst.class.as_str() {
+                            "ModuleScript" => Middleware::ModuleScriptDir,
+                            "Script" => Middleware::ServerScriptDir,
+                            "LocalScript" => Middleware::ClientScriptDir,
+                            "Folder" => Middleware::Dir,
+                            // For other classes, default to Dir
+                            _ => Middleware::Dir,
+                        };
+                        log::debug!(
+                            "Clean mode: path {} doesn't exist, inferring {:?} middleware for class {}",
+                            full_path.display(),
+                            inferred_middleware,
+                            new_inst.class
+                        );
+                        inferred_middleware
+                    } else {
+                        anyhow::bail!(
+                            "Rojo project referred to a file using $path that could not be turned \
+                            into a Roblox Instance by Rojo.\n\
+                            File $path: {}",
+                            full_path.display()
+                        )
+                    }
+                }
             };
+
+            // In clean mode, when the filesystem has a directory (Dir middleware)
+            // but the new instance is a script, we need to use the appropriate
+            // script-dir middleware to create the init file and restore the script.
+            if !snapshot.data.is_incremental() && middleware == Middleware::Dir {
+                let script_middleware = match new_inst.class.as_str() {
+                    "ModuleScript" => Some(Middleware::ModuleScriptDir),
+                    "Script" => Some(Middleware::ServerScriptDir),
+                    "LocalScript" => Some(Middleware::ClientScriptDir),
+                    _ => None,
+                };
+                if let Some(new_middleware) = script_middleware {
+                    log::debug!(
+                        "Clean mode: overriding Dir->{:?} middleware for {} (class {})",
+                        new_middleware,
+                        full_path.display(),
+                        new_inst.class
+                    );
+                    middleware = new_middleware;
+                }
+            }
 
             descendant_snapshots.push(
                 snapshot

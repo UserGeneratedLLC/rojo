@@ -94,13 +94,34 @@ This skipped ANY file whose parent directory was in `added_paths`, but adding a 
 
 **Affected tests**: `clean_removes_duplicate_extensions`, `clean_removes_multiple_duplicates`
 
+### Bug 5: File Paths Added to Directory Scan (FIXED)
+
+**Symptom**: Projects with `$path` pointing to single files (not directories) were failing syncback.
+
+**Root cause**: The `collect_paths_from_project` function was adding all `$path` entries to the scan list, but only directories should be scanned for orphans.
+
+**Fix applied**: Changed to only add `$path` entries that are directories (`resolved.is_dir()`).
+
 ---
 
-## Test Results Summary (Current)
+## Test Results Summary (Final)
 
-**Passing: 15 tests** - orphan removal, basic clean mode behavior
+**Full test suite: 179 passed, 16 failed**
 
-**Failing: 11 tests** - class change scenarios, ambiguous files, meta files, combination tests
+**Clean Mode Stress Tests: 15 passed, 11 failed**
+
+- Passing: All orphan removal tests, basic clean mode behavior
+- Failing: Class change scenarios (3), ambiguous files (2), meta/extension issues (3), combination tests (3)
+
+**Pre-existing Failures (not from this work): 5 tests**
+
+- `syncback_roundtrip::infer_service_name`
+- `syncback_roundtrip::init_meta_class_name`
+- `syncback_roundtrip::init_meta_properties`
+- `syncback_roundtrip::rbxmx_ref`
+- `syncback::ignore_trees_removing`
+
+These were failing before the current changes and are separate issues.
 
 ---
 

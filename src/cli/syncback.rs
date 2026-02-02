@@ -28,6 +28,52 @@ use super::{
     GlobalOptions,
 };
 
+/// In clean mode, ensures all $path directories exist before loading the project.
+/// This allows syncback to restore deleted directories.
+fn ensure_project_paths_exist(project_path: &Path, vfs: &Vfs) -> anyhow::Result<()> {
+    // Load the project file (handles both file and directory paths)
+    let project = Project::load_initial_project(vfs, project_path)
+        .with_context(|| format!("Failed to load project file: {}", project_path.display()))?;
+
+    let base_path = project.folder_location();
+
+    // Recursively find all $path entries in the project tree
+    fn collect_paths(node: &crate::project::ProjectNode, base: &Path, paths: &mut Vec<PathBuf>) {
+        if let Some(ref path_node) = node.path {
+            let full_path = if path_node.path().is_absolute() {
+                path_node.path().to_path_buf()
+            } else {
+                base.join(path_node.path())
+            };
+            paths.push(full_path);
+        }
+        for child in node.children.values() {
+            collect_paths(child, base, paths);
+        }
+    }
+
+    let mut paths_to_check = Vec::new();
+    collect_paths(&project.tree, base_path, &mut paths_to_check);
+
+    // Create missing directories
+    for path in paths_to_check {
+        if !path.exists() {
+            log::debug!(
+                "Clean mode: creating missing $path directory: {}",
+                path.display()
+            );
+            std::fs::create_dir_all(&path).with_context(|| {
+                format!(
+                    "Failed to create directory for $path: {}",
+                    path.display()
+                )
+            })?;
+        }
+    }
+
+    Ok(())
+}
+
 const UNKNOWN_INPUT_KIND_ERR: &str = "Could not detect what kind of file was inputted. \
                                        Expected input file to end in .rbxl, .rbxlx, .rbxm, or .rbxmx.";
 
@@ -138,6 +184,12 @@ impl SyncbackCommand {
         // Use oneshot Vfs for syncback - file watching isn't needed and
         // watcher errors shouldn't terminate the process
         let vfs = Vfs::new_oneshot();
+
+        // In clean mode, ensure all $path directories exist before loading
+        // the project. This allows syncback to restore deleted directories.
+        if !self.incremental {
+            ensure_project_paths_exist(&path_old, &vfs)?;
+        }
 
         let project_start_timer = Instant::now();
         let session_old = ServeSession::new(vfs, path_old.clone())?;
