@@ -38,25 +38,29 @@ pub struct InstanceSnapshot {
 
 Transforms files → `InstanceSnapshot`. Main entry: `snapshot_from_vfs()`
 
-| File | Handler | Result |
-|------|---------|--------|
-| `*.lua` / `*.luau` | `lua.rs` | ModuleScript |
-| `*.server.luau` | `lua.rs` | Script (RunContext.Server) |
-| `*.server.lua` | `lua.rs` | Script (RunContext.Legacy) |
-| `*.client.luau` | `lua.rs` | Script (RunContext.Client) |
-| `*.client.lua` | `lua.rs` | LocalScript |
-| `*.plugin.lua(u)` | `lua.rs` | Script (RunContext.Plugin) |
-| `*.local.lua(u)` | `lua.rs` | LocalScript |
-| `*.legacy.lua(u)` | `lua.rs` | Script (RunContext.Legacy) |
-| `*.rbxm` / `*.rbxmx` | `rbxm.rs` / `rbxmx.rs` | Binary/XML model tree |
-| `*.model.json` | `json_model.rs` | JSON instance |
-| `*.project.json` | `project.rs` | Nested project |
-| `*.csv` / `*.txt` | `csv.rs` / `txt.rs` | LocalizationTable / StringValue |
-| `*.toml` / `*.json` / `*.yaml` | Data → ModuleScript |
-| Directory | `dir.rs` | Folder or inferred service |
-| `*.meta.json` | `meta_file.rs` | Metadata overlay |
+| File | Handler | Result | Note |
+|------|---------|--------|------|
+| `*.luau` | `lua.rs` | ModuleScript | Preferred |
+| `*.server.luau` | `lua.rs` | Script (RunContext.Server) | Preferred |
+| `*.client.luau` | `lua.rs` | Script (RunContext.Client) | Preferred |
+| `*.plugin.luau` | `lua.rs` | Script (RunContext.Plugin) | |
+| `*.local.luau` | `lua.rs` | LocalScript | |
+| `*.legacy.luau` | `lua.rs` | Script (RunContext.Legacy) | |
+| `*.lua` | `lua.rs` | ModuleScript | Legacy |
+| `*.server.lua` | `lua.rs` | Script (RunContext.Legacy) | Legacy |
+| `*.client.lua` | `lua.rs` | LocalScript | Legacy |
+| `*.rbxm` / `*.rbxmx` | `rbxm.rs` / `rbxmx.rs` | Binary/XML model tree | |
+| `*.model.json5` | `json_model.rs` | JSON instance | Preferred |
+| `*.model.json` | `json_model.rs` | JSON instance | Legacy |
+| `*.project.json5` | `project.rs` | Nested project | Preferred |
+| `*.project.json` | `project.rs` | Nested project | Legacy |
+| `*.csv` / `*.txt` | `csv.rs` / `txt.rs` | LocalizationTable / StringValue | |
+| `*.toml` / `*.json5` / `*.yaml` | Data → ModuleScript | |
+| Directory | `dir.rs` | Folder or inferred service | |
+| `*.meta.json5` | `meta_file.rs` | Metadata overlay | Preferred |
+| `*.meta.json` | `meta_file.rs` | Metadata overlay | Legacy |
 
-**Init files:** `init.lua`, `init.server.lua`, etc. → Instance named after parent directory
+**Init files:** `init.luau`, `init.server.luau`, etc. → Instance named after parent directory (`.lua` legacy supported)
 
 **Context passed to middleware:**
 
@@ -94,7 +98,7 @@ Reverse: Roblox file → filesystem
 
 ### 6. Project System (`src/project.rs`)
 
-Parse/validate `.project.json`, handle nested projects, manage sync rules.
+Parse/validate `.project.json5` (or legacy `.project.json`), handle nested projects, manage sync rules.
 
 ## Command Implementations
 

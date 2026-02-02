@@ -71,8 +71,8 @@ pub fn syncback_loop(
 
 **Default behavior.** Preserves existing file structure:
 
-- If `src/MyScript.lua` exists, update it
-- If `src/MyFolder/init.lua` exists (directory structure), preserve it
+- If `src/MyScript.luau` exists, update it
+- If `src/MyFolder/init.luau` exists (directory structure), preserve it
 - Only creates new files when instances don't match anything
 - Compares hashes to detect actual changes (avoids rewriting unchanged files)
 
@@ -119,7 +119,7 @@ pub struct SyncbackRules {
 - Filters out `Name`, `Parent` (always)
 - Filters out properties in `ignore_properties`
 - Filters out unscriptable properties if `sync_unscriptable: false`
-- Filters out middleware-specific properties (e.g., `Script.Source` when writing to `.lua` file)
+- Filters out middleware-specific properties (e.g., `Script.Source` when writing to `.luau` file)
 
 ### Hidden Services
 
@@ -198,11 +198,11 @@ pub struct SyncbackSnapshot<'sync> {
 ```rust
 // Join child to current path
 snapshot.with_joined_path(new_ref, old_ref)?
-// Result: parent_path/ChildName.lua
+// Result: parent_path/ChildName.luau
 
 // Use base path
 snapshot.with_base_path(&base, new_ref, old_ref)?
-// Result: base/ChildName.lua
+// Result: base/ChildName.luau
 
 // Explicit path
 snapshot.with_new_path(path, new_ref, old_ref)
@@ -213,7 +213,7 @@ snapshot.with_new_path(path, new_ref, old_ref)
 - Uses instance name
 - Adds appropriate extension based on middleware
 - Encodes Windows-invalid chars if enabled
-- Example: `Script` named "My Script" → `My Script.server.lua`
+- Example: `Script` named "My Script" → `My Script.server.luau`
 
 ### Property Filtering
 
@@ -232,7 +232,7 @@ snapshot.get_path_filtered_properties(new_ref)
 **Decision tree:**
 
 1. **Old instance exists?** → Use same middleware as before (preserve structure)
-2. **Script type?** → Choose appropriate Lua middleware (`.server.lua`, `.client.lua`, etc.)
+2. **Script type?** → Choose appropriate Lua middleware (`.server.luau`, `.client.luau`, etc.)
 3. **Model/container?** → Choose directory or rbxm based on complexity
 4. **Special types?** → CSV for LocalizationTable, TXT for StringValue
 5. **Fallback** → Rbxm or JsonModel
@@ -334,14 +334,14 @@ Script "MyScript"
 ```
 
 **Syncback produces:**
-```lua
--- src/MyScript.server.lua
+```luau
+-- src/MyScript.server.luau
 print('hello')
 ```
 
 **Meta file (if needed):**
 ```json5
-// src/MyScript.server.meta.json5
+// src/MyScript.server.meta.json5 (for MyScript.server.luau)
 {
     "$properties": {
         "Disabled": false
@@ -352,7 +352,7 @@ print('hello')
 ### Syncing a Model
 
 **Simple model (few children):** → `.rbxm` or `.rbxmx` file
-**Complex model (many children):** → Directory with `init.meta.json5`
+**Complex model (many children):** → Directory with `init.meta.json5` or `init.luau`
 
 ### Syncing Nested Folders
 
@@ -365,9 +365,9 @@ Roblox:
 
 Filesystem:
   src/Modules/
-    Utils.lua
+    Utils.luau
     Math/
-      Add.lua
+      Add.luau
 ```
 
 ## Error Handling

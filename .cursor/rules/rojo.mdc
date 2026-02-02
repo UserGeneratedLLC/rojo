@@ -33,11 +33,11 @@ This avoids manual tree manipulation bugs and handles complex cases (large model
 
 ## Project Files
 
-`.project.json` or `.project.json5` (JSON5 preferred for comments):
+`.project.json5` (preferred) | `.project.json` (legacy):
 
 ```json5
 {
-  name: "MyProject",  // Optional if default.project.json (inherits folder name)
+  name: "MyProject",  // Optional if default.project.json5 (inherits folder name)
   tree: {
     $path: "src"
   },
@@ -50,8 +50,9 @@ This avoids manual tree manipulation bugs and handles complex cases (large model
 
 **Key conventions:**
 - Services don't need explicit `$className` (inferred)
-- `default.project.json` inherits parent folder name
+- `default.project.json5` inherits parent folder name
 - Projects can be nested (each has independent sync rules)
+- **Use `.luau` for scripts, `.json5` for config** (`.lua`/`.json` are legacy but supported)
 
 ## Contributing
 
@@ -66,7 +67,7 @@ For plugin work: Luau LSP, Studio with "Reload plugins on file change"
 ### Initial Setup
 
 ```bash
-git clone --recursive https://github.com/rojo-rbx/rojo
+git clone --recursive https://github.com/UserGeneratedLLC/rojo
 cd rojo
 rokit install  # Installs tools from rokit.toml
 cargo test     # Verify setup
@@ -127,7 +128,7 @@ Every PR updates `CHANGELOG.md`:
 
 * Made a change to Rojo ([#1234])
 
-[#1234]: https://github.com/rojo-rbx/rojo/pull/1234
+[#1234]: https://github.com/UserGeneratedLLC/rojo/pull/1234
 ```
 
 Keep link definitions in ascending order.

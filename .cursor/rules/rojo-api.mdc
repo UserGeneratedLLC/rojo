@@ -8,454 +8,288 @@ globs:
   - "plugin/src/ApiContext.lua"
 ---
 
-# Rojo API & Communication Architecture
+# Rojo API & Communication
 
-Communication between Rojo server (Rust) and Studio plugin (Lua) via HTTP/WebSocket protocol.
+**Protocol Version:** 5 | Server/plugin MAJOR.MINOR must match
 
-**Protocol Version:** 5 (current)
-**Must match:** Server and plugin MAJOR.MINOR versions must match
-
-## Architecture Overview
+## Architecture
 
 ```
-Filesystem Changes
-  ↓
-Server (src/serve_session.rs)
-  ↓ Generate patches
-WebSocket (src/web/api.rs)
-  ↓ Send JSON/MessagePack
-Plugin (plugin/src/ServeSession.lua)
-  ↓ Apply patches
-Studio DataModel
+Filesystem → Server (serve_session.rs) → WebSocket (web/api.rs) → Plugin (ServeSession.lua) → Studio
+
+Two-way (experimental):
+Studio → ChangeBatcher → Plugin → WebSocket → Server → Filesystem
 ```
 
-**Two-way sync (experimental):**
-```
-Studio Changes
-  ↓
-ChangeBatcher (plugin/src/ChangeBatcher/)
-  ↓ Collect changes
-Plugin ServeSession
-  ↓ Send patches
-WebSocket
-  ↓ Receive updates
-Server (src/web/api.rs)
-  ↓ Write to filesystem
-Filesystem
-```
+## HTTP Endpoints (`src/web/api.rs`)
 
-## HTTP API Endpoints (`src/web/api.rs`)
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/api/rojo` | GET | Server info (version, sessionId, projectName, rootInstanceId, servePlaceIds) |
+| `/api/read/:id` | GET | Read instance tree from ID |
+| `/api/serialize/:id` | GET | Instance tree as msgpack |
+| `/api/write` | POST | Two-way sync: plugin sends changes |
+| `/api/open/:id` | POST | Open script in editor (`{"cursor": [line, col]}`) |
+| `/api/ref-patch/:id` | GET | Fix Ref properties after syncback |
 
-### `GET /api/rojo`
-
-**Returns server info:**
+### Server Info Response (`GET /api/rojo`)
 
 ```json
 {
     "serverVersion": "7.7.0-rc.1",
     "protocolVersion": 5,
-    "sessionId": "uuid-here",
+    "sessionId": "uuid",
     "projectName": "MyProject",
-    "expectedPlaceIds": [123456],      // Optional: allowed places
-    "unexpectedPlaceIds": [789012],    // Optional: blocked places
-    "placeId": null,                    // Set by plugin on connect
-    "gameId": null,                     // Set by plugin on connect
+    "expectedPlaceIds": [123456],
     "rootInstanceId": "00000000-0000-0000-0000-000000000000",
-    "syncSourceOnly": true,             // Only sync script sources
-    "ignoreHiddenServices": true,       // Filter hidden services
-    "visibleServices": ["Workspace", "ServerScriptService", ...]
+    "syncSourceOnly": true,
+    "visibleServices": ["Workspace", "ServerScriptService"]
 }
 ```
 
-**Plugin uses this to:**
-1. Check protocol version compatibility
-2. Get session ID for all subsequent requests
-3. Validate place ID matches expected
-4. Determine root instance for tree building
+### Write Request (`POST /api/write`)
 
-### `GET /api/socket/:cursor`
-
-**WebSocket upgrade endpoint.**
-
-**Deprecated:** Protocol v4 used long-polling. Protocol v5 uses WebSocket (see below).
-
-### `GET /api/read/:id`
-
-**Reads instance tree starting from ID.**
-
-**Query params:**
-- `id` - Instance ID to read from
-
-**Returns:** Instance tree JSON structure
-
-**Use case:** Initial tree fetch, or fetching subtree
-
-### `GET /api/serialize/:id`
-
-**Serializes instance tree to msgpack for plugin.**
-
-**Returns:** Encoded instance tree that plugin can decode
-
-### `POST /api/write`
-
-**Two-way sync: Plugin sends changes to server.**
-
-**Request body:**
 ```json
 {
-    "removed": ["instance-id-1"],
-    "added": {
-        "instance-id-2": {
-            "id": "instance-id-2",
-            "className": "Folder",
-            "name": "NewFolder",
-            "properties": {},
-            "children": []
-        }
-    },
-    "updated": [
-        {
-            "id": "instance-id-3",
-            "changedName": "RenamedScript",
-            "changedProperties": {
-                "Source": "print('updated')"
-            }
-        }
-    ]
+    "removed": ["id-1"],
+    "added": { "id-2": { "id": "id-2", "className": "Folder", "name": "New", "properties": {}, "children": [] } },
+    "updated": [{ "id": "id-3", "changedName": "Renamed", "changedProperties": { "Source": "print('hi')" } }]
 }
 ```
 
-**Server response:**
-```json
-{
-    "success": true,
-    "errors": []
-}
-```
-
-**Server action:** Write changes to filesystem based on patch
-
-**Format detection:** Server checks existing file structure:
-- If `Name/init.lua` exists → preserve directory structure
-- If `Name.lua` exists → preserve single file
-- If neither exists → use `has_children` to decide
-
-### `POST /api/open/:id`
-
-**Opens script in external editor.**
-
-**Body:** `{"cursor": [line, column]}`  (optional)
-
-**Action:** Uses `opener` crate to open file in default text editor
-
-### `GET /api/ref-patch/:id`
-
-**Gets patch for fixing Ref properties after syncback.**
-
-**Use case:** After syncback, some Ref properties may be unlinked. This endpoint helps plugin restore them.
+**Format detection:** `Name/init.luau` → directory | `Name.luau` → file | neither → use `has_children` (`.lua` also supported)
 
 ## WebSocket Protocol (v5)
 
-### Connection Flow
+**Connection:** `ws://host:port/api/rojo`
 
-**Plugin initiates:**
+1. Connect → Receive `ServerInfo` handshake → Send `{type = "Subscribe"}` → Receive patches
 
-1. **Connect** to `ws://host:port/api/rojo`
-2. **Receive handshake** from server
-3. **Send subscribe message**
-4. **Receive patches** as filesystem changes
-5. **Send writes** (if two-way sync enabled)
-
-### Handshake (Server → Plugin)
-
-**Packet type:** `ServerInfo`
-
-```lua
-{
-    type = "ServerInfo",
-    protocolVersion = 5,
-    serverVersion = "7.7.0-rc.1",
-    sessionId = "uuid",
-    projectName = "MyProject",
-    rootInstanceId = "00000000-0000-0000-0000-000000000000",
-    -- ... other fields from /api/rojo
-}
-```
-
-**Plugin validates:**
-- Protocol version matches
-- Server version compatible (MAJOR.MINOR)
-- Session ID is new (not stale connection)
-
-### Subscribe Message (Plugin → Server)
-
-```lua
-{
-    type = "Subscribe"
-}
-```
-
-**Server action:** Add plugin to subscribers list, send initial tree
-
-### Patch Messages (Server → Plugin)
-
-**Packet type:** `ApplyPatch`
+### Patch Message (`ApplyPatch`)
 
 ```lua
 {
     type = "ApplyPatch",
     sessionId = "uuid",
     patch = {
-        removed = {"instance-id-1", "instance-id-2"},  -- Vec<Ref>
+        removed = {"id-1", "id-2"},
         added = {
-            ["instance-id-3"] = {  -- HashMap<Ref, Instance>
-                id = "instance-id-3",
-                className = "Folder",
-                name = "NewFolder",
-                properties = {},
-                metadata = {
-                    ignoreUnknownInstances = false,
-                },
-                children = {"child-id-1", "child-id-2"},
+            ["id-3"] = {
+                id = "id-3", className = "Folder", name = "New",
+                properties = {}, metadata = { ignoreUnknownInstances = false },
+                children = {"child-1"},
             },
         },
-        updated = {  -- Vec<InstanceUpdate>
-            {
-                id = "instance-id-4",
-                changedName = "RenamedScript",
-                changedClassName = nil,  -- rare
-                changedProperties = {
-                    Source = "print('new code')",
-                    Disabled = false,
-                },
-                changedMetadata = nil,
-            },
+        updated = {
+            { id = "id-4", changedName = "Renamed", changedProperties = { Source = "code" } },
         },
     }
 }
 ```
 
-**Message format:** MessagePack-encoded for efficiency
-
-### Write Messages (Plugin → Server)
-
-**For two-way sync only.**
-
-Same format as `POST /api/write` but sent over WebSocket.
+**Format:** MessagePack (~30% smaller than JSON, ~2x faster)
 
 ## Server ServeSession (`src/serve_session.rs`)
 
-**Manages active live-sync session.**
-
 ```rust
 pub struct ServeSession {
-    session_id: Uuid,              // Unique session ID
-    tree_handle: Arc<Mutex<RojoTree>>, // Instance tree
-    message_queue: MessageQueue,   // Patch queue
-    project: Project,              // Project config
-    vfs: Vfs,                      // Virtual filesystem
-    // ... other state
+    session_id: Uuid,
+    tree_handle: Arc<Mutex<RojoTree>>,
+    message_queue: MessageQueue,
+    project: Project,
+    vfs: Vfs,
 }
 ```
 
-### Session Lifecycle
+**Lifecycle:** Create → Watch filesystem → Generate patches on changes → Broadcast to plugins → Shutdown
 
-1. **Creation** - `rojo serve` starts, creates session
-2. **Filesystem watching** - VFS monitors for changes
-3. **Patch generation** - Changes trigger snapshot diffs
-4. **Broadcast** - Patches sent to all connected plugins
-5. **Shutdown** - Server stops, sessions terminated
+**Message Queue:** Batches changes (~100ms window), cursor system for reconnect recovery
 
-### Message Queue
-
-**Batches patches:**
-- Collects changes over small time window (~100ms)
-- Combines multiple file changes into single patch
-- Prevents flooding plugin with rapid updates
-
-**Cursor system:**
-- Each patch has incrementing cursor
-- Plugin tracks last received cursor
-- Can request missed patches on reconnect
-
-### WebSocket Handling
-
-**Per-connection state:**
-```rust
-struct WebSocketConnection {
-    sender: WebSocketSender,
-    receiver: WebSocketReceiver,
-    session: Arc<ServeSession>,
-}
-```
-
-**Message loop:**
+**WebSocket loop:**
 ```rust
 loop {
     select! {
-        // Receive from plugin
-        msg = receiver.next() => {
-            handle_plugin_message(msg);
-        }
-        // Send to plugin
-        patch = message_queue.recv() => {
-            sender.send(patch).await;
-        }
+        msg = receiver.next() => handle_plugin_message(msg),
+        patch = message_queue.recv() => sender.send(patch).await,
     }
 }
 ```
 
 ## Plugin ServeSession (`plugin/src/ServeSession.lua`)
 
-**Manages plugin-side connection.**
-
 ```lua
 ServeSession = {
-    __status = "NotStarted",          -- Connection state
-    __apiContext = ApiContext,        -- HTTP/WebSocket client
-    __twoWaySync = false,             -- Enable two-way sync
-    __syncSourceOnly = false,         -- Only sync scripts
-    __reconciler = Reconciler,        -- Applies patches
-    __instanceMap = InstanceMap,      -- Server ID ↔ Studio Instance
-    __changeBatcher = ChangeBatcher,  -- Collects Studio changes
-    __serverInfo = nil,               -- Server handshake data
-    __confirmingPatch = nil,          -- Patch awaiting confirmation
-    __isConfirming = false,           -- In confirmation dialog
+    __status = "NotStarted",  -- NotStarted → Connecting → Connected → Disconnected
+    __apiContext = ApiContext,
+    __twoWaySync = false,
+    __reconciler = Reconciler,
+    __instanceMap = InstanceMap,
+    __changeBatcher = ChangeBatcher,
+    __confirmingPatch = nil,
+    __isConfirming = false,  -- Prevents stacking dialogs, changes during review
 }
-```
-
-### Connection States
-
-```lua
-Status = {
-    NotStarted = "NotStarted",     -- Initial state
-    Connecting = "Connecting",     -- Connecting to server
-    Connected = "Connected",       -- Active connection
-    Disconnected = "Disconnected", -- Connection lost
-}
-```
-
-**State transitions:**
-```
-NotStarted → Connecting → Connected → Disconnected
-              ↑_____________|
 ```
 
 ### Patch Confirmation
 
-**User setting:** `confirmationBehavior`
-- `"Always"` (default) - Confirm every patch
-- `"Initial"` - Confirm first patch only per project
-- `"Large Changes"` - Confirm if > N instances changed (threshold configurable)
-- `"Unlisted PlaceId"` - Confirm if place ID not in servePlaceIds
-- `"Never"` - Never confirm, auto-accept all patches
+**Setting `confirmationBehavior`:** `"Always"` (default) | `"Initial"` | `"Large Changes"` | `"Unlisted PlaceId"` | `"Never"`
 
-**Confirmation flow:**
-
-1. **Receive patch** from server
-2. **Check confirmation setting**
-3. **If confirm needed:**
-   - Show `PatchVisualizer` UI
-   - **Pause ChangeBatcher** (prevent Studio changes during review)
-   - Wait for user action (Apply/Cancel)
-   - **Resume ChangeBatcher** after confirmation
-4. **Apply patch** via Reconciler
-5. **Record applied patch** to undo/redo system
-
-**Defense-in-depth:** `__isConfirming` flag prevents:
-- Multiple confirmation dialogs stacking
-- Patches being applied during confirmation
-- ChangeBatcher sending changes mid-confirmation
+**Flow:** Receive patch → Check setting → Show PatchVisualizer (pause ChangeBatcher) → User confirms → Apply via Reconciler → Resume ChangeBatcher
 
 ### Patch Application
 
-**Via Reconciler:**
+```lua
+-- Remove
+for _, id in patch.removed do instanceMap:fromId(id):Destroy(); instanceMap:removeId(id) end
+-- Add
+for id, data in patch.added do instanceMap:insert(id, Reconciler.reify(data)) end
+-- Update
+for _, update in patch.updated do Reconciler.hydrate(instanceMap:fromId(update.id), update) end
+```
+
+## Two-Way Sync (Experimental)
+
+**Setting:** `twoWaySync` (default: true) | Syncs Studio changes → filesystem in real-time
+
+### Complete Data Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ PLUGIN SIDE                                                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  Studio Instance                                                            │
+│       │ PropertyChanged / DescendantAdded / etc.                            │
+│       ▼                                                                     │
+│  InstanceMap.__connectSignals()                                             │
+│       │ Fires onInstanceChanged(instance, propertyName)                     │
+│       │ (skipped if RunService:IsRunning() or instance is paused)           │
+│       ▼                                                                     │
+│  ServeSession.onInstanceChanged()                                           │
+│       │ Guards: if not self.__twoWaySync then return end                    │
+│       ▼                                                                     │
+│  ChangeBatcher:add(instance, propertyName)                                  │
+│       │ Stores in __pendingPropertyChanges[instance][propertyName] = true   │
+│       ▼                                                                     │
+│  ChangeBatcher:__cycle(dt)  [RenderStepped, every frame]                    │
+│       │ Accumulates dt until >= BATCH_INTERVAL (0.2s)                       │
+│       │ Guards: if __paused then return end                                 │
+│       ▼                                                                     │
+│  ChangeBatcher:__flush()                                                    │
+│       │ Calls createPatchSet(instanceMap, pendingChanges, syncSourceOnly)   │
+│       │ Clears __pendingPropertyChanges                                     │
+│       ▼                                                                     │
+│  onChangesFlushed(patch)                                                    │
+│       │ Guards: if Settings:get("oneShotSync") then return end              │
+│       ▼                                                                     │
+│  ApiContext:write(patch)  → HTTP POST /api/write (MessagePack)              │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ SERVER SIDE                                                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  handle_api_write() [src/web/api.rs]                                        │
+│       │ Validates session_id                                                │
+│       │ Deserializes MessagePack → WriteRequest                             │
+│       ▼                                                                     │
+│  For each removed: syncback_removed_instance()                              │
+│       │ Looks up InstigatingSource::Path → fs::remove_file()                │
+│       ▼                                                                     │
+│  For each added: syncback_added_instance()                                  │
+│       │ Determines file format, writes to filesystem                        │
+│       ▼                                                                     │
+│  Sends PatchSet to tree_mutation_sender channel                             │
+│       ▼                                                                     │
+│  ChangeProcessor::handle_tree_event() [src/change_processor.rs]             │
+│       │ For removed: fs::remove_file(instigating_source.path)               │
+│       │ For updated: if "Source" property → fs::write(path, value)          │
+│       ▼                                                                     │
+│  apply_patch_set() → Updates RojoTree                                       │
+│       ▼                                                                     │
+│  message_queue.push_messages() → Broadcasts to all plugins                  │
+│                                                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### InstanceMap: Change Detection Foundation (`plugin/src/InstanceMap.lua`)
+
+The InstanceMap is a bidirectional map (ID ↔ Instance) that also hooks property change signals:
 
 ```lua
--- 1. Remove instances
-for _, id in ipairs(patch.removed) do
-    local instance = instanceMap:fromId(id)
-    if instance then
-        instance:Destroy()
-        instanceMap:removeId(id)
+InstanceMap = {
+    fromIds = {},              -- Server ID → Studio Instance
+    fromInstances = {},        -- Studio Instance → Server ID
+    pausedUpdateInstances = {}, -- Set of instances to ignore changes from
+    instancesToSignal = {},    -- Instance → RBXScriptConnection(s)
+    onInstanceChanged = fn,    -- Callback: (instance, propertyName) → void
+}
+```
+
+**Signal Connection:**
+```lua
+function InstanceMap:__connectSignals(instance)
+    if instance:IsA("ValueBase") then
+        -- ValueBase.Changed only fires for Value, need explicit signals
+        signals = {
+            instance:GetPropertyChangedSignal("Name"):Connect(...),
+            instance:GetPropertyChangedSignal("Value"):Connect(...),
+            instance:GetPropertyChangedSignal("Parent"):Connect(...),
+        }
+    else
+        -- Regular instances use Changed event (fires for any property)
+        instance.Changed:Connect(function(propertyName)
+            self:__maybeFireInstanceChanged(instance, propertyName)
+        end)
     end
 end
+```
 
--- 2. Add instances (via reify)
-for id, data in pairs(patch.added) do
-    local instance = Reconciler.reify(data)
-    instanceMap:insert(id, instance)
-end
-
--- 3. Update instances (via hydrate)
-for id, update in pairs(patch.updated) do
-    local instance = instanceMap:fromId(id)
-    Reconciler.hydrate(instance, update)
+**Change Guards:**
+```lua
+function InstanceMap:__maybeFireInstanceChanged(instance, propertyName)
+    if self.pausedUpdateInstances[instance] then return end  -- Paused during reconciliation
+    if self.onInstanceChanged == nil then return end         -- No callback registered
+    if RunService:IsRunning() then return end                -- Don't sync during Play mode
+    self.onInstanceChanged(instance, propertyName)
 end
 ```
 
-**Error handling:**
-- Collect all errors without stopping
-- Show errors in patch visualizer
-- Continue applying remaining changes
-
-## Two-Way Sync Architecture
-
-**Experimental feature.** Syncs Studio changes → filesystem.
-
-### Overview
-
-```
-Studio Event (PropertyChanged, DescendantAdded, etc.)
-  ↓
-InstanceMap tracks change
-  ↓
-ChangeBatcher collects (debounced)
-  ↓
-Creates patch from changes
-  ↓
-ServeSession sends via WebSocket
-  ↓
-Server writes to filesystem
-```
+**Pause Mechanism:** When applying incoming patches, instances are paused to prevent their changes from being sent back to the server (feedback loop prevention).
 
 ### ChangeBatcher (`plugin/src/ChangeBatcher/`)
 
-**Purpose:** Collect and batch Studio changes before sending to server.
+| File | Purpose |
+|------|---------|
+| `init.lua` | Main batcher: accumulator, RenderStepped loop, pause/resume |
+| `createPatchSet.lua` | Converts pending changes → PatchSet |
+| `encodePatchUpdate.lua` | Encodes property updates for existing instances |
+| `encodeInstance.lua` | Full instance encoding (for additions/syncback) |
+| `encodeProperty.lua` | Single property value encoding via RbxDom |
 
-**Core files:**
-- `init.lua` - Main batcher logic
-- `createPatchSet.lua` - Generate patch from changes
-- `encodeInstance.lua` - Encode instance to server format
-- `encodeProperty.lua` - Encode property value
-- `encodePatchUpdate.lua` - Encode instance update
-
-### Change Tracking
-
-**InstanceMap hooks:**
-
+**Core State:**
 ```lua
-local instanceMap = InstanceMap.new(function(instance, propertyName)
-    if twoWaySync then
-        changeBatcher:add(instance, propertyName)
-    end
-end)
+ChangeBatcher = {
+    __accumulator = 0,                    -- Time since last flush
+    __pendingPropertyChanges = {},        -- Instance → { PropertyName → true }
+    __syncSourceOnly = false,             -- Only sync Source property
+    __paused = false,                     -- Pause during confirmation
+    __renderSteppedConnection = conn,     -- Frame loop connection
+    __instanceMap = instanceMap,
+    __onChangesFlushed = callback,
+}
 ```
 
-**When property changes:**
-1. InstanceMap fires callback
-2. ChangeBatcher records `(instance, propertyName)` pair
-3. Waits for debounce interval (200ms)
-4. Flushes batch to create patch
-
-### Batch Interval
-
+**Batch Cycle (every frame):**
 ```lua
 local BATCH_INTERVAL = 0.2  -- 200ms
 
 function ChangeBatcher:__cycle(dt)
-    self.__accumulator += dt
+    if self.__paused then return end
     
+    self.__accumulator += dt
     if self.__accumulator >= BATCH_INTERVAL then
         self.__accumulator -= BATCH_INTERVAL
         local patch = self:__flush()
@@ -463,246 +297,359 @@ function ChangeBatcher:__cycle(dt)
             self.__onChangesFlushed(patch)
         end
     end
+    
+    self.__instanceMap:unpauseAllInstances()  -- Resume paused instances
 end
 ```
 
-**Why batch?**
-- Studio fires many property changes rapidly
-- Batching reduces server load
-- Combines related changes (e.g., Position.X, Position.Y, Position.Z)
+**Why 200ms batch interval?**
+- Studio fires many rapid property changes (e.g., dragging a part fires Position.X, Y, Z separately)
+- Batching combines related changes into single patch
+- Reduces server load and WebSocket traffic
+- Still feels responsive to users
 
-### Pause Mechanism
-
-**Critical for confirmation dialog:**
+### createPatchSet.lua: Patch Generation
 
 ```lua
-function ChangeBatcher:pause()
-    self.__paused = true
-end
-
-function ChangeBatcher:resume()
-    self.__paused = false
+function createPatchSet(instanceMap, propertyChanges, syncSourceOnly)
+    local patch = PatchSet.newEmpty()
+    
+    for instance, properties in propertyChanges do
+        local instanceId = instanceMap.fromInstances[instance]
+        if instanceId == nil then
+            Log.warn("Ignoring change for unknown instance")
+            continue
+        end
+        
+        if properties.Parent then
+            if instance.Parent == nil then
+                -- Instance was deleted in Studio
+                table.insert(patch.removed, instanceId)
+            else
+                Log.warn("Cannot sync non-nil Parent changes yet")  -- Reparenting not supported
+            end
+        else
+            if syncSourceOnly then
+                -- Server in source-only mode: only sync Source property
+                if properties.Source then
+                    local update = encodePatchUpdate(instance, instanceId, { Source = true })
+                    if update then table.insert(patch.updated, update) end
+                end
+            else
+                local update = encodePatchUpdate(instance, instanceId, properties)
+                if update then table.insert(patch.updated, update) end
+            end
+        end
+    end
+    
+    return patch
 end
 ```
 
-**When paused:**
-- No changes collected
-- No patches generated
-- Prevents sending Studio changes while user reviews incoming patch
-
-### Encoding
-
-**Instance encoding** (`encodeInstance.lua`):
+### encodePatchUpdate.lua: Update Encoding
 
 ```lua
-{
-    id = serverId,
-    className = instance.ClassName,
-    name = instance.Name,
-    properties = {
-        -- Encoded properties
-    },
-    children = {childId1, childId2},  -- Just IDs, not full data
+function encodePatchUpdate(instance, instanceId, properties)
+    local update = {
+        id = instanceId,
+        changedProperties = {},
+    }
+    
+    for propertyName in properties do
+        if propertyName == "Name" then
+            update.changedName = instance.Name
+        else
+            local descriptor = RbxDom.findCanonicalPropertyDescriptor(instance.ClassName, propertyName)
+            if not descriptor then continue end
+            
+            local success, encoded = encodeProperty(instance, propertyName, descriptor)
+            if success then
+                update.changedProperties[propertyName] = encoded
+            end
+        end
+    end
+    
+    if next(update.changedProperties) == nil and update.changedName == nil then
+        return nil  -- No actual changes
+    end
+    
+    return update
+end
+```
+
+### encodeInstance.lua: Full Instance Encoding (Syncback/Additions)
+
+Used when pulling new instances from Studio to filesystem. **Critical: handles duplicate detection.**
+
+```lua
+-- Duplicate handling (matches server's ref_properties.rs::is_path_unique)
+local function isPathUnique(instance)
+    local current = instance
+    while current do
+        if hasDuplicateSiblings(current) then
+            return false  -- Any duplicate in ancestor chain = ambiguous path
+        end
+        current = current.Parent
+        if current == game then break end
+    end
+    return true
+end
+
+function encodeInstance(instance, parentId, _skipPathCheck)
+    -- Skip instances with ambiguous paths (duplicate-named siblings)
+    if not _skipPathCheck and not isPathUnique(instance) then
+        Log.warn("Skipped '{}' - path contains duplicate-named siblings", instance:GetFullName())
+        return nil
+    end
+    
+    local properties = {}
+    
+    -- Encode Attributes and Tags (work on all instance types)
+    encodeAttributes(instance, properties)
+    encodeTags(instance, properties)
+    
+    -- For scripts, Source is required
+    if SCRIPT_CLASS_NAMES[instance.ClassName] then
+        local success, encoded = encodeProperty(instance, "Source", descriptor)
+        if not success then return nil end
+        properties.Source = encoded
+    end
+    
+    -- Encode all serializable properties
+    local classDescriptor = RbxDom.findClassDescriptor(instance.ClassName)
+    for propertyName, meta in classDescriptor.properties do
+        if SKIP_PROPERTIES[propertyName] then continue end           -- Parent, Name, Archivable
+        if SKIP_PROPERTIES_BY_CLASS[instance.ClassName]?[propertyName] then continue end  -- Source, ScriptGuid, etc.
+        
+        local isReadable = meta.scriptability == "ReadWrite" or meta.scriptability == "Read"
+        local doesSerialize = meta.serialization ~= "DoesNotSerialize"
+        
+        if isReadable and doesSerialize then
+            local success, encoded = encodeProperty(instance, propertyName, descriptor)
+            if success and encoded ~= nil then
+                properties[propertyName] = encoded
+            end
+        end
+    end
+    
+    -- Recursively encode children (skipping duplicates at each level)
+    local children = {}
+    local childDuplicates = findDuplicateNames(instance:GetChildren())
+    for _, child in instance:GetChildren() do
+        if childDuplicates[child.Name] then continue end
+        local encoded = encodeInstance(child, nil, true)  -- Skip path check, already validated
+        if encoded then table.insert(children, encoded) end
+    end
+    
+    return {
+        parent = parentId,
+        name = instance.Name,
+        className = instance.ClassName,
+        properties = properties,
+        children = children,
+    }
+end
+```
+
+**Properties skipped per class:**
+| Class | Skipped Properties | Reason |
+|-------|-------------------|--------|
+| Script/LocalScript/ModuleScript | Source, ScriptGuid, RunContext | Encoded in file contents/suffix |
+| LocalizationTable | Contents | Encoded in .csv file |
+| StringValue | Value | Encoded in .txt file |
+
+### encodeProperty.lua: Value Encoding
+
+```lua
+function encodeProperty(instance, propertyName, descriptor)
+    local readSuccess, value = descriptor:read(instance)
+    if not readSuccess then return false, nil end
+    
+    local dataType = descriptor.dataType
+    local encodeSuccess, encoded = RbxDom.EncodedValue.encode(value, dataType)
+    if not encodeSuccess then return false, nil end
+    
+    return true, encoded
+end
+```
+
+**Encoded value format (via RbxDom):**
+```lua
+-- Primitives
+true, false, 42, "string"
+
+-- Roblox types
+{ Vector3 = {1, 2, 3} }
+{ CFrame = { position = {0,0,0}, orientation = {...} } }
+{ UDim2 = {{0, 100}, {0, 50}} }
+{ Color3 = {1, 0.5, 0} }
+{ BrickColor = 194 }
+{ Ref = "server-instance-id" }  -- Object references
+{ Attributes = { key = value, ... } }
+{ Tags = {"tag1", "tag2"} }
+```
+
+### Server-Side: ChangeProcessor (`src/change_processor.rs`)
+
+Receives patches from plugin via `tree_mutation_receiver` channel:
+
+```rust
+fn handle_tree_event(&self, patch_set: PatchSet) {
+    let mut tree = self.tree.lock().unwrap();
+    
+    // Process removals
+    for &id in &patch_set.removed_instances {
+        if let Some(instance) = tree.get_instance(id) {
+            match &instance.metadata().instigating_source {
+                Some(InstigatingSource::Path(path)) => {
+                    log::info!("Two-way sync: Removing file {}", path.display());
+                    fs::remove_file(path)?;
+                }
+                Some(InstigatingSource::ProjectNode { .. }) => {
+                    log::warn!("Cannot remove instance from project file");
+                }
+                None => {
+                    log::warn!("Cannot remove instance without instigating source");
+                }
+            }
+        }
+    }
+    
+    // Process updates
+    for update in &patch_set.updated_instances {
+        if let Some(instance) = tree.get_instance(update.id) {
+            // Currently only Source property is supported
+            if let Some(Variant::String(source)) = update.changed_properties.get("Source") {
+                match &instance.metadata().instigating_source {
+                    Some(InstigatingSource::Path(path)) => {
+                        log::info!("Two-way sync: Writing Source to {}", path.display());
+                        fs::write(path, source)?;
+                    }
+                    _ => log::warn!("Cannot update instance without path source"),
+                }
+            }
+            
+            // Other property changes logged but not written
+            if update.changed_name.is_some() { log::warn!("Cannot rename instances yet"); }
+            if update.changed_class_name.is_some() { log::warn!("Cannot change ClassName yet"); }
+        }
+    }
+    
+    apply_patch_set(&mut tree, patch_set);  // Update DOM
+    self.message_queue.push_messages(&[applied_patch]);  // Broadcast to plugins
 }
 ```
 
-**Property encoding** (`encodeProperty.lua`):
+**InstigatingSource:** Every instance in RojoTree tracks where it came from:
+- `InstigatingSource::Path(PathBuf)` - Created from a file, can be written back
+- `InstigatingSource::ProjectNode { path, name, node, parent_class }` - Defined in project file, **cannot be modified via two-way sync**
+
+### Pause Mechanism: Critical for Consistency
+
+**Why pause is essential:**
+1. **During incoming patch confirmation:** User is reviewing changes. If ChangeBatcher sends Studio changes mid-review, it creates race conditions.
+2. **During patch application:** Reconciler modifies instances, triggering property change events. Without pause, these would be sent back as "changes" (feedback loop).
+3. **Defense-in-depth:** `__isConfirming` flag in ServeSession prevents multiple dialogs and ensures atomicity.
 
 ```lua
--- Simple types
-Disabled = false
-
--- Complex types
-Position = {Vector3 = {1, 2, 3}}
-Size = {UDim2 = {{0, 100}, {0, 50}}}
-
--- Ref properties
-ObjectValue.Value = {Ref = "target-server-id"}
+-- In ServeSession, when showing confirmation dialog:
+self.__changeBatcher:pause()
+-- ... show PatchVisualizer, wait for user ...
+self.__changeBatcher:resume()
 ```
 
-**Uses `rbx_dom_lua`** for type encoding compatible with server.
+```lua
+-- In Reconciler, when modifying instances:
+instanceMap:pauseInstance(instance)
+instance.SomeProperty = newValue  -- Won't trigger ChangeBatcher
+-- Later, in ChangeBatcher:__cycle():
+instanceMap:unpauseAllInstances()
+```
 
-### Server-Side Handling
-
-**On receiving write patch:**
-
-1. **Validate session ID** - Ensure not stale
-2. **Decode patch** - Parse MessagePack
-3. **Match instances to files** - Use InstanceMap equivalent
-4. **Write changes:**
-   - Scripts → Update `.lua` file contents
-   - Properties → Update `.meta.json` files
-   - New instances → Create new files
-   - Removed instances → Delete files
-5. **Detect format:**
-   - Check if `Name/init.lua` exists (directory)
-   - Check if `Name.lua` exists (standalone)
-   - Use `has_children` if neither exists
-
-### Known Issues (Experimental)
-
-**Two-way sync limitations:**
-
-1. **Undo/redo conflicts** - Studio's undo can trigger spurious changes
-2. **Property race conditions** - Rapid changes can interleave badly
-3. **Format ambiguity** - Hard to determine if instance should be file or directory
-4. **Type serialization** - Some property types don't roundtrip well
-5. **Ref properties** - Complex to handle when instances move
-
-**Workarounds:**
-- Disable during complex operations
-- Use manual pull for safety-critical changes
-- Prefer one-way sync (server → Studio) as primary workflow
-
-## One-Shot Mode
+### One-Shot Mode Integration
 
 **Setting:** `oneShotSync` (default: true)
 
-**Behavior:**
-- Blocks automatic outgoing writes from ChangeBatcher
-- Always requires explicit confirmation for patches
-- **Disconnects automatically after initial sync completes**
-- No sync lock is acquired (multiple users can view)
-
-**Use case:**
-- Quick one-time sync without maintaining connection
-- Review changes before applying
-- Safer for production environments
-
-**Implementation:**
+One-shot mode adds an extra guard in `onChangesFlushed`:
 
 ```lua
-function onChangesFlushed(patch)
+local function onChangesFlushed(patch)
     if Settings:get("oneShotSync") then
-        Log.info("One-shot mode: blocking automatic write")
-        return  -- Don't send to server
+        Log.info("One-shot mode: blocking automatic outgoing write from ChangeBatcher")
+        return  -- Silently discard patch
     end
-    
     self.__apiContext:write(patch)
 end
 ```
 
-## Message Format
+**Behavior:**
+- ChangeBatcher still collects changes (needed for diff visualization)
+- Automatic writes are blocked
+- Only explicit "pull" selections in confirmation dialog can write
+- Disconnects after initial sync completes
+- No sync lock acquired (multiple users can view same place)
 
-**MessagePack encoding:**
-- Smaller than JSON
-- Faster to parse
-- Binary-safe (handles raw bytes)
+**Use cases:**
+- Quick preview of changes without risk of accidental writes
+- Safe for production environments
+- Team viewing same project simultaneously
 
-**Serialization:**
+### Known Limitations (Detailed)
+
+| Issue | Cause | Impact |
+|-------|-------|--------|
+| **Undo/redo triggers spurious changes** | Studio's ChangeHistoryService fires property changes during undo | Can cause unexpected writes or conflicts |
+| **Rapid changes interleave** | 200ms batch window may split logically related changes | Partial updates can leave inconsistent state |
+| **Reparenting not supported** | `Parent` property changes to non-nil values are ignored | Moving instances in Studio doesn't sync |
+| **Renaming not supported** | `changedName` logged but not written | Renaming in Studio doesn't sync |
+| **ClassName changes ignored** | Would require file type change | Changing script type doesn't sync |
+| **Only Source property writes** | Other properties logged but not written to filesystem | Only script content syncs reliably |
+| **Project node instances immutable** | InstigatingSource::ProjectNode cannot be modified | Instances from project file can't be changed |
+| **Duplicate-named siblings skipped** | Path ambiguity makes reliable sync impossible | Instances with same-name siblings ignored |
+| **Ref properties complex** | Instance references may become invalid when instances move | ObjectValue.Value may not sync correctly |
+
+**Recommended workflow:** Use one-way sync (server → Studio) as primary. Use two-way sync only for script Source changes with careful attention to undo/redo behavior.
+
+## Protocol Enforcement
+
 ```rust
-// Server (Rust)
-let msgpack = serialize_msgpack(&packet)?;
-websocket.send(Message::Binary(msgpack)).await?;
+// Server
+if client_protocol != PROTOCOL_VERSION { return error("Protocol mismatch") }
 ```
 
 ```lua
--- Plugin (Lua)
-local msgpack = require(Packages.msgpack)
-local packet = msgpack.decode(message.Data)
+-- Plugin
+if serverInfo.protocolVersion ~= Config.protocolVersion then showError("Protocol mismatch") end
 ```
 
-## Protocol Version Enforcement
-
-**Server checks plugin version:**
-
-```rust
-if client_protocol != PROTOCOL_VERSION {
-    return error_response(format!(
-        "Protocol mismatch: server {}, client {}",
-        PROTOCOL_VERSION, client_protocol
-    ));
-}
-```
-
-**Plugin checks server version:**
-
-```lua
-if serverInfo.protocolVersion ~= Config.protocolVersion then
-    return showError(string.format(
-        "Protocol mismatch: plugin %d, server %d",
-        Config.protocolVersion, serverInfo.protocolVersion
-    ))
-end
-```
-
-**Breaking changes require:** Bump `protocolVersion` in both `src/web/interface.rs` and `plugin/src/Config.lua`
+**Breaking changes:** Bump `protocolVersion` in `src/web/interface.rs` and `plugin/src/Config.lua`
 
 ## Session Management
 
-**Session ID lifecycle:**
-
-1. **Server starts** - Generate new UUID for session
-2. **Plugin connects** - Receives session ID in handshake
-3. **All requests** - Include session ID for validation
-4. **Server restart** - New session ID generated
-5. **Plugin detects** - Old session ID rejected, reconnects
-
-**Stale session handling:**
-
-```rust
-if request_session_id != current_session_id {
-    return error_response("Session expired. Please reconnect.");
-}
-```
-
-**Plugin reconnects automatically** on session mismatch.
-
-## Performance Optimization
-
-**Patch combining:**
-- Multiple rapid filesystem changes combined
-- Reduces WebSocket message count
-- Smooths out jittery updates
-
-**MessagePack benefits:**
-- ~30% smaller than JSON
-- ~2x faster to parse
-- Handles binary data (scripts with UTF-8)
-
-**WebSocket vs Long-Polling:**
-- Protocol v4: Long-polling (1 request per patch)
-- Protocol v5: WebSocket (persistent connection)
-- **Result:** ~10x reduction in overhead
+1. Server starts → Generate UUID
+2. Plugin connects → Receives session ID in handshake
+3. All requests include session ID
+4. Server restart → New session ID → Plugin auto-reconnects on mismatch
 
 ## Debugging
 
-**Server-side:**
 ```bash
+# Server
 RUST_LOG=rojo::web=debug,rojo::serve_session=debug rojo serve
 ```
 
-**Shows:**
-- WebSocket connections/disconnections
-- Patches sent
-- Write requests received
-- Session validation
-
-**Plugin-side:**
 ```lua
+-- Plugin
 Settings:set("logLevel", "Trace")
 ```
 
-**Shows:**
-- Connection state changes
-- Patches received
-- ChangeBatcher activity
-- Property encoding
+Browser: `http://localhost:34872` → Network tab → WebSocket messages
 
-**Browser dev tools:**
-- Open `http://localhost:34872`
-- Inspect WebSocket messages in Network tab
-- See raw MessagePack payloads
+## Key Files
 
-## Key Files to Reference
-
-**Server:**
-- `src/web/api.rs` - HTTP/WebSocket endpoints
-- `src/web/interface.rs` - Packet definitions
-- `src/serve_session.rs` - Session state management
-
-**Plugin:**
-- `plugin/src/ServeSession.lua` - Connection management
-- `plugin/src/ApiContext.lua` - HTTP/WebSocket client
-- `plugin/src/ChangeBatcher/` - Two-way sync implementation
-- `plugin/src/Reconciler/` - Patch application
+| Server | Plugin |
+|--------|--------|
+| `src/web/api.rs` - Endpoints | `plugin/src/ServeSession.lua` - Connection |
+| `src/web/interface.rs` - Packets | `plugin/src/ApiContext.lua` - HTTP/WS client |
+| `src/serve_session.rs` - Session | `plugin/src/ChangeBatcher/` - Two-way sync |
+| | `plugin/src/Reconciler/` - Patch application |
