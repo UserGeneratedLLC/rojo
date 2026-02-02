@@ -766,7 +766,7 @@ fn api_write_existing_instance() {
         added_map.insert(instance_ref, added_instance);
 
         let write_request = WriteRequest {
-            session_id: info.session_id.clone(),
+            session_id: info.session_id,
             removed: vec![],
             added: added_map,
             updated: vec![],

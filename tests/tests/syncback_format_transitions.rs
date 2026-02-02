@@ -71,7 +71,7 @@ fn send_write_request(
     added_map.insert(instance_ref, added);
 
     let write_request = WriteRequest {
-        session_id: session_id.clone(),
+        session_id: *session_id,
         removed: vec![],
         added: added_map,
         updated: vec![],
@@ -131,7 +131,10 @@ fn dir_module_sync_removing_children_preserves_directory() {
 
         assert_directory_exists(&dir_path, "DirModuleWithChildren directory");
         assert_file_exists(&init_file, "init.luau");
-        assert_not_exists(&standalone_file, "standalone file should not exist initially");
+        assert_not_exists(
+            &standalone_file,
+            "standalone file should not exist initially",
+        );
 
         // Send sync with NO children (simulating children deletion in Studio)
         let added = make_added_instance(
@@ -272,7 +275,8 @@ fn dir_model_sync_removing_children_preserves_directory() {
         assert_file_exists(&meta_file, "init.meta.json5");
 
         // Send sync with NO children
-        let added = make_added_instance(rs_id, "DirModelWithChildren", "Configuration", None, vec![]);
+        let added =
+            make_added_instance(rs_id, "DirModelWithChildren", "Configuration", None, vec![]);
         send_write_request(&session, &info.session_id, rs_id, added);
 
         // No standalone model file should be created
@@ -463,7 +467,8 @@ fn standalone_model_sync_adding_children_preserves_standalone() {
 
         // Send sync WITH children
         let child = make_child_instance("ChildValue", "StringValue", None, vec![]);
-        let added = make_added_instance(rs_id, "StandaloneModel", "Configuration", None, vec![child]);
+        let added =
+            make_added_instance(rs_id, "StandaloneModel", "Configuration", None, vec![child]);
         send_write_request(&session, &info.session_id, rs_id, added);
 
         // Standalone file should still exist
@@ -544,7 +549,12 @@ fn sync_with_mixed_children_types() {
 
         // Send sync with various child types
         let children = vec![
-            make_child_instance("ChildModule", "ModuleScript", Some("return 'module'"), vec![]),
+            make_child_instance(
+                "ChildModule",
+                "ModuleScript",
+                Some("return 'module'"),
+                vec![],
+            ),
             make_child_instance("ChildScript", "Script", Some("print('script')"), vec![]),
             make_child_instance("ChildFolder", "Folder", None, vec![]),
             make_child_instance("ChildValue", "StringValue", None, vec![]),
@@ -636,9 +646,24 @@ fn sync_handles_children_with_special_names() {
 
         // Send sync with children that have special names
         let children = vec![
-            make_child_instance("Child With Spaces", "ModuleScript", Some("return 1"), vec![]),
-            make_child_instance("Child-With-Dashes", "ModuleScript", Some("return 2"), vec![]),
-            make_child_instance("Child_With_Underscores", "ModuleScript", Some("return 3"), vec![]),
+            make_child_instance(
+                "Child With Spaces",
+                "ModuleScript",
+                Some("return 1"),
+                vec![],
+            ),
+            make_child_instance(
+                "Child-With-Dashes",
+                "ModuleScript",
+                Some("return 2"),
+                vec![],
+            ),
+            make_child_instance(
+                "Child_With_Underscores",
+                "ModuleScript",
+                Some("return 3"),
+                vec![],
+            ),
         ];
 
         let added = make_added_instance(
@@ -844,7 +869,7 @@ fn rapid_syncs_dont_create_duplicates() {
             added_map.insert(instance_ref, added);
 
             let write_request = WriteRequest {
-                session_id: info.session_id.clone(),
+                session_id: info.session_id,
                 removed: vec![],
                 added: added_map,
                 updated: vec![],
@@ -923,7 +948,9 @@ fn class_change_preserves_existing_format() {
 
         let src_path = session.path().join("src");
 
-        let server_file = src_path.join("DirScriptWithChildren").join("init.server.luau");
+        let server_file = src_path
+            .join("DirScriptWithChildren")
+            .join("init.server.luau");
 
         assert_file_exists(&server_file, "init.server.luau should exist");
 
@@ -1101,7 +1128,10 @@ fn scripts_only_mode_rapid_syncs() {
                 sss_id,
                 "ScriptWithChildren",
                 "Script",
-                Some(&format!("-- Rapid sync {} in scriptsOnlyMode\nprint({})", i, i)),
+                Some(&format!(
+                    "-- Rapid sync {} in scriptsOnlyMode\nprint({})",
+                    i, i
+                )),
                 vec![],
             );
 
@@ -1110,7 +1140,7 @@ fn scripts_only_mode_rapid_syncs() {
             added_map.insert(instance_ref, added);
 
             let write_request = WriteRequest {
-                session_id: info.session_id.clone(),
+                session_id: info.session_id,
                 removed: vec![],
                 added: added_map,
                 updated: vec![],
@@ -1155,7 +1185,12 @@ fn module_with_script_children() {
 
         // Send sync with Script as child (unusual but valid)
         let children = vec![
-            make_child_instance("ChildScript", "Script", Some("print('server child')"), vec![]),
+            make_child_instance(
+                "ChildScript",
+                "Script",
+                Some("print('server child')"),
+                vec![],
+            ),
             make_child_instance(
                 "ChildLocalScript",
                 "LocalScript",
@@ -1198,8 +1233,18 @@ fn script_with_module_children() {
 
         // Send sync with multiple ModuleScript children
         let children = vec![
-            make_child_instance("Config", "ModuleScript", Some("return { config = true }"), vec![]),
-            make_child_instance("Utils", "ModuleScript", Some("return { utils = true }"), vec![]),
+            make_child_instance(
+                "Config",
+                "ModuleScript",
+                Some("return { config = true }"),
+                vec![],
+            ),
+            make_child_instance(
+                "Utils",
+                "ModuleScript",
+                Some("return { utils = true }"),
+                vec![],
+            ),
             make_child_instance("Types", "ModuleScript", Some("return {}"), vec![]),
         ];
 
@@ -1369,7 +1414,13 @@ fn sync_with_empty_source() {
         let dir_path = src_path.join("DirModuleWithChildren");
 
         // Empty source string
-        let added = make_added_instance(rs_id, "DirModuleWithChildren", "ModuleScript", Some(""), vec![]);
+        let added = make_added_instance(
+            rs_id,
+            "DirModuleWithChildren",
+            "ModuleScript",
+            Some(""),
+            vec![],
+        );
         send_write_request(&session, &info.session_id, rs_id, added);
 
         assert_directory_exists(&dir_path, "Directory preserved with empty source");
@@ -1458,7 +1509,12 @@ fn sync_with_very_long_source() {
 
         // Generate a very long source (10KB of comments)
         let long_source: String = (0..500)
-            .map(|i| format!("-- Line {} of extremely verbose and pointless commentary\n", i))
+            .map(|i| {
+                format!(
+                    "-- Line {} of extremely verbose and pointless commentary\n",
+                    i
+                )
+            })
             .collect::<String>()
             + "return {}";
 
@@ -1573,9 +1629,19 @@ fn sync_all_script_types_as_children() {
         let dir_path = src_path.join("DirModuleWithChildren");
 
         let children = vec![
-            make_child_instance("ChildModule", "ModuleScript", Some("return 'module'"), vec![]),
+            make_child_instance(
+                "ChildModule",
+                "ModuleScript",
+                Some("return 'module'"),
+                vec![],
+            ),
             make_child_instance("ChildServer", "Script", Some("print('server')"), vec![]),
-            make_child_instance("ChildClient", "LocalScript", Some("print('client')"), vec![]),
+            make_child_instance(
+                "ChildClient",
+                "LocalScript",
+                Some("print('client')"),
+                vec![],
+            ),
         ];
 
         let added = make_added_instance(
@@ -1697,7 +1763,7 @@ fn sync_immediate_double_sync() {
         let mut added_map = HashMap::new();
         added_map.insert(instance_ref, added1);
         let write_request = WriteRequest {
-            session_id: info.session_id.clone(),
+            session_id: info.session_id,
             removed: vec![],
             added: added_map,
             updated: vec![],
@@ -1710,13 +1776,18 @@ fn sync_immediate_double_sync() {
             "DirModuleWithChildren",
             "ModuleScript",
             Some("return 2"),
-            vec![make_child_instance("QuickChild", "ModuleScript", Some("return 'quick'"), vec![])],
+            vec![make_child_instance(
+                "QuickChild",
+                "ModuleScript",
+                Some("return 'quick'"),
+                vec![],
+            )],
         );
         let instance_ref2 = Ref::new();
         let mut added_map2 = HashMap::new();
         added_map2.insert(instance_ref2, added2);
         let write_request2 = WriteRequest {
-            session_id: info.session_id.clone(),
+            session_id: info.session_id,
             removed: vec![],
             added: added_map2,
             updated: vec![],
@@ -1761,7 +1832,7 @@ fn stress_test_50_rapid_syncs() {
             let mut added_map = HashMap::new();
             added_map.insert(instance_ref, added);
             let write_request = WriteRequest {
-                session_id: info.session_id.clone(),
+                session_id: info.session_id,
                 removed: vec![],
                 added: added_map,
                 updated: vec![],
@@ -1918,8 +1989,18 @@ fn sync_name_with_dots() {
 
         // Child with dots in name
         let children = vec![
-            make_child_instance("config.dev.local", "ModuleScript", Some("return 'dev'"), vec![]),
-            make_child_instance("data.v2.backup", "ModuleScript", Some("return 'backup'"), vec![]),
+            make_child_instance(
+                "config.dev.local",
+                "ModuleScript",
+                Some("return 'dev'"),
+                vec![],
+            ),
+            make_child_instance(
+                "data.v2.backup",
+                "ModuleScript",
+                Some("return 'backup'"),
+                vec![],
+            ),
         ];
 
         let added = make_added_instance(
@@ -1971,7 +2052,12 @@ fn sync_standalone_then_directory_format() {
             "StandaloneModule",
             "ModuleScript",
             Some("return 'with children'"),
-            vec![make_child_instance("Child", "ModuleScript", Some("return 'child'"), vec![])],
+            vec![make_child_instance(
+                "Child",
+                "ModuleScript",
+                Some("return 'child'"),
+                vec![],
+            )],
         );
         send_write_request(&session, &info.session_id, rs_id, added2);
 
@@ -2099,7 +2185,14 @@ fn sync_varying_children_counts() {
 
         for count in child_counts {
             let children: Vec<AddedInstance> = (0..count)
-                .map(|i| make_child_instance(&format!("Child{}", i), "ModuleScript", Some("return 1"), vec![]))
+                .map(|i| {
+                    make_child_instance(
+                        &format!("Child{}", i),
+                        "ModuleScript",
+                        Some("return 1"),
+                        vec![],
+                    )
+                })
                 .collect();
 
             let added = make_added_instance(

@@ -51,7 +51,11 @@ impl ServeCommand {
 
         let server = LiveServer::new(session);
 
-        let host = if ip.is_loopback() { "localhost".to_owned() } else { ip.to_string() };
+        let host = if ip.is_loopback() {
+            "localhost".to_owned()
+        } else {
+            ip.to_string()
+        };
         log::info!("Listening: http://{}:{}", host, port);
         server.start((ip, port).into());
 

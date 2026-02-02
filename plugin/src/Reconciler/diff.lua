@@ -417,10 +417,7 @@ local function diff(instanceMap, virtualInstances, rootId, serverInfo)
 				-- so we shouldn't mark them for deletion during forward sync.
 				if serverInfo and serverInfo.ignoreHiddenServices and instance == game then
 					if not visibleServicesSet[childInstance.Name] then
-						Log.trace(
-							"Skipping hidden service {} (ignoreHiddenServices is enabled)",
-							childInstance.Name
-						)
+						Log.trace("Skipping hidden service {} (ignoreHiddenServices is enabled)", childInstance.Name)
 						continue
 					end
 				end

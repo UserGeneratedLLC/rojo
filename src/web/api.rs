@@ -586,14 +586,17 @@ impl ApiService {
                             }
                         }
                         "LocalScript" => {
-                            if existing_path.join("init.client.luau").exists() {
-                                "init.client.luau"
-                            } else if existing_path.join("init.local.luau").exists() {
+                            // Modern: init.local.luau produces LocalScript
+                            // Legacy: init.client.lua produces LocalScript (without 'u')
+                            // Note: init.client.luau produces Script with Client RunContext, NOT LocalScript!
+                            if existing_path.join("init.local.luau").exists() {
                                 "init.local.luau"
                             } else if existing_path.join("init.client.lua").exists() {
                                 "init.client.lua"
+                            } else if existing_path.join("init.local.lua").exists() {
+                                "init.local.lua"
                             } else {
-                                "init.client.luau" // Default
+                                "init.local.luau" // Default for LocalScript
                             }
                         }
                         _ => unreachable!(),
@@ -604,9 +607,8 @@ impl ApiService {
                     existing_path.to_path_buf()
                 };
 
-                fs::write(&file_path, source.as_bytes()).with_context(|| {
-                    format!("Failed to write file: {}", file_path.display())
-                })?;
+                fs::write(&file_path, source.as_bytes())
+                    .with_context(|| format!("Failed to write file: {}", file_path.display()))?;
 
                 log::info!(
                     "Syncback: Updated existing {} at {}",
@@ -660,11 +662,7 @@ impl ApiService {
                             self.filter_duplicate_children(&added.children, &inst_path, stats);
 
                         for child in &unique_children {
-                            self.syncback_instance_to_path_with_stats(
-                                child,
-                                existing_path,
-                                stats,
-                            )?;
+                            self.syncback_instance_to_path_with_stats(child, existing_path, stats)?;
                         }
                     }
                 } else {
@@ -842,10 +840,12 @@ impl ApiService {
                     "init.client.lua",
                 ],
                 "LocalScript" => vec![
-                    "init.client.luau",
-                    "init.client.lua",
+                    // Modern: init.local.luau produces LocalScript
+                    // Legacy: init.client.lua produces LocalScript (without 'u')
+                    // Note: init.client.luau produces Script with Client RunContext, NOT LocalScript!
                     "init.local.luau",
                     "init.local.lua",
+                    "init.client.lua", // Legacy only (no .luau!)
                 ],
                 // For non-scripts, check for init.model.json5 or similar
                 _ => vec!["init.model.json5", "init.model.json", "init.meta.json5"],
@@ -868,10 +868,12 @@ impl ApiService {
                 format!("{}.client.lua", name),
             ],
             "LocalScript" => vec![
-                format!("{}.client.luau", name),
-                format!("{}.client.lua", name),
+                // Modern: .local.luau produces LocalScript
+                // Legacy: .client.lua produces LocalScript (without 'u')
+                // Note: .client.luau produces Script with Client RunContext, NOT LocalScript!
                 format!("{}.local.luau", name),
                 format!("{}.local.lua", name),
+                format!("{}.client.lua", name), // Legacy only (no .luau!)
             ],
             // For non-scripts, check for model files
             _ => vec![
@@ -1004,10 +1006,7 @@ impl ApiService {
                         format!("Failed to write file: {}", init_path.display())
                     })?;
                     self.write_script_meta_json_if_needed(&dir_path, added)?;
-                    log::info!(
-                        "Syncback: Updated ModuleScript at {}",
-                        init_path.display()
-                    );
+                    log::info!("Syncback: Updated ModuleScript at {}", init_path.display());
                     // Recurse into children if any were provided
                     for child in &unique_children {
                         self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
