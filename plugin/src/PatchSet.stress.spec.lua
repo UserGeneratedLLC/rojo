@@ -7,8 +7,6 @@
 return function()
 	local PatchSet = require(script.Parent.PatchSet)
 	local InstanceMap = require(script.Parent.InstanceMap)
-	local testUtils = require(script.Parent.testUtils)
-	local PatchGenerator = testUtils.PatchGenerator
 
 	local HttpService = game:GetService("HttpService")
 

@@ -8,7 +8,6 @@ return function()
 	local InstanceMap = require(script.Parent.Parent.InstanceMap)
 	local PatchSet = require(script.Parent.Parent.PatchSet)
 	local applyPatch = require(script.Parent.Parent.Reconciler.applyPatch)
-	local diff = require(script.Parent.Parent.Reconciler.diff)
 	local encodeInstance = require(script.Parent.Parent.ChangeBatcher.encodeInstance)
 	local testUtils = require(script.Parent.Parent.testUtils)
 	local PatchGenerator = testUtils.PatchGenerator

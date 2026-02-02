@@ -11,7 +11,6 @@ return function()
 	local PatchSet = require(script.Parent.Parent.PatchSet)
 	local InstanceMap = require(script.Parent.Parent.InstanceMap)
 	local testUtils = require(script.Parent.Parent.testUtils)
-	local LargeTreeGenerator = testUtils.LargeTreeGenerator
 
 	local HttpService = game:GetService("HttpService")
 
@@ -43,11 +42,9 @@ return function()
 			-- Build virtual instances for 20-level deep tree
 			local parentId = nil
 			local rootId = nil
-			local ids = {}
 
 			for i = 1, 20 do
 				local id = generateId()
-				table.insert(ids, id)
 
 				if rootId == nil then
 					rootId = id
@@ -271,7 +268,7 @@ return function()
 			local children = {}
 			local invalidIds = {}
 
-			for i = 1, 5 do
+			for _ = 1, 5 do
 				local childId = generateId()
 				table.insert(children, childId)
 				table.insert(invalidIds, childId)
@@ -519,7 +516,7 @@ return function()
 	describe("performance", function()
 		it("should create 200+ instances in reasonable time", function()
 			local instanceMap = InstanceMap.new()
-			local treeData = LargeTreeGenerator.createVirtualTree({
+			local treeData = testUtils.LargeTreeGenerator.createVirtualTree({
 				depth = 3,
 				width = 6, -- 6^3 = 216 instances
 				instanceType = "Folder",

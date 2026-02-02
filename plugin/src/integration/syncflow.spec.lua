@@ -185,7 +185,7 @@ return function()
 			instanceMap:insert(rootId, root)
 
 			-- Apply 10 consecutive patches
-			for i = 1, 10 do
+			for _ = 1, 10 do
 				local patch = PatchGenerator.createAdditionsPatch({
 					count = 5,
 					parentId = rootId,

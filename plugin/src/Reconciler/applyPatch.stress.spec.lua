@@ -11,7 +11,6 @@ return function()
 	local PatchSet = require(script.Parent.Parent.PatchSet)
 	local testUtils = require(script.Parent.Parent.testUtils)
 	local PatchGenerator = testUtils.PatchGenerator
-	local LargeTreeGenerator = testUtils.LargeTreeGenerator
 
 	local HttpService = game:GetService("HttpService")
 

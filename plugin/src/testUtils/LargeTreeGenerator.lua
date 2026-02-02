@@ -70,7 +70,7 @@ function LargeTreeGenerator.createInstanceTree(options)
 	local withDuplicates = options.withDuplicates or false
 	local duplicateCount = options.duplicateCount or 2
 
-	local function createInstance(name, level)
+	local function createInstance(name, _level)
 		local className = instanceType
 		if instanceType == "mixed" then
 			className = LargeTreeGenerator.randomInstanceType()
@@ -103,7 +103,7 @@ function LargeTreeGenerator.createInstanceTree(options)
 
 		-- Optionally create duplicates
 		if withDuplicates and currentDepth <= 2 then -- Only add duplicates at top levels
-			for i = 1, duplicateCount do
+			for _ = 1, duplicateCount do
 				local duplicateName = prefix .. "_1" -- Same name as first child
 				local duplicate = createInstance(duplicateName, currentDepth)
 				duplicate.Parent = parent
@@ -240,7 +240,7 @@ end
 ]]
 function LargeTreeGenerator.countInstances(root)
 	local count = 1 -- Count the root
-	for _, child in ipairs(root:GetDescendants()) do
+	for _ in ipairs(root:GetDescendants()) do
 		count = count + 1
 	end
 	return count

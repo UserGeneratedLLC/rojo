@@ -122,7 +122,7 @@ return function()
 
 			-- Fix up children references
 			for id, virt in pairs(virtualInstances) do
-				for i, childPlaceholder in ipairs(virt.Children) do
+				for i, _ in ipairs(virt.Children) do
 					-- Find the actual child ID
 					for otherId, otherVirt in pairs(virtualInstances) do
 						if otherVirt.Parent == id then
@@ -529,7 +529,7 @@ return function()
 				},
 			}
 
-			local ok, patch = diff(instanceMap, virtualInstances, rootId)
+			local ok, _ = diff(instanceMap, virtualInstances, rootId)
 
 			expect(ok).to.equal(true)
 			-- CFrame decoding might not work in test env, but the test structure is valid
@@ -957,7 +957,7 @@ return function()
 				},
 			}
 
-			local ok, patch = diff(instanceMap, virtualInstances, rootId)
+			local ok, _ = diff(instanceMap, virtualInstances, rootId)
 
 			expect(ok).to.equal(true)
 			-- Should be considered equal

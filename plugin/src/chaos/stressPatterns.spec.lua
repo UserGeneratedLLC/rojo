@@ -11,7 +11,6 @@ return function()
 	local applyPatch = require(script.Parent.Parent.Reconciler.applyPatch)
 	local diff = require(script.Parent.Parent.Reconciler.diff)
 	local testUtils = require(script.Parent.Parent.testUtils)
-	local LargeTreeGenerator = testUtils.LargeTreeGenerator
 	local PatchGenerator = testUtils.PatchGenerator
 
 	local HttpService = game:GetService("HttpService")
@@ -47,7 +46,7 @@ return function()
 			local rootId = generateId()
 			instanceMap:insert(rootId, root)
 
-			for i = 1, 50 do
+			for _ = 1, 50 do
 				-- Add
 				local addPatch = PatchGenerator.createAdditionsPatch({
 					count = 5,
@@ -86,7 +85,7 @@ return function()
 
 			local allIds = {}
 
-			for i = 1, 30 do
+			for _ = 1, 30 do
 				-- Add some
 				local addPatch = PatchGenerator.createAdditionsPatch({
 					count = 3,
@@ -101,7 +100,7 @@ return function()
 				-- Remove some (if we have any)
 				if #allIds > 5 then
 					local toRemove = {}
-					for j = 1, 2 do
+					for _ = 1, 2 do
 						if #allIds > 0 then
 							table.insert(toRemove, table.remove(allIds, 1))
 						end
