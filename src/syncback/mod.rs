@@ -174,21 +174,25 @@ pub fn syncback_loop_with_stats(
     }
 
     // Handle removing the current camera.
-    if let Some(syncback_rules) = &project.syncback_rules {
-        if !syncback_rules.sync_current_camera.unwrap_or_default() {
-            log::debug!("Removing CurrentCamera from new DOM");
-            let mut camera_ref = None;
-            for child_ref in new_tree.root().children() {
-                let inst = new_tree.get_by_ref(*child_ref).unwrap();
-                if inst.class == "Workspace" {
-                    camera_ref = inst.properties.get(&ustr("CurrentCamera"));
-                    break;
-                }
+    // syncCurrentCamera defaults to false, meaning we remove the camera by default
+    let sync_current_camera = project
+        .syncback_rules
+        .as_ref()
+        .and_then(|s| s.sync_current_camera)
+        .unwrap_or(false);
+    if !sync_current_camera {
+        log::debug!("Removing CurrentCamera from new DOM");
+        let mut camera_ref = None;
+        for child_ref in new_tree.root().children() {
+            let inst = new_tree.get_by_ref(*child_ref).unwrap();
+            if inst.class == "Workspace" {
+                camera_ref = inst.properties.get(&ustr("CurrentCamera"));
+                break;
             }
-            if let Some(Variant::Ref(camera_ref)) = camera_ref {
-                if new_tree.get_by_ref(*camera_ref).is_some() {
-                    new_tree.destroy(*camera_ref);
-                }
+        }
+        if let Some(Variant::Ref(camera_ref)) = camera_ref {
+            if new_tree.get_by_ref(*camera_ref).is_some() {
+                new_tree.destroy(*camera_ref);
             }
         }
     }
