@@ -12,7 +12,6 @@ syncSourceOnly: true
 visibleServices:
   - Lighting
   - MaterialService
-  - NetworkClient
   - ReplicatedFirst
   - ReplicatedStorage
   - ServerScriptService

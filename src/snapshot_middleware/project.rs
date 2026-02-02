@@ -70,10 +70,13 @@ fn middleware_for_script(inst: &Instance) -> Middleware {
         .and_then(|db| db.enums.get("RunContext"))
         .map(|e| &e.items);
 
-    let run_context_value = inst.properties.get(&ustr("RunContext")).and_then(|v| match v {
-        Variant::Enum(e) => Some(e.to_u32()),
-        _ => None,
-    });
+    let run_context_value = inst
+        .properties
+        .get(&ustr("RunContext"))
+        .and_then(|v| match v {
+            Variant::Enum(e) => Some(e.to_u32()),
+            _ => None,
+        });
 
     if let (Some(enums), Some(value)) = (run_context_enums, run_context_value) {
         for (name, &enum_value) in enums {

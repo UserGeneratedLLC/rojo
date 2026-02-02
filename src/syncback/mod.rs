@@ -342,9 +342,11 @@ pub fn syncback_loop_with_stats(
                     let path = source.path();
                     if !path.to_string_lossy().ends_with(".project.json5")
                         && !path.to_string_lossy().ends_with(".project.json")
-                        && path.exists() && !dirs_to_scan.contains(&path.to_path_buf()) {
-                            dirs_to_scan.push(path.to_path_buf());
-                        }
+                        && path.exists()
+                        && !dirs_to_scan.contains(&path.to_path_buf())
+                    {
+                        dirs_to_scan.push(path.to_path_buf());
+                    }
                 }
             }
         }
@@ -412,10 +414,7 @@ pub fn syncback_loop_with_stats(
             if !is_valid_path(&ignore_patterns, project_path, file) {
                 continue;
             }
-            log::trace!(
-                "Adding alternate file to orphan check: {}",
-                file.display()
-            );
+            log::trace!("Adding alternate file to orphan check: {}", file.display());
             paths.insert(file.clone());
         }
 
@@ -687,10 +686,22 @@ pub fn syncback_loop_with_stats(
                 } else {
                     format!("{}/{}", instance_path, name)
                 };
-                collect_all_path_refs_and_mappings(child, base_path, &child_inst_path, protected, mappings);
+                collect_all_path_refs_and_mappings(
+                    child,
+                    base_path,
+                    &child_inst_path,
+                    protected,
+                    mappings,
+                );
             }
         }
-        collect_all_path_refs_and_mappings(&project.tree, project_path, "", &mut protected_paths, &mut path_to_instance_prefix);
+        collect_all_path_refs_and_mappings(
+            &project.tree,
+            project_path,
+            "",
+            &mut protected_paths,
+            &mut path_to_instance_prefix,
+        );
         log::trace!("Protected $path references: {:?}", protected_paths);
         log::trace!("Path to instance mappings: {:?}", path_to_instance_prefix);
 
@@ -757,7 +768,8 @@ pub fn syncback_loop_with_stats(
                             if !pattern_str.contains('*') && !pattern_str.contains('?') {
                                 if pattern_str.starts_with(&inst_path_str)
                                     && pattern_str.len() > inst_path_str.len()
-                                    && pattern_str.as_bytes().get(inst_path_str.len()) == Some(&b'/')
+                                    && pattern_str.as_bytes().get(inst_path_str.len())
+                                        == Some(&b'/')
                                 {
                                     log::trace!(
                                         "Skipping {} (ancestor of literal ignoreTrees path, inst_path: {})",
@@ -773,11 +785,15 @@ pub fn syncback_loop_with_stats(
                                 // that are inside this directory.
                                 let dir_contains_match = existing_paths.iter().any(|child_path| {
                                     // Only check children of this directory
-                                    if !child_path.starts_with(&old_path_norm) || child_path == &old_path_norm {
+                                    if !child_path.starts_with(&old_path_norm)
+                                        || child_path == &old_path_norm
+                                    {
                                         return false;
                                     }
                                     // Convert child path to instance path and check glob match
-                                    if let Some(child_inst_path) = fs_path_to_instance_path(child_path) {
+                                    if let Some(child_inst_path) =
+                                        fs_path_to_instance_path(child_path)
+                                    {
                                         if glob.is_match(&child_inst_path) {
                                             log::trace!(
                                                 "Directory {} contains ignored file {} (inst: {})",
