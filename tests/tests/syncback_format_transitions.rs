@@ -206,7 +206,8 @@ fn dir_script_sync_removing_children_preserves_directory() {
     });
 }
 
-/// Test: Directory LocalScript (init.client.luau + children) receives sync with no children
+/// Test: Directory LocalScript (init.local.luau + children) receives sync with no children
+/// Note: init.local.luau produces LocalScript, NOT init.client.luau (which produces Script with Client RunContext)
 #[test]
 fn dir_localscript_sync_removing_children_preserves_directory() {
     run_serve_test("syncback_format_transitions", |session, _redactions| {
@@ -224,11 +225,11 @@ fn dir_localscript_sync_removing_children_preserves_directory() {
         let src_path = session.path().join("src");
 
         let dir_path = src_path.join("DirLocalScriptWithChildren");
-        let init_file = dir_path.join("init.client.luau");
-        let standalone_file = src_path.join("DirLocalScriptWithChildren.client.luau");
+        let init_file = dir_path.join("init.local.luau");
+        let standalone_file = src_path.join("DirLocalScriptWithChildren.local.luau");
 
         assert_directory_exists(&dir_path, "DirLocalScriptWithChildren directory");
-        assert_file_exists(&init_file, "init.client.luau");
+        assert_file_exists(&init_file, "init.local.luau");
 
         // Send sync with NO children
         let added = make_added_instance(
@@ -243,7 +244,7 @@ fn dir_localscript_sync_removing_children_preserves_directory() {
         // No standalone file should be created
         assert_not_exists(
             &standalone_file,
-            "Standalone .client.luau should NOT be created",
+            "Standalone .local.luau should NOT be created",
         );
 
         assert_directory_exists(&dir_path, "Directory should be preserved");
