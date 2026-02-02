@@ -621,12 +621,48 @@ impl ApiService {
                     let children_dir = if existing_path.is_dir() {
                         existing_path.to_path_buf()
                     } else {
-                        // For standalone scripts, children would need directory conversion
-                        // For now, use the parent directory as the base
-                        existing_path
+                        // Standalone scripts cannot have children in Rojo's file format.
+                        // We need to convert from standalone (e.g., MyScript.server.luau)
+                        // to directory format (e.g., MyScript/init.server.luau).
+                        let script_name = added.name.as_str();
+                        let parent_dir = existing_path
                             .parent()
-                            .map(|p| p.to_path_buf())
-                            .unwrap_or_else(|| existing_path.to_path_buf())
+                            .unwrap_or(existing_path);
+                        let new_dir = parent_dir.join(script_name);
+
+                        // Create the directory
+                        fs::create_dir_all(&new_dir).with_context(|| {
+                            format!("Failed to create directory for script with children: {}", new_dir.display())
+                        })?;
+
+                        // Determine the init file name based on class
+                        let init_name = match class_name.as_str() {
+                            "ModuleScript" => "init.luau",
+                            "Script" => "init.server.luau",
+                            "LocalScript" => "init.local.luau",
+                            _ => "init.luau",
+                        };
+
+                        // Move the script content to init file
+                        let init_path = new_dir.join(init_name);
+                        fs::write(&init_path, source.as_bytes()).with_context(|| {
+                            format!("Failed to write init file: {}", init_path.display())
+                        })?;
+
+                        // Remove the old standalone file
+                        if existing_path.exists() && existing_path != init_path {
+                            fs::remove_file(existing_path).with_context(|| {
+                                format!("Failed to remove old standalone script: {}", existing_path.display())
+                            })?;
+                        }
+
+                        log::info!(
+                            "Syncback: Converted standalone {} to directory format at {}",
+                            class_name,
+                            new_dir.display()
+                        );
+
+                        new_dir
                     };
 
                     // Filter duplicate children

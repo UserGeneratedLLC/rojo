@@ -294,9 +294,10 @@ fn dir_model_sync_removing_children_preserves_directory() {
 // =============================================================================
 
 /// Test: Standalone ModuleScript receives sync WITH children
-/// Expected: Standalone format preserved (no directory created)
+/// Expected: Standalone converted to directory format when children are added
+/// Standalone scripts cannot have children in Rojo's file format.
 #[test]
-fn standalone_module_sync_adding_children_preserves_standalone() {
+fn standalone_module_sync_adding_children_converts_to_directory() {
     run_serve_test("syncback_format_transitions", |session, _redactions| {
         let info = session.get_api_rojo().unwrap();
         let root_id = info.root_instance_id;
@@ -332,21 +333,24 @@ fn standalone_module_sync_adding_children_preserves_standalone() {
         );
         send_write_request(&session, &info.session_id, rs_id, added);
 
-        // Standalone file should still exist
-        assert_file_exists(&standalone_file, "Standalone file should be preserved");
+        // Standalone file should be removed (converted to directory)
+        assert_not_exists(&standalone_file, "Standalone file should be removed after conversion");
 
-        // No directory should be created (format preserved)
-        // Note: This is the conservative approach - format transitions only via CLI syncback
-        assert_not_exists(
-            &dir_path,
-            "Directory should NOT be created for existing standalone file",
-        );
+        // Directory should be created with init file
+        assert_directory_exists(&dir_path, "Directory should be created for script with children");
+        let init_file = dir_path.join("init.luau");
+        assert_file_exists(&init_file, "init.luau should exist");
+
+        // Child should exist in the directory
+        let child_file = dir_path.join("NewChild.luau");
+        assert_file_exists(&child_file, "Child module should be created");
     });
 }
 
-/// Test: Standalone Script receives sync WITH children
+/// Test: Standalone Script receives sync WITH children - converts to directory format
+/// Standalone scripts cannot have children in Rojo's file format.
 #[test]
-fn standalone_script_sync_adding_children_preserves_standalone() {
+fn standalone_script_sync_adding_children_converts_to_directory() {
     run_serve_test("syncback_format_transitions", |session, _redactions| {
         let info = session.get_api_rojo().unwrap();
         let root_id = info.root_instance_id;
@@ -382,20 +386,25 @@ fn standalone_script_sync_adding_children_preserves_standalone() {
         );
         send_write_request(&session, &info.session_id, rs_id, added);
 
-        // Standalone file should still exist
-        assert_file_exists(&standalone_file, "Standalone file should be preserved");
+        // Standalone file should be removed (converted to directory)
+        assert_not_exists(&standalone_file, "Standalone file should be removed after conversion");
 
-        // No directory should be created
-        assert_not_exists(
-            &dir_path,
-            "Directory should NOT be created for existing standalone file",
-        );
+        // Directory should be created with init file
+        assert_directory_exists(&dir_path, "Directory should be created for script with children");
+        let init_file = dir_path.join("init.server.luau");
+        assert_file_exists(&init_file, "init.server.luau should exist");
+
+        // Child should exist in the directory
+        let child_file = dir_path.join("Handler.luau");
+        assert_file_exists(&child_file, "Child module should be created");
     });
 }
 
-/// Test: Standalone LocalScript receives sync WITH children
+/// Test: Standalone LocalScript receives sync WITH children - converts to directory format
+/// When a standalone script receives children, it must be converted to directory format
+/// because standalone scripts cannot have children in Rojo's file format.
 #[test]
-fn standalone_localscript_sync_adding_children_preserves_standalone() {
+fn standalone_localscript_sync_adding_children_converts_to_directory() {
     run_serve_test("syncback_format_transitions", |session, _redactions| {
         let info = session.get_api_rojo().unwrap();
         let root_id = info.root_instance_id;
@@ -431,14 +440,17 @@ fn standalone_localscript_sync_adding_children_preserves_standalone() {
         );
         send_write_request(&session, &info.session_id, rs_id, added);
 
-        // Standalone file should still exist
-        assert_file_exists(&standalone_file, "Standalone file should be preserved");
+        // Standalone file should be removed (converted to directory)
+        assert_not_exists(&standalone_file, "Standalone file should be removed after conversion");
 
-        // No directory should be created
-        assert_not_exists(
-            &dir_path,
-            "Directory should NOT be created for existing standalone file",
-        );
+        // Directory should be created with init file
+        assert_directory_exists(&dir_path, "Directory should be created for script with children");
+        let init_file = dir_path.join("init.local.luau");
+        assert_file_exists(&init_file, "init.local.luau should exist");
+
+        // Child should exist in the directory
+        let child_file = dir_path.join("UIComponent.luau");
+        assert_file_exists(&child_file, "Child module should be created");
     });
 }
 
@@ -1019,9 +1031,11 @@ fn scripts_only_mode_script_preserves_directory() {
     });
 }
 
-/// Test: scriptsOnlyMode - Standalone module preserves format
+/// Test: scriptsOnlyMode - Standalone module converts to directory when children added
+/// Even in scriptsOnlyMode, standalone scripts must convert to directory format
+/// when children are added, because standalone scripts cannot have children.
 #[test]
-fn scripts_only_mode_standalone_module_preserved() {
+fn scripts_only_mode_standalone_module_converts_to_directory() {
     run_serve_test("syncback_scripts_only", |session, _redactions| {
         let info = session.get_api_rojo().unwrap();
         let root_id = info.root_instance_id;
@@ -1057,11 +1071,13 @@ fn scripts_only_mode_standalone_module_preserved() {
         );
         send_write_request(&session, &info.session_id, sss_id, added);
 
-        // Standalone should be preserved
-        assert_file_exists(&standalone, "Standalone preserved");
+        // Standalone should be removed (converted to directory)
+        assert_not_exists(&standalone, "Standalone removed after children sync");
 
-        // No directory should be created (even with children)
-        assert_not_exists(&dir_path, "Directory should NOT be created");
+        // Directory should be created
+        assert_directory_exists(&dir_path, "Directory created for script with children");
+        let init_file = dir_path.join("init.luau");
+        assert_file_exists(&init_file, "init.luau should exist");
     });
 }
 
@@ -2017,6 +2033,7 @@ fn sync_name_with_dots() {
 }
 
 /// Test: Sync standalone then immediately sync directory version
+/// When children are added, standalone must convert to directory format.
 #[test]
 fn sync_standalone_then_directory_format() {
     run_serve_test("syncback_format_transitions", |session, _redactions| {
@@ -2033,10 +2050,11 @@ fn sync_standalone_then_directory_format() {
 
         let src_path = session.path().join("src");
         let standalone = src_path.join("StandaloneModule.luau");
+        let dir_path = src_path.join("StandaloneModule");
 
         assert_file_exists(&standalone, "Standalone exists initially");
 
-        // First sync - no children (standalone format)
+        // First sync - no children (standalone format preserved)
         let added1 = make_added_instance(
             rs_id,
             "StandaloneModule",
@@ -2046,7 +2064,10 @@ fn sync_standalone_then_directory_format() {
         );
         send_write_request(&session, &info.session_id, rs_id, added1);
 
-        // Second sync - with children (would be directory if new)
+        // Standalone should still exist after sync without children
+        assert_file_exists(&standalone, "Standalone preserved after sync without children");
+
+        // Second sync - with children (converts to directory)
         let added2 = make_added_instance(
             rs_id,
             "StandaloneModule",
@@ -2061,8 +2082,13 @@ fn sync_standalone_then_directory_format() {
         );
         send_write_request(&session, &info.session_id, rs_id, added2);
 
-        // Standalone should still exist (format preserved)
-        assert_file_exists(&standalone, "Standalone preserved after children sync");
+        // Standalone should be removed (converted to directory)
+        assert_not_exists(&standalone, "Standalone removed after children sync");
+
+        // Directory should now exist
+        assert_directory_exists(&dir_path, "Directory created after children sync");
+        let init_file = dir_path.join("init.luau");
+        assert_file_exists(&init_file, "init.luau should exist");
     });
 }
 
