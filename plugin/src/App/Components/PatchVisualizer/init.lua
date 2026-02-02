@@ -15,30 +15,32 @@ local e = Roact.createElement
 
 local DomLabel = require(script.DomLabel)
 
--- Convert wildcard pattern (with *) to case-insensitive match
--- e.g., "player*sync" matches "PlayerDataSync"
-local function matchesWildcard(name: string, pattern: string): boolean
-	if pattern == "" then
+-- Case-insensitive substring match with wildcard support
+-- * = one or more characters (.+ in regex)
+-- e.g., "player" matches "PlayerDataSync", "MyPlayer", etc.
+-- e.g., "player*sync" matches "PlayerDataSync" but not "PlayerSync"
+local function matchesFilter(name: string, filter: string): boolean
+	if filter == "" then
 		return true
 	end
 
 	-- Escape Lua pattern special chars except *
-	local escaped = pattern:gsub("([%.%+%-%?%^%$%(%)%[%]%%])", "%%%1")
-	-- Convert * to .* (match any characters)
-	local luaPattern = "^" .. escaped:gsub("%*", ".*") .. "$"
+	local escaped = filter:gsub("([%.%+%-%?%^%$%(%)%[%]%%])", "%%%1")
+	-- Convert * to .+ (one or more characters)
+	local pattern = escaped:gsub("%*", ".+")
 
-	return string.match(name:lower(), luaPattern:lower()) ~= nil
+	return string.match(name:lower(), pattern:lower()) ~= nil
 end
 
 -- Check if node or any of its descendants match the filter
-local function nodeOrDescendantMatches(node, pattern: string): boolean
-	if matchesWildcard(node.name or "", pattern) then
+local function nodeOrDescendantMatches(node, filter: string): boolean
+	if matchesFilter(node.name or "", filter) then
 		return true
 	end
 
 	if node.children then
 		for _, child in node.children do
-			if type(child) == "table" and nodeOrDescendantMatches(child, pattern) then
+			if type(child) == "table" and nodeOrDescendantMatches(child, filter) then
 				return true
 			end
 		end

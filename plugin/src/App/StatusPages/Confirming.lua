@@ -142,12 +142,12 @@ function ConfirmingPage:render()
 
 				FilterInput = e(TextInput, {
 					text = self.state.filterText,
-					placeholder = "Filter (* = wildcard)",
+					placeholder = "Filter",
 					enabled = true,
 					transparency = self.props.transparency,
 					size = UDim2.new(0.5, -5, 1, 0),
 					position = UDim2.new(0.5, 5, 0, 0),
-					onEntered = function(text)
+					onChanged = function(text)
 						self:setState({ filterText = text })
 					end,
 				}),

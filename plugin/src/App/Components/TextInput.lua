@@ -108,7 +108,15 @@ function TextInput:render()
 				end,
 
 				[Roact.Event.FocusLost] = function(rbx)
-					self.props.onEntered(rbx.Text)
+					if self.props.onEntered then
+						self.props.onEntered(rbx.Text)
+					end
+				end,
+
+				[Roact.Change.Text] = function(rbx)
+					if self.props.onChanged then
+						self.props.onChanged(rbx.Text)
+					end
 				end,
 			}),
 			Children = Roact.createFragment(self.props[Roact.Children]),
