@@ -83,6 +83,9 @@ impl SyncbackCommand {
         // Determine if we need to download the input file
         let resolved_input = resolve_path(&self.input);
         let _temp_file: Option<NamedTempFile>;
+        // Track if we should delete the input file after successful syncback
+        // (when using default Project.rbxl and file exists locally)
+        let delete_input_after_syncback: Option<PathBuf>;
 
         // Logic:
         // - If --download=PLACEID: always download that specific place
@@ -100,11 +103,18 @@ impl SyncbackCommand {
                 );
                 let temp_path = temp.path().to_path_buf();
                 _temp_file = Some(temp);
+                delete_input_after_syncback = None;
                 temp_path
             }
             None if resolved_input.exists() => {
                 // No --download flag, input file exists: use it
                 _temp_file = None;
+                // If using default input path, mark for deletion after success
+                delete_input_after_syncback = if self.input.as_os_str() == "Project.rbxl" {
+                    Some(resolved_input.clone().into_owned())
+                } else {
+                    None
+                };
                 resolved_input.into_owned()
             }
             None => {
@@ -123,6 +133,7 @@ impl SyncbackCommand {
                 );
                 let temp_path = temp.path().to_path_buf();
                 _temp_file = Some(temp);
+                delete_input_after_syncback = None;
                 temp_path
             }
         };
@@ -251,6 +262,18 @@ impl SyncbackCommand {
 
             // Refresh git index if in a git repository
             refresh_git_index(base_path);
+
+            // Delete input file if using default Project.rbxl location
+            if let Some(input_path) = &delete_input_after_syncback {
+                match std::fs::remove_file(input_path) {
+                    Ok(()) => log::info!("Deleted input file: {}", input_path.display()),
+                    Err(e) => log::warn!(
+                        "Failed to delete input file {}: {}",
+                        input_path.display(),
+                        e
+                    ),
+                }
+            }
         } else {
             log::info!(
                 "Would write {} files/folders and remove {} files/folders.",

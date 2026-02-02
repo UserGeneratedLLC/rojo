@@ -1,12 +1,14 @@
 //! Defines Rojo's CLI through clap types.
 
 mod build;
+mod cursor;
 mod doc;
 mod fmt_project;
 mod init;
 mod plugin;
 mod serve;
 mod sourcemap;
+mod studio;
 mod syncback;
 mod upload;
 
@@ -16,12 +18,14 @@ use clap::Parser;
 use thiserror::Error;
 
 pub use self::build::BuildCommand;
+pub use self::cursor::CursorCommand;
 pub use self::doc::DocCommand;
 pub use self::fmt_project::FmtProjectCommand;
 pub use self::init::{InitCommand, InitKind};
 pub use self::plugin::{PluginCommand, PluginSubcommand};
 pub use self::serve::ServeCommand;
 pub use self::sourcemap::SourcemapCommand;
+pub use self::studio::StudioCommand;
 pub use self::syncback::SyncbackCommand;
 pub use self::upload::UploadCommand;
 
@@ -46,8 +50,10 @@ impl Options {
             Subcommand::Upload(subcommand) => subcommand.run(),
             Subcommand::Sourcemap(subcommand) => subcommand.run(),
             Subcommand::FmtProject(subcommand) => subcommand.run(),
+            Subcommand::Cursor(subcommand) => subcommand.run(),
             Subcommand::Doc(subcommand) => subcommand.run(),
             Subcommand::Plugin(subcommand) => subcommand.run(),
+            Subcommand::Studio(subcommand) => subcommand.run(),
             Subcommand::Syncback(subcommand) => subcommand.run(self.global),
         }
     }
@@ -120,8 +126,10 @@ pub enum Subcommand {
     Upload(UploadCommand),
     Sourcemap(SourcemapCommand),
     FmtProject(FmtProjectCommand),
+    Cursor(CursorCommand),
     Doc(DocCommand),
     Plugin(PluginCommand),
+    Studio(StudioCommand),
     Syncback(SyncbackCommand),
 }
 

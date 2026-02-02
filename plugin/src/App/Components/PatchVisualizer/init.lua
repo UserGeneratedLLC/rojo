@@ -15,6 +15,38 @@ local e = Roact.createElement
 
 local DomLabel = require(script.DomLabel)
 
+-- Convert wildcard pattern (with *) to case-insensitive match
+-- e.g., "player*sync" matches "PlayerDataSync"
+local function matchesWildcard(name: string, pattern: string): boolean
+	if pattern == "" then
+		return true
+	end
+
+	-- Escape Lua pattern special chars except *
+	local escaped = pattern:gsub("([%.%+%-%?%^%$%(%)%[%]%%])", "%%%1")
+	-- Convert * to .* (match any characters)
+	local luaPattern = "^" .. escaped:gsub("%*", ".*") .. "$"
+
+	return string.match(name:lower(), luaPattern:lower()) ~= nil
+end
+
+-- Check if node or any of its descendants match the filter
+local function nodeOrDescendantMatches(node, pattern: string): boolean
+	if matchesWildcard(node.name or "", pattern) then
+		return true
+	end
+
+	if node.children then
+		for _, child in node.children do
+			if type(child) == "table" and nodeOrDescendantMatches(child, pattern) then
+				return true
+			end
+		end
+	end
+
+	return false
+end
+
 local PatchVisualizer = Roact.Component:extend("PatchVisualizer")
 
 function PatchVisualizer:init()
@@ -33,6 +65,10 @@ function PatchVisualizer:shouldUpdate(nextProps)
 	end
 
 	if self.props.selections ~= nextProps.selections then
+		return true
+	end
+
+	if self.props.filterText ~= nextProps.filterText then
 		return true
 	end
 
@@ -58,23 +94,73 @@ function PatchVisualizer:render()
 		end
 	end
 
-	-- Recusively draw tree
+	-- Recursively draw tree
 	local scrollElements, elementHeights, elementIndex = {}, {}, 0
+	local filterText = self.props.filterText or ""
 
 	if patchTree then
-		local elementTotal = patchTree:getCount()
+		-- First pass: collect visible nodes in proper tree order (depth-first, alphabetical)
+		local visibleNodes = {}
+
+		local function collectVisibleNodes(node, depth)
+			local shouldShow = filterText == "" or nodeOrDescendantMatches(node, filterText)
+
+			if shouldShow then
+				table.insert(visibleNodes, { node = node, depth = depth })
+
+				-- Process children in alphabetical order (depth-first)
+				if node.children then
+					local sortedChildren = {}
+					for _, child in node.children do
+						if type(child) == "table" then
+							table.insert(sortedChildren, child)
+						end
+					end
+					table.sort(sortedChildren, function(a, b)
+						return (a.name or "") < (b.name or "")
+					end)
+
+					for _, child in ipairs(sortedChildren) do
+						collectVisibleNodes(child, depth + 1)
+					end
+				end
+			end
+		end
+
+		-- Collect from root children in alphabetical order
+		local rootChildren = {}
+		for _, child in patchTree.ROOT.children do
+			if type(child) == "table" then
+				table.insert(rootChildren, child)
+			end
+		end
+		table.sort(rootChildren, function(a, b)
+			return (a.name or "") < (b.name or "")
+		end)
+
+		for _, child in ipairs(rootChildren) do
+			collectVisibleNodes(child, 1)
+		end
+
+		local elementTotal = #visibleNodes
 		local depthsComplete = {}
-		local function drawNode(node, depth)
+
+		local function drawNode(node, depth, nodeIndex)
 			elementIndex += 1
 
-			local parentNode = patchTree:getNode(node.parentId)
+			-- Check if this is the final visible child among siblings
+			-- Look ahead to see if there's another node at the same depth with the same parent
 			local isFinalChild = true
-			if parentNode then
-				for _id, sibling in parentNode.children do
-					if type(sibling) == "table" and sibling.name and sibling.name > node.name then
-						isFinalChild = false
-						break
-					end
+			for i = nodeIndex + 1, #visibleNodes do
+				local nextEntry = visibleNodes[i]
+				if nextEntry.depth < depth then
+					-- Went back up the tree, we're done checking
+					break
+				end
+				if nextEntry.depth == depth and nextEntry.node.parentId == node.parentId then
+					-- Found a sibling at the same depth
+					isFinalChild = false
+					break
 				end
 			end
 
@@ -112,14 +198,16 @@ function PatchVisualizer:render()
 			end
 		end
 
-		patchTree:forEach(function(node, depth)
+		-- Draw all visible nodes in order
+		for i, entry in ipairs(visibleNodes) do
+			local depth = entry.depth
 			depthsComplete[depth] = false
-			for i = depth + 1, #depthsComplete do
-				depthsComplete[i] = nil
+			for j = depth + 1, #depthsComplete do
+				depthsComplete[j] = nil
 			end
 
-			drawNode(node, depth)
-		end)
+			drawNode(entry.node, depth, i)
+		end
 	end
 
 	return Theme.with(function(theme)
@@ -132,7 +220,9 @@ function PatchVisualizer:render()
 		}, {
 			CleanMerge = e("TextLabel", {
 				Visible = #scrollElements == 0,
-				Text = "No changes to sync, project is up to date.",
+				Text = if filterText ~= ""
+					then "No items match the filter."
+					else "No changes to sync, project is up to date.",
 				FontFace = theme.Font.Main,
 				TextSize = theme.TextSize.Medium,
 				TextColor3 = theme.TextColor,

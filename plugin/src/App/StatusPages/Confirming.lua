@@ -7,6 +7,7 @@ local Roact = require(Packages.Roact)
 local Theme = require(Plugin.App.Theme)
 local PatchTree = require(Plugin.PatchTree)
 local TextButton = require(Plugin.App.Components.TextButton)
+local TextInput = require(Plugin.App.Components.TextInput)
 local StudioPluginGui = require(Plugin.App.Components.Studio.StudioPluginGui)
 local Tooltip = require(Plugin.App.Components.Tooltip)
 local PatchVisualizer = require(Plugin.App.Components.PatchVisualizer)
@@ -37,6 +38,7 @@ function ConfirmingPage:init()
 		showingAcceptConfirm = false,
 		unselectedCount = 0,
 		selections = initialSelections,
+		filterText = "",
 	})
 
 	-- Callback to update individual selection
@@ -116,27 +118,48 @@ function ConfirmingPage:render()
 
 	return Theme.with(function(theme)
 		local pageContent = Roact.createFragment({
-			Title = e("TextLabel", {
-				Text = string.format(
-					"Sync changes for project '%s':",
-					self.props.confirmData.serverInfo.projectName or "UNKNOWN"
-				),
-				FontFace = theme.Font.Thin,
-				LineHeight = 1.2,
-				TextSize = theme.TextSize.Body,
-				TextColor3 = theme.TextColor,
-				TextXAlignment = Enum.TextXAlignment.Left,
-				TextTransparency = self.props.transparency,
-				Size = UDim2.new(1, 0, 0, theme.TextSize.Large + 2),
+			Header = e("Frame", {
+				Size = UDim2.new(1, 0, 0, 28),
 				BackgroundTransparency = 1,
+				LayoutOrder = 1,
+			}, {
+				Title = e("TextLabel", {
+					Text = string.format(
+						"Sync changes for project '%s':",
+						self.props.confirmData.serverInfo.projectName or "UNKNOWN"
+					),
+					FontFace = theme.Font.Thin,
+					LineHeight = 1.2,
+					TextSize = theme.TextSize.Body,
+					TextColor3 = theme.TextColor,
+					TextXAlignment = Enum.TextXAlignment.Left,
+					TextYAlignment = Enum.TextYAlignment.Center,
+					TextTransparency = self.props.transparency,
+					Size = UDim2.new(0.5, -5, 1, 0),
+					Position = UDim2.new(0, 0, 0, 0),
+					BackgroundTransparency = 1,
+				}),
+
+				FilterInput = e(TextInput, {
+					text = self.state.filterText,
+					placeholder = "Filter (* = wildcard)",
+					enabled = true,
+					transparency = self.props.transparency,
+					size = UDim2.new(0.5, -5, 1, 0),
+					position = UDim2.new(0.5, 5, 0, 0),
+					onEntered = function(text)
+						self:setState({ filterText = text })
+					end,
+				}),
 			}),
 
 			PatchVisualizer = e(PatchVisualizer, {
 				size = UDim2.new(1, 0, 1, -100),
 				transparency = self.props.transparency,
-				layoutOrder = 3,
+				layoutOrder = 2,
 
 				patchTree = self.props.patchTree,
+				filterText = self.state.filterText,
 				selections = self.state.selections,
 				onSelectionChange = self.onSelectionChange,
 				onSubtreeSelectionChange = self.onSubtreeSelectionChange,
@@ -159,7 +182,7 @@ function ConfirmingPage:render()
 
 			Buttons = e("Frame", {
 				Size = UDim2.new(1, 0, 0, 34),
-				LayoutOrder = 4,
+				LayoutOrder = 3,
 				BackgroundTransparency = 1,
 			}, {
 				-- Only show Abort button when there are changes
