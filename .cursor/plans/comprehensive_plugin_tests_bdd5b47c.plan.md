@@ -73,10 +73,14 @@ isProject: false
 
 **Testing Philosophy**:
 
-- Tests exist to EXPOSE limitations, not just pass
-- Tests that break the system are GOOD - they're the forcing function for quality
-- Do NOT back down when tests fail - fix the underlying issue
-- A failing stress test reveals a real bug that will hit users in production
+- Tests exist to EXPOSE potential issues, not just pass
+- A failing test requires INVESTIGATION - it could mean:
+  - The code has a bug (fix the code)
+  - The test is invalid or has wrong assumptions (fix the test)
+  - The test is testing something that's not actually a requirement (remove/adjust the test)
+- Don't automatically assume failing test = broken code, but also don't dismiss failures
+- When a test fails, determine the root cause before deciding on the fix
+- Tests should be grounded in real requirements and real-world scenarios
 
 **Code Quality Awareness**:
 
@@ -483,35 +487,39 @@ These are the types of bugs that stress tests should expose:
 
 ## Success Criteria
 
-**Primary Goal: Expose Limitations**
+**Primary Goal: Build Confidence Through Stress Testing**
 
-1. Tests should initially FAIL if the underlying code has bugs - this is expected and good
-2. Each failing test should be tracked as a bug to fix, not a test to skip
-3. Tests that pass immediately may not be stressing the system enough
+1. Failing tests require investigation - could be code bug OR invalid test
+2. Each failing test should be analyzed: is this a real bug, or is the test wrong?
+3. Don't skip tests without understanding why they fail
+4. Tests that pass immediately are fine - they confirm expected behavior
 
 **Quality Gates**:
 
-1. All tests eventually pass in CI (after bugs are fixed)
+1. All valid tests pass in CI
 2. Tests catch regressions in the critical paths identified
 3. Edge cases like duplicate names, ambiguous paths are thoroughly covered
 4. Both scripts-only and everything modes have dedicated test coverage
 5. Large-scale scenarios (1000+ instances) run without timeouts
 6. Memory usage is reasonable during stress tests
-7. No "fix on fix" pattern - if a test keeps failing after patches, redesign the subsystem
+7. No "fix on fix" pattern - if code keeps needing patches, consider redesign
 
-**Bug Tracking**:
+**Failure Triage**:
 
-When a stress test fails, document:
+When a stress test fails, investigate:
 
 - The symptom (what failed)
-- The root cause (after investigation)
-- Whether it needs a patch or a redesign
-- Link to the fix
+- Is this a real bug, or is the test invalid?
+- If bug: does it need a patch or a redesign?
+- If invalid test: fix the test or remove it
+- Document the decision and reasoning
 
 ## Anti-Patterns to Avoid
 
-- Skipping tests because they're "too hard to fix"
+- Skipping tests without understanding why they fail
 - Adding workarounds instead of fixing root causes
-- Reducing test scope to make tests pass
-- Ignoring intermittent failures (they reveal real race conditions)
+- Reducing test scope arbitrarily to make tests pass
+- Ignoring intermittent failures without investigation
+- Assuming all failing tests mean broken code (tests can be wrong too)
+- Writing tests that don't reflect real requirements or real-world usage
 

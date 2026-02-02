@@ -74,7 +74,7 @@ local function VersionIndicator(props)
 end
 
 local function Header(props)
-	return Theme.with(function(theme)
+	return Theme.with(function(_theme)
 		return e("Frame", {
 			Size = UDim2.new(1, 0, 0, 32),
 			LayoutOrder = props.layoutOrder,
