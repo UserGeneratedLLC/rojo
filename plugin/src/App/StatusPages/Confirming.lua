@@ -145,8 +145,9 @@ function ConfirmingPage:render()
 					placeholder = "Filter",
 					enabled = true,
 					transparency = self.props.transparency,
-					size = UDim2.new(0.5, -5, 1, 0),
-					position = UDim2.new(0.5, 5, 0, 0),
+					textXAlignment = Enum.TextXAlignment.Left,
+					size = UDim2.new(0.25, -5, 1, 0),
+					position = UDim2.new(0.75, 5, 0, 0),
 					onChanged = function(text)
 						self:setState({ filterText = text })
 					end,

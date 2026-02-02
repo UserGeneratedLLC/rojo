@@ -92,6 +92,7 @@ function TextInput:render()
 					textInputTheme.Enabled.PlaceholderColor
 				),
 				TextSize = theme.TextSize.Large,
+				TextXAlignment = self.props.textXAlignment or Enum.TextXAlignment.Center,
 				TextEditable = self.props.enabled,
 				ClearTextOnFocus = self.props.clearTextOnFocus,
 
@@ -118,6 +119,11 @@ function TextInput:render()
 						self.props.onChanged(rbx.Text)
 					end
 				end,
+			}, {
+				Padding = e("UIPadding", {
+					PaddingLeft = UDim.new(0, 6),
+					PaddingRight = UDim.new(0, 6),
+				}),
 			}),
 			Children = Roact.createFragment(self.props[Roact.Children]),
 		})
