@@ -4,43 +4,43 @@ overview: Create comprehensive Lua plugin stress tests (.spec.lua files) coverin
 todos:
   - id: test-utils
     content: Create test utility modules (MockApiContext, LargeTreeGenerator, PatchGenerator)
-    status: pending
+    status: completed
   - id: diff-stress
     content: Create diff.stress.spec.lua with 25+ tests for large trees, duplicates, equality edge cases
-    status: pending
+    status: completed
   - id: apply-stress
     content: Create applyPatch.stress.spec.lua with 20+ tests for partial failures, refs, className changes
-    status: pending
+    status: completed
   - id: reify-stress
     content: Create reify.stress.spec.lua with 15+ tests for deep/wide trees, property edge cases
-    status: pending
+    status: completed
   - id: property-read
     content: Create getProperty.spec.lua with 15+ tests for all error paths and property types
-    status: pending
+    status: completed
   - id: property-write
     content: Create setProperty.spec.lua with 15+ tests for error paths and type coercion
-    status: pending
+    status: completed
   - id: decode-values
     content: Create decodeValue.spec.lua with 15+ tests for refs, types, and failure scenarios
-    status: pending
+    status: completed
   - id: encode-stress
     content: Create encodeInstance.stress.spec.lua with 25+ tests for hierarchies and all instance types
-    status: pending
+    status: completed
   - id: encode-property
     content: Create encodeProperty.spec.lua with 20+ tests for all property types
-    status: pending
+    status: completed
   - id: patchset-stress
     content: Create PatchSet.stress.spec.lua with 15+ tests for merge operations and scale
-    status: pending
+    status: completed
   - id: instancemap-stress
     content: Create InstanceMap.stress.spec.lua with 10+ tests for scale and concurrency
-    status: pending
+    status: completed
   - id: integration-sync
     content: Create syncflow.spec.lua with 15+ tests for E2E sync flow and error recovery
-    status: pending
+    status: completed
   - id: integration-twoway
     content: Create twoWaySync.spec.lua with 15+ tests for bidirectional sync and conflicts
-    status: pending
+    status: completed
   - id: scripts-only-mode
     content: Create scriptsOnly.spec.lua with tests for scripts-only mode edge cases
     status: pending
@@ -58,10 +58,10 @@ todos:
     status: pending
   - id: chaos-tests
     content: Create stressPatterns.spec.lua with 20+ chaos engineering tests
-    status: pending
+    status: completed
   - id: wire-tests
     content: Update runTests.lua to include all new test modules
-    status: pending
+    status: completed
 isProject: false
 ---
 
