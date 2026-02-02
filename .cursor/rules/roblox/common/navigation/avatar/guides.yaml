@@ -1,0 +1,153 @@
+navigation:
+  - heading: Overview
+  - title: Get started
+    path: /avatar/
+  - title: Resources
+    path: /avatar/resources
+  - heading: Create
+  - title: Classic clothing
+    section:
+      - title: Overview
+        path: /art/classic-clothing
+      - title: Test in Studio
+        path: /art/test-classic-clothing
+      - title: Upload and sell
+        path: /art/upload-classic-clothing
+  - title: Accessories
+    section:
+      - title: Overview
+        path: /art/accessories/
+      - title: Specifications
+        path: /art/accessories/specifications
+      - title: Body scale
+        path: /art/accessories/body-scale
+      - title: Export settings
+        path: /art/accessories/export-settings
+      - title: Import into Studio
+        path: /art/accessories/importing
+  - title: Clothing
+    section:
+      - title: Overview
+        path: /art/accessories/layered-clothing
+      - title: Specifications
+        path: /art/accessories/clothing-specifications
+      - title: Reference files
+        path: /art/accessories/project-files
+      - title: Caging
+        path: /art/accessories/caging-best-practices
+      - title: Export settings
+        path: /art/accessories/clothing-export-settings
+      - title: Import into Studio
+        path: /art/accessories/import-clothing
+  - title: Characters
+    section:
+      - title: Overview
+        path: /art/characters/
+      - title: Specifications
+        path: /art/characters/specifications
+      - title: Reference files
+        path: /art/characters/project-files
+      - title: Export settings
+        path: /art/characters/export-settings
+      - title: Import into Studio
+        path: /art/characters/import
+      - title: Heads
+        section:
+          - title: Overview
+            path: /art/characters/facial-animation/
+          - title: Head specifications
+            path: /art/characters/head-specifications
+          - title: Face cage optimizations
+            path: /art/characters/face-caging-best-practices
+          - title: Testing in Studio
+            path: /art/characters/facial-animation/use-heads-in-studio
+          - title: FACS poses reference
+            path: /art/characters/facial-animation/facs-poses-reference
+  - title: Emotes
+    section:
+      - title: Overview
+        path: /art/emotes/
+      - title: Specifications
+        path: /art/emotes/specifications
+      - title: Export settings
+        path: /art/emotes/export-settings
+      - title: Import and configure in Studio
+        path: /art/emotes/import
+  - title: Makeup (Beta)
+    section:
+      - title: Overview
+        path: /makeup/
+      - title: Specifications
+        path: /makeup/specifications
+      - title: Reassign textures
+        path: /makeup/reassign-textures
+      - title: Import into Studio
+        path: /makeup/import
+  - title: Publish
+    section:
+      - title: Overview
+        path: /marketplace/
+      - title: Publish to Marketplace
+        path: /marketplace/publish-to-marketplace
+      - title: UGC Homestore
+        path: /marketplace/homestore
+  - title: Avatar Setup
+    section:
+      - title: Overview
+        path: /avatar-setup/
+      - title: Auto-setup
+        path: /avatar-setup/auto-setup
+      - title: Auto-setup requirements
+        path: /avatar-setup/auto-setup-requirements
+      - title: Preview and edit tools
+        path: /avatar-setup/tools
+  - title: More Studio tools
+    section:
+      - title: 3D Importer
+        path: /art/modeling/3d-importer
+      - title: Accessory Fitting
+        path: /art/accessories/accessory-fitting-tool
+      - title: Automatic Skinning Transfer
+        path: /art/accessories/automatic-skinning-transfer
+      - title: Thumbnails
+        path: /marketplace/custom-thumbnails
+  - title: Validation errors
+    path: /art/validation-errors
+
+  - title: 3rd party add-ons
+    section:
+      - title: Roblox Blender plugin
+        path: /art/modeling/roblox-blender-plugin
+      - title: Calisthenics Tool
+        path: /art/modeling/calisthenics-tool
+      - title: Clothing Validation Tool
+        path: /art/accessories/validation-tool
+
+  - title: In-experience creation
+    path: /avatar/in-experience-creation
+  - title: Photo-to-Avatar generation
+    path: /avatar/avatar-generation
+
+  - heading: Monetize
+  - title: Overview
+    path: /monetize-avatar
+  - title: Fees and commissions
+    path: /marketplace/marketplace-fees-and-commissions
+  - title: In-experience sales
+    path: /production/monetization/avatar-items
+  - title: In-experience creation
+    path: /production/monetization/avatar-creation-token
+  - title: Sponsor items
+    path: /production/promotion/sponsor-items
+  - title: Randomized items
+    path: /production/monetization/virtual-items
+
+  - heading: Policies and Guidelines
+  - title: Marketplace policy
+    path: /marketplace/marketplace-policy
+  - title: Intellectual property
+    path: /marketplace/intellectual-property
+  - title: Moderation
+    path: /marketplace/moderation
+  - title: FAQ
+    path: /marketplace/frequently-asked-questions

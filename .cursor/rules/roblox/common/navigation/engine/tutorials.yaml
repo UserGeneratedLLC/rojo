@@ -1,0 +1,173 @@
+navigation:
+  - heading: Get started
+  - title: Overview
+    path: /tutorials/
+  - title: Brand new to Studio?
+    section:
+      - title: Studio lesson
+        path: /tutorials/curriculums/studio
+        navigation: /engine/tutorials-studio.yaml
+      - title: Building lesson
+        path: /tutorials/curriculums/building
+        navigation: /engine/tutorials-building.yaml
+      - title: Coding lesson
+        path: /tutorials/curriculums/coding
+        navigation: /engine/tutorials-coding.yaml
+      - title: VFX lesson
+        path: /tutorials/curriculums/artist
+        navigation: /engine/tutorials-artist.yaml
+      - title: Animation lesson
+        path: /tutorials/curriculums/animator
+        navigation: /engine/tutorials-animator.yaml
+  - title: Create your first experience
+    path: /tutorials/curriculums/core/
+    navigation: /engine/tutorials-core.yaml
+  - title: Luau basics
+    path: /tutorials/fundamentals/coding-1/coding-fundamentals
+    navigation: /engine/tutorials-fundamentals.yaml
+  - heading: Intermediate tutorials
+  - title: Overview
+    path: /tutorials/use-case-tutorials/use-case-tutorial-overview
+  - title: Modeling
+    section:
+      - title: Neon signs
+        path: /tutorials/use-case-tutorials/modeling/create-neon-signs
+      - title: Modular environments
+        path: /tutorials/use-case-tutorials/modeling/assemble-modular-environments
+  - title: User interfaces
+    section:
+      - title: HUD meters
+        path: /tutorials/use-case-tutorials/ui/create-hud-meters
+      - title: Interactive UI
+        path: /tutorials/use-case-tutorials/ui/interactive-ui
+      - title: Proximity prompts
+        path: /tutorials/use-case-tutorials/ui/proximity-prompts
+      - title: Score bars
+        path: /tutorials/use-case-tutorials/ui/create-a-score-bar
+  - title: Audio
+    section:
+      - title: 2D audio
+        path: /tutorials/use-case-tutorials/audio/add-2D-audio
+      - title: 3D audio
+        path: /tutorials/use-case-tutorials/audio/add-3D-audio
+      - title: Voice chat
+        path: /tutorials/use-case-tutorials/audio/add-voice-chat
+      - title: Text-to-speech
+        path: /tutorials/use-case-tutorials/audio/add-text-to-speech
+      - title: Speech-to-text
+        path: /tutorials/use-case-tutorials/audio/speech-to-text
+  - title: Lighting
+    section:
+      - title: Indoor environments
+        path: /tutorials/use-case-tutorials/lighting/enhance-indoor-environments
+      - title: Outdoor environments
+        path: /tutorials/use-case-tutorials/lighting/enhance-outdoor-environments
+  - title: VFX
+    section:
+      - title: Laser beams
+        path: /tutorials/use-case-tutorials/vfx/laser-traps-with-beams
+      - title: Waterfalls
+        path: /tutorials/use-case-tutorials/vfx/create-waterfalls
+      - title: Volcanoes
+        path: /tutorials/use-case-tutorials/vfx/create-volcanoes
+      - title: Explosions
+        path: /tutorials/use-case-tutorials/vfx/use-particles-for-explosions
+  - title: Physics
+    section:
+      - title: Moving objects
+        path: /tutorials/use-case-tutorials/physics/create-moving-objects
+      - title: Spinning objects
+        path: /tutorials/use-case-tutorials/physics/create-spinning-objects
+  - title: Animation
+    section:
+      - title: In Studio
+        section:
+          - title: Create character animations
+            path: /tutorials/use-case-tutorials/animation/create-an-animation
+          - title: Play character animations
+            path: /tutorials/use-case-tutorials/animation/play-character-animations
+      - title: In Blender
+        section:
+          - title: Rig simple meshes
+            path: /art/modeling/rig-a-simple-mesh
+          - title: Skin simple meshes
+            path: /art/modeling/skin-a-simple-mesh
+          - title: Rig humanoid models
+            path: /art/modeling/rig-a-humanoid-model
+          - title: Skin humanoid models
+            path: /art/modeling/skin-a-humanoid-model
+  - title: Scripting
+    section:
+      - title: Basic gameplay
+        section:
+          - title: Introduction to scripting
+            path: /tutorials/use-case-tutorials/scripting/basic-scripting/intro-to-scripting
+          - title: Deadly lava
+            path: /tutorials/use-case-tutorials/scripting/basic-scripting/deadly-lava
+          - title: Fading trap
+            path: /tutorials/use-case-tutorials/scripting/basic-scripting/fading-trap
+          - title: Score points
+            path: /tutorials/use-case-tutorials/scripting/basic-scripting/score-points
+      - title: Intermediate gameplay
+        section:
+          - title: Health pickups
+            path: /tutorials/use-case-tutorials/scripting/intermediate-scripting/create-a-health-pickup
+          - title: Player tools
+            path: /tutorials/use-case-tutorials/scripting/intermediate-scripting/create-player-tools
+          - title: Hit detection with lasers
+            path: /tutorials/use-case-tutorials/scripting/intermediate-scripting/hit-detection-with-lasers
+  - title: Input and camera
+    section:
+      - title: Control the user's camera
+        path: /tutorials/use-case-tutorials/input-and-camera/control-the-users-camera
+      - title: Detect user input
+        path: /tutorials/use-case-tutorials/input-and-camera/detect-user-input
+  - title: Data storage
+    section:
+      - title: Save player data
+        path: /tutorials/use-case-tutorials/data-storage/save-player-data
+      - title: Create a custom leaderboard
+        path: /tutorials/use-case-tutorials/data-storage/create-leaderboard
+  - title: Avatar items
+    section:
+      - title: Create accessories from an existing model
+        path: /art/accessories/from-existing
+      - title: Rig and cage an existing model
+        path: /art/accessories/rig-and-cage-existing-models
+      - title: Create basic heads
+        path: /art/characters/facial-animation/create-basic-heads
+      - title: Create face accessories
+        path: /art/characters/facial-animation/create-face-accessories
+      - title: Publish eyebrows and eyelashes
+        path: /art/accessories/publish-eyebrows-eyelashes
+      - title: Test characters
+        path: /art/characters/testing/
+        section:
+          - title: Overview
+            path: /art/characters/testing/
+          - title: In Blender
+            path: /art/characters/testing/blender
+          - title: In Studio
+            path: /art/characters/testing/studio
+  - heading: Advanced paths
+  - title: Overview
+    path: /tutorials/curriculums/curriculum-overview
+  - title: Environmental art
+    path: /tutorials/curriculums/environmental-art/
+    navigation: /engine/tutorials-ea.yaml
+  - title: Gameplay scripting
+    path: /tutorials/curriculums/gameplay-scripting/
+    navigation: /engine/tutorials-gs.yaml
+  - title: User interface design
+    path: /tutorials/curriculums/user-interface-design/
+    navigation: /engine/tutorials-ui.yaml
+  # avatar/tutorials content needs to move somewhere
+  - title: Rigid accessories
+    path: /art/accessories/creating-rigid/
+    navigation: /avatar/tutorials-accessories.yaml
+  - title: Clothing
+    path: /art/accessories/creating
+    navigation: /avatar/tutorials-clothing.yaml
+  - title: Bodies
+    path: /art/characters/creating
+    navigation: /avatar/tutorials-bodies.yaml

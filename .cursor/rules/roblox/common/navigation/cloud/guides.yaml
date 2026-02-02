@@ -1,0 +1,35 @@
+backTo:
+  title: Back to Open Cloud
+  path: /cloud/
+navigation:
+  - title: Overview
+    path: /cloud/guides/
+  - heading: Guides
+  - title: Data stores
+    path: /cloud/guides/data-stores/
+    section:
+      - title: Overview
+        path: /cloud/guides/data-stores/
+      - title: Handle requests
+        path: /cloud/guides/data-stores/request-handling
+      - title: Rate limits and throttling
+        path: /cloud/guides/data-stores/throttling
+  - title: Assets
+    path: /cloud/guides/usage-assets
+  - title: Secrets stores
+    path: /cloud/guides/secrets-store
+  - title: User inventories
+    path: /cloud/guides/inventory
+  - title: Engine instances
+    path: /cloud/guides/instance
+  - title: User notifications
+    path: /cloud/guides/experience-notifications
+  - title: Messaging
+    path: /cloud/guides/usage-messaging
+  - title: Place publishing
+    path: /cloud/guides/usage-place-publishing
+  - heading: Webhooks
+  - title: Webhook notifications
+    path: /cloud/webhooks/webhook-notifications
+  - title: Right to erasure requests
+    path: /cloud/webhooks/automate-right-to-erasure

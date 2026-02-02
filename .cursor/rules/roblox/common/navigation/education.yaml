@@ -1,0 +1,81 @@
+navigation:
+  - heading: Educator training
+  - title: Educator onboarding
+    path: /education/educator-onboarding/landing
+    section:
+      - title: Intro to Roblox
+        path: /education/educator-onboarding/1-intro-to-roblox
+      - title: Play on Roblox
+        path: /education/educator-onboarding/2-playing-on-roblox
+      - title: Set up a classroom
+        path: /education/educator-onboarding/3-setting-up-a-roblox-classroom
+      - title: Run a classroom
+        path: /education/educator-onboarding/4-running-classrooms
+      - title: Next steps
+        path: /education/educator-onboarding/5-next-steps
+  - title: Classroom facilitation
+    section:
+      - title: Digital civility
+        path: /education/resources/intro-to-digital-civility
+      - title: Digital safety
+        path: /education/resources/intro-to-digital-safety
+      - title: Remote teaching
+        path: /education/resources/teaching-remotely
+      - title: Private servers
+        path: /education/support/private-servers-for-classroom-use
+      - title: Best practices for collaboration
+        path: /education/resources/collaboration-best-practices
+      - title: Best practices for classrooms
+        path: /education/resources/classroom-best-practices
+  - heading: Lesson plans
+  - title: Unit lessons
+    section:
+      - title: Game design and coding
+        path: /education/lesson-plans/intro-to-game-and-coding
+      - title: Digital citizenship
+        path: /education/lesson-plans/digital-citizenship/landing
+        section:
+          - title: Intro to digital safety
+            path: /education/lesson-plans/digital-citizenship/intro-to-roblox
+          - title: Be a digital citizen
+            path: /education/lesson-plans/digital-citizenship/being-a-digital-citizen
+          - title: Develop civil and safe games
+            path: /education/lesson-plans/digital-citizenship/civil-and-safe-game
+          - title: Lights and polish
+            path: /education/lesson-plans/digital-citizenship/lights-and-polish
+          - title: Coding fundamentals
+            path: /education/lesson-plans/digital-citizenship/coding-fundamentals
+          - title: Character animation
+            path: /education/lesson-plans/digital-citizenship/animating-characters
+          - title: Finish projects
+            path: /education/lesson-plans/digital-citizenship/finishing-projects
+  - title: Activity lessons
+    section:
+      - title: Intro to Building
+        path: /education/lesson-plans/build-an-obby-lesson
+      - title: Roblox animations
+        path: /education/lesson-plans/animate-in-roblox-lesson
+      - title: Story games
+        path: /education/lesson-plans/story-games-lesson
+  - title: Resources
+    path: /education/resources/resources-landing
+    section:
+      - title: List of Roblox educators
+        path: /education/resources/roblox-educators
+      - title: Marketing materials
+        path: /education/resources/marketing-materials
+      - title: Roblox for AP CSP
+        path: /education/resources/roblox-for-the-ap-csp-create-performance-task
+      - title: Bundled installers
+        path: /education/support/creating-bundled-installers
+  - title: FAQ
+    path: /education/resources/frequently-asked-questions-education
+  - heading: Education developers
+  - title: Get started for developers
+    path: /education/resources/getting-started-for-developers-education
+  - title: Design educational experiences
+    path: /education/developer/designing-educational-experiences
+  - title: Plan for educational settings
+    path: /education/developer/planning-for-educational-settings
+  - title: Beta test experiences
+    path: /education/developer/beta-testing-experiences

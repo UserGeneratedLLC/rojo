@@ -9,32 +9,54 @@ When you need information about Roblox APIs, features, or best practices, refere
 
 ## Directory Structure
 
+Documentation is organized under `roblox/en-us/` with shared data in `roblox/common/`.
+
 | Path | Content |
 |------|---------|
-| `roblox/luau/` | Luau language basics (tables, strings, functions, type-checking, etc.) |
-| `roblox/scripting/` | Scripting concepts (scripts, modules, events, coroutines, etc.) |
-| `roblox/ui/` | UI components (buttons, frames, layouts, styling, etc.) |
-| `roblox/physics/` | Physics system (constraints, assemblies, network ownership, etc.) |
-| `roblox/animation/` | Animation system |
-| `roblox/audio/` | Audio system |
-| `roblox/effects/` | Visual effects (beams, particles, trails, lighting) |
-| `roblox/environment/` | Environment (atmosphere, clouds, lighting, skybox) |
-| `roblox/workspace/` | Workspace concepts (CFrames, raycasting, collisions, streaming) |
-| `roblox/players/` | Player management |
-| `roblox/chat/` | Chat system |
-| `roblox/input/` | Input handling |
-| `roblox/parts/` | Parts and meshes |
-| `roblox/characters/` | Character system |
-| `roblox/avatar/` | Avatar system |
-| `roblox/cloud/` | Cloud services |
-| `roblox/cloud-services/` | Open Cloud APIs |
-| `roblox/production/` | Publishing, monetization, analytics, localization |
-| `roblox/performance-optimization/` | Performance best practices |
-| `roblox/studio/` | Studio features and tools |
-| `roblox/tutorials/` | Step-by-step tutorials |
-| `roblox/resources/` | Feature packages, modules, templates |
-| `roblox/reference/` | API reference (YAML format) |
+| `roblox/common/` | Shared YAML data files |
+| `roblox/en-us/animation/` | Animation system |
+| `roblox/en-us/art/` | Art and modeling (accessories, characters, meshes, textures, etc.) |
+| `roblox/en-us/assistant/` | Roblox Assistant documentation |
+| `roblox/en-us/audio/` | Audio system |
+| `roblox/en-us/avatar/` | Avatar system |
+| `roblox/en-us/avatar-setup/` | Avatar setup and configuration |
+| `roblox/en-us/characters/` | Character system |
+| `roblox/en-us/chat/` | Chat system |
+| `roblox/en-us/cloud/` | Cloud services |
+| `roblox/en-us/cloud-services/` | Open Cloud APIs |
+| `roblox/en-us/creator-programs/` | Creator programs and partnerships |
+| `roblox/en-us/education/` | Educational content and lessons |
+| `roblox/en-us/effects/` | Visual effects (beams, particles, trails, lighting) |
+| `roblox/en-us/environment/` | Environment (atmosphere, clouds, lighting, skybox) |
+| `roblox/en-us/includes/` | Reusable documentation snippets |
+| `roblox/en-us/input/` | Input handling |
+| `roblox/en-us/ip-licensing/` | IP licensing information |
+| `roblox/en-us/luau/` | Luau language basics (tables, strings, functions, type-checking, etc.) |
+| `roblox/en-us/makeup/` | Makeup and cosmetics system |
+| `roblox/en-us/marketplace/` | Marketplace and economy |
+| `roblox/en-us/matchmaking/` | Matchmaking system |
+| `roblox/en-us/parts/` | Parts and meshes |
+| `roblox/en-us/performance-optimization/` | Performance best practices |
+| `roblox/en-us/physics/` | Physics system (constraints, assemblies, network ownership, etc.) |
+| `roblox/en-us/players/` | Player management |
+| `roblox/en-us/production/` | Publishing, monetization, analytics, localization |
+| `roblox/en-us/projects/` | Project management and collaboration |
+| `roblox/en-us/reference/` | API reference (YAML format) |
+| `roblox/en-us/resources/` | Feature packages, modules, templates |
+| `roblox/en-us/scripting/` | Scripting concepts (scripts, modules, events, coroutines, etc.) |
+| `roblox/en-us/sound/` | Sound design and implementation |
+| `roblox/en-us/studio/` | Studio features and tools |
+| `roblox/en-us/tutorials/` | Step-by-step tutorials |
+| `roblox/en-us/ui/` | UI components (buttons, frames, layouts, styling, etc.) |
+| `roblox/en-us/workspace/` | Workspace concepts (CFrames, raycasting, collisions, streaming) |
+
+Standalone files in `roblox/en-us/`:
+- `unity.md` - Unity to Roblox migration guide
+- `unreal.md` - Unreal to Roblox migration guide
+- `what-is-roblox.md` - Introduction to Roblox
 
 ## Finding Documentation
 
 Use glob and grep to search `.cursor/rules/roblox/` for Roblox-specific documentation files.
+
+**Tip:** Check `roblox/common/navigation/` for YAML files that organize documentation by category (analytics, avatar, cloud, engine, monetization, etc.). These navigation files help locate relevant docs quickly.

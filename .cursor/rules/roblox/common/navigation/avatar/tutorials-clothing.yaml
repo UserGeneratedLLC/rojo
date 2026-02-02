@@ -1,0 +1,46 @@
+backTo:
+  title: Back to tutorials
+  path: /tutorials/
+navigation:
+  - title: Overview
+    path: /art/accessories/creating/
+
+  - heading: Modeling
+  - title: Set up mesh
+    path: /art/accessories/creating/modeling-setup
+  - title: Trim clothing shape
+    path: /art/accessories/creating/trimming
+  - title: Sculpt detail
+    path: /art/accessories/creating/sculpting
+  - title: Make mesh watertight
+    path: /art/accessories/creating/watertight
+
+  - heading: Texturing
+  - title: Create seams and unwrap
+    path: /art/accessories/creating/unwrapping
+  - title: Create a texture map
+    path: /art/accessories/creating/texture-map
+  - title: Texture painting
+    path: /art/accessories/creating/texture-painting
+
+  - heading: Rigging
+  - title: Armature setup
+    path: /art/accessories/creating/armature-setup
+  - title: Test poses
+    path: /art/accessories/creating/test-poses
+
+  - heading: Caging
+  - title: Caging setup
+    path: /art/accessories/creating/caging-setup
+  - title: Modify outer cage
+    path: /art/accessories/creating/modify-cage
+
+  - heading: Export
+  - title: Export FBX
+    path: /art/accessories/creating/exporting
+
+  - heading: Import and convert
+  - title: Use Studio's 3D importer
+    path: /art/accessories/creating/importing
+  - title: Use the accessory fitting tool
+    path: /art/accessories/creating/converting

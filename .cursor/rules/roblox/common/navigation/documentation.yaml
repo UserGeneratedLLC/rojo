@@ -1,0 +1,43 @@
+columns:
+  - - title: Learn
+      path: /
+      items:
+        - title: Experiences
+          navigation: /engine/guides.yaml
+          path: /experiences
+        - title: Avatar
+          navigation: /avatar/guides.yaml
+          path: /avatar
+        - title: Assets
+          navigation: /assets.yaml
+          path: /assets
+        - title: Samples and projects
+          navigation: /engine/resources.yaml
+          path: /samples
+        - title: Engine API
+          path: /reference/engine
+          navigation: /engine/reference.yaml
+        - title: Open Cloud API
+          navigation: /cloud/reference.yaml
+          path: /cloud/
+        - title: Studio
+          path: /studio/
+          navigation: /engine/studio.yaml
+        - title: Analytics
+          path: /production/analytics/
+          navigation: analytics.yaml
+        - title: Platform
+          path: /platform
+          navigation: /platform.yaml
+        - title: Tutorials
+          navigation: /engine/tutorials.yaml
+          path: /tutorials
+        - title: Creator programs
+          path: /creator-programs/
+          navigation: /programs.yaml
+        - title: Education
+          navigation: /education.yaml
+          path: /education/educator-onboarding/landing
+        - title: Courses
+          navigation: /courses/courses.yaml
+          path: /courses

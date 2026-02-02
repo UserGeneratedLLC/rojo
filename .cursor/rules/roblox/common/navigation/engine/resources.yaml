@@ -1,0 +1,121 @@
+navigation:
+  - heading: Code samples
+  - title: Overview
+    path: /samples/
+  - heading: Feature packages
+  - title: Overview
+    path: /resources/feature-packages/
+  - title: Bundles
+    path: /resources/feature-packages/bundles
+  - title: Missions
+    path: /resources/feature-packages/missions
+  - title: Season passes
+    path: /resources/feature-packages/season-passes
+  - title: Engagement rewards
+    path: /resources/feature-packages/engagement-rewards
+  - title: Changelog
+    path: /resources/feature-packages/changelog
+  - heading: Developer modules
+  - title: Overview
+    path: /resources/modules/
+  - title: Selfie Mode
+    path: /resources/modules/selfie-mode
+  - title: Merch Booth
+    path: /resources/modules/merch-booth
+  - title: Friends Locator
+    path: /resources/modules/friends-locator
+  - title: Profile Card
+    path: /resources/modules/profile-card
+  - title: Emote Bar
+    path: /resources/modules/emote-bar
+  - title: Spawn With Friends
+    path: /resources/modules/spawn-with-friends
+  - title: Photo Booth
+    path: /resources/modules/photo-booth
+  - title: Surface Art
+    path: /resources/modules/surface-art
+  - title: Scavenger Hunt
+    path: /resources/modules/scavenger-hunt
+  - title: Social Interactions
+    path: /resources/modules/social-interactions
+  - title: Event Sequencer
+    path: /resources/modules/event-sequencer
+  - heading: Scripting libraries
+  - title: Overview
+    path: /resources/scripting-libraries
+  - heading: Projects and kits
+  - title: Templates
+    path: /resources/templates
+  - title: Roblox Connect project
+    path: /resources/roblox-connect
+  - title: Plant reference project
+    path: /resources/plant-reference-project
+
+  - heading: Resources
+  - title: The Mystery of Duvall Drive
+    path: /resources/the-mystery-of-duvall-drive/
+    section:
+      - title: Overview
+        path: /resources/the-mystery-of-duvall-drive/
+      - title: Construct the house
+        path: /resources/the-mystery-of-duvall-drive/construct-the-house
+      - title: Materialize the world
+        path: /resources/the-mystery-of-duvall-drive/materialize-the-world
+      - title: Immersive narrative
+        path: /resources/the-mystery-of-duvall-drive/immersive-narrative
+      - title: Stream in immersion
+        path: /resources/the-mystery-of-duvall-drive/stream-in-immersion
+      - title: Develop a moving world
+        path: /resources/the-mystery-of-duvall-drive/develop-a-moving-world
+      - title: Design dark soundscapes
+        path: /resources/the-mystery-of-duvall-drive/design-dark-soundscapes
+      - title: Technical overview
+        path: /resources/the-mystery-of-duvall-drive/technical-overview
+        section:
+          - title: Overview
+            path: /resources/the-mystery-of-duvall-drive/technical-overview
+          - title: Main design requirements
+            path: /resources/the-mystery-of-duvall-drive/main-design-requirements
+          - title: Foundational gameplay systems
+            path: /resources/the-mystery-of-duvall-drive/foundational-gameplay-systems
+          - title: Supporting systems
+            path: /resources/the-mystery-of-duvall-drive/supporting-systems
+  - title: Beyond the Dark
+    path: /resources/beyond-the-dark/
+    section:
+      - title: Overview
+        path: /resources/beyond-the-dark/
+      - title: Architecture
+        path: /resources/beyond-the-dark/building-architecture
+      - title: Characters
+        path: /resources/beyond-the-dark/custom-characters
+      - title: Layered clothing
+        path: /resources/beyond-the-dark/layered-clothing
+      - title: Sound design
+        path: /resources/beyond-the-dark/sound-design
+      - title: User interface
+        path: /resources/beyond-the-dark/user-interface
+
+  - title: Battle Royale
+    path: /resources/battle-royale/
+    section:
+      - title: Overview
+        path: /resources/battle-royale/
+      - title: Installation and setup
+        path: /resources/battle-royale/installation-and-setup
+      - title: Run the game
+        path: /resources/battle-royale/run-the-game
+      - title: Core scripts
+        path: /resources/battle-royale/core-scripts
+      - title: Pickup system
+        path: /resources/battle-royale/pickup-system
+      - title: Building system
+        path: /resources/battle-royale/building-system
+      - title: Minimap system
+        path: /resources/battle-royale/minimap-system
+      - title: The storm
+        path: /resources/battle-royale/the-storm
+  - title: Weapons kit
+    path: /resources/weapons-kit
+  - title: NPC kit
+    path: /resources/npc-kit

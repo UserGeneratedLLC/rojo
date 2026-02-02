@@ -1,0 +1,62 @@
+defaultType: markdown
+navigation:
+  - heading: Roblox Studio
+  - title: Overview
+    path: /studio/
+  - title: Setup
+    path: /studio/setup
+  - title: Interface
+    path: /studio/ui-overview
+  - title: Assistant
+    path: /assistant/guide
+    section:
+      - title: Overview
+        path: /assistant/guide
+      - title: Prompt guide and examples
+        path: /assistant/prompt-engineering
+  - heading: Building tools
+  - title: Align
+    path: /studio/align-tool
+  - title: Pivot
+    path: /studio/pivot-tools
+  - title: Terrain Editor
+    path: /studio/terrain-editor
+  - title: Material Generator
+    path: /studio/material-generator
+  - title: Texture Generator
+    path: /studio/texture-generator
+  - title: Rig Generator
+    path: /studio/rig-builder
+  - heading: Scripting tools
+  - title: Script Editor
+    path: /studio/script-editor
+  - title: Debugging
+    path: /studio/debugging
+  - heading: Testing tools
+  - title: Testing modes
+    path: /studio/testing-modes
+  - title: Output
+    path: /studio/output
+  - title: Developer Console
+    path: /studio/developer-console
+    section:
+      - title: Overview
+        path: /studio/developer-console
+      - title: Script Profiler
+        path: /studio/optimization/scriptprofiler
+      - title: Memory usage
+        path: /studio/optimization/memory-usage
+  - heading: UI reference
+  - title: Explorer
+    path: /studio/explorer
+  - title: Properties
+    path: /studio/properties
+  - title: Experience Settings
+    path: /studio/experience-settings
+  - title: Avatar Settings
+    path: /studio/avatar-settings
+  - heading: Plugins
+  - title: Overview
+    path: /studio/plugins
+  - title: Studio widgets
+    path: /studio/build-studio-widgets
