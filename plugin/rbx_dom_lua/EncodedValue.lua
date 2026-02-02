@@ -4,6 +4,36 @@ local function identity(...)
 	return ...
 end
 
+-- Convert msgpack Int64 representation to a Lua number
+-- Note: Lua numbers are doubles, so precision may be lost for values > 2^53
+local function int64FromPod(pod)
+	-- If it's already a number, return it
+	if type(pod) == "number" then
+		return pod
+	end
+	-- If it's a msgpack Int64 table, convert to number
+	if type(pod) == "table" and pod.mostSignificantPart ~= nil and pod.leastSignificantPart ~= nil then
+		local most = pod.mostSignificantPart
+		local least = pod.leastSignificantPart
+		local value = most * 0x100000000 + least
+		-- Handle signed integers (negative values have MSB set)
+		if most >= 0x80000000 then
+			value = value - 0x10000000000000000
+		end
+		return value
+	end
+	return pod
+end
+
+-- Convert a Lua number to msgpack Int64 if needed, otherwise return as-is
+-- For values that fit in Lua's safe integer range, returning plain number works
+-- because msgpack will encode it appropriately
+local function int64ToPod(roblox)
+	-- Just return the number - msgpack will handle encoding
+	-- For values outside safe range, this might lose precision
+	return roblox
+end
+
 local function unpackDecoder(f)
 	return function(value)
 		return f(unpack(value))
@@ -302,8 +332,8 @@ types = {
 	},
 
 	Int64 = {
-		fromPod = identity,
-		toPod = identity,
+		fromPod = int64FromPod,
+		toPod = int64ToPod,
 	},
 
 	MaterialColors = {

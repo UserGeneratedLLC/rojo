@@ -55,6 +55,44 @@ fn can_transition_class(old_class: &str, new_class: &str) -> bool {
     false
 }
 
+/// Determines the correct script-dir middleware for a Script based on its RunContext property.
+///
+/// Script class has a RunContext property that determines the correct middleware:
+/// - Server → ServerScriptDir (init.server.luau)
+/// - Client → ClientScriptDir (init.client.luau)
+/// - Plugin → PluginScriptDir (init.plugin.luau)
+/// - Legacy → LegacyScriptDir (init.legacy.luau)
+///
+/// If RunContext is not set or unrecognized, defaults to LegacyScriptDir.
+fn middleware_for_script(inst: &Instance) -> Middleware {
+    let run_context_enums = rbx_reflection_database::get()
+        .ok()
+        .and_then(|db| db.enums.get("RunContext"))
+        .map(|e| &e.items);
+
+    let run_context_value = inst.properties.get(&ustr("RunContext")).and_then(|v| match v {
+        Variant::Enum(e) => Some(e.to_u32()),
+        _ => None,
+    });
+
+    if let (Some(enums), Some(value)) = (run_context_enums, run_context_value) {
+        for (name, &enum_value) in enums {
+            if enum_value == value {
+                return match name.as_ref() {
+                    "Server" => Middleware::ServerScriptDir,
+                    "Client" => Middleware::ClientScriptDir,
+                    "Plugin" => Middleware::PluginScriptDir,
+                    "Legacy" => Middleware::LegacyScriptDir,
+                    _ => Middleware::LegacyScriptDir,
+                };
+            }
+        }
+    }
+
+    // Default to LegacyScriptDir if no RunContext or unrecognized
+    Middleware::LegacyScriptDir
+}
+
 pub fn snapshot_project(
     context: &InstanceContext,
     vfs: &Vfs,
@@ -424,10 +462,10 @@ pub fn syncback_project<'sync>(
                     // determine the middleware from the new instance and let
                     // syncback create the necessary files/directories.
                     if !snapshot.data.is_incremental() {
-                        // Determine middleware based on new instance class
+                        // Determine middleware based on new instance class (and RunContext for Scripts)
                         let inferred_middleware = match new_inst.class.as_str() {
                             "ModuleScript" => Middleware::ModuleScriptDir,
-                            "Script" => Middleware::ServerScriptDir,
+                            "Script" => middleware_for_script(new_inst),
                             "LocalScript" => Middleware::LocalScriptDir,
                             "Folder" => Middleware::Dir,
                             // For other classes, default to Dir
@@ -459,7 +497,7 @@ pub fn syncback_project<'sync>(
                 if middleware == Middleware::Dir {
                     let script_middleware = match new_inst.class.as_str() {
                         "ModuleScript" => Some(Middleware::ModuleScriptDir),
-                        "Script" => Some(Middleware::ServerScriptDir),
+                        "Script" => Some(middleware_for_script(new_inst)),
                         "LocalScript" => Some(Middleware::LocalScriptDir),
                         _ => None,
                     };
@@ -482,6 +520,8 @@ pub fn syncback_project<'sync>(
                         | Middleware::ServerScriptDir
                         | Middleware::ClientScriptDir
                         | Middleware::LocalScriptDir
+                        | Middleware::PluginScriptDir
+                        | Middleware::LegacyScriptDir
                 );
                 if is_script_dir_middleware && new_inst.class == "Folder" {
                     log::debug!(
@@ -493,13 +533,14 @@ pub fn syncback_project<'sync>(
                 }
 
                 // Case 3: Filesystem has a script-dir but new instance is a DIFFERENT script type.
-                // e.g., ModuleScriptDir (init.luau) but new instance is Script → use ServerScriptDir.
+                // e.g., ModuleScriptDir (init.luau) but new instance is Script → use correct script-dir.
                 // Without this, changing a ModuleScript to Script in Studio would silently keep
                 // the old init.luau file, causing the script to be read as ModuleScript on next build.
+                // For Scripts, we also check RunContext to pick the correct middleware (Server/Client/Plugin/Legacy).
                 if is_script_dir_middleware {
                     let correct_middleware = match new_inst.class.as_str() {
                         "ModuleScript" => Some(Middleware::ModuleScriptDir),
-                        "Script" => Some(Middleware::ServerScriptDir),
+                        "Script" => Some(middleware_for_script(new_inst)),
                         "LocalScript" => Some(Middleware::LocalScriptDir),
                         _ => None,
                     };
