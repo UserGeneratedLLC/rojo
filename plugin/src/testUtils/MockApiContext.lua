@@ -108,13 +108,14 @@ function MockApiContext:connect()
 	end
 
 	-- Default connect response
-	return true, {
-		serverVersion = "0.0.0-mock",
-		protocolVersion = 4,
-		sessionId = HttpService:GenerateGUID(false),
-		expectedPlaceIds = {},
-		rootInstanceId = HttpService:GenerateGUID(false),
-	}
+	return true,
+		{
+			serverVersion = "0.0.0-mock",
+			protocolVersion = 4,
+			sessionId = HttpService:GenerateGUID(false),
+			expectedPlaceIds = {},
+			rootInstanceId = HttpService:GenerateGUID(false),
+		}
 end
 
 --[[

@@ -266,19 +266,34 @@ return function()
 
 			local knownIds = { rootId }
 
+			-- Helper to clean up knownIds by removing IDs that no longer exist in instanceMap.
+			-- This is necessary because when a parent is removed, its children are also
+			-- destroyed by Roblox, but their IDs may still be in knownIds.
+			local function cleanupKnownIds()
+				local validIds = {}
+				for _, id in ipairs(knownIds) do
+					if instanceMap.fromIds[id] ~= nil then
+						table.insert(validIds, id)
+					end
+				end
+				knownIds = validIds
+			end
+
 			for _ = 1, 100 do
 				local operation = math.random(1, 3)
 
 				if operation == 1 and #knownIds < 500 then
-					-- Add
+					-- Add: verify parent still exists (may have been destroyed as descendant)
 					local parentId = knownIds[math.random(1, #knownIds)]
-					local patch = PatchGenerator.createAdditionsPatch({
-						count = 1,
-						parentId = parentId,
-					})
-					applyPatch(instanceMap, patch)
-					for id in pairs(patch.added) do
-						table.insert(knownIds, id)
+					if instanceMap.fromIds[parentId] ~= nil then
+						local patch = PatchGenerator.createAdditionsPatch({
+							count = 1,
+							parentId = parentId,
+						})
+						applyPatch(instanceMap, patch)
+						for id in pairs(patch.added) do
+							table.insert(knownIds, id)
+						end
 					end
 				elseif operation == 2 and #knownIds > 1 then
 					-- Remove (not root)
@@ -288,16 +303,21 @@ return function()
 
 					local patch = PatchGenerator.createRemovalsPatch({ ids = { idToRemove } })
 					applyPatch(instanceMap, patch)
+
+					-- Clean up knownIds to remove any descendants that were destroyed
+					cleanupKnownIds()
 				elseif operation == 3 and #knownIds > 0 then
-					-- Update
+					-- Update: verify instance still exists
 					local idToUpdate = knownIds[math.random(1, #knownIds)]
-					local patch = PatchSet.newEmpty()
-					table.insert(patch.updated, {
-						id = idToUpdate,
-						changedName = "Updated_" .. tostring(os.clock()),
-						changedProperties = {},
-					})
-					applyPatch(instanceMap, patch)
+					if instanceMap.fromIds[idToUpdate] ~= nil then
+						local patch = PatchSet.newEmpty()
+						table.insert(patch.updated, {
+							id = idToUpdate,
+							changedName = "Updated_" .. tostring(os.clock()),
+							changedProperties = {},
+						})
+						applyPatch(instanceMap, patch)
+					end
 				end
 			end
 

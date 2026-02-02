@@ -527,13 +527,8 @@ return function()
 
 			local startTime = os.clock()
 			local deferredRefs = {}
-			local unappliedPatch = reifyInstance(
-				deferredRefs,
-				instanceMap,
-				treeData.virtualInstances,
-				treeData.rootId,
-				container
-			)
+			local unappliedPatch =
+				reifyInstance(deferredRefs, instanceMap, treeData.virtualInstances, treeData.rootId, container)
 			applyDeferredRefs(instanceMap, deferredRefs, unappliedPatch)
 			local elapsed = os.clock() - startTime
 

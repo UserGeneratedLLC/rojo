@@ -208,7 +208,8 @@ function LargeTreeGenerator.createVirtualTree(options)
 			if withDuplicates and currentDepth <= 1 then
 				for _ = 1, duplicateCount do
 					local duplicateName = prefix .. "_1" -- Same as first child
-					local duplicateId = createVirtualInstance(duplicateName, id, currentDepth + 1, duplicateName .. "_dup")
+					local duplicateId =
+						createVirtualInstance(duplicateName, id, currentDepth + 1, duplicateName .. "_dup")
 					table.insert(children, duplicateId)
 				end
 			end
