@@ -256,6 +256,14 @@ pub fn syncback_loop_with_stats(
         // Collect paths from the project tree definition
         collect_paths_from_project(&project.tree, project_path, &mut dirs_to_scan);
         
+        // Also scan the project folder itself - files like src.luau that exist
+        // alongside default.project.json5 should be considered for orphan removal
+        let project_path_buf = project_path.to_path_buf();
+        if !dirs_to_scan.contains(&project_path_buf) {
+            log::trace!("Adding project folder to scan: {}", project_path.display());
+            dirs_to_scan.push(project_path_buf);
+        }
+        
         // Also check instance metadata for paths that might not be in project
         // (e.g., from nested project references)
         let root = old_tree.root();

@@ -23,11 +23,32 @@ isProject: false
 
 **Goal**: Make syncback bulletproof for complex games. No filesystem inconsistencies. The filesystem must be the source of truth.
 
+**What Clean Mode Represents**:
+
+Clean mode is conceptually equivalent to:
+
+1. Deleting the entire project `src/` directory
+2. Keeping only `default.project.json5`
+3. Letting syncback rebuild everything from scratch based on the rbxm/rbxl
+
+This gives a **truthful representation** of the project as it exists in Studio. Clean mode is the **preferred mechanism** for syncback because it produces the most accurate filesystem state.
+
+**Why Clean Mode Exists**:
+
+Previously, users had to use a shell script that literally deleted the src folder and let syncback rebuild. This approach:
+
+- Was very slow
+- Caused many unnecessary git/filesystem changes
+- Left "bad residues" behind
+
+Clean mode is an **optimized version** of that same approach - it achieves the same truthful result without the overhead of deleting and recreating everything.
+
 **Testing Philosophy**:
 
 - Tests exist to EXPOSE limitations, not just pass
 - Tests that break the system are GOOD - they're the forcing function for quality
 - Do NOT back down when tests fail - fix the underlying issue
+- **CRITICAL**: Before modifying code to fix a test, ensure you KNOW FOR A FACT the expected output is correct for the given input. Don't assume a failing test means the code is wrong.
 
 **Code Quality Concerns**:
 
