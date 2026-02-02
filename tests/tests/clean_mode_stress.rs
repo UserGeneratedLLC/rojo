@@ -521,12 +521,10 @@ fn clean_handles_empty_orphan_directory() {
     // with just adding an empty-ish directory structure
     clean_equals_fresh(
         "deep_nesting",
-        &[
-            Mutation::AddOrphanFile {
-                relative_path: "src/empty_dir/.gitkeep",
-                content: "",
-            },
-        ],
+        &[Mutation::AddOrphanFile {
+            relative_path: "src/empty_dir/.gitkeep",
+            content: "",
+        }],
     );
 }
 

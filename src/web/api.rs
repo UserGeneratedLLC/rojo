@@ -625,14 +625,15 @@ impl ApiService {
                         // We need to convert from standalone (e.g., MyScript.server.luau)
                         // to directory format (e.g., MyScript/init.server.luau).
                         let script_name = added.name.as_str();
-                        let parent_dir = existing_path
-                            .parent()
-                            .unwrap_or(existing_path);
+                        let parent_dir = existing_path.parent().unwrap_or(existing_path);
                         let new_dir = parent_dir.join(script_name);
 
                         // Create the directory
                         fs::create_dir_all(&new_dir).with_context(|| {
-                            format!("Failed to create directory for script with children: {}", new_dir.display())
+                            format!(
+                                "Failed to create directory for script with children: {}",
+                                new_dir.display()
+                            )
                         })?;
 
                         // Determine the init file name based on class
@@ -652,7 +653,10 @@ impl ApiService {
                         // Remove the old standalone file
                         if existing_path.exists() && existing_path != init_path {
                             fs::remove_file(existing_path).with_context(|| {
-                                format!("Failed to remove old standalone script: {}", existing_path.display())
+                                format!(
+                                    "Failed to remove old standalone script: {}",
+                                    existing_path.display()
+                                )
                             })?;
                         }
 

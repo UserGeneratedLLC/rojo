@@ -374,7 +374,8 @@ pub fn syncback_project<'sync>(
         if old_inst.class_name() != new_inst.class {
             // In clean mode, allow recoverable class transitions
             // (e.g., Folder -> ModuleScript by creating init.luau)
-            let can_recover = can_transition_class(old_inst.class_name().as_str(), new_inst.class.as_str());
+            let can_recover =
+                can_transition_class(old_inst.class_name().as_str(), new_inst.class.as_str());
             if !snapshot.data.is_incremental() && can_recover {
                 log::debug!(
                     "Clean mode: allowing class transition {} -> {} for {}",
@@ -489,6 +490,31 @@ pub fn syncback_project<'sync>(
                         full_path.display()
                     );
                     middleware = Middleware::Dir;
+                }
+
+                // Case 3: Filesystem has a script-dir but new instance is a DIFFERENT script type.
+                // e.g., ModuleScriptDir (init.luau) but new instance is Script → use ServerScriptDir.
+                // Without this, changing a ModuleScript to Script in Studio would silently keep
+                // the old init.luau file, causing the script to be read as ModuleScript on next build.
+                if is_script_dir_middleware {
+                    let correct_middleware = match new_inst.class.as_str() {
+                        "ModuleScript" => Some(Middleware::ModuleScriptDir),
+                        "Script" => Some(Middleware::ServerScriptDir),
+                        "LocalScript" => Some(Middleware::LocalScriptDir),
+                        _ => None,
+                    };
+                    if let Some(new_middleware) = correct_middleware {
+                        if middleware != new_middleware {
+                            log::debug!(
+                                "Clean mode: overriding {:?}->{:?} middleware for {} (class {} changed)",
+                                middleware,
+                                new_middleware,
+                                full_path.display(),
+                                new_inst.class
+                            );
+                            middleware = new_middleware;
+                        }
+                    }
                 }
             }
 

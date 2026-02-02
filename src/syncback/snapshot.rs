@@ -309,7 +309,8 @@ impl<'sync> SyncbackSnapshot<'sync> {
 
     /// Compiles the ignoreTrees patterns into globs.
     /// Returns an empty Vec if no patterns are configured.
-    pub fn compile_tree_globs(&self) -> Vec<Glob> {
+    /// Each entry contains both the compiled Glob and the original pattern string.
+    pub fn compile_tree_globs(&self) -> Vec<(Glob, String)> {
         self.data
             .project
             .syncback_rules

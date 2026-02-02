@@ -74,7 +74,8 @@ pub fn syncback_rbxm<'sync>(
 
 /// Clones a subtree from the source WeakDom, filtering out instances that match
 /// the provided ignoreTrees glob patterns.
-pub fn clone_tree_filtered(source: &WeakDom, root_ref: Ref, ignore_globs: &[Glob]) -> WeakDom {
+/// Each entry contains both the compiled Glob and the original pattern string.
+pub fn clone_tree_filtered(source: &WeakDom, root_ref: Ref, ignore_globs: &[(Glob, String)]) -> WeakDom {
     let root_inst = source.get_by_ref(root_ref).expect("root ref should exist");
 
     // Create a new tree with the root instance
@@ -93,7 +94,7 @@ fn add_children_filtered(
     source: &WeakDom,
     parent_ref: Ref,
     builder: &mut InstanceBuilder,
-    ignore_globs: &[Glob],
+    ignore_globs: &[(Glob, String)],
 ) {
     let parent = source
         .get_by_ref(parent_ref)
@@ -103,7 +104,7 @@ fn add_children_filtered(
         let child_path = inst_path(source, child_ref);
 
         // Check if this child should be ignored
-        let should_ignore = ignore_globs.iter().any(|glob| glob.is_match(&child_path));
+        let should_ignore = ignore_globs.iter().any(|(glob, _)| glob.is_match(&child_path));
 
         if should_ignore {
             log::debug!("Filtering out {child_path} from rbxm due to ignoreTrees pattern");

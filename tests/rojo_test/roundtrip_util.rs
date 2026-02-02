@@ -53,10 +53,7 @@ pub fn run_rojo_build(project_path: &Path, output_name: &str) -> (TempDir, PathB
 pub fn run_rojo_syncback_clean(project_path: &Path, input_path: &Path) -> bool {
     // Verify input file exists before calling
     if !input_path.exists() {
-        eprintln!(
-            "ERROR: Input file does not exist: {}",
-            input_path.display()
-        );
+        eprintln!("ERROR: Input file does not exist: {}", input_path.display());
         return false;
     }
 
@@ -319,7 +316,10 @@ pub fn apply_mutation(dir: &Path, mutation: &Mutation) {
                 fs::remove_dir_all(&path).expect("Failed to delete directory");
             }
         }
-        Mutation::ConvertDirToFile { dir: dir_path, file_content } => {
+        Mutation::ConvertDirToFile {
+            dir: dir_path,
+            file_content,
+        } => {
             let path = dir.join(dir_path);
             if path.exists() && path.is_dir() {
                 fs::remove_dir_all(&path).expect("Failed to remove directory");

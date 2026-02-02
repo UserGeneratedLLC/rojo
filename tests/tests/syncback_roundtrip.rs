@@ -75,11 +75,16 @@ fn assert_rbx_equal(file_a: &Path, file_b: &Path, test_name: &str) {
     let data_b = fs::read(file_b).expect("Failed to read roundtrip rbxl");
 
     let dom_a = rbx_binary::from_reader(data_a.as_slice()).expect("Failed to parse original rbxl");
-    let dom_b =
-        rbx_binary::from_reader(data_b.as_slice()).expect("Failed to parse roundtrip rbxl");
+    let dom_b = rbx_binary::from_reader(data_b.as_slice()).expect("Failed to parse roundtrip rbxl");
 
     // Compare the root's children (DataModel children)
-    compare_children(&dom_a, dom_a.root_ref(), &dom_b, dom_b.root_ref(), test_name);
+    compare_children(
+        &dom_a,
+        dom_a.root_ref(),
+        &dom_b,
+        dom_b.root_ref(),
+        test_name,
+    );
 }
 
 /// Recursively compare children of two instances.

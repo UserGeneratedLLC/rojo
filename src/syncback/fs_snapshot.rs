@@ -126,10 +126,7 @@ impl FsSnapshot {
         // Also handle the case where the same file might be listed twice (absolute vs relative path)
         // by gracefully handling "file not found" errors.
         for path in &self.removed_files {
-            let is_inside_removed_dir = self
-                .removed_dirs
-                .iter()
-                .any(|dir| path.starts_with(dir));
+            let is_inside_removed_dir = self.removed_dirs.iter().any(|dir| path.starts_with(dir));
             if is_inside_removed_dir {
                 continue;
             }
@@ -158,11 +155,7 @@ impl FsSnapshot {
         let files_inside_dirs = self
             .removed_files
             .iter()
-            .filter(|path| {
-                self.removed_dirs
-                    .iter()
-                    .any(|dir| path.starts_with(dir))
-            })
+            .filter(|path| self.removed_dirs.iter().any(|dir| path.starts_with(dir)))
             .count();
         log::debug!(
             "Removed {} directories and {} files from the file system ({} files skipped, inside removed dirs)",

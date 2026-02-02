@@ -335,10 +335,16 @@ fn standalone_module_sync_adding_children_converts_to_directory() {
         send_write_request(&session, &info.session_id, rs_id, added);
 
         // Standalone file should be removed (converted to directory)
-        assert_not_exists(&standalone_file, "Standalone file should be removed after conversion");
+        assert_not_exists(
+            &standalone_file,
+            "Standalone file should be removed after conversion",
+        );
 
         // Directory should be created with init file
-        assert_directory_exists(&dir_path, "Directory should be created for script with children");
+        assert_directory_exists(
+            &dir_path,
+            "Directory should be created for script with children",
+        );
         let init_file = dir_path.join("init.luau");
         assert_file_exists(&init_file, "init.luau should exist");
 
@@ -388,10 +394,16 @@ fn standalone_script_sync_adding_children_converts_to_directory() {
         send_write_request(&session, &info.session_id, rs_id, added);
 
         // Standalone file should be removed (converted to directory)
-        assert_not_exists(&standalone_file, "Standalone file should be removed after conversion");
+        assert_not_exists(
+            &standalone_file,
+            "Standalone file should be removed after conversion",
+        );
 
         // Directory should be created with init file
-        assert_directory_exists(&dir_path, "Directory should be created for script with children");
+        assert_directory_exists(
+            &dir_path,
+            "Directory should be created for script with children",
+        );
         let init_file = dir_path.join("init.server.luau");
         assert_file_exists(&init_file, "init.server.luau should exist");
 
@@ -442,10 +454,16 @@ fn standalone_localscript_sync_adding_children_converts_to_directory() {
         send_write_request(&session, &info.session_id, rs_id, added);
 
         // Standalone file should be removed (converted to directory)
-        assert_not_exists(&standalone_file, "Standalone file should be removed after conversion");
+        assert_not_exists(
+            &standalone_file,
+            "Standalone file should be removed after conversion",
+        );
 
         // Directory should be created with init file
-        assert_directory_exists(&dir_path, "Directory should be created for script with children");
+        assert_directory_exists(
+            &dir_path,
+            "Directory should be created for script with children",
+        );
         let init_file = dir_path.join("init.local.luau");
         assert_file_exists(&init_file, "init.local.luau should exist");
 
@@ -2066,7 +2084,10 @@ fn sync_standalone_then_directory_format() {
         send_write_request(&session, &info.session_id, rs_id, added1);
 
         // Standalone should still exist after sync without children
-        assert_file_exists(&standalone, "Standalone preserved after sync without children");
+        assert_file_exists(
+            &standalone,
+            "Standalone preserved after sync without children",
+        );
 
         // Second sync - with children (converts to directory)
         let added2 = make_added_instance(

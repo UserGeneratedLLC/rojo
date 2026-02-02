@@ -229,7 +229,7 @@ pub fn syncback_loop_with_stats(
         // We need to collect ALL $path directories defined in the project,
         // not just instigating_source metadata (which may point to project file).
         let mut dirs_to_scan: Vec<PathBuf> = Vec::new();
-        
+
         // Helper to recursively collect $path DIRECTORY entries from project tree
         // Only directories need to be scanned for orphan detection; single files
         // don't contain orphans that need to be removed.
@@ -252,10 +252,10 @@ pub fn syncback_loop_with_stats(
                 collect_paths_from_project(child, base_path, paths);
             }
         }
-        
+
         // Collect paths from the project tree definition
         collect_paths_from_project(&project.tree, project_path, &mut dirs_to_scan);
-        
+
         // Also scan the project folder itself - files like src.luau that exist
         // alongside default.project.json5 should be considered for orphan removal
         let project_path_buf = project_path.to_path_buf();
@@ -263,11 +263,15 @@ pub fn syncback_loop_with_stats(
             log::trace!("Adding project folder to scan: {}", project_path.display());
             dirs_to_scan.push(project_path_buf);
         }
-        
+
         // Also check instance metadata for paths that might not be in project
         // (e.g., from nested project references)
         let root = old_tree.root();
-        log::trace!("Root instance: name={}, class={}", root.name(), root.class_name());
+        log::trace!(
+            "Root instance: name={}, class={}",
+            root.name(),
+            root.class_name()
+        );
         if let Some(source) = &root.metadata().instigating_source {
             let path = source.path();
             // Skip project files - we want source directories
@@ -280,7 +284,7 @@ pub fn syncback_loop_with_stats(
                 }
             }
         }
-        
+
         // Check children for additional paths
         for ref_id in old_tree.inner().root().children() {
             if let Some(inst) = old_tree.get_instance(*ref_id) {
@@ -288,11 +292,9 @@ pub fn syncback_loop_with_stats(
                     let path = source.path();
                     if !path.to_string_lossy().ends_with(".project.json5")
                         && !path.to_string_lossy().ends_with(".project.json")
-                    {
-                        if path.exists() && !dirs_to_scan.contains(&path.to_path_buf()) {
+                        && path.exists() && !dirs_to_scan.contains(&path.to_path_buf()) {
                             dirs_to_scan.push(path.to_path_buf());
                         }
-                    }
                 }
             }
         }
@@ -341,7 +343,10 @@ pub fn syncback_loop_with_stats(
 
         log::trace!(
             "dirs_to_scan: {:?}",
-            dirs_to_scan.iter().map(|p| p.display().to_string()).collect::<Vec<_>>()
+            dirs_to_scan
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
         );
 
         for dir in &dirs_to_scan {
@@ -405,7 +410,7 @@ pub fn syncback_loop_with_stats(
         }
         // Check ignoreTrees with glob pattern support
         if let Some(ref globs) = tree_globs {
-            for glob in globs {
+            for (glob, _pattern) in globs {
                 if glob.is_match(&inst_path) {
                     log::debug!("Tree {inst_path} is blocked by ignoreTrees glob pattern");
                     continue 'syncback;
@@ -477,7 +482,7 @@ pub fn syncback_loop_with_stats(
                 }
                 // Check ignoreTrees with glob pattern support
                 if let Some(ref globs) = tree_globs {
-                    for glob in globs {
+                    for (glob, _pattern) in globs {
                         if glob.is_match(&inst_path) {
                             log::debug!("Skipping removing {inst_path} because its path is blocked by ignoreTrees glob pattern");
                             continue 'remove;
@@ -584,6 +589,67 @@ pub fn syncback_loop_with_stats(
         // Get the project file path to exclude it from removal
         let project_file = normalize_existing_path(&project.file_location);
 
+        // Collect ALL paths explicitly referenced via $path in the project.
+        // These paths should NOT be removed during orphan cleanup because they
+        // are explicitly part of the project structure.
+        let mut protected_paths: HashSet<PathBuf> = HashSet::new();
+
+        // Also build a mapping from filesystem path prefix to instance path prefix.
+        // This is needed to convert filesystem paths to instance paths for ignoreTrees checking.
+        // e.g., if project has "$path": "src" on "ReplicatedStorage", then
+        // filesystem "src/Foo" maps to instance "ReplicatedStorage/Foo"
+        let mut path_to_instance_prefix: Vec<(PathBuf, String)> = Vec::new();
+
+        fn collect_all_path_refs_and_mappings(
+            node: &crate::project::ProjectNode,
+            base_path: &Path,
+            instance_path: &str,
+            protected: &mut HashSet<PathBuf>,
+            mappings: &mut Vec<(PathBuf, String)>,
+        ) {
+            if let Some(ref path_node) = node.path {
+                let resolved = base_path.join(path_node.path());
+                let canonical = std::fs::canonicalize(&resolved)
+                    .map(strip_unc_prefix)
+                    .unwrap_or_else(|_| resolved.clone());
+                protected.insert(canonical.clone());
+                // Add mapping from filesystem path to instance path
+                if !instance_path.is_empty() {
+                    mappings.push((canonical, instance_path.to_string()));
+                }
+            }
+            for (name, child) in &node.children {
+                let child_inst_path = if instance_path.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{}/{}", instance_path, name)
+                };
+                collect_all_path_refs_and_mappings(child, base_path, &child_inst_path, protected, mappings);
+            }
+        }
+        collect_all_path_refs_and_mappings(&project.tree, project_path, "", &mut protected_paths, &mut path_to_instance_prefix);
+        log::trace!("Protected $path references: {:?}", protected_paths);
+        log::trace!("Path to instance mappings: {:?}", path_to_instance_prefix);
+
+        // Helper to convert a filesystem path to an instance path using the mappings
+        let fs_path_to_instance_path = |fs_path: &Path| -> Option<String> {
+            for (fs_prefix, inst_prefix) in &path_to_instance_prefix {
+                if let Ok(relative) = fs_path.strip_prefix(fs_prefix) {
+                    let relative_str = relative
+                        .components()
+                        .filter_map(|c| c.as_os_str().to_str())
+                        .collect::<Vec<_>>()
+                        .join("/");
+                    if relative_str.is_empty() {
+                        return Some(inst_prefix.clone());
+                    } else {
+                        return Some(format!("{}/{}", inst_prefix, relative_str));
+                    }
+                }
+            }
+            None
+        };
+
         // First pass: collect normalized paths to remove (deduplicated)
         let mut paths_to_remove: HashSet<PathBuf> = HashSet::new();
         for old_path in &existing_paths {
@@ -594,25 +660,76 @@ pub fn syncback_loop_with_stats(
                 log::trace!("Skipping root project file: {}", old_path.display());
                 continue;
             }
-            // In clean mode, orphan nested project files ARE removed.
-            // Clean mode represents "delete everything and rebuild from rbxm" -
-            // orphan project files that aren't referenced by the main project
-            // should not survive. Only the root project file is protected.
-            //
+
+            // Never remove paths that are explicitly referenced via $path in the project
+            if protected_paths.contains(&old_path_norm) {
+                log::trace!(
+                    "Skipping {} (explicitly referenced via $path)",
+                    old_path.display()
+                );
+                continue;
+            }
+
+            // Check ignoreTrees with glob pattern support.
+            // Convert filesystem path to instance path using the project structure mappings.
+            if let Some(ref globs) = tree_globs {
+                if let Some(inst_path_str) = fs_path_to_instance_path(&old_path_norm) {
+                    let mut is_ignored = false;
+                    for (glob, pattern_str) in globs {
+                        // Check if this path matches the ignore pattern
+                        if glob.is_match(&inst_path_str) {
+                            log::trace!(
+                                "Skipping {} (matches ignoreTrees pattern, inst_path: {})",
+                                old_path.display(),
+                                inst_path_str
+                            );
+                            is_ignored = true;
+                            break;
+                        }
+                        // Also check if this is a directory that is an ANCESTOR of an ignored path.
+                        // e.g., if "ReplicatedStorage/KeepMe" is ignored, then "ReplicatedStorage" (src/)
+                        // should not be removed as it contains ignored content.
+                        if old_path_norm.is_dir() {
+                            // Check if the pattern starts with the instance path (meaning it's inside this directory)
+                            if pattern_str.starts_with(&inst_path_str)
+                                && pattern_str.len() > inst_path_str.len()
+                                && pattern_str.as_bytes().get(inst_path_str.len()) == Some(&b'/')
+                            {
+                                log::trace!(
+                                    "Skipping {} (ancestor of ignoreTrees path, inst_path: {})",
+                                    old_path.display(),
+                                    inst_path_str
+                                );
+                                is_ignored = true;
+                                break;
+                            }
+                        }
+                    }
+                    if is_ignored {
+                        continue;
+                    }
+                }
+            }
+
             // Skip if this exact path is being written to
             if added_paths.contains(&old_path_norm) {
-                log::trace!("Skipping {} (exact path in added_paths)", old_path.display());
+                log::trace!(
+                    "Skipping {} (exact path in added_paths)",
+                    old_path.display()
+                );
                 continue;
             }
             // Skip if this path is an ancestor of something being written to
             // (e.g., a directory that will contain new files)
             // NOTE: We DO NOT skip files just because their parent directory is in added_paths.
             // Adding a directory does not mean all orphan files inside should be preserved.
-            if old_path_norm.is_dir() {
-                if added_paths.iter().any(|added| added.starts_with(&old_path_norm)) {
-                    log::trace!("Skipping {} (ancestor of added path)", old_path.display());
-                    continue;
-                }
+            if old_path_norm.is_dir()
+                && added_paths
+                    .iter()
+                    .any(|added| added.starts_with(&old_path_norm))
+            {
+                log::trace!("Skipping {} (ancestor of added path)", old_path.display());
+                continue;
             }
             // Use normalized path to avoid duplicates from UNC vs regular paths
             log::trace!("Marking for removal: {}", old_path_norm.display());
@@ -804,14 +921,15 @@ impl SyncbackRules {
 
     /// Compiles the ignoreTrees patterns into glob matchers.
     /// Supports glob patterns like `**/Abc/Script` for flexible matching.
-    pub fn compile_tree_globs(&self) -> anyhow::Result<Vec<Glob>> {
+    /// Returns both the compiled Glob and the original pattern string for each entry.
+    pub fn compile_tree_globs(&self) -> anyhow::Result<Vec<(Glob, String)>> {
         let mut globs = Vec::with_capacity(self.ignore_trees.len());
 
         for pattern in &self.ignore_trees {
             let glob = Glob::new(pattern).with_context(|| {
                 format!("the pattern '{pattern}' is not a valid ignoreTrees glob")
             })?;
-            globs.push(glob);
+            globs.push((glob, pattern.clone()));
         }
 
         Ok(globs)
