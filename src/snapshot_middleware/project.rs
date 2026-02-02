@@ -427,7 +427,7 @@ pub fn syncback_project<'sync>(
                         let inferred_middleware = match new_inst.class.as_str() {
                             "ModuleScript" => Middleware::ModuleScriptDir,
                             "Script" => Middleware::ServerScriptDir,
-                            "LocalScript" => Middleware::ClientScriptDir,
+                            "LocalScript" => Middleware::LocalScriptDir,
                             "Folder" => Middleware::Dir,
                             // For other classes, default to Dir
                             _ => Middleware::Dir,
@@ -450,24 +450,45 @@ pub fn syncback_project<'sync>(
                 }
             };
 
-            // In clean mode, when the filesystem has a directory (Dir middleware)
-            // but the new instance is a script, we need to use the appropriate
-            // script-dir middleware to create the init file and restore the script.
-            if !snapshot.data.is_incremental() && middleware == Middleware::Dir {
-                let script_middleware = match new_inst.class.as_str() {
-                    "ModuleScript" => Some(Middleware::ModuleScriptDir),
-                    "Script" => Some(Middleware::ServerScriptDir),
-                    "LocalScript" => Some(Middleware::ClientScriptDir),
-                    _ => None,
-                };
-                if let Some(new_middleware) = script_middleware {
+            // In clean mode, we may need to override middleware when the filesystem
+            // structure doesn't match the new instance type.
+            if !snapshot.data.is_incremental() {
+                // Case 1: Filesystem has a directory (Dir middleware) but new instance
+                // is a script - use script-dir middleware to create the init file.
+                if middleware == Middleware::Dir {
+                    let script_middleware = match new_inst.class.as_str() {
+                        "ModuleScript" => Some(Middleware::ModuleScriptDir),
+                        "Script" => Some(Middleware::ServerScriptDir),
+                        "LocalScript" => Some(Middleware::LocalScriptDir),
+                        _ => None,
+                    };
+                    if let Some(new_middleware) = script_middleware {
+                        log::debug!(
+                            "Clean mode: overriding Dir->{:?} middleware for {} (class {})",
+                            new_middleware,
+                            full_path.display(),
+                            new_inst.class
+                        );
+                        middleware = new_middleware;
+                    }
+                }
+
+                // Case 2: Filesystem has a script-dir (init.luau exists) but new instance
+                // is a Folder - use Dir middleware. The init file will be removed as orphan.
+                let is_script_dir_middleware = matches!(
+                    middleware,
+                    Middleware::ModuleScriptDir
+                        | Middleware::ServerScriptDir
+                        | Middleware::ClientScriptDir
+                        | Middleware::LocalScriptDir
+                );
+                if is_script_dir_middleware && new_inst.class == "Folder" {
                     log::debug!(
-                        "Clean mode: overriding Dir->{:?} middleware for {} (class {})",
-                        new_middleware,
-                        full_path.display(),
-                        new_inst.class
+                        "Clean mode: overriding {:?}->Dir middleware for {} (class Folder)",
+                        middleware,
+                        full_path.display()
                     );
-                    middleware = new_middleware;
+                    middleware = Middleware::Dir;
                 }
             }
 

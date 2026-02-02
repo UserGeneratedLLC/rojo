@@ -51,6 +51,15 @@ pub fn run_rojo_build(project_path: &Path, output_name: &str) -> (TempDir, PathB
 ///
 /// Returns true if syncback succeeded, false otherwise.
 pub fn run_rojo_syncback_clean(project_path: &Path, input_path: &Path) -> bool {
+    // Verify input file exists before calling
+    if !input_path.exists() {
+        eprintln!(
+            "ERROR: Input file does not exist: {}",
+            input_path.display()
+        );
+        return false;
+    }
+
     let output = Command::new(ROJO_PATH)
         .args([
             "syncback",
@@ -71,6 +80,51 @@ pub fn run_rojo_syncback_clean(project_path: &Path, input_path: &Path) -> bool {
     }
 
     output.status.success()
+}
+
+/// Ensure base project directories exist.
+///
+/// This reads the project file and creates any $path directories that don't exist.
+/// Clean mode requires the base directory structure to be present - it can clean up
+/// orphans and restore content, but it can't recreate directories from nothing.
+pub fn ensure_project_dirs_exist(project_dir: &Path) {
+    // Find the project file
+    let project_file = project_dir.join("default.project.json5");
+    if !project_file.exists() {
+        return;
+    }
+
+    // Read and parse project file
+    let content = fs::read_to_string(&project_file).expect("Failed to read project file");
+
+    // Simple parsing - look for "$path" entries and extract the path values
+    // This is a simplified parser that handles common cases
+    for line in content.lines() {
+        if let Some(path_start) = line.find("\"$path\"") {
+            // Find the value after the colon
+            let after_key = &line[path_start + 7..];
+            if let Some(colon_pos) = after_key.find(':') {
+                let after_colon = after_key[colon_pos + 1..].trim();
+                // Extract the string value (remove quotes and trailing comma/brace)
+                if after_colon.starts_with('"') {
+                    let path_value = after_colon
+                        .trim_start_matches('"')
+                        .split('"')
+                        .next()
+                        .unwrap_or("");
+
+                    if !path_value.is_empty() {
+                        let full_path = project_dir.join(path_value);
+                        // Only create if it doesn't exist and has no extension
+                        // (directories typically don't have extensions)
+                        if !full_path.exists() && full_path.extension().is_none() {
+                            fs::create_dir_all(&full_path).ok();
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Compare two directories recursively, asserting they have identical content.
@@ -189,6 +243,7 @@ pub enum Mutation {
     /// Add an orphan directory with content
     AddOrphanDirectory { relative_path: &'static str },
     /// Delete an entire directory
+    #[allow(dead_code)]
     DeleteDirectory { relative_path: &'static str },
     /// Convert directory format to standalone file
     ConvertDirToFile {

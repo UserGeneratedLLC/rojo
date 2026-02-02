@@ -589,19 +589,16 @@ pub fn syncback_loop_with_stats(
         for old_path in &existing_paths {
             let old_path_norm = normalize_existing_path(old_path);
 
-            // Never remove the project file itself
+            // Never remove the ROOT project file itself
             if old_path_norm == project_file {
-                log::trace!("Skipping project file: {}", old_path.display());
+                log::trace!("Skipping root project file: {}", old_path.display());
                 continue;
             }
-            // Never remove any nested project files - they define project structure
-            // and may be referenced via $path from other project files
-            if let Some(file_name) = old_path_norm.file_name().and_then(|n| n.to_str()) {
-                if file_name.ends_with(".project.json5") || file_name.ends_with(".project.json") {
-                    log::trace!("Skipping nested project file: {}", old_path.display());
-                    continue;
-                }
-            }
+            // In clean mode, orphan nested project files ARE removed.
+            // Clean mode represents "delete everything and rebuild from rbxm" -
+            // orphan project files that aren't referenced by the main project
+            // should not survive. Only the root project file is protected.
+            //
             // Skip if this exact path is being written to
             if added_paths.contains(&old_path_norm) {
                 log::trace!("Skipping {} (exact path in added_paths)", old_path.display());
