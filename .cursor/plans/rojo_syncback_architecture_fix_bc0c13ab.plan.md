@@ -390,11 +390,11 @@ Create end-to-end test:
 ### Already Fixed
 
 
-| Issue                         | Fix                                    | File                              |
-| ----------------------------- | -------------------------------------- | --------------------------------- |
-| reify.lua crash               | Gracefully handle missing children IDs | `plugin/src/Reconciler/reify.lua` |
-| CLI clean mode misses orphans | Scan actual filesystem                 | `src/syncback/mod.rs`             |
-| Plugin creates wrong format   | Check filesystem for existing format   | `src/web/api.rs`                  |
+| Issue                         | Fix                                    | File                                                     |
+| ----------------------------- | -------------------------------------- | -------------------------------------------------------- |
+| reify.lua crash               | Gracefully handle missing children IDs | `plugin/src/Reconciler/reify.lua`                        |
+| CLI clean mode misses orphans | Scan actual filesystem                 | `src/syncback/mod.rs`                                    |
+| Plugin creates wrong format   | Check filesystem for existing format   | `src/web/api.rs`                                         |
 | Hidden services marked delete | Expose ignoreHiddenServices to plugin  | `src/web/interface.rs`, `plugin/src/Reconciler/diff.lua` |
 
 
