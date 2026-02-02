@@ -110,8 +110,31 @@ impl FsSnapshot {
         for dir_path in &self.removed_dirs {
             lock.remove_dir_all(base_path.join(dir_path))?;
         }
+        // Only remove files that aren't already inside a directory we're removing.
+        // remove_dir_all already deleted those files recursively.
+        // Also handle the case where the same file might be listed twice (absolute vs relative path)
+        // by gracefully handling "file not found" errors.
         for path in &self.removed_files {
-            lock.remove_file(base_path.join(path))?;
+            let is_inside_removed_dir = self
+                .removed_dirs
+                .iter()
+                .any(|dir| path.starts_with(dir));
+            if is_inside_removed_dir {
+                continue;
+            }
+            let full_path = base_path.join(path);
+            match lock.remove_file(&full_path) {
+                Ok(()) => (),
+                // File might have already been removed (e.g., by remove_dir_all, or listed twice
+                // with different path formats like absolute vs relative)
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    log::debug!(
+                        "File already removed or doesn't exist: {}",
+                        full_path.display()
+                    );
+                }
+                Err(err) => return Err(err),
+            }
         }
         drop(lock);
 
@@ -120,10 +143,21 @@ impl FsSnapshot {
             self.added_dirs.len(),
             self.added_files.len()
         );
+        // Count how many files were skipped because they're inside removed directories
+        let files_inside_dirs = self
+            .removed_files
+            .iter()
+            .filter(|path| {
+                self.removed_dirs
+                    .iter()
+                    .any(|dir| path.starts_with(dir))
+            })
+            .count();
         log::debug!(
-            "Removed {} directories and {} files from the file system",
+            "Removed {} directories and {} files from the file system ({} files skipped, inside removed dirs)",
             self.removed_dirs.len(),
-            self.removed_files.len()
+            self.removed_files.len() - files_inside_dirs,
+            files_inside_dirs
         );
         Ok(())
     }

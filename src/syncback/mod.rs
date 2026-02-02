@@ -221,7 +221,9 @@ pub fn syncback_loop_with_stats(
     // not just what Rojo loaded into its tree. This ensures orphaned files
     // (like duplicates Rojo couldn't load) get cleaned up properly.
     // Clean mode is essentially: "delete everything and rebuild from Studio"
+    eprintln!("[DEBUG] incremental = {}", incremental);
     let existing_paths: HashSet<PathBuf> = if !incremental {
+        eprintln!("[DEBUG] Clean mode: scanning filesystem for existing paths");
         log::debug!("Clean mode: scanning filesystem for existing paths");
         let mut paths = HashSet::new();
 
@@ -246,9 +248,13 @@ pub fn syncback_loop_with_stats(
             ignore_patterns: &Option<Vec<Glob>>,
             project_path: &Path,
         ) {
+            eprintln!("[DEBUG] scan_directory: {}", dir.display());
             let entries = match std::fs::read_dir(dir) {
                 Ok(e) => e,
-                Err(_) => return,
+                Err(e) => {
+                    eprintln!("[DEBUG] Failed to read directory {}: {}", dir.display(), e);
+                    return;
+                }
             };
 
             for entry in entries.flatten() {
@@ -256,16 +262,19 @@ pub fn syncback_loop_with_stats(
 
                 // Skip paths matching ignore patterns
                 if !is_valid_path(ignore_patterns, project_path, &path) {
+                    eprintln!("[DEBUG] Skipping {} (matches ignore pattern)", path.display());
                     continue;
                 }
 
                 // Skip hidden files/directories (starting with .)
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if name.starts_with('.') {
+                        eprintln!("[DEBUG] Skipping {} (hidden)", path.display());
                         continue;
                     }
                 }
 
+                eprintln!("[DEBUG] Found: {} (is_dir: {})", path.display(), path.is_dir());
                 paths.insert(path.clone());
 
                 if path.is_dir() {
@@ -274,18 +283,33 @@ pub fn syncback_loop_with_stats(
             }
         }
 
+        eprintln!(
+            "[DEBUG] dirs_to_scan: {:?}",
+            dirs_to_scan.iter().map(|p| p.display().to_string()).collect::<Vec<_>>()
+        );
+
         for dir in &dirs_to_scan {
             if dir.is_dir() {
+                eprintln!("[DEBUG] Scanning directory: {}", dir.display());
                 scan_directory(dir, &mut paths, &ignore_patterns, project_path);
             } else if dir.exists() {
                 // It's a file, add it directly
+                eprintln!("[DEBUG] Adding file directly: {}", dir.display());
                 if is_valid_path(&ignore_patterns, project_path, dir) {
                     paths.insert(dir.clone());
                 }
+            } else {
+                eprintln!("[DEBUG] Path does not exist: {}", dir.display());
             }
         }
 
-        log::debug!("Scanned {} existing paths from filesystem", paths.len());
+        eprintln!(
+            "[DEBUG] Scanned {} existing paths from filesystem",
+            paths.len()
+        );
+        for p in &paths {
+            eprintln!("[DEBUG]   - {}", p.display());
+        }
         paths
     } else {
         HashSet::new()

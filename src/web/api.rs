@@ -996,11 +996,21 @@ impl ApiService {
                         true
                     }
                     ExistingFileFormat::Standalone => {
-                        log::debug!(
-                            "Syncback: Preserving existing standalone format for {}",
-                            added.name
-                        );
-                        false
+                        // Standalone format can stay standalone only if there are no children.
+                        // If children were added in Studio, we must convert to directory format.
+                        if has_children {
+                            log::info!(
+                                "Syncback: Converting {} from standalone to directory format (children added)",
+                                added.name
+                            );
+                            true
+                        } else {
+                            log::debug!(
+                                "Syncback: Preserving existing standalone format for {}",
+                                added.name
+                            );
+                            false
+                        }
                     }
                     ExistingFileFormat::None => {
                         // New instance - use has_children to decide
@@ -1010,8 +1020,10 @@ impl ApiService {
 
                 if use_directory {
                     // Directory format: Name/init.luau
-                    // Only remove standalone if this is a new instance transitioning to directory
-                    if existing_format == ExistingFileFormat::None {
+                    // Remove standalone file if transitioning to directory (new instance or format conversion)
+                    if existing_format == ExistingFileFormat::None
+                        || existing_format == ExistingFileFormat::Standalone
+                    {
                         let standalone_path = parent_dir.join(format!("{}.luau", added.name));
                         if standalone_path.exists() {
                             if let Err(err) = fs::remove_file(&standalone_path) {
@@ -1090,18 +1102,30 @@ impl ApiService {
                         true
                     }
                     ExistingFileFormat::Standalone => {
-                        log::debug!(
-                            "Syncback: Preserving existing standalone format for Script {}",
-                            added.name
-                        );
-                        false
+                        // Standalone format can stay standalone only if there are no children.
+                        // If children were added in Studio, we must convert to directory format.
+                        if has_children {
+                            log::info!(
+                                "Syncback: Converting Script {} from standalone to directory format (children added)",
+                                added.name
+                            );
+                            true
+                        } else {
+                            log::debug!(
+                                "Syncback: Preserving existing standalone format for Script {}",
+                                added.name
+                            );
+                            false
+                        }
                     }
                     ExistingFileFormat::None => has_children,
                 };
 
                 if use_directory {
-                    // Only clean up if this is a new instance
-                    if existing_format == ExistingFileFormat::None {
+                    // Clean up standalone files if transitioning to directory (new instance or format conversion)
+                    if existing_format == ExistingFileFormat::None
+                        || existing_format == ExistingFileFormat::Standalone
+                    {
                         for suffix in &["server", "client"] {
                             let standalone_path =
                                 parent_dir.join(format!("{}.{}.luau", added.name, suffix));
@@ -1159,18 +1183,30 @@ impl ApiService {
                         true
                     }
                     ExistingFileFormat::Standalone => {
-                        log::debug!(
-                            "Syncback: Preserving existing standalone format for LocalScript {}",
-                            added.name
-                        );
-                        false
+                        // Standalone format can stay standalone only if there are no children.
+                        // If children were added in Studio, we must convert to directory format.
+                        if has_children {
+                            log::info!(
+                                "Syncback: Converting LocalScript {} from standalone to directory format (children added)",
+                                added.name
+                            );
+                            true
+                        } else {
+                            log::debug!(
+                                "Syncback: Preserving existing standalone format for LocalScript {}",
+                                added.name
+                            );
+                            false
+                        }
                     }
                     ExistingFileFormat::None => has_children,
                 };
 
                 if use_directory {
-                    // Only clean up if this is a new instance
-                    if existing_format == ExistingFileFormat::None {
+                    // Clean up standalone files if transitioning to directory (new instance or format conversion)
+                    if existing_format == ExistingFileFormat::None
+                        || existing_format == ExistingFileFormat::Standalone
+                    {
                         for suffix in &["local", "client"] {
                             let standalone_path =
                                 parent_dir.join(format!("{}.{}.luau", added.name, suffix));

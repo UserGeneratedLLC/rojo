@@ -41,6 +41,21 @@ todos:
   - id: integration-twoway
     content: Create twoWaySync.spec.lua with 15+ tests for bidirectional sync and conflicts
     status: pending
+  - id: scripts-only-mode
+    content: Create scriptsOnly.spec.lua with tests for scripts-only mode edge cases
+    status: pending
+  - id: everything-mode
+    content: Create everythingMode.spec.lua with tests for everything mode and all instance types
+    status: pending
+  - id: mode-transitions
+    content: Create modeTransitions.spec.lua with tests for switching between sync modes
+    status: pending
+  - id: multi-developer
+    content: Create multiDeveloper.spec.lua simulating concurrent changes from multiple sources
+    status: pending
+  - id: race-conditions
+    content: Create raceConditions.spec.lua detecting race conditions during sync
+    status: pending
   - id: chaos-tests
     content: Create stressPatterns.spec.lua with 20+ chaos engineering tests
     status: pending
@@ -52,14 +67,81 @@ isProject: false
 
 # Comprehensive Lua Plugin Stress Tests
 
+## Vision and Philosophy
+
+**Goal**: Make the plugin/API interface bulletproof for complex games. The plugin must handle abuse from real-world scenarios - huge games, many developers, concurrent Rojo setups, and chaotic Studio environments.
+
+**Testing Philosophy**:
+
+- Tests exist to EXPOSE limitations, not just pass
+- Tests that break the system are GOOD - they're the forcing function for quality
+- Do NOT back down when tests fail - fix the underlying issue
+- A failing stress test reveals a real bug that will hit users in production
+
+**Code Quality Awareness**:
+
+- The plugin code has been iterated by AI agents and may have accumulated "fix on fix" complexity
+- If a subsystem needs repeated patches, step back and consider a ground-up redesign
+- Example: if diff equality checks keep needing fixes, redesign the comparison logic
+- Use good judgment - don't rewrite everything, but don't just pile on fixes either
+
+**Why Abuse Testing Matters**:
+
+- The plugin/API interface is a mega weak layer
+- It constantly crashes, nukes files, syncs incorrectly, misses files, or syncs wrong files
+- Real games have thousands of instances, concurrent developers, and unpredictable Studio behavior
+- Scripts-only mode AND everything-mode must both be bulletproof
+
+---
+
 ## Motivation
 
 The Rojo plugin/API interface is a critical weak layer that must handle:
 
 - Scripts-only mode and everything-mode
-- Large games with many developers
-- Concurrent Rojo setups
+- Large games with many developers (potentially 10+ developers with their own Rojo setups)
+- Concurrent Rojo setups on the same game
 - Edge cases causing crashes, file nuking, incorrect syncing
+- Rapid changes during active development
+- Recovery from partial failures and network issues
+
+## Known Bug Patterns to Catch
+
+These are the types of bugs that stress tests should expose:
+
+**Duplicate/Ambiguous Path Handling**:
+- Instances with duplicate-named siblings cause ambiguous paths
+- Nested duplicates at any level of the hierarchy
+- Path uniqueness checks must walk entire ancestor chain
+- Tests should verify duplicate detection at every level
+
+**Property Equality Edge Cases**:
+- Floating-point comparison (epsilon = 0.0001)
+- Color3 RGB integer comparison vs float comparison
+- CFrame/Vector3/Vector2 precision
+- NaN handling (NaN != NaN)
+- EnumItem vs number comparisons
+
+**Patch Application Failures**:
+- Partial application (some properties succeed, others fail)
+- Ref properties to non-existent instances
+- ClassName changes with child migration failures
+- Instance creation failures (invalid ClassName)
+- Permission errors on protected properties
+
+**Concurrency Issues**:
+- Changes during confirmation dialogue
+- Rapid bidirectional changes
+- Instance destruction during patch application
+- WebSocket messages during patch processing
+
+**Memory and Scale**:
+- Large instance trees (1000+ instances)
+- Deep hierarchies (50+ levels)
+- Wide hierarchies (100+ siblings)
+- Large patches (500+ changes)
+
+---
 
 ## Test Files to Create
 
@@ -238,7 +320,80 @@ The Rojo plugin/API interface is a critical weak layer that must handle:
 -- ChangeBatcher pause/resume during confirm
 ```
 
-### 6. Edge Case and Chaos Tests
+### 6. Scripts-Only vs Everything Mode Tests
+
+**`plugin/src/modes/scriptsOnly.spec.lua`** - Scripts-only mode specific tests
+
+```lua
+-- Key test scenarios:
+-- Only scripts are synced (ModuleScript, Script, LocalScript)
+-- Non-script instances are preserved in Studio (not deleted)
+-- Script children of non-script parents sync correctly
+-- RunContext property handling for Script class
+-- Source property encoding/decoding
+-- ignoreUnknownInstances behavior with non-scripts
+-- Nested scripts under non-script containers
+-- Script deletion rules (scripts can always be deleted)
+-- Format transitions (standalone <-> directory) for scripts only
+```
+
+**`plugin/src/modes/everythingMode.spec.lua`** - Everything mode specific tests
+
+```lua
+-- Key test scenarios:
+-- All instance types sync correctly
+-- Folder creation and deletion
+-- Part, Model, and other non-script instances
+-- Instance properties beyond Source (Anchored, Size, Color, etc.)
+-- Attributes on all instance types
+-- Tags on all instance types
+-- .model.json generation for complex instances
+-- Directory structure for instances with children
+-- Meta file generation (init.meta.json5)
+-- Mixed hierarchies (scripts and non-scripts)
+```
+
+**`plugin/src/modes/modeTransitions.spec.lua`** - Switching between modes
+
+```lua
+-- Key test scenarios:
+-- Switch from scripts-only to everything mode
+-- Switch from everything mode to scripts-only
+-- Files created in everything mode preserved when switching to scripts-only
+-- Orphan non-script files in scripts-only mode
+-- State consistency after mode switch
+```
+
+### 7. Multi-Developer and Concurrent Scenarios
+
+**`plugin/src/concurrent/multiDeveloper.spec.lua`** - Simulating multiple developers
+
+```lua
+-- Key test scenarios:
+-- Rapid changes from "multiple sources" (simulated)
+-- Conflicting changes to same instance
+-- Interleaved add/remove operations
+-- Property changes while confirmation dialogue is open
+-- Patches arriving during patch application
+-- WebSocket message queue overflow scenarios
+-- State recovery after connection drop
+-- Merge conflicts in PatchSet
+```
+
+**`plugin/src/concurrent/raceConditions.spec.lua`** - Race condition detection
+
+```lua
+-- Key test scenarios:
+-- Instance destroyed during property read
+-- Instance reparented during diff
+-- InstanceMap modified during iteration
+-- ChangeBatcher cycle during pause/resume
+-- Confirmation callback during state transition
+-- Multiple simultaneous patch applications
+-- ID collision during rapid add/remove
+```
+
+### 8. Edge Case and Chaos Tests
 
 `**plugin/src/chaos/stressPatterns.spec.lua**` - Chaos engineering patterns
 
@@ -297,31 +452,60 @@ The Rojo plugin/API interface is a critical weak layer that must handle:
 ## Test Categories Summary
 
 
-| Category           | File                           | Test Count (Est.) | Purpose                           |
-| ------------------ | ------------------------------ | ----------------- | --------------------------------- |
-| Diff Stress        | diff.stress.spec.lua           | 25+               | Large trees, duplicates, equality |
-| Apply Stress       | applyPatch.stress.spec.lua     | 20+               | Partial failures, refs, className |
-| Reify Stress       | reify.stress.spec.lua          | 15+               | Deep/wide trees, properties       |
-| Property Read      | getProperty.spec.lua           | 15+               | All error paths, types            |
-| Property Write     | setProperty.spec.lua           | 15+               | All error paths, coercion         |
-| Decode Values      | decodeValue.spec.lua           | 15+               | Refs, types, failures             |
-| Encode Instance    | encodeInstance.stress.spec.lua | 25+               | Hierarchies, duplicates, types    |
-| Encode Property    | encodeProperty.spec.lua        | 20+               | All property types                |
-| PatchSet Stress    | PatchSet.stress.spec.lua       | 15+               | Merge, scale, conflict            |
-| InstanceMap Stress | InstanceMap.stress.spec.lua    | 10+               | Scale, concurrency                |
-| Sync Flow          | syncflow.spec.lua              | 15+               | E2E, modes, recovery              |
-| Two-Way Sync       | twoWaySync.spec.lua            | 15+               | Bidirectional, conflicts          |
-| Chaos Tests        | stressPatterns.spec.lua        | 20+               | Random ops, flapping              |
+| Category           | File                           | Test Count (Est.) | Purpose                                 |
+| ------------------ | ------------------------------ | ----------------- | --------------------------------------- |
+| Diff Stress        | diff.stress.spec.lua           | 25+               | Large trees, duplicates, equality       |
+| Apply Stress       | applyPatch.stress.spec.lua     | 20+               | Partial failures, refs, className       |
+| Reify Stress       | reify.stress.spec.lua          | 15+               | Deep/wide trees, properties             |
+| Property Read      | getProperty.spec.lua           | 15+               | All error paths, types                  |
+| Property Write     | setProperty.spec.lua           | 15+               | All error paths, coercion               |
+| Decode Values      | decodeValue.spec.lua           | 15+               | Refs, types, failures                   |
+| Encode Instance    | encodeInstance.stress.spec.lua | 25+               | Hierarchies, duplicates, types          |
+| Encode Property    | encodeProperty.spec.lua        | 20+               | All property types                      |
+| PatchSet Stress    | PatchSet.stress.spec.lua       | 15+               | Merge, scale, conflict                  |
+| InstanceMap Stress | InstanceMap.stress.spec.lua    | 10+               | Scale, concurrency                      |
+| Sync Flow          | syncflow.spec.lua              | 15+               | E2E, modes, recovery                    |
+| Two-Way Sync       | twoWaySync.spec.lua            | 15+               | Bidirectional, conflicts                |
+| Scripts-Only Mode  | scriptsOnly.spec.lua           | 15+               | Script-specific sync, ignoreUnknown     |
+| Everything Mode    | everythingMode.spec.lua        | 20+               | All instance types, properties          |
+| Mode Transitions   | modeTransitions.spec.lua       | 10+               | Switching modes, orphan handling        |
+| Multi-Developer    | multiDeveloper.spec.lua        | 15+               | Concurrent changes, conflicts           |
+| Race Conditions    | raceConditions.spec.lua        | 15+               | Instance destruction during ops         |
+| Chaos Tests        | stressPatterns.spec.lua        | 20+               | Random ops, flapping, chaos engineering |
 
 
-**Estimated Total: 225+ new tests**
+**Estimated Total: 300+ new tests**
 
 ## Success Criteria
 
-1. All tests pass in CI
+**Primary Goal: Expose Limitations**
+
+1. Tests should initially FAIL if the underlying code has bugs - this is expected and good
+2. Each failing test should be tracked as a bug to fix, not a test to skip
+3. Tests that pass immediately may not be stressing the system enough
+
+**Quality Gates**:
+
+1. All tests eventually pass in CI (after bugs are fixed)
 2. Tests catch regressions in the critical paths identified
 3. Edge cases like duplicate names, ambiguous paths are thoroughly covered
 4. Both scripts-only and everything modes have dedicated test coverage
 5. Large-scale scenarios (1000+ instances) run without timeouts
 6. Memory usage is reasonable during stress tests
+7. No "fix on fix" pattern - if a test keeps failing after patches, redesign the subsystem
+
+**Bug Tracking**:
+
+When a stress test fails, document:
+- The symptom (what failed)
+- The root cause (after investigation)
+- Whether it needs a patch or a redesign
+- Link to the fix
+
+## Anti-Patterns to Avoid
+
+- Skipping tests because they're "too hard to fix"
+- Adding workarounds instead of fixing root causes
+- Reducing test scope to make tests pass
+- Ignoring intermittent failures (they reveal real race conditions)
 

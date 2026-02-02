@@ -4,20 +4,63 @@ overview: Add comprehensive build-syncback roundtrip tests and mutation stress t
 todos:
   - id: roundtrip-utils
     content: "Create `tests/rojo_test/roundtrip_util.rs` with helpers: `run_rojo_build`, `assert_dirs_equal`, `Mutation` enum and `apply_mutation`"
-    status: pending
+    status: completed
   - id: roundtrip-tests
     content: Create `tests/tests/syncback_roundtrip.rs` with build -> syncback -> rebuild roundtrip tests using existing build-test projects
-    status: pending
+    status: completed
   - id: clean-stress-tests
     content: Create `tests/tests/clean_mode_stress.rs` with clean-equals-fresh tests covering 12+ mutation scenarios
-    status: pending
+    status: completed
   - id: wire-modules
     content: Update `tests/rojo_test/mod.rs` and `tests/tests/mod.rs` to include new test modules
-    status: pending
+    status: in_progress
 isProject: false
 ---
 
 # Syncback Roundtrip and Clean Mode Stress Tests
+
+## Vision and Philosophy
+
+**Goal**: Make syncback bulletproof for complex games. No filesystem inconsistencies. The filesystem must be the source of truth.
+
+**Testing Philosophy**:
+
+- Tests exist to EXPOSE limitations, not just pass
+- Tests that break the system are GOOD - they're the forcing function for quality
+- Do NOT back down when tests fail - fix the underlying issue
+
+**Code Quality Concerns**:
+
+- The syncback code has been iterated by AI agents and may have accumulated "fix on fix" complexity
+- If a subsystem needs repeated patches, step back and consider a ground-up redesign
+- Example: the orphan file detection algorithm may need rethinking rather than more patches
+- Use good judgment - don't rewrite everything, but don't just pile on fixes either
+
+---
+
+## Current Status: Bugs Found by Stress Tests
+
+### Bug 1: Nested Orphan Files Not Removed (ACTIVE)
+
+**Symptom**: Orphan files at the top level (`src/orphan.txt`) are removed, but nested orphan files (`src/level-1/orphan.luau`) are NOT removed.
+
+**Debug output**: `Scanned 2 existing paths from filesystem` - but should be finding many more paths including nested orphan files.
+
+**Root cause investigation needed**: The orphan scanning algorithm in `src/syncback/mod.rs` lines 220-292 may have a bug in:
+
+1. How `dirs_to_scan` is populated from root children
+2. How the recursive `scan_directory` function traverses the filesystem
+3. Path normalization issues between scanned paths and added paths
+
+### Bug 2: Duplicate File Removal Crash (FIXED)
+
+**Symptom**: `failed to remove file: The system cannot find the file specified`
+
+**Root cause**: Same file could be added to `removed_files` with both absolute and relative paths, causing double removal attempts.
+
+**Fix applied**: In `fs_snapshot.rs`, gracefully handle "file not found" errors during removal since the file may have already been deleted.
+
+---
 
 ## Context: The Syncback Work Done
 
