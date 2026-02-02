@@ -396,13 +396,16 @@ fn clean_removes_multiple_duplicates() {
 // =============================================================================
 
 /// Clean mode handles multiple different mutations at once.
+///
+/// NOTE: All orphans are placed within $path directories (src/).
+/// Orphan files at the project root are NOT removed by clean mode.
 #[test]
 fn clean_handles_multiple_mutations() {
     clean_equals_fresh(
         "deep_nesting",
         &[
             Mutation::AddOrphanFile {
-                relative_path: "orphan1.luau",
+                relative_path: "src/orphan1.luau",
                 content: "x",
             },
             Mutation::AddOrphanFile {
@@ -410,7 +413,7 @@ fn clean_handles_multiple_mutations() {
                 content: "y",
             },
             Mutation::AddOrphanDirectory {
-                relative_path: "fake_dir",
+                relative_path: "src/fake_dir",
             },
             Mutation::AddNestedProjectFile {
                 relative_path: "src/bad.project.json5",
@@ -420,16 +423,16 @@ fn clean_handles_multiple_mutations() {
 }
 
 /// Clean mode handles extreme chaos with many mutations.
+///
+/// NOTE: Clean mode only removes orphans within `$path` directories.
+/// Orphan files at the project root (outside $path dirs) are NOT removed
+/// because that would risk deleting legitimate files like .gitignore, README.md, etc.
 #[test]
 fn clean_handles_extreme_chaos() {
     clean_equals_fresh(
         "deep_nesting",
         &[
-            // Orphan files everywhere
-            Mutation::AddOrphanFile {
-                relative_path: "orphan_root.luau",
-                content: "-- root level orphan",
-            },
+            // Orphan files within $path directories (these WILL be removed)
             Mutation::AddOrphanFile {
                 relative_path: "src/orphan_src.luau",
                 content: "-- src level orphan",
@@ -442,10 +445,7 @@ fn clean_handles_extreme_chaos() {
                 relative_path: "src/level-1/level-2/orphan_l2.luau",
                 content: "-- l2 orphan",
             },
-            // Orphan directories
-            Mutation::AddOrphanDirectory {
-                relative_path: "fake_service",
-            },
+            // Orphan directories within $path (these WILL be removed)
             Mutation::AddOrphanDirectory {
                 relative_path: "src/fake_folder",
             },

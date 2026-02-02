@@ -256,13 +256,60 @@ pub fn syncback_loop_with_stats(
         // Collect paths from the project tree definition
         collect_paths_from_project(&project.tree, project_path, &mut dirs_to_scan);
 
-        // Also scan the project folder itself - files like src.luau that exist
-        // alongside default.project.json5 should be considered for orphan removal
-        let project_path_buf = project_path.to_path_buf();
-        if !dirs_to_scan.contains(&project_path_buf) {
-            log::trace!("Adding project folder to scan: {}", project_path.display());
-            dirs_to_scan.push(project_path_buf);
+        // NOTE: We intentionally do NOT scan the project root folder itself.
+        // Only directories explicitly referenced via $path should be scanned.
+        // Scanning the root would delete unrelated files like .gitignore, README.md, etc.
+        //
+        // However, we DO need to collect alternate file representations of $path entries.
+        // For example, if $path: "src" expects a directory, but "src.luau" exists as a file
+        // (perhaps the user accidentally converted the directory to a file), that orphan
+        // file should be removed. We collect these as individual files to check, not as
+        // directories to scan recursively.
+        let mut orphan_files_to_check: Vec<PathBuf> = Vec::new();
+
+        // Helper to find alternate file extensions for a path
+        fn collect_alternate_files(
+            node: &crate::project::ProjectNode,
+            base_path: &Path,
+            files: &mut Vec<PathBuf>,
+        ) {
+            if let Some(ref path_node) = node.path {
+                let path_str = path_node.path();
+                let resolved = base_path.join(path_str);
+
+                // If the $path points to a directory, check for file alternates
+                if resolved.is_dir() {
+                    // Common Rojo file extensions that could be alternates
+                    let extensions = [
+                        ".luau",
+                        ".lua",
+                        ".server.luau",
+                        ".server.lua",
+                        ".client.luau",
+                        ".client.lua",
+                        ".local.luau",
+                        ".local.lua",
+                    ];
+                    for ext in extensions {
+                        // Create alternate filename by appending extension to path name
+                        let path_str_display = path_str.display().to_string();
+                        let alt_file = base_path.join(format!("{}{}", path_str_display, ext));
+                        if alt_file.exists() && alt_file.is_file() {
+                            log::trace!(
+                                "Found alternate file for $path '{}': {}",
+                                path_str_display,
+                                alt_file.display()
+                            );
+                            files.push(alt_file);
+                        }
+                    }
+                }
+            }
+            for child in node.children.values() {
+                collect_alternate_files(child, base_path, files);
+            }
         }
+        collect_alternate_files(&project.tree, project_path, &mut orphan_files_to_check);
 
         // Also check instance metadata for paths that might not be in project
         // (e.g., from nested project references)
@@ -354,6 +401,19 @@ pub fn syncback_loop_with_stats(
                 scan_directory(dir, &mut paths, &ignore_patterns, project_path);
             }
             // Note: We only add directories to dirs_to_scan now, so no else branch needed
+        }
+
+        // Also add any alternate file representations we found earlier
+        // (e.g., src.luau when $path: "src" is a directory)
+        for file in &orphan_files_to_check {
+            if !is_valid_path(&ignore_patterns, project_path, file) {
+                continue;
+            }
+            log::trace!(
+                "Adding alternate file to orphan check: {}",
+                file.display()
+            );
+            paths.insert(file.clone());
         }
 
         log::debug!("Scanned {} existing paths from filesystem", paths.len());
@@ -690,18 +750,51 @@ pub fn syncback_loop_with_stats(
                         // e.g., if "ReplicatedStorage/KeepMe" is ignored, then "ReplicatedStorage" (src/)
                         // should not be removed as it contains ignored content.
                         if old_path_norm.is_dir() {
-                            // Check if the pattern starts with the instance path (meaning it's inside this directory)
-                            if pattern_str.starts_with(&inst_path_str)
-                                && pattern_str.len() > inst_path_str.len()
-                                && pattern_str.as_bytes().get(inst_path_str.len()) == Some(&b'/')
-                            {
-                                log::trace!(
-                                    "Skipping {} (ancestor of ignoreTrees path, inst_path: {})",
-                                    old_path.display(),
-                                    inst_path_str
-                                );
-                                is_ignored = true;
-                                break;
+                            // For literal patterns (no wildcards), use string prefix check
+                            if !pattern_str.contains('*') && !pattern_str.contains('?') {
+                                if pattern_str.starts_with(&inst_path_str)
+                                    && pattern_str.len() > inst_path_str.len()
+                                    && pattern_str.as_bytes().get(inst_path_str.len()) == Some(&b'/')
+                                {
+                                    log::trace!(
+                                        "Skipping {} (ancestor of literal ignoreTrees path, inst_path: {})",
+                                        old_path.display(),
+                                        inst_path_str
+                                    );
+                                    is_ignored = true;
+                                    break;
+                                }
+                            } else {
+                                // For glob patterns, check if ANY file inside this directory
+                                // could match the pattern. We do this by checking all existing_paths
+                                // that are inside this directory.
+                                let dir_contains_match = existing_paths.iter().any(|child_path| {
+                                    // Only check children of this directory
+                                    if !child_path.starts_with(&old_path_norm) || child_path == &old_path_norm {
+                                        return false;
+                                    }
+                                    // Convert child path to instance path and check glob match
+                                    if let Some(child_inst_path) = fs_path_to_instance_path(child_path) {
+                                        if glob.is_match(&child_inst_path) {
+                                            log::trace!(
+                                                "Directory {} contains ignored file {} (inst: {})",
+                                                old_path.display(),
+                                                child_path.display(),
+                                                child_inst_path
+                                            );
+                                            return true;
+                                        }
+                                    }
+                                    false
+                                });
+                                if dir_contains_match {
+                                    log::trace!(
+                                        "Skipping {} (contains files matching glob pattern)",
+                                        old_path.display()
+                                    );
+                                    is_ignored = true;
+                                    break;
+                                }
                             }
                         }
                     }

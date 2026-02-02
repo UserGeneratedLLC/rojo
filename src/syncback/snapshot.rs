@@ -320,7 +320,7 @@ impl<'sync> SyncbackSnapshot<'sync> {
     }
 
     /// Returns whether Windows-invalid characters should be encoded in file
-    /// names during syncback.
+    /// names during syncback. Defaults to `true`.
     #[inline]
     pub fn encode_windows_invalid_chars(&self) -> bool {
         self.data
@@ -328,7 +328,7 @@ impl<'sync> SyncbackSnapshot<'sync> {
             .syncback_rules
             .as_ref()
             .map(|rules| rules.encode_windows_invalid_chars())
-            .unwrap_or(false)
+            .unwrap_or(true)
     }
 
     /// Returns whether to emit warnings when duplicate child names are
