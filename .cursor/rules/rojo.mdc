@@ -1,0 +1,348 @@
+---
+description: "Essential Rojo context: architecture, contribution workflow, and code conventions for this project."
+alwaysApply: true
+---
+
+# Rojo Project Guide
+
+## What is Rojo?
+
+Rojo bridges filesystem and Roblox Studio, enabling professional development tools (VS Code, Git) for Roblox. It's designed for power users building complex games, libraries, and plugins.
+
+**Core capabilities:**
+- Filesystem-based development with live sync to Studio
+- Build/upload rbxl/rbxm files from command line
+- Syncback: pull instances from Roblox → filesystem (7.7.0+)
+
+## Architecture Overview
+
+### Three Components
+
+1. **Server/CLI (Rust)** - `src/`, commands: serve, build, upload, syncback, sourcemap
+2. **Studio Plugin (Lua)** - `plugin/`, Roact UI, WebSocket sync
+3. **rbx-dom (submodule)** - `rbx-dom/`, Roblox format libraries (binary/XML, types, reflection)
+
+### The Snapshot System
+
+Rojo's core innovation (`src/snapshot/`):
+1. **Snapshot Generation**: Pure function filesystem → instance tree
+2. **Diffing**: Generate minimal PatchSet
+3. **Patch Application**: Apply changes, return AppliedPatchSet for plugin
+
+This avoids manual tree manipulation bugs and handles complex cases (large models, concurrent edits).
+
+## Project Files
+
+`.project.json` or `.project.json5` (JSON5 preferred for comments):
+
+```json5
+{
+  name: "MyProject",  // Optional if default.project.json (inherits folder name)
+  tree: {
+    $path: "src"
+  },
+  servePlaceIds: [123456],      // Optional: restrict live sync
+  globIgnorePaths: ["**/*.md"], // Optional: ignore patterns
+  syncRules: [...],             // Optional: custom file type handling
+  syncbackRules: {...}          // Optional: syncback configuration
+}
+```
+
+**Key conventions:**
+- Services don't need explicit `$className` (inferred)
+- `default.project.json` inherits parent folder name
+- Projects can be nested (each has independent sync rules)
+
+## Contributing
+
+### Required Tools
+
+1. **Rust** (minimum 1.88 - see `Cargo.toml`)
+2. **Rokit** - toolchain manager (installs selene, stylua, run-in-roblox)
+3. **Git submodules** - `git submodule update --init --recursive`
+
+For plugin work: Luau LSP, Studio with "Reload plugins on file change"
+
+### Initial Setup
+
+```bash
+git clone --recursive https://github.com/rojo-rbx/rojo
+cd rojo
+rokit install  # Installs tools from rokit.toml
+cargo test     # Verify setup
+```
+
+### Development Workflow
+
+**Server (Rust):**
+```bash
+cargo build
+cargo test
+cargo fmt       # Format code
+cargo clippy    # Lint
+```
+
+**Plugin (Lua):**
+```bash
+# Watch mode (auto-rebuild on save)
+bash scripts/watch-build-plugin.sh  # macOS/Linux
+.\scripts\watch-build-plugin.ps1    # Windows
+
+# Run tests
+bash scripts/unit-test-plugin.sh
+```
+
+**Install plugin:** `rojo plugin install`
+
+### Testing
+
+**Types:**
+1. Rust unit tests - alongside code (`.rs` + tests module)
+2. Rust integration tests - `tests/` directory
+3. Lua unit tests - `.spec.lua` files (TestEZ)
+4. Snapshot tests - `rojo-test/` with `insta` crate
+
+**Snapshot testing workflow:**
+```bash
+cargo test
+cargo insta review  # Review snapshot changes
+cargo insta accept  # Accept all changes
+```
+
+Test fixtures: `rojo-test/build-tests/`, `serve-tests/`, `syncback-tests/`
+
+### CI Requirements
+
+All PRs must pass (`.github/workflows/ci.yml`):
+- Build on 5 platforms (Ubuntu, Windows, macOS, ARM variants)
+- `cargo test --locked`
+- MSRV check (Rust 1.88)
+- Linting: `cargo fmt --check`, `cargo clippy`, `stylua --check`, `selene`
+
+### Changelog
+
+Every PR updates `CHANGELOG.md`:
+```markdown
+## Unreleased
+
+* Made a change to Rojo ([#1234])
+
+[#1234]: https://github.com/rojo-rbx/rojo/pull/1234
+```
+
+Keep link definitions in ascending order.
+
+### Before Submitting PR
+
+- [ ] Code formatted (`cargo fmt`, `stylua plugin/src`)
+- [ ] Linters pass (`cargo clippy`, `selene plugin/src`)
+- [ ] Tests pass (`cargo test`)
+- [ ] New tests added if needed
+- [ ] CHANGELOG.md updated
+- [ ] No warnings in build output
+
+### Important: Talk to Maintainers First
+
+Open issue/discussion before working on features or bugs. Prevents wasted effort on changes that won't be accepted.
+
+## Code Conventions
+
+### Rust Style
+
+**Formatting:** Use `cargo fmt` (default config, no custom rustfmt.toml)
+
+**Error handling:**
+```rust
+use anyhow::{Context, Result};
+
+fn do_something() -> Result<()> {
+    let file = fs::read_to_string(path)
+        .context("Failed to read project file")?;
+    Ok(())
+}
+```
+
+**Module organization** (see `src/snapshot/mod.rs`):
+- Module doc at top explaining purpose, data flow
+- Private submodules, then public exports
+- Tests in `#[cfg(test)] mod tests`
+
+**Context for middleware:**
+```rust
+pub struct InstanceContext {
+    pub path_ignore_rules: Arc<Vec<PathIgnoreRule>>,
+    pub sync_rules: Vec<SyncRule>,
+    pub decode_windows_invalid_chars: bool,
+}
+```
+
+**VFS passed separately to snapshot functions:**
+```rust
+snapshot_from_vfs(&context, &vfs, &path)?
+```
+
+### Lua Style
+
+**Formatting:** Use `stylua` (default config)
+**Linting:** `selene` (see `selene.toml` - roblox+testez standard)
+
+**Strict mode required:**
+```lua
+local strict = require(script.Parent.strict)
+
+local MyModule = {}
+
+function MyModule.doSomething()
+    -- implementation
+end
+
+return strict("MyModule", {
+    doSomething = MyModule.doSomething,
+})
+```
+
+**Roact components:**
+```lua
+local MyComponent = Roact.Component:extend("MyComponent")
+
+function MyComponent:init()
+    self.state = { value = 0 }
+end
+
+function MyComponent:render()
+    return Roact.createElement("Frame", {
+        Size = UDim2.new(1, 0, 1, 0),
+    })
+end
+
+return MyComponent
+```
+
+**TestEZ pattern:**
+```lua
+return function()
+    describe("MyModule", function()
+        it("should do something", function()
+            expect(result).to.equal(expected)
+        end)
+    end)
+end
+```
+
+### Naming Conventions
+
+**Rust:** `snake_case` for functions/variables, `PascalCase` for types
+**Lua:** `camelCase` for locals/functions, `PascalCase` for modules/classes, `SCREAMING_SNAKE_CASE` for constants
+
+**Critical:** Luau arrays are 1-indexed! `local arr = {"first"}; print(arr[1])`
+
+### Project Files (JSON5)
+
+Prefer JSON5 over JSON for comments and trailing commas:
+
+```json5
+{
+    // Services inferred automatically
+    ReplicatedStorage: {
+        $path: "src/shared"
+    },
+    
+    ServerScriptService: {
+        $path: "src/server",
+        $properties: {
+            LoadStringEnabled: false  // Trailing comma OK
+        }
+    }
+}
+```
+
+## Common Patterns
+
+### Loading a Project (Rust)
+```rust
+use librojo::Project;
+let project = Project::load_from_slice(path, contents)?;
+```
+
+### Building Snapshots (Rust)
+```rust
+use librojo::{InstanceContext, snapshot_from_vfs};
+let snapshot = snapshot_from_vfs(&context, &vfs, &path)?;
+```
+
+### Applying Patches (Lua)
+```lua
+local Reconciler = require(script.Reconciler)
+Reconciler.applyPatch(instanceMap, patch)
+```
+
+## File Organization
+
+```
+src/                 - Rust server/CLI
+  cli/              - Command implementations
+  snapshot/         - Core snapshot system
+  snapshot_middleware/ - File type handlers
+  syncback/         - Roblox → filesystem
+  web/              - HTTP/WebSocket server
+
+plugin/src/         - Lua Studio plugin
+  App/              - Roact UI components
+  Reconciler/       - Patch application logic
+  Config.lua        - Version and protocol config
+
+rbx-dom/            - Git submodule (separate repo)
+  rbx_binary/       - Binary format (rbxm/rbxl)
+  rbx_xml/          - XML format (rbxmx/rbxlx)
+  rbx_dom_weak/     - Instance representation
+  rbx_reflection/   - Property metadata
+
+tests/              - Rust integration tests
+rojo-test/          - Test fixtures and utilities
+```
+
+## Anti-Patterns to Avoid
+
+**Rust:**
+- Don't use `unwrap()` or `expect()` in library code (use `?`)
+- Don't ignore errors
+- Don't use string concatenation for paths (use `Path::join()`)
+
+**Lua:**
+- Don't use 0-based indexing (arrays start at 1!)
+- Don't use deprecated functions (`getfenv`, `setfenv`, `wait()`)
+- Don't mutate props in Roact components
+- Don't forget `strict()` wrapper
+
+## Version Information
+
+- **Protocol version:** 5 (`plugin/src/Config.lua`)
+- **Server/Plugin must match:** MAJOR.MINOR (e.g., 7.7.x works with 7.7.y)
+- **MSRV:** Rust 1.88
+- **License:** MPL-2.0 (rbx-dom uses MIT)
+
+## Resources
+
+- **Documentation:** https://rojo.space/docs
+- **rbx-dom docs:** https://dom.rojo.space
+- **CONTRIBUTING.md** - Detailed contribution guide
+- **CHANGELOG.md** - Complete release history with PR links
+- **Snapshot system explanation:** `src/snapshot/mod.rs`
+
+## Common Issues
+
+**Submodule not initialized:**
+```bash
+git submodule update --init --recursive
+```
+
+**Build fails with MSRV error:** Check Rust version matches 1.88+
+
+**Snapshot tests fail:** Review and accept changes:
+```bash
+cargo insta review
+```
+
+**Plugin not syncing:** Check protocol version matches between server and plugin
+
+**Properties not syncing:** Verify property is scriptable in rbx_reflection_database

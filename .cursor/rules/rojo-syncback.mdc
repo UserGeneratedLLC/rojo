@@ -1,0 +1,453 @@
+---
+description: "Syncback architecture: Roblox→filesystem synchronization, incremental vs clean modes, hash-based change detection, middleware selection, and property filtering."
+globs:
+  - "src/syncback/**/*.rs"
+  - "src/cli/syncback.rs"
+---
+
+# Rojo Syncback Architecture
+
+**Syncback** is the reverse operation of building: it takes a Roblox binary file (rbxl/rbxm) and writes instances back to the filesystem according to project structure.
+
+**Entry point:** `rojo syncback <project> --input <file>`
+
+## Core Concept
+
+```
+Roblox File (rbxl/rbxm)
+  ↓ Parse with rbx_binary
+WeakDom (in-memory instances)
+  ↓ Match to project structure
+Filesystem (Lua files, models, directories)
+```
+
+**Key challenge:** Determining which instances map to which files, and preserving existing file structure when possible.
+
+## Architecture Overview (`src/syncback/`)
+
+### Module Structure
+
+```
+syncback/
+  mod.rs              - Main loop, orchestration
+  snapshot.rs         - Convert instances → snapshots
+  fs_snapshot.rs      - Filesystem representation
+  file_names.rs       - Generate valid filenames
+  property_filter.rs  - Filter properties per syncback rules
+  ref_properties.rs   - Handle Ref properties (cross-references)
+  hash/               - Content hashing for change detection
+    mod.rs            - Hash variants
+    variant.rs        - Variant-specific hashing
+  stats.rs            - Statistics tracking
+```
+
+### Main Loop (`syncback_loop`)
+
+**Flow:**
+
+1. **Parse input file** - Read rbxl/rbxm with `rbx_binary`
+2. **Prune tree** - Remove instances not in original project
+3. **Filter hidden services** - Remove internal Roblox services (AdService, Analytics, etc.)
+4. **Collect pre-prune paths** - Track all instances before pruning (for external refs)
+5. **Hash comparison** - Compare hashes of old tree vs new tree
+6. **Recursive syncback** - Walk trees, matching instances to files
+7. **Write filesystem** - Create/update files based on changes
+8. **Link Ref properties** - Resolve cross-references between instances
+
+**Signature:**
+```rust
+pub fn syncback_loop(
+    vfs: &Vfs,
+    old_tree: &mut RojoTree,      // Existing project tree
+    new_tree: WeakDom,             // Roblox file contents
+    project: &Project,             // Project configuration
+    incremental: bool,             // Preserve structure vs rebuild
+) -> anyhow::Result<FsSnapshot>
+```
+
+## Syncback Modes
+
+### Incremental Mode (`incremental: true`)
+
+**Default behavior.** Preserves existing file structure:
+
+- If `src/MyScript.lua` exists, update it
+- If `src/MyFolder/init.lua` exists (directory structure), preserve it
+- Only creates new files when instances don't match anything
+- Compares hashes to detect actual changes (avoids rewriting unchanged files)
+
+**Use case:** Normal workflow where you sync changes from Studio back to disk.
+
+### Clean Mode (`incremental: false`)
+
+**Rebuild from scratch.** Treats all children as new:
+
+- Ignores existing file structure
+- Generates new filenames for everything
+- Chooses best middleware for each instance
+- Useful when project structure changed significantly
+
+**Use case:** Major refactoring, or when incremental mode produces wrong results.
+
+**Implementation detail:** `old_ref` is ignored in `SyncbackSnapshot::with_joined_path` when `incremental=false`.
+
+## Syncback Rules
+
+Configured in `syncbackRules` section of project file:
+
+```rust
+pub struct SyncbackRules {
+    /// Roblox tree paths to ignore (e.g., "ServerStorage/Secrets")
+    pub ignore_trees: Vec<String>,
+    
+    /// Filesystem paths to ignore (e.g., "src/client/*")
+    pub ignore_paths: Vec<PathBuf>,
+    
+    /// Properties to not sync back per class
+    /// Example: {"BasePart": ["Color"], "Script": ["Disabled"]}
+    pub ignore_properties: HashMap<String, Vec<String>>,
+    
+    /// Whether to sync Workspace.CurrentCamera (default: false)
+    pub sync_current_camera: bool,
+    
+    /// Whether to sync unscriptable properties (default: true)
+    pub sync_unscriptable: bool,
+}
+```
+
+**Property filtering** (`property_filter.rs`):
+- Filters out `Name`, `Parent` (always)
+- Filters out properties in `ignore_properties`
+- Filters out unscriptable properties if `sync_unscriptable: false`
+- Filters out middleware-specific properties (e.g., `Script.Source` when writing to `.lua` file)
+
+### Hidden Services
+
+**Default behavior (`ignoreHiddenServices: true`):**
+
+Only sync "visible" services:
+```rust
+const VISIBLE_SERVICES: &[&str] = &[
+    "Lighting", "MaterialService", "ReplicatedFirst",
+    "ReplicatedStorage", "ServerScriptService", "ServerStorage",
+    "SoundService", "StarterGui", "StarterPack", "StarterPlayer",
+    "Teams", "TextChatService", "VoiceChatService", "Workspace",
+];
+```
+
+**Rationale:** Prevents plugin from trying to delete services like `HttpService`, `AnalyticsService`, `Chat` that were never synced to disk.
+
+## Hash-Based Change Detection (`hash/`)
+
+### Why Hashing?
+
+**Problem:** Writing every file on every syncback is slow and creates noise in git diffs.
+
+**Solution:** Hash both old and new instance trees. Only write files where hashes differ.
+
+### Hash Algorithm
+
+Hashing uses **blake3** directly - there's no `HashVariant` struct.
+
+```rust
+/// Returns HashMap<Ref, Hash> mapping each instance to its content hash
+pub fn hash_tree(project: &Project, dom: &WeakDom, root_ref: Ref) -> HashMap<Ref, Hash>
+```
+
+**Hashing strategy:**
+1. Process instances bottom-up (children first)
+2. Hash class name, then filtered properties
+3. Sort and hash children's hashes
+4. Finalize with blake3
+
+**Special cases:**
+- Ref properties are hashed as paths (since Refs change between trees)
+- Some properties are normalized (e.g., line endings in scripts)
+- Unscriptable properties can be excluded from hash
+
+### Hash Comparison
+
+```rust
+if old_hash == new_hash {
+    // No changes - skip writing file
+    return Ok(None);
+} else {
+    // Changed - write file
+    write_instance_to_file(snapshot)?;
+}
+```
+
+## SyncbackSnapshot (`snapshot.rs`)
+
+**Core type representing instance to sync back:**
+
+```rust
+pub struct SyncbackSnapshot<'sync> {
+    pub data: SyncbackData<'sync>,  // Context (VFS, trees, project)
+    pub old: Option<Ref>,            // Old tree instance (if exists)
+    pub new: Ref,                    // New tree instance (Roblox file)
+    pub path: PathBuf,               // Target filesystem path
+    pub middleware: Option<Middleware>, // How to write (Lua, Rbxm, etc.)
+}
+```
+
+### Snapshot Creation
+
+**Methods:**
+
+```rust
+// Join child to current path
+snapshot.with_joined_path(new_ref, old_ref)?
+// Result: parent_path/ChildName.lua
+
+// Use base path
+snapshot.with_base_path(&base, new_ref, old_ref)?
+// Result: base/ChildName.lua
+
+// Explicit path
+snapshot.with_new_path(path, new_ref, old_ref)
+// Result: path (exactly as provided)
+```
+
+**Filename generation** (`file_names.rs`):
+- Uses instance name
+- Adds appropriate extension based on middleware
+- Encodes Windows-invalid chars if enabled
+- Example: `Script` named "My Script" → `My Script.server.lua`
+
+### Property Filtering
+
+```rust
+snapshot.get_path_filtered_properties(new_ref)
+```
+
+**Filters out:**
+- `Source` property for scripts (content goes in file body)
+- `Value` property for StringValue (content goes in `.txt` file)
+- Properties specified in `ignoreProperties` rules
+- Name/Parent (structural, not data)
+
+## Middleware Selection
+
+**Decision tree:**
+
+1. **Old instance exists?** → Use same middleware as before (preserve structure)
+2. **Script type?** → Choose appropriate Lua middleware (`.server.lua`, `.client.lua`, etc.)
+3. **Model/container?** → Choose directory or rbxm based on complexity
+4. **Special types?** → CSV for LocalizationTable, TXT for StringValue
+5. **Fallback** → Rbxm or JsonModel
+
+**Debug override:** `ROJO_SYNCBACK_DEBUG` environment variable
+- `1` = Use Rbxmx instead of Rbxm
+- `2` = Use JsonModel
+
+## Filesystem Snapshot (`fs_snapshot.rs`)
+
+**Represents filesystem operations to perform:**
+
+```rust
+pub struct FsSnapshot {
+    added_files: HashMap<PathBuf, Vec<u8>>,   // New files to create
+    added_dirs: HashSet<PathBuf>,             // New directories
+    removed_files: HashSet<PathBuf>,          // Files to delete
+    removed_dirs: HashSet<PathBuf>,           // Directories to delete
+}
+```
+
+**Key methods:**
+```rust
+// Create snapshot with operations
+fs_snapshot.with_added_file(path, contents)
+fs_snapshot.with_added_dir(path)
+fs_snapshot.merge(other)  // Combine snapshots
+
+// Apply to filesystem
+fs_snapshot.write_to_vfs(base_path, vfs)?;
+
+// Query
+fs_snapshot.is_empty()
+fs_snapshot.added_paths()
+fs_snapshot.removed_paths()
+```
+
+## Ref Properties (`ref_properties.rs`)
+
+**Challenge:** Ref properties (like `ObjectValue.Value`) point to other instances by Ref, but Refs are different between old and new trees.
+
+**Solution:**
+
+1. **Collect paths** - Map every Ref → full instance path (e.g., `Workspace.Part1`)
+2. **Collect referents** - Find all properties that are Refs, store as (source_path, target_path)
+3. **Link referents** - After syncback, use Rojo's `$id` / `Rojo_Target_PropertyName` system to link instances
+
+**Rojo linking system:**
+```json
+{
+    "id": "some-unique-id",
+    "properties": {},
+    "attributes": {
+        "Rojo_Target_Value": "some-unique-id"
+    }
+}
+```
+
+Plugin reads `Rojo_Target_PropertyName` attributes and sets corresponding Ref properties.
+
+## Statistics Tracking (`stats.rs`)
+
+```rust
+pub struct SyncbackStats {
+    duplicate_name_count: AtomicUsize,     // Instances skipped (name collision)
+    rbxm_fallback_count: AtomicUsize,      // Instances using rbxm fallback
+    unknown_class_count: AtomicUsize,      // Unknown classes encountered
+    unknown_property_count: AtomicUsize,   // Unknown properties encountered
+    unknown_classes: Mutex<HashSet<String>>,
+    unknown_properties: Mutex<HashSet<String>>,
+}
+```
+
+**Key methods:**
+```rust
+stats.record_duplicate_name(path, name)
+stats.record_rbxm_fallback(path, reason)
+stats.record_unknown_class(class_name)
+stats.record_unknown_property(class, property)
+stats.has_issues()      // Any warnings?
+stats.has_unknown_types()  // Unknown classes/properties?
+stats.log_summary()     // Log final report
+```
+
+**Logged at end of syncback:**
+```
+Syncback complete. Warnings: 2 duplicate names, 1 unknown class
+```
+
+## Common Patterns
+
+### Syncing a Script
+
+**Roblox file has:**
+```
+Script "MyScript"
+  Source = "print('hello')"
+  Disabled = false
+```
+
+**Syncback produces:**
+```lua
+-- src/MyScript.server.lua
+print('hello')
+```
+
+**Meta file (if needed):**
+```json5
+// src/MyScript.server.meta.json5
+{
+    "$properties": {
+        "Disabled": false
+    }
+}
+```
+
+### Syncing a Model
+
+**Simple model (few children):** → `.rbxm` or `.rbxmx` file
+**Complex model (many children):** → Directory with `init.meta.json5`
+
+### Syncing Nested Folders
+
+```
+Roblox:
+  Folder "Modules"
+    ModuleScript "Utils"
+    Folder "Math"
+      ModuleScript "Add"
+
+Filesystem:
+  src/Modules/
+    Utils.lua
+    Math/
+      Add.lua
+```
+
+## Error Handling
+
+**Common errors:**
+
+1. **Middleware mismatch** - Instance type changed but file structure can't accommodate
+   - Solution: Use clean mode
+   
+2. **Invalid filename** - Instance name contains invalid chars
+   - Solution: Enable `decodeWindowsInvalidChars` or rename in Studio
+   
+3. **Ref to pruned instance** - Property points to instance not in project
+   - Logged as warning, property not synced
+   
+4. **Write permission** - Can't write to file
+   - Error reported, syncback continues for other files
+
+**Error collection:**
+```rust
+stats.record_error(&format!("Failed to sync {}: {}", path.display(), error));
+```
+
+All errors collected and reported at end.
+
+## Integration with Plugin
+
+**Plugin does NOT handle syncback.** It only handles:
+1. Downloading place file from Studio
+2. Sending file to server
+3. Server runs syncback command
+
+**Two-way sync (experimental)** is different - see `rojo-api.mdc`.
+
+## Performance Considerations
+
+**Hashing overhead:** Hashing is fast (~50µs per instance), negligible compared to disk I/O.
+
+**Incremental benefit:** On large projects, incremental mode with hashing can be 10-100x faster than rewriting everything.
+
+**Parallelization:** Not currently parallelized - filesystem writes are sequential.
+
+## Debugging
+
+**Enable verbose logging:**
+```bash
+RUST_LOG=rojo::syncback=debug rojo syncback project/ --input place.rbxl
+```
+
+**Shows:**
+- Which instances are being processed
+- Hash comparisons
+- File write decisions
+- Middleware selection
+
+**Test syncback:**
+```bash
+# Syncback once
+rojo syncback project/ --input place.rbxl
+
+# Build back to verify roundtrip
+rojo build project/ -o rebuilt.rbxl
+
+# Compare
+diff place.rbxl rebuilt.rbxl
+```
+
+## Future Improvements
+
+**From code comments:**
+- Better detection of when root is directory vs file
+- More sophisticated middleware selection
+- Parallel file writes
+- Better handling of Roblox format changes
+- Support for partial syncback (only changed instances)
+
+## Key Files to Reference
+
+- `src/syncback/mod.rs` - Main orchestration loop
+- `src/syncback/snapshot.rs` - SyncbackSnapshot implementation
+- `src/syncback/hash/` - Hashing algorithm
+- `src/syncback/property_filter.rs` - Property filtering logic
+- `src/cli/syncback.rs` - CLI command implementation

@@ -1,0 +1,448 @@
+---
+description: Luau language syntax, type system, single-threaded model, and common gotchas
+alwaysApply: true
+---
+# Luau Language Rules
+
+## Finding Documentation
+
+Search `.cursor/rules/roblox/luau/` for detailed Luau documentation files.
+
+## Single-Threaded Execution Model
+
+**Luau is completely single-threaded.** This is the most misunderstood aspect of the language.
+
+### Key Facts
+
+- Code in one script **cannot** run simultaneously with another script
+- Execution only switches when code **yields** (`task.wait()`, `:Wait()`, `coroutine.yield()`, async APIs)
+- **No yield = no other code runs.** Infinite loops without yields freeze the game.
+
+### Practical Implications
+
+```luau
+-- SAFE: No yield between read/write, guaranteed atomic
+local value = data.Value
+data.Value = value + 1
+
+-- UNSAFE: Yield allows other code to modify data.Value
+local value = data.Value
+task.wait(0.1) -- Other code can run here!
+data.Value = value + 1 -- May not be what you expect
+```
+
+### Common Misconceptions
+
+1. **"Multiple scripts run in parallel"** - False. They switch only at yield points.
+2. **"I need mutexes/locks"** - Not in pure Luau. No yield = exclusive access.
+3. **"`task.spawn` runs code in parallel"** - False. It schedules for later.
+
+## Luau-Specific Syntax
+
+### Arrays Are 1-Indexed
+
+**Critical:** Unlike most languages, Luau arrays start at index 1, not 0.
+
+```luau
+local arr = {"first", "second", "third"}
+print(arr[1]) -- "first" (NOT arr[0])
+print(arr[0]) -- nil
+
+for i = 1, #arr do -- Start at 1
+    print(arr[i])
+end
+```
+
+### Generic Instantiation Uses `<<T>>`
+
+This is unique to Luau and easy to forget:
+
+```luau
+-- Correct: Double angle brackets
+local binding = React.createBinding<<number?>>()
+local result = someFunc<<string, number>>()
+
+-- WRONG: Single angle brackets (won't work)
+-- local binding = React.createBinding<number?>()
+```
+
+### Type Ascription Uses `::`
+
+```luau
+local x = someValue :: string
+local y = (a + b) :: number
+```
+
+### String Interpolation Uses Backticks
+
+```luau
+local name = "world"
+print(`Hello {name}!`)  -- Hello world!
+print(`Result: {1 + 2}`)  -- Result: 3
+
+-- Escape with backslash
+print(`Literal braces: \{not interpolated}`)
+```
+
+### If Expressions (Ternary)
+
+```luau
+local x = if condition then value else alternative
+local size = if x > 10 then "big" elseif x > 5 then "medium" else "small"
+```
+
+### Continue Statement
+
+```luau
+for i = 1, 10 do
+    if i % 2 == 0 then continue end
+    print(i)
+end
+```
+
+### Compound Assignment
+
+```luau
+a += b  -- a = a + b
+x //= 2 -- Floor division
+str ..= "suffix"
+```
+
+### Floor Division
+
+```luau
+local half = width // 2  -- More efficient than math.floor(width / 2)
+```
+
+## Type System Essentials
+
+### Type Modes
+
+- `--!strict`: Full type checking (recommended)
+- `--!nonstrict`: Reduced checking
+- `--!nocheck`: Disabled
+
+### Core Types
+
+```luau
+-- Primitives
+local x: number
+local s: string
+local b: boolean
+local arr: {string}           -- Array
+local map: {[string]: number} -- Dictionary
+
+-- Optional
+local maybe: string?  -- string | nil
+
+-- Union / Intersection
+type Result = "ok" | "error"
+type Combined = TypeA & TypeB
+
+-- Negation
+type NotNil = ~nil
+
+-- Singleton (literal types)
+type Direction = "up" | "down" | "left" | "right"
+
+-- Function types
+type Callback = (number, string) -> boolean
+type Generic = <T>(T) -> T
+```
+
+### Read-Only Properties
+
+```luau
+type ReadOnly = { read x: number }
+type WriteOnly = { write x: number }
+```
+
+### Tagged Unions (Discriminated Unions)
+
+Common pattern for type-safe variants:
+
+```luau
+type Action =
+    | { type: "increment" }
+    | { type: "decrement" }
+    | { type: "set", value: number }
+
+function reducer(state: number, action: Action): number
+    if action.type == "increment" then
+        return state + 1
+    elseif action.type == "decrement" then
+        return state - 1
+    elseif action.type == "set" then
+        return action.value
+    else
+        error(`Unknown action`)
+    end
+end
+```
+
+### Built-in Type Functions
+
+```luau
+type Keys = keyof<MyTable>
+type PropType = index<Person, "age">
+```
+
+### Variadic Type Packs
+
+For variadic functions, use `...type` in type definitions:
+
+```luau
+-- Function definition
+local function addNumbers(...: number)
+    -- implementation
+end
+
+-- Type definition
+type AddNumbers = (...number) -> number
+
+-- Generic type packs (advanced)
+type Fields<self, P..., R...> = {
+    call: (self, P...) -> R...
+}
+```
+
+### Type Exports
+
+Share types across modules with `export type`:
+
+```luau
+-- In Types.luau
+export type Player = {
+    name: string,
+    score: number
+}
+
+-- In another module
+local Types = require(ReplicatedStorage.Types)
+local player: Types.Player = {name = "Alice", score = 100}
+```
+
+### Inferred Types with `typeof`
+
+Use `typeof` to infer types from values:
+
+```luau
+local config = {
+    maxRetries = 3,
+    timeout = 30
+}
+type Config = typeof(config) -- Infers {maxRetries: number, timeout: number}
+
+-- Useful for metatable types
+type Vector = typeof(setmetatable({}::{
+    x: number,
+    y: number
+}, {}::{
+    __add: (Vector, Vector) -> Vector
+}))
+```
+
+## Roblox-Specific
+
+### Use Vector3, Not vector
+
+The `vector` primitive exists but is poorly integrated with Roblox APIs. Always use `Vector3`:
+
+```luau
+-- Correct
+local pos = Vector3.new(1, 2, 3)
+
+-- Avoid (not compatible with most Roblox APIs)
+-- local pos = vector.create(1, 2, 3)
+```
+
+## Deprecated Functions
+
+**Never use these:**
+
+- `getfenv`/`setfenv`: Breaks optimizations and type checking
+- `table.getn`: Use `#` or `rawlen`
+- `table.foreach`/`table.foreachi`: Use `for..in` loops
+- `wait()`: Use `task.wait()`
+
+## Common Gotchas
+
+### Raw Table Functions
+
+When working with metatables, use `rawget`/`rawset`/`rawequal` to bypass metamethods:
+
+```luau
+local t = setmetatable({}, {
+    __index = function(self, key)
+        rawset(self, key, key * 10) -- Avoid triggering __newindex
+        return self[key]
+    end
+})
+
+-- rawget: Get without triggering __index
+local val = rawget(t, "key")
+
+-- rawset: Set without triggering __newindex  
+rawset(t, "key", "value")
+
+-- rawequal: Compare without triggering __eq
+if rawequal(a, b) then end
+```
+
+### Metamethod Differences from Lua
+
+- `__eq` always called, even for rawequal objects
+- `__len` works on tables (not just userdata)
+- `__iter` enables custom iteration
+
+### No Bitwise Shift Operators
+
+`<<` and `>>` don't exist (conflicts with generic syntax). Use `bit32.lshift`/`bit32.rshift`.
+
+### Table Iteration
+
+Tables can be iterated directly without `pairs`/`ipairs`:
+
+```luau
+for k, v in myTable do
+    -- Works directly
+end
+```
+
+### Spreading Arrays with `unpack`
+
+Use `unpack()` to spread array values:
+
+```luau
+local args = {1, 2, 3}
+print(unpack(args)) -- 1 2 3
+
+local function add(a, b, c)
+    return a + b + c
+end
+print(add(unpack(args))) -- 6
+```
+
+### Function Attributes
+
+```luau
+@native
+function hotFunction()
+    -- Compiled to native code
+end
+
+@deprecated
+function oldFunction()
+end
+```
+
+Note: `@inline` is NOT supported. Compiler handles inlining automatically.
+
+## OOP Pattern
+
+```luau
+type Point = { x: number, y: number }
+
+local Point = {}
+Point.__index = Point
+
+function Point.new(): Point
+    return setmetatable({ x = 0, y = 0 }, Point)
+end
+
+function Point:getX(): number
+    return self.x
+end
+```
+
+## Performance Tips
+
+1. **Preallocate tables**: `table.create(count)` for known sizes
+2. **Reuse tables**: `table.clear()` instead of creating new
+3. **Floor division**: `//` is faster than `math.floor(a / b)`
+4. **Avoid yields in hot paths**: Remember the single-threaded model
+
+### Native Code Generation
+
+Use `--!native` to compile server scripts to machine code for ~2-10x speedup:
+
+```luau
+--!native
+--!strict
+
+-- Best for: computation-heavy code, math operations, buffer manipulation
+-- Avoid: getfenv/setfenv, non-numeric args to math functions
+```
+
+Or use `@native` for individual functions:
+
+```luau
+@native
+local function calculatePhysics(dt: number)
+    -- Heavy computation here
+end
+```
+
+**When to use:**
+- Functions with heavy math/loops called frequently
+- `buffer` operations
+- Avoid for API-heavy code (gains are minimal)
+
+**Annotate `Vector3` parameters** for best results:
+
+```luau
+-- Slow: "v" assumed to be table
+local function magnitude(v)
+    return math.sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z)
+end
+
+-- Fast: compiler generates optimized vector code
+local function magnitude(v: Vector3)
+    return math.sqrt(v.X * v.X + v.Y * v.Y + v.Z * v.Z)
+end
+```
+
+## Module Exports with Types
+
+```luau
+--!strict
+
+export type MyType = { field: string }
+
+local Module = {}
+
+function Module.create(): MyType
+    return { field = "value" }
+end
+
+return Module
+```
+
+## Exhaustiveness Checking
+
+Use `never` type to ensure all cases are handled:
+
+```luau
+function handle(x: "a" | "b")
+    if x == "a" then
+        return 1
+    elseif x == "b" then
+        return 2
+    else
+        local _: never = x  -- Type error if not exhaustive
+    end
+end
+```
+
+## Immutable Tables
+
+```luau
+local config = table.freeze({
+    maxRetries = 3,
+    timeout = 30
+})
+
+-- Clone before modifying
+local newConfig = table.clone(config)
+newConfig.maxRetries = 5
+```

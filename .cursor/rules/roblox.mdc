@@ -1,0 +1,40 @@
+---
+description: Index for Roblox API documentation in .cursor/rules/roblox/
+alwaysApply: true
+---
+
+# Roblox Documentation Reference
+
+When you need information about Roblox APIs, features, or best practices, reference the documentation in `.cursor/rules/roblox/`.
+
+## Directory Structure
+
+| Path | Content |
+|------|---------|
+| `roblox/luau/` | Luau language basics (tables, strings, functions, type-checking, etc.) |
+| `roblox/scripting/` | Scripting concepts (scripts, modules, events, coroutines, etc.) |
+| `roblox/ui/` | UI components (buttons, frames, layouts, styling, etc.) |
+| `roblox/physics/` | Physics system (constraints, assemblies, network ownership, etc.) |
+| `roblox/animation/` | Animation system |
+| `roblox/audio/` | Audio system |
+| `roblox/effects/` | Visual effects (beams, particles, trails, lighting) |
+| `roblox/environment/` | Environment (atmosphere, clouds, lighting, skybox) |
+| `roblox/workspace/` | Workspace concepts (CFrames, raycasting, collisions, streaming) |
+| `roblox/players/` | Player management |
+| `roblox/chat/` | Chat system |
+| `roblox/input/` | Input handling |
+| `roblox/parts/` | Parts and meshes |
+| `roblox/characters/` | Character system |
+| `roblox/avatar/` | Avatar system |
+| `roblox/cloud/` | Cloud services |
+| `roblox/cloud-services/` | Open Cloud APIs |
+| `roblox/production/` | Publishing, monetization, analytics, localization |
+| `roblox/performance-optimization/` | Performance best practices |
+| `roblox/studio/` | Studio features and tools |
+| `roblox/tutorials/` | Step-by-step tutorials |
+| `roblox/resources/` | Feature packages, modules, templates |
+| `roblox/reference/` | API reference (YAML format) |
+
+## Finding Documentation
+
+Use glob and grep to search `.cursor/rules/roblox/` for Roblox-specific documentation files.

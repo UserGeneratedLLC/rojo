@@ -1,0 +1,47 @@
+---
+description: Python code style and conventions
+globs: ["**/*.py"]
+alwaysApply: false
+---
+
+# Python Code Style
+
+## Formatting
+- 2-space indentation
+- Double quotes for strings
+- f-strings for formatting
+- Max line width ~100 chars
+- Break long function declarations/calls across multiple lines
+
+## Types
+- Type declarations on function parameters and return types only
+- Don't add types where inference is obvious (constants, assignments)
+
+## Code Organization
+- Use `pathlib` for file paths
+- Prefer built-in Python libraries when suitable
+- Blank lines between functions; condensed within functions
+- Use blank lines meaningfully to separate logical sections
+
+## Comments & Debugging
+- Minimal comments - let types and names speak
+- No docstring comments for parameters/return values
+- No scattered print statements for debugging
+
+## Dependencies
+- Modern, maintained packages only
+- Up-to-date practices
+
+## User-Facing Messages
+- Descriptive error messages for input/output issues
+- Keep internal error strings minimal
+
+## UI/Styling
+- Dark mode preferred
+- Modern, clean UI/text
+
+## Restrictions (unless specifically asked)
+- Never create python tools or test scripts
+- Don't modify JSON configs
+- Don't run test commands
+- Don't generate READMEs

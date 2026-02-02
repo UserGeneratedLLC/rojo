@@ -1,0 +1,770 @@
+---
+description: "Project file format specification: .project.json schema, all file extensions, middleware types, init files, sync rules, and complete property reference."
+globs:
+  - "**/*.project.json"
+  - "**/*.project.json5"
+  - "**/*.meta.json"
+  - "**/*.meta.json5"
+  - "**/*.model.json"
+  - "**/*.model.json5"
+---
+
+# Rojo Project File Format Specification
+
+Complete reference for Rojo project files, file type mappings, and middleware system.
+
+## Project File Schema
+
+### File Names
+
+**Recognized project files (in priority order):**
+1. `*.project.json5` - Preferred (supports comments, trailing commas)
+2. `*.project.json` - Legacy (strict JSON)
+
+**Special names:**
+- `default.project.json5` - Instance inherits parent folder name
+- `default.project.json` - Legacy equivalent
+- `MyGame.project.json5` - Instance named "MyGame"
+
+### Root Schema
+
+```json5
+{
+    // Optional: JSON Schema reference
+    "$schema": "https://raw.githubusercontent.com/rojo-rbx/vscode-rojo/master/schemas/project.schema.json",
+    
+    // REQUIRED: Instance name (optional if default.project.json)
+    "name": "MyProject",
+    
+    // REQUIRED: Instance tree structure
+    "tree": {
+        // See ProjectNode schema below
+    },
+    
+    // Optional: Default port for `rojo serve`
+    "servePort": 34872,
+    
+    // Optional: Allowed place IDs for live sync
+    "servePlaceIds": [123456, 789012],
+    
+    // Optional: Blocked place IDs (cannot sync to these)
+    "blockedPlaceIds": [111111],
+    
+    // Optional: Set place ID on connect
+    "placeId": 123456,
+    
+    // Optional: Set game ID on connect
+    "gameId": 789012,
+    
+    // Optional: Default address for `rojo serve`
+    "serveAddress": "0.0.0.0",  // or "127.0.0.1", etc.
+    
+    // Optional: Glob patterns to ignore
+    "globIgnorePaths": [
+        "**/*.md",
+        "**/.git/**",
+        "**/node_modules/**"
+    ],
+    
+    // Optional: Custom file type mappings
+    "syncRules": [
+        {
+            "pattern": "*.foo",
+            "use": "text",
+            "suffix": ".foo",
+            "exclude": "*.test.foo"
+        }
+    ],
+    
+    // Optional: Syncback configuration
+    "syncbackRules": {
+        "ignoreTrees": ["ServerStorage/Secrets"],
+        "ignorePaths": ["src/client/*"],
+        "ignoreProperties": {
+            "BasePart": ["Color"]
+        },
+        "syncCurrentCamera": false,
+        "syncUnscriptable": true
+    },
+    
+    // Optional: Only sync script instances (default: false)
+    "syncScriptsOnly": false,
+    
+    // Optional: Ignore hidden services (default: true)
+    "ignoreHiddenServices": true
+}
+```
+
+## ProjectNode Schema
+
+**Used in `tree` field and recursively for children.**
+
+```json5
+{
+    // Optional: Instance class (inferred for services, required for others)
+    "$className": "Folder",
+    
+    // Optional: ID for Ref property linking
+    "$id": "unique-identifier",
+    
+    // Optional: Path to filesystem
+    "$path": "src/MyFolder",
+    
+    // Optional: Instance properties
+    "$properties": {
+        "Anchored": true,
+        "Position": [0, 5, 0],  // Shorthand Vector3
+        "BrickColor": "Bright red",
+        "Size": {  // Explicit type
+            "Vector3": [4, 1, 2]
+        }
+    },
+    
+    // Optional: Instance attributes
+    "$attributes": {
+        "Health": 100,
+        "MaxSpeed": 16.5,
+        "IsEnemy": false
+    },
+    
+    // Optional: Ignore unknown instances during sync (default: varies)
+    "$ignoreUnknownInstances": false,
+    
+    // Children (no $ prefix = child instances)
+    "ChildFolder": {
+        "$className": "Folder"
+    },
+    
+    "MyScript": {
+        "$path": "src/MyScript.lua"
+    }
+}
+```
+
+### Reserved Names
+
+**ALL keys starting with `$` are reserved:**
+- `$className` - Instance class
+- `$path` - Filesystem path
+- `$properties` - Instance properties
+- `$attributes` - Instance attributes
+- `$id` - Ref linking ID
+- `$ignoreUnknownInstances` - Sync behavior
+- `$keepUnknownInstances` - Legacy (use `$ignoreUnknownInstances`)
+
+**Keys WITHOUT `$` are children.**
+
+## File Extension Mappings
+
+### Script Files
+
+| Extension | Middleware | Result | RunContext |
+|-----------|-----------|--------|------------|
+| `*.lua` | `Lua` | ModuleScript | N/A |
+| `*.luau` | `Lua` | ModuleScript | N/A |
+| `*.server.luau` | `ServerScript` | Script | Server |
+| `*.server.lua` | `ServerScript` | Script | Legacy |
+| `*.client.luau` | `ClientScript` | Script | Client |
+| `*.client.lua` | `ClientScript` | LocalScript | N/A |
+| `*.plugin.lua` | `PluginScript` | Script | Plugin |
+| `*.plugin.luau` | `PluginScript` | Script | Plugin |
+| `*.local.lua` | `LocalScript` | LocalScript | N/A |
+| `*.local.luau` | `LocalScript` | LocalScript | N/A |
+| `*.legacy.lua` | `LegacyScript` | Script | Legacy |
+| `*.legacy.luau` | `LegacyScript` | Script | Legacy |
+
+**Note:** `.lua` and `.luau` extensions produce different results for server/client scripts:
+- `.server.luau` → Script with RunContext.Server (modern)
+- `.server.lua` → Script with RunContext.Legacy (backwards compat)
+- `.client.luau` → Script with RunContext.Client (modern)
+- `.client.lua` → LocalScript (backwards compat)
+
+### Model Files
+
+| Extension | Middleware | Format | Use Case |
+|-----------|-----------|--------|----------|
+| `*.rbxm` | `Rbxm` | Binary | Production models |
+| `*.rbxmx` | `Rbxmx` | XML | Debugging, diffs |
+| `*.model.json` | `JsonModel` | JSON | Simple instances |
+| `*.model.json5` | `JsonModel` | JSON5 | Simple instances (comments) |
+
+### Data Files
+
+| Extension | Middleware | Result | Content |
+|-----------|-----------|--------|---------|
+| `*.txt` | `Txt` | StringValue | File contents → `Value` |
+| `*.csv` | `Csv` | LocalizationTable | CSV → localization data |
+| `*.toml` | `Toml` | ModuleScript | TOML → Lua table |
+| `*.json` | `Json` | ModuleScript | JSON → Lua table |
+| `*.json5` | `Json` | ModuleScript | JSON5 → Lua table |
+| `*.yaml` | `Yaml` | ModuleScript | YAML → Lua table |
+| `*.yml` | `Yaml` | ModuleScript | YAML → Lua table |
+
+### Meta Files
+
+| Extension | Purpose | Example |
+|-----------|---------|---------|
+| `*.meta.json` | Add metadata | `MyScript.meta.json` |
+| `*.meta.json5` | Add metadata | `MyScript.meta.json5` |
+
+**Meta files add:**
+- Properties
+- Attributes
+- ClassName override
+
+### Project Files
+
+| Extension | Purpose |
+|-----------|---------|
+| `*.project.json` | Nested project (strict JSON) |
+| `*.project.json5` | Nested project (preferred) |
+
+**Special:** `default.project.json5` in directory acts as init file.
+
+## Init Files
+
+**Init files** name instance after parent directory, enabling nested structures.
+
+### Priority Order
+
+**When directory has multiple init files, Rojo uses first match:**
+
+1. `default.project.json5` → Nested project (CHECKED FIRST)
+2. `default.project.json` → Nested project (legacy)
+3. `init.luau` → ModuleScript
+4. `init.server.luau` → Script (RunContext.Server)
+5. `init.client.luau` → Script (RunContext.Client)
+6. `init.plugin.luau` → Script (RunContext.Plugin)
+7. `init.local.luau` → LocalScript
+8. `init.legacy.luau` → Script (RunContext.Legacy)
+9. `init.csv` → LocalizationTable
+10. `init.lua` → ModuleScript
+11. `init.server.lua` → Script (RunContext.Legacy)
+12. `init.client.lua` → LocalScript
+
+**No init file?** → Directory becomes Folder (or inferred service).
+
+**Important:** Project files take highest priority. Legacy `.lua` extensions produce different script types than modern `.luau`.
+
+### Example: Init File Structure
+
+```
+MyModule/
+  init.luau           ← ModuleScript named "MyModule"
+  types.luau          ← Child ModuleScript "types"
+  utils.luau          ← Child ModuleScript "utils"
+```
+
+**Equivalent to:**
+```
+ModuleScript "MyModule"
+  ├─ ModuleScript "types"
+  └─ ModuleScript "utils"
+```
+
+## Service Inference
+
+**Services don't require `$className`:**
+
+```json5
+{
+    "name": "MyGame",
+    "tree": {
+        // Inferred as Workspace service
+        "Workspace": {
+            "$path": "src/workspace"
+        },
+        
+        // Inferred as ServerScriptService
+        "ServerScriptService": {
+            "$path": "src/server"
+        },
+        
+        // Must specify (not a service)
+        "MyFolder": {
+            "$className": "Folder",
+            "$path": "src/modules"
+        }
+    }
+}
+```
+
+**Recognized services:**
+- Workspace
+- Lighting
+- ReplicatedFirst
+- ReplicatedStorage
+- ServerScriptService
+- ServerStorage
+- StarterGui
+- StarterPack
+- StarterPlayer
+- Teams
+- SoundService
+- Chat
+- LocalizationService
+- TestService
+- And all other DataModel services
+
+**Special:** `Terrain` is also inferred.
+
+## Property Formats
+
+### Shorthand (Recommended)
+
+```json5
+{
+    "$properties": {
+        // Primitives
+        "Anchored": true,
+        "Disabled": false,
+        "Name": "MyPart",  // Warning: Don't set Name in properties!
+        
+        // Numbers
+        "Health": 100,
+        "Speed": 16.5,
+        
+        // Strings
+        "Source": "print('hello')",
+        
+        // Vector types (arrays)
+        "Position": [0, 5, 0],                // Vector3
+        "Size": [4, 1, 2],                    // Vector3
+        "Velocity": [1, 0, 0],                // Vector3
+        "ImageRectSize": [100, 100],          // Vector2
+        
+        // Color3 (normalized RGB)
+        "Color": [1, 0, 0],                   // Red
+        "BrickColor": "Bright red",           // BrickColor name
+        
+        // UDim/UDim2 (nested objects)
+        "Size": {
+            "X": {"Scale": 1, "Offset": 0},
+            "Y": {"Scale": 0, "Offset": 100}
+        },
+        
+        // CFrame (special syntax)
+        "CFrame": [0, 5, 0],                  // Position only
+        "CFrame": {
+            "position": [0, 5, 0],
+            "orientation": [
+                [1, 0, 0],
+                [0, 1, 0],
+                [0, 0, 1]
+            ]
+        },
+        
+        // Enums (string names)
+        "Shape": "Ball",
+        "Material": "Plastic",
+        "FormFactor": "Symmetric",
+        
+        // Arrays
+        "Tags": ["Collectible", "PowerUp"],
+    }
+}
+```
+
+### Explicit Type (When Needed)
+
+```json5
+{
+    "$properties": {
+        // Explicit Vector3
+        "Position": {
+            "Vector3": [0, 5, 0]
+        },
+        
+        // Explicit Color3
+        "Color": {
+            "Color3": [1, 0, 0]
+        },
+        
+        // Explicit Enum (by number)
+        "Shape": {
+            "Enum": 1  // Ball = 1
+        },
+        
+        // Explicit BrickColor (by number)
+        "BrickColor": {
+            "BrickColor": 21  // Bright red = 21
+        }
+    }
+}
+```
+
+**When to use explicit:**
+- Ambiguous types
+- Enum by number instead of name
+- Overriding inferred type
+
+## Attributes
+
+```json5
+{
+    "$attributes": {
+        // Primitives
+        "Health": 100,
+        "Speed": 16.5,
+        "IsEnemy": true,
+        "Description": "A powerful weapon",
+        
+        // Supported types
+        "Position": [0, 5, 0],       // Vector3
+        "Color": [1, 0, 0],          // Color3
+        "MyFont": {                  // Font
+            "family": "rbxasset://fonts/families/SourceSansPro.json",
+            "weight": "Regular",
+            "style": "Normal"
+        },
+        "MyCFrame": {                // CFrame
+            "position": [0, 0, 0],
+            "orientation": [[1,0,0],[0,1,0],[0,0,1]]
+        },
+        
+        // Enums (string names only)
+        "Material": "Plastic"
+    }
+}
+```
+
+**Attribute limitations:**
+- No Ref properties
+- No complex types (NumberSequence, ColorSequence, etc.)
+- Enums must use string names (not numbers)
+
+## Ref Property Linking
+
+**Problem:** Instances can reference other instances (e.g., `ObjectValue.Value`).
+
+**Solution:** Use `$id` and special attributes:
+
+```json5
+{
+    "tree": {
+        "Target": {
+            "$className": "Part",
+            "$id": "myTarget"
+        },
+        
+        "Pointer": {
+            "$className": "ObjectValue",
+            "$id": "myPointer",
+            "$attributes": {
+                // Links Value property to instance with $id "myTarget"
+                "Rojo_Target_Value": "myTarget"
+            }
+        }
+    }
+}
+```
+
+**Attribute format:** `Rojo_Target_<PropertyName>`
+
+**Plugin handles linking:**
+1. Reads `$id` from instances
+2. Reads `Rojo_Target_*` attributes
+3. Sets Ref properties to correct instances
+
+## Sync Rules
+
+**Custom file type handling:**
+
+```json5
+{
+    "syncRules": [
+        {
+            // Required: Glob pattern (relative to project)
+            "pattern": "*.foo",
+            
+            // Required: How to treat files
+            "use": "text",
+            
+            // Optional: What to strip from filename
+            "suffix": ".foo",
+            
+            // Optional: Exclude pattern
+            "exclude": "*.test.foo"
+        }
+    ]
+}
+```
+
+### Available `use` Types
+
+| `use` Value | Result | Notes |
+|-------------|--------|-------|
+| `serverScript` | Script (RunContext.Server) | Server-side script |
+| `clientScript` | Script (RunContext.Client) | Client-side script |
+| `moduleScript` | ModuleScript | Shared module |
+| `pluginScript` | Script (RunContext.Plugin) | Plugin script |
+| `localScript` | LocalScript | Legacy client script |
+| `legacyScript` | Script (RunContext.Legacy) | Legacy server script |
+| `json` | ModuleScript | JSON → Lua table |
+| `toml` | ModuleScript | TOML → Lua table |
+| `yaml` | ModuleScript | YAML → Lua table |
+| `csv` | LocalizationTable | CSV localization |
+| `text` | StringValue | Plain text |
+| `jsonModel` | Instance tree | JSON model format |
+| `rbxm` | Instance tree | Binary model |
+| `rbxmx` | Instance tree | XML model |
+| `project` | Nested project | Project file |
+| `ignore` | (nothing) | Skip file entirely |
+
+**Note:** These are the only valid `use` values. The Middleware enum uses camelCase serialization.
+
+### Example: Custom Extension
+
+```json5
+{
+    "syncRules": [
+        {
+            "pattern": "*.component.tsx",
+            "use": "moduleScript",
+            "suffix": ".component.tsx"
+        }
+    ]
+}
+```
+
+**Result:** `Button.component.tsx` → ModuleScript named "Button"
+
+## Syncback Rules
+
+```json5
+{
+    "syncbackRules": {
+        // Ignore Roblox tree paths
+        "ignoreTrees": [
+            "ServerStorage/AdminTools",
+            "Workspace/Camera"
+        ],
+        
+        // Ignore filesystem paths (globs)
+        "ignorePaths": [
+            "src/generated/*",
+            "src/temp/**"
+        ],
+        
+        // Ignore properties by class
+        "ignoreProperties": {
+            "BasePart": ["Color", "BrickColor"],
+            "Script": ["Disabled"],
+            "LocalScript": ["Disabled"]
+        },
+        
+        // Ignore entire classes during syncback
+        "ignoreClasses": [
+            "Terrain",
+            "Camera"
+        ],
+        
+        // Sync Workspace.CurrentCamera? (default: false)
+        "syncCurrentCamera": false,
+        
+        // Sync unscriptable properties? (default: true)
+        "syncUnscriptable": true,
+        
+        // Skip Ref properties like Model.PrimaryPart? (default: false)
+        "ignoreReferents": false
+    }
+}
+```
+
+## Meta File Format
+
+**Purpose:** Add metadata to instances created from files.
+
+**Example:** `MyScript.server.lua` + `MyScript.server.meta.json5`
+
+```json5
+// MyScript.server.meta.json5
+{
+    // Override className (rare)
+    "$className": "Script",
+    
+    // Add properties
+    "$properties": {
+        "Disabled": false,
+        "RunContext": "Server"
+    },
+    
+    // Add attributes
+    "$attributes": {
+        "Priority": 1,
+        "LoadOrder": "First"
+    },
+    
+    // Ignore unknown children during sync
+    "$ignoreUnknownInstances": true
+}
+```
+
+**Meta files CAN'T:**
+- Override instance name (name comes from filename)
+- Set `$path` (path is the .lua file)
+- Have children (children come from directory)
+
+**Meta files CAN:**
+- Override `$className` (if middleware allows)
+- Add `$properties`
+- Add `$attributes`
+- Set `$ignoreUnknownInstances`
+
+## Model.json Format
+
+**Inline instance definition:**
+
+```json5
+// Weapon.model.json5
+{
+    // Required: Class name
+    "$className": "Tool",
+    
+    // Optional: Properties
+    "$properties": {
+        "CanBeDropped": false,
+        "RequiresHandle": true
+    },
+    
+    // Optional: Attributes
+    "$attributes": {
+        "Damage": 50,
+        "FireRate": 0.5
+    },
+    
+    // Optional: Children
+    "Handle": {
+        "$className": "Part",
+        "$properties": {
+            "Size": [1, 1, 3],
+            "Anchored": false
+        }
+    },
+    
+    "Script": {
+        "$className": "Script",
+        "$properties": {
+            "Source": "print('tool equipped')"
+        }
+    }
+}
+```
+
+**Use case:** Small instances that don't need separate files.
+
+## Common Patterns
+
+### Multi-Place Game
+
+```json5
+{
+    "name": "MyGame",
+    "servePlaceIds": [123456, 789012],  // Both places allowed
+    "tree": {
+        "ReplicatedStorage": {
+            "$path": "src/shared"  // Shared code
+        },
+        "ServerScriptService": {
+            "$path": "src/server"  // Server code
+        }
+    }
+}
+```
+
+### Library/Module
+
+```json5
+{
+    "name": "MyLibrary",
+    "tree": {
+        "$className": "ModuleScript",
+        "$path": "src/init.lua"
+    }
+}
+```
+
+**Result:** Single ModuleScript named "MyLibrary"
+
+### Plugin
+
+```json5
+{
+    "name": "MyPlugin",
+    "tree": {
+        "$className": "Script",
+        "$path": "src/plugin.server.lua",
+        "$properties": {
+            "RunContext": "Plugin"
+        }
+    }
+}
+```
+
+## Validation Rules
+
+**Rojo validates projects and provides errors:**
+
+1. **Unknown fields** - Keys not recognized (except children)
+2. **Reserved names starting with `$`** - Can't use as child names
+3. **`$className` without `$path`** - Must set one or both
+4. **`$path` pointing to non-existent file** - File must exist
+5. **Invalid property types** - Type doesn't match property
+6. **Glob pattern syntax** - Must be valid glob
+7. **Duplicate `$id`** - IDs must be unique
+
+## Property Type Reference
+
+**Complete list of supported property types:**
+
+- `String` - Text
+- `Bool` - true/false
+- `Int32`, `Int64` - Integers
+- `Float32`, `Float64` - Decimals
+- `Vector2`, `Vector3` - Vectors
+- `Vector2int16`, `Vector3int16` - Integer vectors
+- `UDim`, `UDim2` - UI dimensions
+- `CFrame` - Coordinate frame
+- `Color3`, `Color3uint8` - Colors
+- `BrickColor` - Legacy colors
+- `NumberRange` - Min/max range
+- `Rect` - Rectangle
+- `NumberSequence` - Animated number
+- `ColorSequence` - Animated color
+- `Enum` - Enumeration
+- `Ref` - Instance reference
+- `Content` - Asset URL
+- `Font` - Font description
+- `PhysicalProperties` - Part physics
+- `Axes`, `Faces` - Part faces/axes
+- `Tags` - CollectionService tags
+- `Attributes` - Instance attributes
+
+**See rbx_reflection_database for complete property listings per class.**
+
+## Debugging Project Files
+
+**Validate with:**
+```bash
+rojo build project.json5 -o test.rbxmx
+```
+
+**Check for:**
+- Syntax errors (JSON5 parser)
+- Unknown fields (validation)
+- Missing files (path resolution)
+- Type mismatches (property validation)
+
+**Format project file:**
+```bash
+rojo fmt-project project.json5
+```
+
+Formats JSON, normalizes structure, sorts keys.
+
+## Key Files to Reference
+
+- `src/project.rs` - Project parsing and validation
+- `src/snapshot_middleware/mod.rs` - File extension mappings
+- `src/snapshot/` - Instance tree structure
+- `examples/` - Example project files (if exists)
