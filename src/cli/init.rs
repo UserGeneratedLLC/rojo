@@ -28,7 +28,7 @@ static TEMPLATE_BINCODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/templ
 #[derive(Debug, Parser)]
 pub struct InitCommand {
     /// Path to the place to create the project. Defaults to the current directory.
-    #[clap(default_value = "")]
+    #[clap(long, default_value = ".")]
     pub path: PathBuf,
 
     /// The kind of project to create, 'place', 'plugin', or 'model'.
@@ -38,6 +38,13 @@ pub struct InitCommand {
     /// Skips the initialization of a git repository.
     #[clap(long)]
     pub skip_git: bool,
+
+    /// Place ID to use for servePlaceIds.
+    pub placeid: Option<u64>,
+
+    /// Skip cloning cursor rules into .cursor directory.
+    #[clap(long)]
+    pub skip_rules: bool,
 }
 
 impl InitCommand {
@@ -45,6 +52,18 @@ impl InitCommand {
         let template = self.kind.template();
 
         let base_path = resolve_path(&self.path);
+
+        // Check if directory exists and is non-empty
+        if base_path.exists() {
+            let is_empty = base_path.read_dir()?.next().is_none();
+            if !is_empty {
+                bail!(
+                    "Directory '{}' is not empty. Please use an empty directory.",
+                    base_path.display()
+                );
+            }
+        }
+
         fs::create_dir_all(&base_path)?;
 
         let canonical = fs::canonicalize(&base_path)?;
@@ -55,6 +74,7 @@ impl InitCommand {
 
         let project_params = ProjectParams {
             name: project_name.to_owned(),
+            place_id: self.placeid,
         };
 
         println!(
@@ -95,7 +115,7 @@ impl InitCommand {
             }
         }
 
-        if !self.skip_git && should_git_init(&base_path) {
+        let did_git_init = if !self.skip_git && should_git_init(&base_path) {
             log::debug!("Initializing Git repository...");
 
             let status = Command::new("git")
@@ -106,6 +126,76 @@ impl InitCommand {
             if !status.success() {
                 bail!("git init failed: status code {:?}", status.code());
             }
+            true
+        } else {
+            !self.skip_git
+        };
+
+        if !self.skip_rules {
+            if did_git_init {
+                log::debug!("Adding cursor rules as submodule...");
+
+                let result = Command::new("git")
+                    .args([
+                        "submodule",
+                        "add",
+                        "https://github.com/jrmelsha/cursor-rules.git",
+                        ".cursor",
+                    ])
+                    .current_dir(&base_path)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+
+                match result {
+                    Ok(status) if status.success() => {
+                        println!("Added cursor rules as submodule.");
+                    }
+                    _ => {
+                        log::debug!("Failed to add cursor rules submodule, skipping.");
+                    }
+                }
+            } else {
+                log::debug!("Cloning cursor rules (no git repo)...");
+
+                let result = Command::new("git")
+                    .args([
+                        "clone",
+                        "https://github.com/jrmelsha/cursor-rules.git",
+                        ".cursor",
+                    ])
+                    .current_dir(&base_path)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+
+                match result {
+                    Ok(status) if status.success() => {
+                        println!("Cloned cursor rules successfully.");
+                    }
+                    _ => {
+                        log::debug!("Failed to clone cursor rules, skipping.");
+                    }
+                }
+            }
+        }
+
+        if did_git_init {
+            log::debug!("Committing initial project...");
+
+            let _ = Command::new("git")
+                .args(["add", "."])
+                .current_dir(&base_path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
+
+            let _ = Command::new("git")
+                .args(["commit", "-m", "Initial commit"])
+                .current_dir(&base_path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
         }
 
         println!("Created project successfully.");
@@ -172,14 +262,21 @@ impl FromStr for InitKind {
 /// Contains parameters used in templates to create a project.
 struct ProjectParams {
     name: String,
+    place_id: Option<u64>,
 }
 
 impl ProjectParams {
     /// Render a template by replacing variables with project parameters.
     fn render_template(&self, template: &str) -> String {
+        let place_id_str = self
+            .place_id
+            .map(|id| id.to_string())
+            .unwrap_or_else(|| "0".to_string());
+
         template
             .replace("{project_name}", &self.name)
             .replace("{rojo_version}", env!("CARGO_PKG_VERSION"))
+            .replace("{place_id}", &place_id_str)
     }
 }
 
