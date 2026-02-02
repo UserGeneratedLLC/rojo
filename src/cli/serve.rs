@@ -1,5 +1,4 @@
 use std::{
-    io::{self, Write},
     net::{IpAddr, Ipv4Addr},
     path::PathBuf,
     sync::Arc,
@@ -7,11 +6,10 @@ use std::{
 
 use clap::Parser;
 use memofs::Vfs;
-use termcolor::{BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
 
 use crate::{serve_session::ServeSession, web::LiveServer};
 
-use super::{resolve_path, GlobalOptions};
+use super::resolve_path;
 
 const DEFAULT_BIND_ADDRESS: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 1);
 const DEFAULT_PORT: u16 = 34872;
@@ -34,7 +32,7 @@ pub struct ServeCommand {
 }
 
 impl ServeCommand {
-    pub fn run(self, global: GlobalOptions) -> anyhow::Result<()> {
+    pub fn run(self) -> anyhow::Result<()> {
         let project_path = resolve_path(&self.project);
 
         let vfs = Vfs::new_default();
@@ -53,49 +51,10 @@ impl ServeCommand {
 
         let server = LiveServer::new(session);
 
-        let _ = show_start_message(ip, port, global.color.into());
+        let host = if ip.is_loopback() { "localhost".to_owned() } else { ip.to_string() };
+        log::info!("Listening: http://{}:{}", host, port);
         server.start((ip, port).into());
 
         Ok(())
     }
-}
-
-fn show_start_message(bind_address: IpAddr, port: u16, color: ColorChoice) -> io::Result<()> {
-    let mut green = ColorSpec::new();
-    green.set_fg(Some(Color::Green)).set_bold(true);
-
-    let writer = BufferWriter::stdout(color);
-    let mut buffer = writer.buffer();
-
-    let address_string = if bind_address.is_loopback() {
-        "localhost".to_owned()
-    } else {
-        bind_address.to_string()
-    };
-
-    writeln!(&mut buffer, "Rojo server listening:")?;
-
-    write!(&mut buffer, "  Address: ")?;
-    buffer.set_color(&green)?;
-    writeln!(&mut buffer, "{}", address_string)?;
-
-    buffer.set_color(&ColorSpec::new())?;
-    write!(&mut buffer, "  Port:    ")?;
-    buffer.set_color(&green)?;
-    writeln!(&mut buffer, "{}", port)?;
-
-    writeln!(&mut buffer)?;
-
-    buffer.set_color(&ColorSpec::new())?;
-    write!(&mut buffer, "Visit ")?;
-
-    buffer.set_color(&green)?;
-    write!(&mut buffer, "http://{}:{}/", address_string, port)?;
-
-    buffer.set_color(&ColorSpec::new())?;
-    writeln!(&mut buffer, " in your browser for more information.")?;
-
-    writer.print(&buffer)?;
-
-    Ok(())
 }

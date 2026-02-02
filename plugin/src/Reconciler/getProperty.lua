@@ -21,6 +21,18 @@ local function getProperty(instance, propertyName)
 			})
 	end
 
+	-- If the property name we were given is not the canonical name, treat it
+	-- as unknown. This handles serialization-only aliases like `heat_xml`
+	-- which resolve to `Heat` - we should skip these and let the canonical
+	-- property name be used instead.
+	if descriptor.name ~= propertyName then
+		return false,
+			Error.new(Error.UnknownProperty, {
+				className = instance.ClassName,
+				propertyName = propertyName,
+			})
+	end
+
 	if descriptor.scriptability == "None" or descriptor.scriptability == "Write" then
 		return false,
 			Error.new(Error.UnreadableProperty, {

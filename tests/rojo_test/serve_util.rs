@@ -242,6 +242,40 @@ impl TestServeSession {
 
         Ok(deserialize_msgpack(&body).expect("Server returned malformed response"))
     }
+
+    /// Post to /api/write to simulate plugin syncback operations.
+    /// Uses the library's WriteRequest type for proper serialization.
+    /// Uses human-readable msgpack format to match server expectations.
+    pub fn post_api_write(
+        &self,
+        request: &librojo::web_api::WriteRequest,
+    ) -> Result<(), reqwest::Error> {
+        use serde::Serialize;
+
+        let url = format!("http://localhost:{}/api/write", self.port);
+
+        // Serialize with human-readable mode to match server expectations
+        let mut body = Vec::new();
+        let mut serializer = rmp_serde::Serializer::new(&mut body)
+            .with_human_readable()
+            .with_struct_map();
+        request
+            .serialize(&mut serializer)
+            .expect("Failed to serialize WriteRequest");
+
+        let client = reqwest::blocking::Client::new();
+        let response = client.post(url).body(body).send()?;
+
+        if !response.status().is_success() {
+            panic!(
+                "Write request failed with status {}: {}",
+                response.status(),
+                response.text().unwrap_or_default()
+            );
+        }
+
+        Ok(())
+    }
 }
 
 fn deserialize_msgpack<'a, T: Deserialize<'a>>(

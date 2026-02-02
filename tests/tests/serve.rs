@@ -681,3 +681,115 @@ fn forced_parent() {
         assert_snapshot!("forced_parent_serialize_model", model);
     });
 }
+
+/// Test that plugin syncback via /api/write doesn't create duplicate files
+/// when sending an AddedInstance that already exists on the filesystem.
+///
+/// This tests the fix for the issue where pulling an instance that appeared
+/// as "to delete" (due to duplicate detection issues) would create additional
+/// duplicate files instead of updating the existing ones.
+///
+/// The fix has two layers:
+/// 1. Tree lookup: Check if instance exists in Rojo's tree, update in place
+/// 2. Filesystem check: Detect existing file format and preserve it
+#[test]
+fn api_write_existing_instance() {
+    use librojo::web_api::{AddedInstance, WriteRequest};
+    use rbx_dom_weak::types::Variant;
+    use std::collections::HashMap;
+
+    run_serve_test("api_write_existing", |session, _redactions| {
+        let info = session.get_api_rojo().unwrap();
+        let root_id = info.root_instance_id;
+
+        // Read the tree to find ServerScriptService
+        let read_response = session.get_api_read(root_id).unwrap();
+
+        // Find the ServerScriptService instance
+        let sss_id = read_response
+            .instances
+            .iter()
+            .find(|(_, inst)| inst.class_name == "ServerScriptService")
+            .map(|(id, _)| *id)
+            .expect("ServerScriptService should exist");
+
+        // Verify initial state on filesystem
+        let event_service_dir = session.path().join("src").join("EventService");
+        let init_file = event_service_dir.join("init.server.luau");
+        assert!(
+            event_service_dir.exists(),
+            "EventService directory should exist before test"
+        );
+        assert!(
+            init_file.exists(),
+            "init.server.luau should exist before test"
+        );
+
+        // This is the critical file we're checking - it should NOT be created
+        let standalone_file = session.path().join("src").join("EventService.server.luau");
+        assert!(
+            !standalone_file.exists(),
+            "EventService.server.luau should NOT exist initially"
+        );
+
+        // Simulate plugin sending an AddedInstance for EventService
+        // This happens when user "pulls" an instance that appeared as "to delete"
+        let mut properties = HashMap::new();
+        properties.insert(
+            "Source".to_string(),
+            Variant::String("-- Updated EventService\nreturn {}".to_string()),
+        );
+
+        let added_instance = AddedInstance {
+            parent: Some(sss_id),
+            name: "EventService".to_string(),
+            class_name: "Script".to_string(),
+            properties,
+            children: vec![AddedInstance {
+                parent: None,
+                name: "AcidRainEvent".to_string(),
+                class_name: "ModuleScript".to_string(),
+                properties: {
+                    let mut p = HashMap::new();
+                    p.insert(
+                        "Source".to_string(),
+                        Variant::String("-- Updated AcidRainEvent\nreturn {}".to_string()),
+                    );
+                    p
+                },
+                children: vec![],
+            }],
+        };
+
+        let instance_ref = rbx_dom_weak::types::Ref::new();
+        let mut added_map = HashMap::new();
+        added_map.insert(instance_ref, added_instance);
+
+        let write_request = WriteRequest {
+            session_id: info.session_id.clone(),
+            removed: vec![],
+            added: added_map,
+            updated: vec![],
+        };
+
+        session
+            .post_api_write(&write_request)
+            .expect("Write request should succeed");
+
+        // Give the server time to process
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        // CRITICAL ASSERTION: No duplicate standalone file should be created
+        // The existing directory structure (EventService/init.server.luau) should be preserved
+        assert!(
+            !standalone_file.exists(),
+            "EventService.server.luau should NOT be created - the existing directory structure must be preserved"
+        );
+
+        // The directory should still exist
+        assert!(
+            event_service_dir.exists(),
+            "EventService directory should still exist after syncback"
+        );
+    });
+}

@@ -1,0 +1,11 @@
+{
+  "name": "syncback_scripts_only",
+  "syncScriptsOnly": true,
+  "tree": {
+    "$className": "DataModel",
+    "ServerScriptService": {
+      "$className": "ServerScriptService",
+      "$path": "src"
+    }
+  }
+}

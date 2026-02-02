@@ -193,6 +193,14 @@ pub struct ServerInfoResponse {
     /// Other property changes will be ignored.
     #[serde(default)]
     pub sync_source_only: bool,
+    /// When true, hidden/internal services should be ignored during sync.
+    /// The plugin should not mark these services as "to delete" during forward sync.
+    #[serde(default)]
+    pub ignore_hidden_services: bool,
+    /// List of service names that are considered "visible" when ignoreHiddenServices is true.
+    /// Services not in this list should be ignored during sync operations.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub visible_services: Vec<String>,
 }
 
 // Serialize place IDs as f64 to avoid msgpack uint64 encoding issues with Lua

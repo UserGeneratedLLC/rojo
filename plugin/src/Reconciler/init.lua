@@ -41,9 +41,9 @@ function Reconciler:hydrate(virtualInstances, rootId, rootInstance)
 	return result
 end
 
-function Reconciler:diff(virtualInstances, rootId)
+function Reconciler:diff(virtualInstances, rootId, serverInfo)
 	Timer.start("Reconciler:diff")
-	local success, result = diff(self.__instanceMap, virtualInstances, rootId)
+	local success, result = diff(self.__instanceMap, virtualInstances, rootId, serverInfo)
 	Timer.stop()
 
 	return success, result

@@ -41,7 +41,7 @@ impl Options {
     pub fn run(self) -> anyhow::Result<()> {
         match self.subcommand {
             Subcommand::Init(subcommand) => subcommand.run(),
-            Subcommand::Serve(subcommand) => subcommand.run(self.global),
+            Subcommand::Serve(subcommand) => subcommand.run(),
             Subcommand::Build(subcommand) => subcommand.run(),
             Subcommand::Upload(subcommand) => subcommand.run(),
             Subcommand::Sourcemap(subcommand) => subcommand.run(),

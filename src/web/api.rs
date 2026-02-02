@@ -21,6 +21,7 @@ use rbx_dom_weak::{
 use crate::{
     serve_session::ServeSession,
     snapshot::{InstanceWithMeta, InstigatingSource, PatchSet, PatchUpdate},
+    syncback::VISIBLE_SERVICES,
     web::{
         interface::{
             ErrorResponse, Instance, InstanceMetadata, MessagesPacket, OpenResponse, ReadResponse,
@@ -31,6 +32,22 @@ use crate::{
     },
     web_api::{InstanceUpdate, RefPatchResponse, SerializeResponse},
 };
+
+/// Represents the existing file format for a script/instance on disk.
+/// Used to preserve the current format when doing partial updates from the plugin.
+///
+/// When the plugin sends a script update, it might not include children info.
+/// We check the filesystem to see if this is already a directory (with init file)
+/// or a standalone file, and preserve that format to avoid creating duplicates.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum ExistingFileFormat {
+    /// No existing file found - use has_children to decide
+    None,
+    /// Standalone file exists (e.g., Name.luau)
+    Standalone,
+    /// Directory with init file exists (e.g., Name/init.luau)
+    Directory,
+}
 
 /// Convert a Variant to a JSON-compatible value for .model.json5 files
 fn variant_to_json(variant: &Variant) -> Option<serde_json::Value> {
@@ -150,6 +167,13 @@ impl ApiService {
         let tree = self.serve_session.tree();
         let root_instance_id = tree.get_root_id();
 
+        let ignore_hidden_services = self.serve_session.ignore_hidden_services();
+        let visible_services = if ignore_hidden_services {
+            VISIBLE_SERVICES.iter().map(|s| s.to_string()).collect()
+        } else {
+            Vec::new()
+        };
+
         msgpack_ok(&ServerInfoResponse {
             server_version: SERVER_VERSION.to_owned(),
             protocol_version: PROTOCOL_VERSION,
@@ -161,6 +185,8 @@ impl ApiService {
             game_id: self.serve_session.game_id(),
             root_instance_id,
             sync_source_only: true,
+            ignore_hidden_services,
+            visible_services,
         })
     }
 
@@ -403,11 +429,36 @@ impl ApiService {
         }
     }
 
+    /// Find a child instance by name under a given parent in the tree.
+    /// Returns the Ref of the child if found, None otherwise.
+    fn find_child_by_name(
+        tree: &crate::snapshot::RojoTree,
+        parent_ref: Ref,
+        name: &str,
+    ) -> Option<Ref> {
+        let parent = tree.get_instance(parent_ref)?;
+        parent
+            .children()
+            .iter()
+            .find(|&&child_ref| {
+                tree.get_instance(child_ref)
+                    .map(|c| c.name() == name)
+                    .unwrap_or(false)
+            })
+            .copied()
+    }
+
     /// This follows the same middleware selection logic as the dedicated syncback
     /// system in `src/syncback/mod.rs` to ensure consistent behavior.
     ///
     /// Takes the tree reference and duplicate siblings cache as parameters to ensure
     /// consistency - the cache was computed from this exact tree state.
+    ///
+    /// IMPORTANT: Before creating new files, this function checks if an instance
+    /// with the same name already exists in the tree. If so, it updates the existing
+    /// file at its `instigating_source.path` instead of creating a new file.
+    /// This prevents duplicate file creation when the plugin sends an instance
+    /// that already exists on the filesystem.
     fn syncback_added_instance(
         &self,
         added: &crate::web::interface::AddedInstance,
@@ -446,6 +497,26 @@ impl ApiService {
             );
         }
 
+        // CRITICAL: Check if instance already exists in tree before creating new files.
+        // This prevents duplicate file creation when the plugin sends an instance
+        // that already exists (e.g., user "pulls" an instance that appeared as
+        // "to delete" due to duplicate detection issues).
+        if let Some(existing_ref) = Self::find_child_by_name(tree, parent_ref, &added.name) {
+            if let Some(existing) = tree.get_instance(existing_ref) {
+                if let Some(source) = &existing.metadata().instigating_source {
+                    let existing_path = source.path();
+                    log::info!(
+                        "Syncback: Instance '{}' already exists in tree at {}, updating in place",
+                        added.name,
+                        existing_path.display()
+                    );
+                    // Update the existing instance instead of creating new files
+                    return self.syncback_update_existing_instance(added, existing_path, stats);
+                }
+            }
+        }
+
+        // Instance doesn't exist in tree - create new files
         // Get the parent's filesystem path from its metadata
         let parent_path = parent_instance
             .metadata()
@@ -466,6 +537,152 @@ impl ApiService {
 
         // Create the instance at the resolved path
         self.syncback_instance_to_path_with_stats(added, &parent_dir, stats)
+    }
+
+    /// Update an existing instance in place instead of creating new files.
+    /// This is called when the plugin sends an "added" instance that already
+    /// exists in the tree. We update the existing file at its instigating_source
+    /// path to preserve the file format and avoid creating duplicates.
+    ///
+    /// For children, we use the normal syncback path which will check for
+    /// existing files via `detect_existing_script_format`.
+    fn syncback_update_existing_instance(
+        &self,
+        added: &crate::web::interface::AddedInstance,
+        existing_path: &std::path::Path,
+        stats: &crate::syncback::SyncbackStats,
+    ) -> anyhow::Result<()> {
+        use anyhow::Context;
+
+        let class_name = &added.class_name;
+
+        // For scripts, update the Source property at the existing path
+        match class_name.as_str() {
+            "ModuleScript" | "Script" | "LocalScript" => {
+                let source = self.get_source_property(added);
+
+                // Determine the actual file to write based on existing structure
+                // If existing_path is a directory, look for init file inside
+                let file_path = if existing_path.is_dir() {
+                    // Find the init file based on class
+                    let init_name = match class_name.as_str() {
+                        "ModuleScript" => {
+                            if existing_path.join("init.luau").exists() {
+                                "init.luau"
+                            } else {
+                                "init.lua"
+                            }
+                        }
+                        "Script" => {
+                            // Check which init file exists
+                            if existing_path.join("init.server.luau").exists() {
+                                "init.server.luau"
+                            } else if existing_path.join("init.client.luau").exists() {
+                                "init.client.luau"
+                            } else if existing_path.join("init.server.lua").exists() {
+                                "init.server.lua"
+                            } else {
+                                "init.server.luau" // Default
+                            }
+                        }
+                        "LocalScript" => {
+                            if existing_path.join("init.client.luau").exists() {
+                                "init.client.luau"
+                            } else if existing_path.join("init.local.luau").exists() {
+                                "init.local.luau"
+                            } else if existing_path.join("init.client.lua").exists() {
+                                "init.client.lua"
+                            } else {
+                                "init.client.luau" // Default
+                            }
+                        }
+                        _ => unreachable!(),
+                    };
+                    existing_path.join(init_name)
+                } else {
+                    // It's already a file path
+                    existing_path.to_path_buf()
+                };
+
+                fs::write(&file_path, source.as_bytes()).with_context(|| {
+                    format!("Failed to write file: {}", file_path.display())
+                })?;
+
+                log::info!(
+                    "Syncback: Updated existing {} at {}",
+                    class_name,
+                    file_path.display()
+                );
+
+                // Handle children - they go into the directory
+                if !added.children.is_empty() {
+                    let children_dir = if existing_path.is_dir() {
+                        existing_path.to_path_buf()
+                    } else {
+                        // For standalone scripts, children would need directory conversion
+                        // For now, use the parent directory as the base
+                        existing_path
+                            .parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or_else(|| existing_path.to_path_buf())
+                    };
+
+                    // Filter duplicate children
+                    let inst_path = format!("{}", existing_path.display());
+                    let unique_children =
+                        self.filter_duplicate_children(&added.children, &inst_path, stats);
+
+                    // Process children using normal syncback path
+                    // This will use detect_existing_script_format to check existing files
+                    for child in &unique_children {
+                        self.syncback_instance_to_path_with_stats(child, &children_dir, stats)?;
+                    }
+                }
+            }
+
+            // For non-script types, update the appropriate file
+            _ => {
+                if existing_path.is_dir() {
+                    // Update init.meta.json5 if needed
+                    if !added.properties.is_empty() {
+                        self.write_init_meta_json(existing_path, added)?;
+                        log::info!(
+                            "Syncback: Updated existing {} at {}/init.meta.json5",
+                            class_name,
+                            existing_path.display()
+                        );
+                    }
+
+                    // Handle children
+                    if !added.children.is_empty() {
+                        let inst_path = format!("{}", existing_path.display());
+                        let unique_children =
+                            self.filter_duplicate_children(&added.children, &inst_path, stats);
+
+                        for child in &unique_children {
+                            self.syncback_instance_to_path_with_stats(
+                                child,
+                                existing_path,
+                                stats,
+                            )?;
+                        }
+                    }
+                } else {
+                    // It's a standalone file (e.g., .model.json5)
+                    let content = self.serialize_instance_to_model_json(added)?;
+                    fs::write(existing_path, &content).with_context(|| {
+                        format!("Failed to write file: {}", existing_path.display())
+                    })?;
+                    log::info!(
+                        "Syncback: Updated existing {} at {}",
+                        class_name,
+                        existing_path.display()
+                    );
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Syncback a removed instance by deleting its file(s) from the filesystem.
@@ -600,6 +817,78 @@ impl ApiService {
             .collect()
     }
 
+    /// Detects what file format currently exists on disk for a given instance.
+    /// This is used to preserve the existing format during partial updates.
+    ///
+    /// When the plugin sends a script update, it might not include children info.
+    /// We check the filesystem to see if this is already a directory (with init file)
+    /// or a standalone file, and preserve that format.
+    fn detect_existing_script_format(
+        parent_dir: &std::path::Path,
+        name: &str,
+        class_name: &str,
+    ) -> ExistingFileFormat {
+        let dir_path = parent_dir.join(name);
+
+        // Check for directory with init file first (takes precedence)
+        if dir_path.is_dir() {
+            // Check for any init file based on class type
+            let init_files = match class_name {
+                "ModuleScript" => vec!["init.luau", "init.lua"],
+                "Script" => vec![
+                    "init.server.luau",
+                    "init.server.lua",
+                    "init.client.luau",
+                    "init.client.lua",
+                ],
+                "LocalScript" => vec![
+                    "init.client.luau",
+                    "init.client.lua",
+                    "init.local.luau",
+                    "init.local.lua",
+                ],
+                // For non-scripts, check for init.model.json5 or similar
+                _ => vec!["init.model.json5", "init.model.json", "init.meta.json5"],
+            };
+
+            for init_file in init_files {
+                if dir_path.join(init_file).exists() {
+                    return ExistingFileFormat::Directory;
+                }
+            }
+        }
+
+        // Check for standalone file
+        let standalone_patterns = match class_name {
+            "ModuleScript" => vec![format!("{}.luau", name), format!("{}.lua", name)],
+            "Script" => vec![
+                format!("{}.server.luau", name),
+                format!("{}.server.lua", name),
+                format!("{}.client.luau", name),
+                format!("{}.client.lua", name),
+            ],
+            "LocalScript" => vec![
+                format!("{}.client.luau", name),
+                format!("{}.client.lua", name),
+                format!("{}.local.luau", name),
+                format!("{}.local.lua", name),
+            ],
+            // For non-scripts, check for model files
+            _ => vec![
+                format!("{}.model.json5", name),
+                format!("{}.model.json", name),
+            ],
+        };
+
+        for pattern in standalone_patterns {
+            if parent_dir.join(&pattern).exists() {
+                return ExistingFileFormat::Standalone;
+            }
+        }
+
+        ExistingFileFormat::None
+    }
+
     /// Recursively syncback an instance and its children to the filesystem.
     /// This is the internal implementation that handles the actual file creation.
     #[allow(dead_code)]
@@ -642,13 +931,70 @@ impl ApiService {
 
         // Determine the appropriate middleware/file format based on class name
         // This matches the logic in src/syncback/mod.rs::get_best_middleware
-        // Scripts with children become directories with init files
+        //
+        // IMPORTANT: When an instance already exists on disk, preserve its format.
+        // The plugin might send a partial update (e.g., just the script source without
+        // children), so we can't rely solely on has_children to decide the format.
+        // Only transition formats when creating truly new instances.
+        let existing_format =
+            Self::detect_existing_script_format(parent_dir, &added.name, &added.class_name);
+
         match added.class_name.as_str() {
             // Script types: .luau files, or directories with init files if has children
             // Non-Source properties (like Attributes) go into init.meta.json5
             "ModuleScript" => {
                 let source = self.get_source_property(added);
-                if has_children {
+
+                // Decide whether to use directory or standalone format:
+                // - If directory already exists on disk, preserve it (update init file)
+                // - If standalone already exists on disk, preserve it (update standalone)
+                // - If nothing exists, use has_children to decide (new instance)
+                let use_directory = match existing_format {
+                    ExistingFileFormat::Directory => {
+                        log::debug!(
+                            "Syncback: Preserving existing directory format for {}",
+                            added.name
+                        );
+                        true
+                    }
+                    ExistingFileFormat::Standalone => {
+                        log::debug!(
+                            "Syncback: Preserving existing standalone format for {}",
+                            added.name
+                        );
+                        false
+                    }
+                    ExistingFileFormat::None => {
+                        // New instance - use has_children to decide
+                        has_children
+                    }
+                };
+
+                if use_directory {
+                    // Directory format: Name/init.luau
+                    // Only remove standalone if this is a new instance transitioning to directory
+                    if existing_format == ExistingFileFormat::None {
+                        let standalone_path = parent_dir.join(format!("{}.luau", added.name));
+                        if standalone_path.exists() {
+                            if let Err(err) = fs::remove_file(&standalone_path) {
+                                log::warn!(
+                                    "Syncback: Failed to remove old standalone file {}: {}",
+                                    standalone_path.display(),
+                                    err
+                                );
+                            } else {
+                                log::info!(
+                                    "Syncback: Removed old standalone file {} (script now has children)",
+                                    standalone_path.display()
+                                );
+                            }
+                            let meta_path = parent_dir.join(format!("{}.meta.json5", added.name));
+                            if meta_path.exists() {
+                                let _ = fs::remove_file(&meta_path);
+                            }
+                        }
+                    }
+
                     let dir_path = parent_dir.join(&added.name);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
@@ -657,32 +1003,83 @@ impl ApiService {
                     fs::write(&init_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", init_path.display())
                     })?;
-                    // Write init.meta.json5 if there are non-Source properties (like Attributes)
                     self.write_script_meta_json_if_needed(&dir_path, added)?;
                     log::info!(
-                        "Syncback: Created ModuleScript directory at {}",
-                        dir_path.display()
+                        "Syncback: Updated ModuleScript at {}",
+                        init_path.display()
                     );
+                    // Recurse into children if any were provided
                     for child in &unique_children {
                         self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
                     }
                 } else {
+                    // Standalone format: Name.luau
+                    // Only remove directory if this is a new instance transitioning to standalone
+                    if existing_format == ExistingFileFormat::None {
+                        let dir_path = parent_dir.join(&added.name);
+                        if dir_path.is_dir() {
+                            if let Err(err) = fs::remove_dir_all(&dir_path) {
+                                log::warn!(
+                                    "Syncback: Failed to remove old directory {}: {}",
+                                    dir_path.display(),
+                                    err
+                                );
+                            } else {
+                                log::info!(
+                                    "Syncback: Removed old directory {} (script no longer has children)",
+                                    dir_path.display()
+                                );
+                            }
+                        }
+                    }
+
                     let file_path = parent_dir.join(format!("{}.luau", added.name));
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
-                    // Create adjacent meta file if there are non-Source properties
                     self.write_adjacent_script_meta_if_needed(parent_dir, &added.name, added)?;
-                    log::info!("Syncback: Created ModuleScript at {}", file_path.display());
+                    log::info!("Syncback: Updated ModuleScript at {}", file_path.display());
                 }
             }
             "Script" => {
                 let source = self.get_source_property(added);
-                // Determine script type based on RunContext property
-                // This ensures proper round-tripping regardless of emitLegacyScripts mode
                 let script_suffix = self.get_script_suffix_for_run_context(added);
 
-                if has_children {
+                // Use existing format if present, otherwise decide based on has_children
+                let use_directory = match existing_format {
+                    ExistingFileFormat::Directory => {
+                        log::debug!(
+                            "Syncback: Preserving existing directory format for Script {}",
+                            added.name
+                        );
+                        true
+                    }
+                    ExistingFileFormat::Standalone => {
+                        log::debug!(
+                            "Syncback: Preserving existing standalone format for Script {}",
+                            added.name
+                        );
+                        false
+                    }
+                    ExistingFileFormat::None => has_children,
+                };
+
+                if use_directory {
+                    // Only clean up if this is a new instance
+                    if existing_format == ExistingFileFormat::None {
+                        for suffix in &["server", "client"] {
+                            let standalone_path =
+                                parent_dir.join(format!("{}.{}.luau", added.name, suffix));
+                            if standalone_path.exists() {
+                                let _ = fs::remove_file(&standalone_path);
+                            }
+                        }
+                        let meta_path = parent_dir.join(format!("{}.meta.json5", added.name));
+                        if meta_path.exists() {
+                            let _ = fs::remove_file(&meta_path);
+                        }
+                    }
+
                     let dir_path = parent_dir.join(&added.name);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
@@ -692,27 +1089,66 @@ impl ApiService {
                         format!("Failed to write file: {}", init_path.display())
                     })?;
                     self.write_script_meta_json_if_needed(&dir_path, added)?;
-                    log::info!(
-                        "Syncback: Created Script directory at {}",
-                        dir_path.display()
-                    );
+                    log::info!("Syncback: Updated Script at {}", init_path.display());
                     for child in &unique_children {
                         self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
                     }
                 } else {
+                    // Only clean up if this is a new instance
+                    if existing_format == ExistingFileFormat::None {
+                        let dir_path = parent_dir.join(&added.name);
+                        if dir_path.is_dir() {
+                            let _ = fs::remove_dir_all(&dir_path);
+                        }
+                    }
+
                     let file_path =
                         parent_dir.join(format!("{}.{}.luau", added.name, script_suffix));
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
-                    // Create adjacent meta file if there are non-Source properties
                     self.write_adjacent_script_meta_if_needed(parent_dir, &added.name, added)?;
-                    log::info!("Syncback: Created Script at {}", file_path.display());
+                    log::info!("Syncback: Updated Script at {}", file_path.display());
                 }
             }
             "LocalScript" => {
                 let source = self.get_source_property(added);
-                if has_children {
+
+                // Use existing format if present, otherwise decide based on has_children
+                let use_directory = match existing_format {
+                    ExistingFileFormat::Directory => {
+                        log::debug!(
+                            "Syncback: Preserving existing directory format for LocalScript {}",
+                            added.name
+                        );
+                        true
+                    }
+                    ExistingFileFormat::Standalone => {
+                        log::debug!(
+                            "Syncback: Preserving existing standalone format for LocalScript {}",
+                            added.name
+                        );
+                        false
+                    }
+                    ExistingFileFormat::None => has_children,
+                };
+
+                if use_directory {
+                    // Only clean up if this is a new instance
+                    if existing_format == ExistingFileFormat::None {
+                        for suffix in &["local", "client"] {
+                            let standalone_path =
+                                parent_dir.join(format!("{}.{}.luau", added.name, suffix));
+                            if standalone_path.exists() {
+                                let _ = fs::remove_file(&standalone_path);
+                            }
+                        }
+                        let meta_path = parent_dir.join(format!("{}.meta.json5", added.name));
+                        if meta_path.exists() {
+                            let _ = fs::remove_file(&meta_path);
+                        }
+                    }
+
                     let dir_path = parent_dir.join(&added.name);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
@@ -722,21 +1158,25 @@ impl ApiService {
                         format!("Failed to write file: {}", init_path.display())
                     })?;
                     self.write_script_meta_json_if_needed(&dir_path, added)?;
-                    log::info!(
-                        "Syncback: Created LocalScript directory at {}",
-                        dir_path.display()
-                    );
+                    log::info!("Syncback: Updated LocalScript at {}", init_path.display());
                     for child in &unique_children {
                         self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
                     }
                 } else {
+                    // Only clean up if this is a new instance
+                    if existing_format == ExistingFileFormat::None {
+                        let dir_path = parent_dir.join(&added.name);
+                        if dir_path.is_dir() {
+                            let _ = fs::remove_dir_all(&dir_path);
+                        }
+                    }
+
                     let file_path = parent_dir.join(format!("{}.local.luau", added.name));
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
-                    // Create adjacent meta file if there are non-Source properties
                     self.write_adjacent_script_meta_if_needed(parent_dir, &added.name, added)?;
-                    log::info!("Syncback: Created LocalScript at {}", file_path.display());
+                    log::info!("Syncback: Updated LocalScript at {}", file_path.display());
                 }
             }
 
@@ -843,8 +1283,29 @@ impl ApiService {
             }
 
             // All other classes -> .model.json5 or directory if has children
+            // Preserves existing format to avoid creating duplicates during partial updates
             _ => {
-                if has_children {
+                let use_directory = match existing_format {
+                    ExistingFileFormat::Directory => {
+                        log::debug!(
+                            "Syncback: Preserving existing directory format for {} {}",
+                            added.class_name,
+                            added.name
+                        );
+                        true
+                    }
+                    ExistingFileFormat::Standalone => {
+                        log::debug!(
+                            "Syncback: Preserving existing standalone format for {} {}",
+                            added.class_name,
+                            added.name
+                        );
+                        false
+                    }
+                    ExistingFileFormat::None => has_children,
+                };
+
+                if use_directory {
                     // Create directory and put the instance as init.meta.json5
                     let dir_path = parent_dir.join(&added.name);
                     fs::create_dir_all(&dir_path).with_context(|| {
@@ -855,7 +1316,7 @@ impl ApiService {
                     self.write_init_meta_json(&dir_path, added)?;
 
                     log::info!(
-                        "Syncback: Created {} directory at {} with init.meta.json5",
+                        "Syncback: Updated {} at {}/init.meta.json5",
                         added.class_name,
                         dir_path.display()
                     );
@@ -872,7 +1333,7 @@ impl ApiService {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
                     log::info!(
-                        "Syncback: Created {} at {}",
+                        "Syncback: Updated {} at {}",
                         added.class_name,
                         file_path.display()
                     );

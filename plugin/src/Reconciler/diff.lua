@@ -175,12 +175,20 @@ local function shouldDeleteChild(virtualInstance, childInstance)
 	return false
 end
 
-local function diff(instanceMap, virtualInstances, rootId)
+local function diff(instanceMap, virtualInstances, rootId, serverInfo)
 	local patch = {
 		removed = {},
 		added = {},
 		updated = {},
 	}
+
+	-- Build a lookup table for visible services (for ignoreHiddenServices check)
+	local visibleServicesSet: { [string]: boolean } = {}
+	if serverInfo and serverInfo.ignoreHiddenServices and serverInfo.visibleServices then
+		for _, serviceName in ipairs(serverInfo.visibleServices) do
+			visibleServicesSet[serviceName] = true
+		end
+	end
 
 	-- Count of locations with duplicate-named siblings
 	local skippedDuplicateCount = 0
@@ -401,6 +409,20 @@ local function diff(instanceMap, virtualInstances, rootId)
 				local siblingDuplicates = findDuplicateNames(siblings)
 				if siblingDuplicates[childInstance.Name] then
 					continue
+				end
+
+				-- Skip hidden services when ignoreHiddenServices is enabled.
+				-- Services are direct children of game (DataModel), and if they're
+				-- not in the visible services list, they weren't synced back to disk,
+				-- so we shouldn't mark them for deletion during forward sync.
+				if serverInfo and serverInfo.ignoreHiddenServices and instance == game then
+					if not visibleServicesSet[childInstance.Name] then
+						Log.trace(
+							"Skipping hidden service {} (ignoreHiddenServices is enabled)",
+							childInstance.Name
+						)
+						continue
+					end
 				end
 
 				-- This is an existing instance not present in the virtual DOM.

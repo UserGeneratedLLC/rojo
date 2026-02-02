@@ -226,6 +226,26 @@ impl ServeSession {
     pub fn sync_scripts_only(&self) -> bool {
         self.root_project.sync_scripts_only.unwrap_or(false)
     }
+
+    /// Returns whether hidden/internal services should be ignored during sync.
+    /// When enabled, only "visible" services like Workspace, ReplicatedStorage, etc.
+    /// are included in sync operations.
+    ///
+    /// Checks root-level `ignoreHiddenServices` first, then falls back to
+    /// `syncbackRules.ignoreHiddenServices` for backward compatibility.
+    /// Defaults to `true` if neither is specified.
+    pub fn ignore_hidden_services(&self) -> bool {
+        // Root-level setting takes precedence
+        if let Some(value) = self.root_project.ignore_hidden_services {
+            return value;
+        }
+        // Fall back to syncbackRules for backward compatibility
+        self.root_project
+            .syncback_rules
+            .as_ref()
+            .map(|rules| rules.ignore_hidden_services())
+            .unwrap_or(true)
+    }
 }
 
 #[derive(Debug, Error)]

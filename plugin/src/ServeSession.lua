@@ -612,7 +612,7 @@ function ServeSession:__computeInitialPatch(serverInfo)
 		Log.trace("Computing changes that plugin needs to make to catch up to server...")
 		self:setLoadingText("Finding differences between server and Studio...")
 		local success, catchUpPatch =
-			self.__reconciler:diff(readResponseBody.instances, serverInfo.rootInstanceId, game)
+			self.__reconciler:diff(readResponseBody.instances, serverInfo.rootInstanceId, serverInfo)
 
 		if not success then
 			Log.error("Could not compute a diff to catch up to the Rojo server: {:#?}", catchUpPatch)

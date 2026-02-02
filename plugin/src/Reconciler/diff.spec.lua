@@ -1,7 +1,4 @@
 return function()
-	local Packages = script.Parent.Parent.Parent.Packages
-	local Log = require(Packages.Log)
-
 	local InstanceMap = require(script.Parent.Parent.InstanceMap)
 	local PatchSet = require(script.Parent.Parent.PatchSet)
 
@@ -164,15 +161,7 @@ return function()
 		assert(isEmpty(patch.updated))
 	end)
 
-	--[[
-		Because rbx_dom_lua resolves non-canonical properties to their canonical
-		variants, this test does not work as intended.
-
-		Instead, heat_xml is diffed with Heat, the canonical property variant,
-		and a patch trying to assign to heat_xml is generated. This is
-		incorrect, but will require more invasive changes to fix later.
-	]]
-	itFIXME("should ignore unreadable properties", function()
+	it("should ignore unreadable properties", function()
 		local knownInstances = InstanceMap.new()
 		local virtualInstances = {
 			ROOT = {
@@ -193,8 +182,6 @@ return function()
 		knownInstances:insert("ROOT", rootInstance)
 
 		local ok, patch = diff(knownInstances, virtualInstances, "ROOT")
-
-		Log.warn("{:#?}", patch)
 
 		assert(ok, tostring(patch))
 

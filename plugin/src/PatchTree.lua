@@ -222,7 +222,7 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 		local parentObject = instance.Parent
 		local parentId = instanceMap.fromInstances[parentObject]
 		local previousId = nil
-		while parentObject do
+		while parentObject and parentId do
 			if knownAncestors[parentId] then
 				-- We've already added this ancestor
 				previousId = parentId

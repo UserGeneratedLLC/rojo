@@ -129,6 +129,19 @@ pub struct Project {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sync_scripts_only: Option<bool>,
 
+    /// When enabled, hidden/internal services (like AdService, AnalyticsService,
+    /// Chat, HttpService, etc.) are ignored during sync operations. Only "visible"
+    /// services like Workspace, ReplicatedStorage, ServerScriptService will be
+    /// synced. Defaults to `true`.
+    ///
+    /// This prevents the plugin from trying to delete services that were never
+    /// synced to disk in the first place.
+    ///
+    /// Note: This setting can also be specified in `syncbackRules.ignoreHiddenServices`
+    /// for backward compatibility, but the root-level setting takes precedence.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ignore_hidden_services: Option<bool>,
+
     /// The path to the file that this project came from. Relative paths in the
     /// project should be considered relative to the parent of this field, also
     /// given by `Project::folder_location`.

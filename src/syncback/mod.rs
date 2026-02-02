@@ -50,7 +50,7 @@ const DEBUG_MODEL_FORMAT_VAR: &str = "ROJO_SYNCBACK_DEBUG";
 
 /// Services that are considered "visible" and will be included when
 /// `ignoreHiddenServices` is enabled. All other services will be ignored.
-const VISIBLE_SERVICES: &[&str] = &[
+pub const VISIBLE_SERVICES: &[&str] = &[
     "Lighting",
     "MaterialService",
     "NetworkClient",
@@ -134,12 +134,17 @@ pub fn syncback_loop_with_stats(
     }
 
     // If ignoreHiddenServices is enabled (default: true), filter to only visible services
-    if project
-        .syncback_rules
-        .as_ref()
-        .map(|rules| rules.ignore_hidden_services())
-        .unwrap_or(true)
-    {
+    // Check root-level setting first, then fall back to syncbackRules for backward compatibility
+    let ignore_hidden = project
+        .ignore_hidden_services
+        .or_else(|| {
+            project
+                .syncback_rules
+                .as_ref()
+                .map(|rules| rules.ignore_hidden_services())
+        })
+        .unwrap_or(true);
+    if ignore_hidden {
         log::debug!("Filtering hidden services");
         strip_hidden_services(&mut new_tree);
     }
@@ -212,25 +217,75 @@ pub fn syncback_loop_with_stats(
 
     let project_path = project.folder_location();
 
-    // In clean mode, collect all existing paths from old tree for cleanup.
-    // These will be compared against new paths to remove orphaned files.
+    // In clean mode, we scan the actual filesystem to find ALL existing files,
+    // not just what Rojo loaded into its tree. This ensures orphaned files
+    // (like duplicates Rojo couldn't load) get cleaned up properly.
+    // Clean mode is essentially: "delete everything and rebuild from Studio"
     let existing_paths: HashSet<PathBuf> = if !incremental {
-        log::debug!("Clean mode: collecting existing paths for cleanup");
+        log::debug!("Clean mode: scanning filesystem for existing paths");
         let mut paths = HashSet::new();
-        for ref_id in descendants(old_tree.inner(), old_tree.get_root_id()) {
-            if let Some(inst) = old_tree.get_instance(ref_id) {
-                for path in inst.metadata().relevant_paths.iter() {
-                    // Skip paths matching ignore patterns
-                    if is_valid_path(&ignore_patterns, project_path, path) {
-                        // Only include paths that actually exist on disk
-                        if path.exists() {
-                            paths.insert(path.clone());
-                        }
+
+        // Get the source directories from the project's tree structure.
+        // We scan these directories recursively to find all files on disk.
+        let mut dirs_to_scan: Vec<PathBuf> = Vec::new();
+        for ref_id in old_tree.inner().root().children() {
+            if let Some(inst) = old_tree.get_instance(*ref_id) {
+                if let Some(source) = &inst.metadata().instigating_source {
+                    let path = source.path();
+                    if path.exists() {
+                        dirs_to_scan.push(path.to_path_buf());
                     }
                 }
             }
         }
-        log::debug!("Collected {} existing paths", paths.len());
+
+        // Recursively scan each source directory
+        fn scan_directory(
+            dir: &Path,
+            paths: &mut HashSet<PathBuf>,
+            ignore_patterns: &Option<Vec<Glob>>,
+            project_path: &Path,
+        ) {
+            let entries = match std::fs::read_dir(dir) {
+                Ok(e) => e,
+                Err(_) => return,
+            };
+
+            for entry in entries.flatten() {
+                let path = entry.path();
+
+                // Skip paths matching ignore patterns
+                if !is_valid_path(ignore_patterns, project_path, &path) {
+                    continue;
+                }
+
+                // Skip hidden files/directories (starting with .)
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.starts_with('.') {
+                        continue;
+                    }
+                }
+
+                paths.insert(path.clone());
+
+                if path.is_dir() {
+                    scan_directory(&path, paths, ignore_patterns, project_path);
+                }
+            }
+        }
+
+        for dir in &dirs_to_scan {
+            if dir.is_dir() {
+                scan_directory(dir, &mut paths, &ignore_patterns, project_path);
+            } else if dir.exists() {
+                // It's a file, add it directly
+                if is_valid_path(&ignore_patterns, project_path, dir) {
+                    paths.insert(dir.clone());
+                }
+            }
+        }
+
+        log::debug!("Scanned {} existing paths from filesystem", paths.len());
         paths
     } else {
         HashSet::new()
@@ -649,7 +704,7 @@ pub struct SyncbackRules {
     /// Whether to encode Windows-invalid characters in file names during
     /// syncback. Characters like `<`, `>`, `:`, `"`, `/`, `\`, `|`, `?`, `*`
     /// will be encoded as `%LT%`, `%GT%`, `%COLON%`, etc.
-    /// Defaults to `false`.
+    /// Defaults to `true`.
     #[serde(skip_serializing_if = "Option::is_none")]
     encode_windows_invalid_chars: Option<bool>,
     /// When enabled, only "visible" services will be synced back. This includes
