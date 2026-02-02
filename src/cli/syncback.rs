@@ -361,45 +361,15 @@ fn refresh_git_index(project_dir: &Path) {
 
     if is_git_repo {
         log::info!("Refreshing git index...");
-        let mut attempts = 0;
-        loop {
-            attempts += 1;
-            let result = Command::new("git")
-                .args(["update-index", "--refresh"])
-                .current_dir(project_dir)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-
-            match result {
-                Ok(status) => {
-                    if status.success() {
-                        log::info!("Git index refreshed.");
-                        break;
-                    } else if attempts < 2 {
-                        log::debug!(
-                            "git update-index --refresh exited with: {}, retrying in 500ms...",
-                            status
-                        );
-                        std::thread::sleep(std::time::Duration::from_millis(500));
-                    } else {
-                        log::warn!("git update-index --refresh exited with: {}", status);
-                        break;
-                    }
-                }
-                Err(e) => {
-                    if attempts < 2 {
-                        log::debug!(
-                            "Failed to run git update-index --refresh: {}, retrying in 500ms...",
-                            e
-                        );
-                        std::thread::sleep(std::time::Duration::from_millis(500));
-                    } else {
-                        log::warn!("Failed to run git update-index --refresh: {}", e);
-                        break;
-                    }
-                }
-            }
+        // Exit code 1 is normal - it just means files were refreshed.
+        // We only warn if git itself fails to run.
+        match Command::new("git")
+            .args(["update-index", "--refresh", "-q"])
+            .current_dir(project_dir)
+            .status()
+        {
+            Ok(_) => log::info!("Git index refreshed."),
+            Err(e) => log::warn!("Failed to run git update-index --refresh: {}", e),
         }
     } else {
         log::debug!("Not a git repository, skipping index refresh.");
