@@ -63,7 +63,8 @@ pub fn run_rojo_syncback_clean(project_path: &Path, input_path: &Path) -> bool {
 
     if !output.status.success() {
         eprintln!(
-            "rojo syncback failed:\nstdout: {}\nstderr: {}",
+            "rojo syncback failed (exit code {:?}):\nstdout: {}\nstderr: {}",
+            output.status.code(),
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );

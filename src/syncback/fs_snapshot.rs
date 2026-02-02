@@ -108,7 +108,18 @@ impl FsSnapshot {
             lock.write(base_path.join(path), contents)?;
         }
         for dir_path in &self.removed_dirs {
-            lock.remove_dir_all(base_path.join(dir_path))?;
+            let full_path = base_path.join(dir_path);
+            match lock.remove_dir_all(&full_path) {
+                Ok(()) => (),
+                // Directory might have already been removed (e.g., added twice via different code paths)
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                    log::debug!(
+                        "Directory already removed or doesn't exist: {}",
+                        full_path.display()
+                    );
+                }
+                Err(err) => return Err(err),
+            }
         }
         // Only remove files that aren't already inside a directory we're removing.
         // remove_dir_all already deleted those files recursively.

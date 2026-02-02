@@ -40,25 +40,67 @@ isProject: false
 
 ## Current Status: Bugs Found by Stress Tests
 
-### Bug 1: Nested Orphan Files Not Removed (ACTIVE)
+### Bug 1: Nested Orphan Files Not Removed (FIXED)
 
-**Symptom**: Orphan files at the top level (`src/orphan.txt`) are removed, but nested orphan files (`src/level-1/orphan.luau`) are NOT removed.
+**Symptom**: Orphan files at the top level (`src/orphan.txt`) were removed, but nested orphan files (`src/level-1/orphan.luau`) were NOT removed.
 
-**Debug output**: `Scanned 2 existing paths from filesystem` - but should be finding many more paths including nested orphan files.
+**Root cause**: The orphan removal logic had a flawed check:
 
-**Root cause investigation needed**: The orphan scanning algorithm in `src/syncback/mod.rs` lines 220-292 may have a bug in:
+```rust
+if added_paths.iter().any(|added| old_path_norm.starts_with(added)) { continue; }
+```
 
-1. How `dirs_to_scan` is populated from root children
-2. How the recursive `scan_directory` function traverses the filesystem
-3. Path normalization issues between scanned paths and added paths
+This skipped ANY file whose parent directory was in `added_paths`, but adding a directory doesn't mean all files inside should be preserved.
 
-### Bug 2: Duplicate File Removal Crash (FIXED)
+**Fix applied**: Changed the logic to only skip DIRECTORIES that are ancestors of added paths, not files.
+
+### Bug 2: Missing $path Directories in Scan (FIXED)
+
+**Symptom**: `dirs_to_scan` only contained the project file, not the `$path` source directories.
+
+**Root cause**: The code relied on `instigating_source` metadata which points to the project file for root nodes, not the actual source directory defined by `$path`.
+
+**Fix applied**: Added `collect_paths_from_project()` to recursively extract `$path` entries from the project tree.
+
+### Bug 3: Duplicate File Removal Crash (FIXED)
 
 **Symptom**: `failed to remove file: The system cannot find the file specified`
 
 **Root cause**: Same file could be added to `removed_files` with both absolute and relative paths, causing double removal attempts.
 
-**Fix applied**: In `fs_snapshot.rs`, gracefully handle "file not found" errors during removal since the file may have already been deleted.
+**Fix applied**: In `fs_snapshot.rs`, gracefully handle "file not found" errors during removal.
+
+### Bug 4: Directory Double-Removal Crash (FIXED)
+
+**Symptom**: Syncback fails when a directory is marked for removal by both the syncback `removed_children` phase and the orphan removal phase.
+
+**Root cause**: `remove_dir_all` returns an error when the directory doesn't exist, and the same directory could be added twice.
+
+**Fix applied**: Handle "not found" errors gracefully in `fs_snapshot.rs` for directory removal.
+
+### Limitation 1: Class Change Not Supported (FUNDAMENTAL)
+
+**Symptom**: Deleting `init.luau` changes folder from ModuleScript to Folder. Syncback fails silently.
+
+**Root cause**: Syncback cannot change the class of instances defined in the project file. This is by design in `src/snapshot_middleware/project.rs`.
+
+**Affected tests**: `clean_restores_deleted_files`, `clean_restores_deleted_nested_files`, `clean_restores_dir_from_file`
+
+### Limitation 2: Ambiguous File Names Not Supported (FUNDAMENTAL)
+
+**Symptom**: Adding duplicate files with different extensions (e.g., `foo.luau` and `foo.lua`) causes syncback to fail.
+
+**Root cause**: Rojo can't handle ambiguous file names during project loading.
+
+**Affected tests**: `clean_removes_duplicate_extensions`, `clean_removes_multiple_duplicates`
+
+---
+
+## Test Results Summary (Current)
+
+**Passing: 15 tests** - orphan removal, basic clean mode behavior
+
+**Failing: 11 tests** - class change scenarios, ambiguous files, meta files, combination tests
 
 ---
 

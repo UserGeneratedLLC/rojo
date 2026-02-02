@@ -110,12 +110,14 @@ The Rojo plugin/API interface is a critical weak layer that must handle:
 These are the types of bugs that stress tests should expose:
 
 **Duplicate/Ambiguous Path Handling**:
+
 - Instances with duplicate-named siblings cause ambiguous paths
 - Nested duplicates at any level of the hierarchy
 - Path uniqueness checks must walk entire ancestor chain
 - Tests should verify duplicate detection at every level
 
 **Property Equality Edge Cases**:
+
 - Floating-point comparison (epsilon = 0.0001)
 - Color3 RGB integer comparison vs float comparison
 - CFrame/Vector3/Vector2 precision
@@ -123,6 +125,7 @@ These are the types of bugs that stress tests should expose:
 - EnumItem vs number comparisons
 
 **Patch Application Failures**:
+
 - Partial application (some properties succeed, others fail)
 - Ref properties to non-existent instances
 - ClassName changes with child migration failures
@@ -130,12 +133,14 @@ These are the types of bugs that stress tests should expose:
 - Permission errors on protected properties
 
 **Concurrency Issues**:
+
 - Changes during confirmation dialogue
 - Rapid bidirectional changes
 - Instance destruction during patch application
 - WebSocket messages during patch processing
 
 **Memory and Scale**:
+
 - Large instance trees (1000+ instances)
 - Deep hierarchies (50+ levels)
 - Wide hierarchies (100+ siblings)
@@ -322,7 +327,7 @@ These are the types of bugs that stress tests should expose:
 
 ### 6. Scripts-Only vs Everything Mode Tests
 
-**`plugin/src/modes/scriptsOnly.spec.lua`** - Scripts-only mode specific tests
+`**plugin/src/modes/scriptsOnly.spec.lua**` - Scripts-only mode specific tests
 
 ```lua
 -- Key test scenarios:
@@ -337,7 +342,7 @@ These are the types of bugs that stress tests should expose:
 -- Format transitions (standalone <-> directory) for scripts only
 ```
 
-**`plugin/src/modes/everythingMode.spec.lua`** - Everything mode specific tests
+`**plugin/src/modes/everythingMode.spec.lua**` - Everything mode specific tests
 
 ```lua
 -- Key test scenarios:
@@ -353,7 +358,7 @@ These are the types of bugs that stress tests should expose:
 -- Mixed hierarchies (scripts and non-scripts)
 ```
 
-**`plugin/src/modes/modeTransitions.spec.lua`** - Switching between modes
+`**plugin/src/modes/modeTransitions.spec.lua**` - Switching between modes
 
 ```lua
 -- Key test scenarios:
@@ -366,7 +371,7 @@ These are the types of bugs that stress tests should expose:
 
 ### 7. Multi-Developer and Concurrent Scenarios
 
-**`plugin/src/concurrent/multiDeveloper.spec.lua`** - Simulating multiple developers
+`**plugin/src/concurrent/multiDeveloper.spec.lua**` - Simulating multiple developers
 
 ```lua
 -- Key test scenarios:
@@ -380,7 +385,7 @@ These are the types of bugs that stress tests should expose:
 -- Merge conflicts in PatchSet
 ```
 
-**`plugin/src/concurrent/raceConditions.spec.lua`** - Race condition detection
+`**plugin/src/concurrent/raceConditions.spec.lua**` - Race condition detection
 
 ```lua
 -- Key test scenarios:
@@ -497,6 +502,7 @@ These are the types of bugs that stress tests should expose:
 **Bug Tracking**:
 
 When a stress test fails, document:
+
 - The symptom (what failed)
 - The root cause (after investigation)
 - Whether it needs a patch or a redesign

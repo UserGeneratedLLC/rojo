@@ -221,21 +221,66 @@ pub fn syncback_loop_with_stats(
     // not just what Rojo loaded into its tree. This ensures orphaned files
     // (like duplicates Rojo couldn't load) get cleaned up properly.
     // Clean mode is essentially: "delete everything and rebuild from Studio"
-    eprintln!("[DEBUG] incremental = {}", incremental);
     let existing_paths: HashSet<PathBuf> = if !incremental {
-        eprintln!("[DEBUG] Clean mode: scanning filesystem for existing paths");
         log::debug!("Clean mode: scanning filesystem for existing paths");
         let mut paths = HashSet::new();
 
         // Get the source directories from the project's tree structure.
-        // We scan these directories recursively to find all files on disk.
+        // We need to collect ALL $path directories defined in the project,
+        // not just instigating_source metadata (which may point to project file).
         let mut dirs_to_scan: Vec<PathBuf> = Vec::new();
+        
+        // Helper to recursively collect $path entries from project tree
+        fn collect_paths_from_project(
+            node: &crate::project::ProjectNode,
+            base_path: &Path,
+            paths: &mut Vec<PathBuf>,
+        ) {
+            // If this node has a $path, add it
+            if let Some(ref path_node) = node.path {
+                let resolved = base_path.join(path_node.path());
+                log::trace!("Found $path in project: {}", resolved.display());
+                if resolved.exists() && !paths.contains(&resolved) {
+                    paths.push(resolved);
+                }
+            }
+            // Recursively check children
+            for child in node.children.values() {
+                collect_paths_from_project(child, base_path, paths);
+            }
+        }
+        
+        // Collect paths from the project tree definition
+        collect_paths_from_project(&project.tree, project_path, &mut dirs_to_scan);
+        
+        // Also check instance metadata for paths that might not be in project
+        // (e.g., from nested project references)
+        let root = old_tree.root();
+        log::trace!("Root instance: name={}, class={}", root.name(), root.class_name());
+        if let Some(source) = &root.metadata().instigating_source {
+            let path = source.path();
+            // Skip project files - we want source directories
+            if !path.to_string_lossy().ends_with(".project.json5")
+                && !path.to_string_lossy().ends_with(".project.json")
+            {
+                log::trace!("Root has instigating_source: {}", path.display());
+                if path.exists() && !dirs_to_scan.contains(&path.to_path_buf()) {
+                    dirs_to_scan.push(path.to_path_buf());
+                }
+            }
+        }
+        
+        // Check children for additional paths
         for ref_id in old_tree.inner().root().children() {
             if let Some(inst) = old_tree.get_instance(*ref_id) {
                 if let Some(source) = &inst.metadata().instigating_source {
                     let path = source.path();
-                    if path.exists() {
-                        dirs_to_scan.push(path.to_path_buf());
+                    if !path.to_string_lossy().ends_with(".project.json5")
+                        && !path.to_string_lossy().ends_with(".project.json")
+                    {
+                        if path.exists() && !dirs_to_scan.contains(&path.to_path_buf()) {
+                            dirs_to_scan.push(path.to_path_buf());
+                        }
                     }
                 }
             }
@@ -248,11 +293,11 @@ pub fn syncback_loop_with_stats(
             ignore_patterns: &Option<Vec<Glob>>,
             project_path: &Path,
         ) {
-            eprintln!("[DEBUG] scan_directory: {}", dir.display());
+            log::trace!("Scanning directory: {}", dir.display());
             let entries = match std::fs::read_dir(dir) {
                 Ok(e) => e,
                 Err(e) => {
-                    eprintln!("[DEBUG] Failed to read directory {}: {}", dir.display(), e);
+                    log::trace!("Failed to read directory {}: {}", dir.display(), e);
                     return;
                 }
             };
@@ -262,19 +307,19 @@ pub fn syncback_loop_with_stats(
 
                 // Skip paths matching ignore patterns
                 if !is_valid_path(ignore_patterns, project_path, &path) {
-                    eprintln!("[DEBUG] Skipping {} (matches ignore pattern)", path.display());
+                    log::trace!("Skipping {} (matches ignore pattern)", path.display());
                     continue;
                 }
 
                 // Skip hidden files/directories (starting with .)
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
                     if name.starts_with('.') {
-                        eprintln!("[DEBUG] Skipping {} (hidden)", path.display());
+                        log::trace!("Skipping {} (hidden)", path.display());
                         continue;
                     }
                 }
 
-                eprintln!("[DEBUG] Found: {} (is_dir: {})", path.display(), path.is_dir());
+                log::trace!("Found path: {}", path.display());
                 paths.insert(path.clone());
 
                 if path.is_dir() {
@@ -283,33 +328,23 @@ pub fn syncback_loop_with_stats(
             }
         }
 
-        eprintln!(
-            "[DEBUG] dirs_to_scan: {:?}",
+        log::trace!(
+            "dirs_to_scan: {:?}",
             dirs_to_scan.iter().map(|p| p.display().to_string()).collect::<Vec<_>>()
         );
 
         for dir in &dirs_to_scan {
             if dir.is_dir() {
-                eprintln!("[DEBUG] Scanning directory: {}", dir.display());
                 scan_directory(dir, &mut paths, &ignore_patterns, project_path);
             } else if dir.exists() {
                 // It's a file, add it directly
-                eprintln!("[DEBUG] Adding file directly: {}", dir.display());
                 if is_valid_path(&ignore_patterns, project_path, dir) {
                     paths.insert(dir.clone());
                 }
-            } else {
-                eprintln!("[DEBUG] Path does not exist: {}", dir.display());
             }
         }
 
-        eprintln!(
-            "[DEBUG] Scanned {} existing paths from filesystem",
-            paths.len()
-        );
-        for p in &paths {
-            eprintln!("[DEBUG]   - {}", p.display());
-        }
+        log::debug!("Scanned {} existing paths from filesystem", paths.len());
         paths
     } else {
         HashSet::new()
@@ -549,38 +584,34 @@ pub fn syncback_loop_with_stats(
 
             // Never remove the project file itself
             if old_path_norm == project_file {
-                log::debug!("Skipping project file: {}", old_path.display());
+                log::trace!("Skipping project file: {}", old_path.display());
                 continue;
             }
             // Never remove any nested project files - they define project structure
             // and may be referenced via $path from other project files
             if let Some(file_name) = old_path_norm.file_name().and_then(|n| n.to_str()) {
                 if file_name.ends_with(".project.json5") || file_name.ends_with(".project.json") {
-                    log::debug!("Skipping nested project file: {}", old_path.display());
+                    log::trace!("Skipping nested project file: {}", old_path.display());
                     continue;
                 }
             }
             // Skip if this exact path is being written to
             if added_paths.contains(&old_path_norm) {
-                continue;
-            }
-            // Skip if a parent of this path is being added
-            // (e.g., the new structure will replace it)
-            if added_paths
-                .iter()
-                .any(|added| old_path_norm.starts_with(added))
-            {
+                log::trace!("Skipping {} (exact path in added_paths)", old_path.display());
                 continue;
             }
             // Skip if this path is an ancestor of something being written to
             // (e.g., a directory that will contain new files)
-            if added_paths
-                .iter()
-                .any(|added| added.starts_with(&old_path_norm))
-            {
-                continue;
+            // NOTE: We DO NOT skip files just because their parent directory is in added_paths.
+            // Adding a directory does not mean all orphan files inside should be preserved.
+            if old_path_norm.is_dir() {
+                if added_paths.iter().any(|added| added.starts_with(&old_path_norm)) {
+                    log::trace!("Skipping {} (ancestor of added path)", old_path.display());
+                    continue;
+                }
             }
             // Use normalized path to avoid duplicates from UNC vs regular paths
+            log::trace!("Marking for removal: {}", old_path_norm.display());
             paths_to_remove.insert(old_path_norm);
         }
 
