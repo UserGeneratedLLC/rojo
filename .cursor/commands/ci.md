@@ -16,11 +16,20 @@ stylua plugin/src
 cargo fmt
 ```
 
-### 3. Lua Static Analysis (Selene)
+### 3. Lua Static Analysis (Selene) - MUST PASS WITH ZERO ISSUES
 ```powershell
 selene plugin/src
 ```
-If there are errors, report them and offer to help fix.
+
+**CRITICAL: Selene must exit with code 0 (zero errors AND zero warnings).** Warnings count as failures.
+
+If Selene reports ANY errors or warnings:
+1. **FIX THEM IMMEDIATELY** before proceeding - do not just report them
+2. Common fixes:
+   - `unused_variable`: Replace with `_` (e.g., `for _ = 1, 10 do`) or remove the variable entirely
+   - `unused_variable` for imports: Remove the unused require/import line
+3. Re-run Selene after fixes to confirm exit code 0
+4. Only proceed once Selene shows: `Results: 0 errors, 0 warnings, 0 parse errors`
 
 ### 4. Rust Linting (Clippy) - Auto-fix where possible
 ```powershell
@@ -30,7 +39,7 @@ Then verify with:
 ```powershell
 cargo clippy --all-targets --all-features
 ```
-If there are remaining warnings/errors, report them and offer to help fix.
+If there are remaining warnings/errors, fix them before proceeding.
 
 ### 5. Build Everything
 ```powershell
@@ -59,7 +68,7 @@ Formatting:
   - Rustfmt: [fixed X files / no changes needed]
 
 Linting:
-  - Selene: PASS / FAIL (X issues)
+  - Selene: PASS (0 errors, 0 warnings) / FAIL (X errors, Y warnings)
   - Clippy: PASS / FAIL (X warnings)
 
 Build: PASS / FAIL
@@ -71,4 +80,7 @@ Tests:
 Overall: PASS / FAIL
 ```
 
-If any step fails, continue running the remaining steps to get a complete picture, then report all failures at the end.
+**IMPORTANT:** 
+- Selene PASS requires exit code 0 (0 errors AND 0 warnings). Any warnings = FAIL.
+- If any step fails, continue running the remaining steps to get a complete picture, then report all failures at the end.
+- Do not report "Overall: PASS" unless ALL linters pass with zero issues.
