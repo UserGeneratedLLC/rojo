@@ -53,7 +53,6 @@ const DEBUG_MODEL_FORMAT_VAR: &str = "ROJO_SYNCBACK_DEBUG";
 pub const VISIBLE_SERVICES: &[&str] = &[
     "Lighting",
     "MaterialService",
-    "NetworkClient",
     "ReplicatedFirst",
     "ReplicatedStorage",
     "ServerScriptService",
