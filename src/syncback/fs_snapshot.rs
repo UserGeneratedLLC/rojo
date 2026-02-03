@@ -2,9 +2,106 @@ use std::{
     collections::{HashMap, HashSet},
     io,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
+    thread,
+    time::Duration,
 };
 
 use memofs::Vfs;
+use rayon::prelude::*;
+
+/// Maximum number of retry attempts for filesystem operations on Windows.
+/// Windows can have transient "Access denied" errors due to antivirus scanning,
+/// filesystem timing, or file handle release delays.
+#[cfg(windows)]
+const MAX_RETRIES: u32 = 3;
+
+/// Initial delay between retries (doubles on each retry).
+#[cfg(windows)]
+const INITIAL_RETRY_DELAY_MS: u64 = 10;
+
+/// Writes to a file with retry logic for transient Windows errors.
+#[cfg(windows)]
+fn write_with_retry(path: &Path, contents: &[u8]) -> io::Result<()> {
+    let mut last_error = None;
+    let mut delay_ms = INITIAL_RETRY_DELAY_MS;
+
+    for attempt in 0..=MAX_RETRIES {
+        match std::fs::write(path, contents) {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                // Only retry on "Access denied" (os error 5) or "Sharing violation" (os error 32)
+                let should_retry = err.raw_os_error().is_some_and(|code| code == 5 || code == 32);
+
+                if should_retry && attempt < MAX_RETRIES {
+                    log::trace!(
+                        "Retrying write to {} after error (attempt {}): {}",
+                        path.display(),
+                        attempt + 1,
+                        err
+                    );
+                    thread::sleep(Duration::from_millis(delay_ms));
+                    delay_ms *= 2; // Exponential backoff
+                    last_error = Some(err);
+                } else {
+                    return Err(err);
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap())
+}
+
+/// On non-Windows platforms, just write directly without retry logic.
+#[cfg(not(windows))]
+fn write_with_retry(path: &Path, contents: &[u8]) -> io::Result<()> {
+    std::fs::write(path, contents)
+}
+
+/// Removes a file with retry logic for transient Windows errors.
+#[cfg(windows)]
+fn remove_file_with_retry(path: &Path) -> io::Result<()> {
+    let mut last_error = None;
+    let mut delay_ms = INITIAL_RETRY_DELAY_MS;
+
+    for attempt in 0..=MAX_RETRIES {
+        match std::fs::remove_file(path) {
+            Ok(()) => return Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(err) => {
+                // Only retry on "Access denied" (os error 5) or "Sharing violation" (os error 32)
+                let should_retry = err.raw_os_error().is_some_and(|code| code == 5 || code == 32);
+
+                if should_retry && attempt < MAX_RETRIES {
+                    log::trace!(
+                        "Retrying remove of {} after error (attempt {}): {}",
+                        path.display(),
+                        attempt + 1,
+                        err
+                    );
+                    thread::sleep(Duration::from_millis(delay_ms));
+                    delay_ms *= 2;
+                    last_error = Some(err);
+                } else {
+                    return Err(err);
+                }
+            }
+        }
+    }
+
+    Err(last_error.unwrap())
+}
+
+/// On non-Windows platforms, just remove directly without retry logic.
+#[cfg(not(windows))]
+fn remove_file_with_retry(path: &Path) -> io::Result<()> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err),
+    }
+}
 
 /// A simple representation of a subsection of a file system.
 #[derive(Default)]
@@ -163,6 +260,124 @@ impl FsSnapshot {
             self.removed_files.len() - files_inside_dirs,
             files_inside_dirs
         );
+        Ok(())
+    }
+
+    /// Writes the `FsSnapshot` to the provided VFS using parallel file writes.
+    ///
+    /// This is optimized for syncback operations where many files need to be written.
+    /// Directory creation and removal remain sequential (ordering constraints),
+    /// but file writes and file removals are parallelized using rayon.
+    ///
+    /// This bypasses the VFS lock for file writes, using `std::fs` directly.
+    /// This is safe because syncback uses a oneshot VFS with no caching or watching.
+    pub fn write_to_vfs_parallel<P: AsRef<Path>>(&self, base: P, vfs: &Vfs) -> io::Result<()> {
+        let base_path = base.as_ref();
+
+        // Phase 1: Create directories (sequential - parent must exist before child)
+        {
+            let mut lock = vfs.lock();
+            for dir_path in &self.added_dirs {
+                match lock.create_dir_all(base_path.join(dir_path)) {
+                    Ok(_) => (),
+                    Err(err) if err.kind() == io::ErrorKind::AlreadyExists => (),
+                    Err(err) => return Err(err),
+                };
+            }
+        } // Release lock before parallel phase
+
+        // Phase 2: Write files (parallel - independent operations)
+        // On Windows, use retry logic for transient "Access denied" errors that can
+        // occur due to antivirus scanning or filesystem timing issues.
+        let write_errors = AtomicUsize::new(0);
+        let first_error: std::sync::Mutex<Option<io::Error>> = std::sync::Mutex::new(None);
+
+        self.added_files.par_iter().for_each(|(path, contents)| {
+            let full_path = base_path.join(path);
+            if let Err(err) = write_with_retry(&full_path, contents) {
+                write_errors.fetch_add(1, Ordering::Relaxed);
+                let mut guard = first_error.lock().unwrap();
+                if guard.is_none() {
+                    *guard = Some(err);
+                }
+            }
+        });
+
+        // Check for write errors
+        if let Some(err) = first_error.into_inner().unwrap() {
+            let error_count = write_errors.load(Ordering::Relaxed);
+            if error_count > 1 {
+                log::warn!("{} additional file write errors occurred", error_count - 1);
+            }
+            return Err(err);
+        }
+
+        // Phase 3: Remove files not inside removed directories (parallel)
+        // Uses retry logic on Windows for transient errors.
+        let files_to_remove: Vec<_> = self
+            .removed_files
+            .iter()
+            .filter(|path| !self.removed_dirs.iter().any(|dir| path.starts_with(dir)))
+            .collect();
+
+        let remove_errors = AtomicUsize::new(0);
+        let first_remove_error: std::sync::Mutex<Option<io::Error>> = std::sync::Mutex::new(None);
+
+        files_to_remove.par_iter().for_each(|path| {
+            let full_path = base_path.join(path);
+            if let Err(err) = remove_file_with_retry(&full_path) {
+                remove_errors.fetch_add(1, Ordering::Relaxed);
+                let mut guard = first_remove_error.lock().unwrap();
+                if guard.is_none() {
+                    *guard = Some(err);
+                }
+            }
+        });
+
+        // Check for remove errors
+        if let Some(err) = first_remove_error.into_inner().unwrap() {
+            let error_count = remove_errors.load(Ordering::Relaxed);
+            if error_count > 1 {
+                log::warn!(
+                    "{} additional file removal errors occurred",
+                    error_count - 1
+                );
+            }
+            return Err(err);
+        }
+
+        // Phase 4: Remove directories (sequential - uses VFS for proper unwatch handling)
+        {
+            let mut lock = vfs.lock();
+            for dir_path in &self.removed_dirs {
+                let full_path = base_path.join(dir_path);
+                match lock.remove_dir_all(&full_path) {
+                    Ok(()) => (),
+                    Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                        log::debug!(
+                            "Directory already removed or doesn't exist: {}",
+                            full_path.display()
+                        );
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+        }
+
+        log::debug!(
+            "Wrote {} directories and {} files to the file system (parallel)",
+            self.added_dirs.len(),
+            self.added_files.len()
+        );
+
+        let files_inside_dirs = self.removed_files.len() - files_to_remove.len();
+        log::debug!(
+            "Removed {} directories and {} files from the file system ({} files skipped, inside removed dirs)",
+            self.removed_dirs.len(),
+            files_to_remove.len(),
+            files_inside_dirs
+        );
+
         Ok(())
     }
 

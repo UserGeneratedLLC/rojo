@@ -31,6 +31,7 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+* Improved syncback performance by parallelizing filesystem writes using rayon. File writes and removals now run concurrently, while directory operations remain sequential to preserve ordering constraints. ([#TBD])
 * Fixed the "Always" confirmation behavior setting to prompt for confirmation on every sync patch, not just the initial sync (which is handled by "Initial", the default confirmation behavior setting). Changes that arrive during confirmation are merged into the pending patch and the UI updates in real-time. ([#1216])
 * Fixed a bug caused by having reference properties (such as `ObjectValue.Value`) that point to an Instance not included in syncback. ([#1179])
 * Fixed instance replacement fallback failing when too many instances needed to be replaced. ([#1192])
@@ -43,6 +44,7 @@ Making a new release? Simply add the new header with the version and date undern
 [#1211]: https://github.com/rojo-rbx/rojo/pull/1211
 [#1215]: https://github.com/rojo-rbx/rojo/pull/1215
 [#1216]: https://github.com/rojo-rbx/rojo/pull/1216
+[#TBD]: https://github.com/rojo-rbx/rojo/pull/TBD
 
 ## [7.7.0-rc.1] (November 27th, 2025)
 

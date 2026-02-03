@@ -220,7 +220,7 @@ impl SyncbackCommand {
                 }
             }
             log::info!("Writing to the file system...");
-            snapshot.write_to_vfs(base_path, session_old.vfs())?;
+            snapshot.write_to_vfs_parallel(base_path, session_old.vfs())?;
             log::info!(
                 "Finished syncback: wrote {} files/folders, removed {}.",
                 snapshot.added_paths().len(),
