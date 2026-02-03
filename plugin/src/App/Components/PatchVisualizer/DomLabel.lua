@@ -297,6 +297,14 @@ function DomLabel:willUnmount()
 end
 
 function DomLabel:didUpdate(prevProps)
+	-- When parent re-renders it creates new bindings starting at 24, but our motor
+	-- may be at expanded height. Sync immediately to prevent VirtualScroller from
+	-- positioning elements incorrectly.
+	if prevProps.setElementHeight ~= self.props.setElementHeight then
+		local currentHeight = self.binding:getValue()
+		self.props.setElementHeight(currentHeight)
+	end
+
 	if
 		prevProps.instance ~= self.props.instance
 		or prevProps.patchType ~= self.props.patchType
@@ -404,15 +412,21 @@ function DomLabel:render()
 					else
 						-- Single click expands the changes (after a delay to check for double click)
 						task.delay(0.3, function()
+							-- Guard against unmounted component or stale click
+							if not self.isMounted then
+								return
+							end
+
 							if os.clock() - (self.lastDoubleClickTime or 0) <= 0.35 then
 								-- This was a double click, so don't expand
 								return
 							end
 
-							if props.changeList then
+							-- Use self.props to get current props, not stale closure
+							if self.props.changeList then
 								self.expanded = not self.expanded
 								local goalHeight = 24
-									+ (if self.expanded then math.clamp(#props.changeList * 24, 24, 24 * 6) else 0)
+									+ (if self.expanded then math.clamp(#self.props.changeList * 24, 24, 24 * 6) else 0)
 								self.motor:setGoal(Flipper.Spring.new(goalHeight, {
 									frequency = 5,
 									dampingRatio = 1,

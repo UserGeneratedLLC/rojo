@@ -55,6 +55,11 @@ function PatchVisualizer:init()
 	self.contentSize, self.setContentSize = Roact.createBinding(Vector2.new(0, 0))
 
 	self.updateEvent = Instance.new("BindableEvent")
+
+	-- Store height bindings by node ID to persist across re-renders.
+	-- Without this, every render creates new bindings starting at 24,
+	-- causing expanded rows to visually glitch when unrelated props change.
+	self.nodeHeightBindings = {}
 end
 
 function PatchVisualizer:willUnmount()
@@ -166,7 +171,15 @@ function PatchVisualizer:render()
 				end
 			end
 
-			local elementHeight, setElementHeight = Roact.createBinding(24)
+			-- Reuse existing bindings for this node, or create new ones
+			local nodeId = node.id
+			if not self.nodeHeightBindings[nodeId] then
+				local binding, setBinding = Roact.createBinding(24)
+				self.nodeHeightBindings[nodeId] = { binding = binding, setBinding = setBinding }
+			end
+			local elementHeight = self.nodeHeightBindings[nodeId].binding
+			local setElementHeight = self.nodeHeightBindings[nodeId].setBinding
+
 			elementHeights[elementIndex] = elementHeight
 			scrollElements[elementIndex] = e(DomLabel, {
 				transparency = self.props.transparency,
@@ -200,6 +213,9 @@ function PatchVisualizer:render()
 			end
 		end
 
+		-- Track which node IDs are used this render
+		local usedNodeIds = {}
+
 		-- Draw all visible nodes in order
 		for i, entry in ipairs(visibleNodes) do
 			local depth = entry.depth
@@ -209,6 +225,14 @@ function PatchVisualizer:render()
 			end
 
 			drawNode(entry.node, depth, i)
+			usedNodeIds[entry.node.id] = true
+		end
+
+		-- Clean up bindings for nodes that no longer exist
+		for nodeId in self.nodeHeightBindings do
+			if not usedNodeIds[nodeId] then
+				self.nodeHeightBindings[nodeId] = nil
+			end
 		end
 	end
 
