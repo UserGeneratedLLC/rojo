@@ -31,7 +31,9 @@ fn write_with_retry(path: &Path, contents: &[u8]) -> io::Result<()> {
             Ok(()) => return Ok(()),
             Err(err) => {
                 // Only retry on "Access denied" (os error 5) or "Sharing violation" (os error 32)
-                let should_retry = err.raw_os_error().is_some_and(|code| code == 5 || code == 32);
+                let should_retry = err
+                    .raw_os_error()
+                    .is_some_and(|code| code == 5 || code == 32);
 
                 if should_retry && attempt < MAX_RETRIES {
                     log::trace!(
@@ -71,7 +73,9 @@ fn remove_file_with_retry(path: &Path) -> io::Result<()> {
             Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
             Err(err) => {
                 // Only retry on "Access denied" (os error 5) or "Sharing violation" (os error 32)
-                let should_retry = err.raw_os_error().is_some_and(|code| code == 5 || code == 32);
+                let should_retry = err
+                    .raw_os_error()
+                    .is_some_and(|code| code == 5 || code == 32);
 
                 if should_retry && attempt < MAX_RETRIES {
                     log::trace!(
