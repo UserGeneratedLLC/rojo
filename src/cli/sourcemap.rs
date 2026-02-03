@@ -3,8 +3,11 @@ use std::{
     io::{BufWriter, Write},
     mem::forget,
     path::{self, Path, PathBuf},
+    process,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
+use anyhow::Context;
 use clap::Parser;
 use fs_err::File;
 use memofs::Vfs;
@@ -259,11 +262,13 @@ pub(crate) fn write_sourcemap(
     );
 
     if let Some(output_path) = output {
-        let mut file = BufWriter::new(File::create(output_path)?);
         // Use standard JSON (not JSON5) for sourcemaps - required by external tools like LSPs
         let json_output = serde_json::to_string(&root_node)?;
-        file.write_all(json_output.as_bytes())?;
-        file.flush()?;
+
+        // Use atomic write (temp file + rename) to prevent file watchers from
+        // reading partial files. Rename is atomic on all major filesystems when
+        // source and destination are on the same filesystem.
+        write_atomic(output_path, json_output.as_bytes())?;
 
         if !quiet {
             println!("Created sourcemap at {}", output_path.display());
@@ -273,6 +278,54 @@ pub(crate) fn write_sourcemap(
         let output = serde_json::to_string(&root_node)?;
         println!("{}", output);
     }
+
+    Ok(())
+}
+
+/// Writes data to a file atomically by writing to a temporary file first,
+/// then renaming it to the target path. This ensures file watchers never
+/// see partial file contents.
+fn write_atomic(target: &Path, data: &[u8]) -> anyhow::Result<()> {
+    // Generate a unique temp filename in the same directory as the target.
+    // Using same directory ensures rename is atomic (same filesystem).
+    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+
+    let temp_name = format!(
+        ".{}.{}.{}.tmp",
+        target
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("sourcemap"),
+        process::id(),
+        timestamp
+    );
+    let temp_path = parent.join(&temp_name);
+
+    // Write to temp file
+    let mut file = BufWriter::new(
+        File::create(&temp_path)
+            .with_context(|| format!("Failed to create temp file: {}", temp_path.display()))?,
+    );
+    file.write_all(data)
+        .with_context(|| format!("Failed to write temp file: {}", temp_path.display()))?;
+    file.flush()?;
+
+    // Ensure data is synced to disk before rename (important for crash safety)
+    file.into_inner()?.sync_all()?;
+
+    // Atomic rename to target path
+    std::fs::rename(&temp_path, target).with_context(|| {
+        format!(
+            "Failed to rename {} to {}",
+            temp_path.display(),
+            target.display()
+        )
+    })?;
 
     Ok(())
 }
