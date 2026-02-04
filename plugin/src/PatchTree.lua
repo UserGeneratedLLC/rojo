@@ -183,7 +183,19 @@ function Tree:buildAncestryNodes(previousId: string?, ancestryIds: { string }, p
 
 		local value = instanceMap.fromIds[ancestorId] or patch.added[ancestorId]
 		if not value then
-			Log.warn("Failed to find ancestor object for " .. ancestorId)
+			-- Ancestor is missing from both instanceMap and patch.added.
+			-- This can happen during rapid changes (e.g., undo operations) where
+			-- patches arrive referencing instances that were never fully synced.
+			-- Create a placeholder node to maintain the ancestry chain, allowing
+			-- the visualization to still work with incomplete information.
+			Log.warn("Failed to find ancestor object for {}; creating placeholder node", ancestorId)
+			self:addNode(previousId, {
+				id = ancestorId,
+				className = "Unknown",
+				name = "[Unknown Ancestor]",
+				instance = nil,
+			})
+			previousId = ancestorId
 			continue
 		end
 		self:addNode(previousId, {
