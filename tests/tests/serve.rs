@@ -1,4 +1,6 @@
 use std::fs;
+use std::thread;
+use std::time::Duration;
 
 use insta::{assert_snapshot, assert_yaml_snapshot, with_settings};
 use tempfile::tempdir;
@@ -43,6 +45,7 @@ fn scripts() {
         });
 
         fs::write(session.path().join("src/foo.luau"), "Updated foo!").unwrap();
+        thread::sleep(Duration::from_millis(100));
 
         let socket_packet = session
             .get_api_socket_packet(SocketPacketType::Messages, 0)
@@ -109,6 +112,7 @@ fn remove_file() {
         );
 
         fs::remove_file(session.path().join("src/hello.txt")).unwrap();
+        thread::sleep(Duration::from_millis(100));
 
         let socket_packet = session
             .get_api_socket_packet(SocketPacketType::Messages, 0)
@@ -141,6 +145,7 @@ fn edit_init() {
         );
 
         fs::write(session.path().join("src/init.luau"), b"-- Edited contents").unwrap();
+        thread::sleep(Duration::from_millis(100));
 
         let socket_packet = session
             .get_api_socket_packet(SocketPacketType::Messages, 0)
@@ -484,6 +489,7 @@ fn ref_properties_remove() {
         );
 
         fs::remove_file(session.path().join("src/target.model.json5")).unwrap();
+        thread::sleep(Duration::from_millis(100));
 
         let socket_packet = session
             .get_api_socket_packet(SocketPacketType::Messages, 0)
