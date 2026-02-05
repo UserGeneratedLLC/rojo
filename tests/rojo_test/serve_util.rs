@@ -1,8 +1,9 @@
 use std::{
     fmt::Write as _,
     fs,
+    io::Read as _,
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::atomic::{AtomicUsize, Ordering},
     thread,
     time::Duration,
@@ -108,6 +109,7 @@ impl TestServeSession {
                 port_string.as_str(),
             ])
             .current_dir(working_dir)
+            .stderr(Stdio::piped())
             .spawn()
             .expect("Couldn't start Rojo");
 
@@ -132,7 +134,16 @@ impl TestServeSession {
 
         for i in 1..=MAX_TRIES {
             match self.rojo_process.0.try_wait() {
-                Ok(Some(status)) => panic!("Rojo process exited with status {}", status),
+                Ok(Some(status)) => {
+                    let mut stderr_output = String::new();
+                    if let Some(mut stderr) = self.rojo_process.0.stderr.take() {
+                        let _ = stderr.read_to_string(&mut stderr_output);
+                    }
+                    panic!(
+                        "Rojo process exited with status {}\nstderr:\n{}",
+                        status, stderr_output
+                    );
+                }
                 Ok(None) => { /* The process is still running, as expected */ }
                 Err(err) => panic!("Failed to wait on Rojo process: {}", err),
             }
