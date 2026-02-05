@@ -187,6 +187,21 @@ impl TestServeSession {
         packet_type: SocketPacketType,
         cursor: u32,
     ) -> Result<SocketPacket<'static>, Box<dyn std::error::Error>> {
+        self.recv_socket_packet(packet_type, cursor, || {})
+    }
+
+    /// Start listening on the WebSocket, then run the provided action (e.g. a
+    /// file modification), and wait for the expected packet.
+    ///
+    /// This avoids race conditions where the file watcher hasn't processed a
+    /// change before the WebSocket connects: by connecting first, the listener
+    /// is guaranteed to be in place when the change is detected.
+    pub fn recv_socket_packet(
+        &self,
+        packet_type: SocketPacketType,
+        cursor: u32,
+        action: impl FnOnce(),
+    ) -> Result<SocketPacket<'static>, Box<dyn std::error::Error>> {
         let url = format!("ws://localhost:{}/api/socket/{}", self.port, cursor);
 
         let (mut socket, _response) = connect(url)?;
@@ -199,6 +214,10 @@ impl TestServeSession {
         {
             stream.set_read_timeout(Some(Duration::from_millis(100)))?;
         }
+
+        // Now that the WebSocket is connected and listening, perform the action
+        // that should trigger the change (e.g. writing/deleting a file).
+        action();
 
         let start = std::time::Instant::now();
 

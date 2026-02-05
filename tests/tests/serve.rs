@@ -1,6 +1,4 @@
 use std::fs;
-use std::thread;
-use std::time::Duration;
 
 use insta::{assert_snapshot, assert_yaml_snapshot, with_settings};
 use tempfile::tempdir;
@@ -44,11 +42,11 @@ fn scripts() {
             );
         });
 
-        fs::write(session.path().join("src/foo.luau"), "Updated foo!").unwrap();
-        thread::sleep(Duration::from_millis(100));
-
+        let path = session.path().join("src/foo.luau");
         let socket_packet = session
-            .get_api_socket_packet(SocketPacketType::Messages, 0)
+            .recv_socket_packet(SocketPacketType::Messages, 0, || {
+                fs::write(&path, "Updated foo!").unwrap();
+            })
             .unwrap();
         assert_yaml_snapshot!(
             "scripts_subscribe",
@@ -111,11 +109,11 @@ fn remove_file() {
             read_response.intern_and_redact(&mut redactions, root_id)
         );
 
-        fs::remove_file(session.path().join("src/hello.txt")).unwrap();
-        thread::sleep(Duration::from_millis(100));
-
+        let path = session.path().join("src/hello.txt");
         let socket_packet = session
-            .get_api_socket_packet(SocketPacketType::Messages, 0)
+            .recv_socket_packet(SocketPacketType::Messages, 0, || {
+                fs::remove_file(&path).unwrap();
+            })
             .unwrap();
         assert_yaml_snapshot!(
             "remove_file_subscribe",
@@ -144,11 +142,11 @@ fn edit_init() {
             read_response.intern_and_redact(&mut redactions, root_id)
         );
 
-        fs::write(session.path().join("src/init.luau"), b"-- Edited contents").unwrap();
-        thread::sleep(Duration::from_millis(100));
-
+        let path = session.path().join("src/init.luau");
         let socket_packet = session
-            .get_api_socket_packet(SocketPacketType::Messages, 0)
+            .recv_socket_packet(SocketPacketType::Messages, 0, || {
+                fs::write(&path, b"-- Edited contents").unwrap();
+            })
             .unwrap();
         assert_yaml_snapshot!(
             "edit_init_subscribe",
@@ -488,11 +486,11 @@ fn ref_properties_remove() {
             read_response.intern_and_redact(&mut redactions, root_id)
         );
 
-        fs::remove_file(session.path().join("src/target.model.json5")).unwrap();
-        thread::sleep(Duration::from_millis(100));
-
+        let path = session.path().join("src/target.model.json5");
         let socket_packet = session
-            .get_api_socket_packet(SocketPacketType::Messages, 0)
+            .recv_socket_packet(SocketPacketType::Messages, 0, || {
+                fs::remove_file(&path).unwrap();
+            })
             .unwrap();
         assert_yaml_snapshot!(
             "ref_properties_remove_subscribe",
