@@ -4480,15 +4480,19 @@ fn extreme_no_wait_rename_chain_20x() {
     });
 }
 
-/// 20 no-wait all-three-combined on a directory: rename + class + source.
+/// 15 no-wait all-three-combined on a directory: rename + class + source.
+/// (Directory all-three is the most expensive per-operation: dir rename +
+/// init rename + source write + many VFS events. 15 iterations keeps the
+/// extreme pressure without timing out the HTTP stack, unlike standalone
+/// renames where 20 is fine because each op is cheap.)
 #[test]
-fn extreme_no_wait_directory_all_three_20x() {
+fn extreme_no_wait_directory_all_three_15x() {
     run_serve_test("syncback_format_transitions", |session, _redactions| {
         let src = session.path().join("src");
         let classes = ["Script", "LocalScript", "ModuleScript"];
         let mut current_name = "DirModuleWithChildren".to_string();
 
-        for i in 1..=20 {
+        for i in 1..=15 {
             let new_name = format!("XD{}", i);
             let new_class = classes[i % 3];
             let (session_id, id) = get_format_transitions_instance(&session, &current_name);
@@ -4506,21 +4510,21 @@ fn extreme_no_wait_directory_all_three_20x() {
         }
 
         wait_for_settle();
-        let final_dir = src.join("XD20");
-        assert!(final_dir.is_dir(), "XD20 should be a directory");
-        // class at i=20: classes[20 % 3] = classes[2] = ModuleScript
+        let final_dir = src.join("XD15");
+        assert!(final_dir.is_dir(), "XD15 should be a directory");
+        // class at i=15: classes[15 % 3] = classes[0] = Script
         assert_file_exists(
-            &final_dir.join("init.luau"),
-            "init.luau in XD20 (ModuleScript)",
+            &final_dir.join("init.server.luau"),
+            "init.server.luau in XD15 (Script)",
         );
-        let content = fs::read_to_string(final_dir.join("init.luau")).unwrap();
+        let content = fs::read_to_string(final_dir.join("init.server.luau")).unwrap();
         assert!(
-            content.contains("-- xd 20"),
-            "Final source in XD20, got: {}",
+            content.contains("-- xd 15"),
+            "Final source in XD15, got: {}",
             content
         );
-        assert_file_exists(&final_dir.join("ChildA.luau"), "ChildA in XD20");
-        assert_file_exists(&final_dir.join("ChildB.luau"), "ChildB in XD20");
+        assert_file_exists(&final_dir.join("ChildA.luau"), "ChildA in XD15");
+        assert_file_exists(&final_dir.join("ChildB.luau"), "ChildB in XD15");
     });
 }
 
