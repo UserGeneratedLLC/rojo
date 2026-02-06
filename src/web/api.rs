@@ -347,15 +347,24 @@ impl ApiService {
                         } else {
                             log::info!("Syncback: Removed file at {}", path.display());
                         }
-                        // Also remove adjacent meta file
-                        if let Some(instance_name) = path
+                        // Also remove adjacent meta file.
+                        // Strip known script suffixes (.server, .client, etc.)
+                        // rather than splitting on dots, so that names containing
+                        // dots (e.g. "Config.Client.server.luau") resolve correctly.
+                        if let Some(file_stem) = path
                             .file_stem()
                             .and_then(|s| s.to_str())
-                            .map(|s| s.split('.').next().unwrap_or(s).to_string())
                         {
+                            let base_name = file_stem
+                                .strip_suffix(".server")
+                                .or_else(|| file_stem.strip_suffix(".client"))
+                                .or_else(|| file_stem.strip_suffix(".plugin"))
+                                .or_else(|| file_stem.strip_suffix(".local"))
+                                .or_else(|| file_stem.strip_suffix(".legacy"))
+                                .unwrap_or(file_stem);
                             if let Some(parent_dir) = path.parent() {
                                 let meta_path =
-                                    parent_dir.join(format!("{}.meta.json5", instance_name));
+                                    parent_dir.join(format!("{}.meta.json5", base_name));
                                 if meta_path.exists() {
                                     self.suppress_path(&meta_path);
                                     let _ = fs::remove_file(&meta_path);
