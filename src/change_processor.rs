@@ -495,15 +495,64 @@ impl JobThreadContext {
                                 InstigatingSource::Path(path) => {
                                     if path.exists() {
                                         let old_name = instance.name();
-                                        // Compute new path by replacing the old name
-                                        // in the filename/directory name
-                                        if let Some(parent) = path.parent() {
-                                            let old_file_name = path
-                                                .file_name()
-                                                .and_then(|f| f.to_str())
-                                                .unwrap_or("");
+                                        let file_name = path
+                                            .file_name()
+                                            .and_then(|f| f.to_str())
+                                            .unwrap_or("");
+
+                                        // For directory-format scripts, the instigating_source
+                                        // is the init file (e.g., src/MyModule/init.luau).
+                                        // The instance name corresponds to the parent directory,
+                                        // not the init file, so we must rename the directory.
+                                        let is_init_file = file_name.starts_with("init.");
+
+                                        if is_init_file {
+                                            let dir_path = path.parent().unwrap();
+                                            if let Some(grandparent) = dir_path.parent() {
+                                                let dir_name = dir_path
+                                                    .file_name()
+                                                    .and_then(|f| f.to_str())
+                                                    .unwrap_or("");
+                                                let new_dir_name =
+                                                    dir_name.replacen(old_name, new_name, 1);
+                                                let new_dir_path =
+                                                    grandparent.join(&new_dir_name);
+
+                                                if new_dir_path != dir_path {
+                                                    log::info!(
+                                                        "Two-way sync: Renaming directory {} -> {}",
+                                                        dir_path.display(),
+                                                        new_dir_path.display()
+                                                    );
+                                                    if let Err(err) =
+                                                        fs::rename(dir_path, &new_dir_path)
+                                                    {
+                                                        log::error!(
+                                                            "Failed to rename directory {:?} to {:?}: {}",
+                                                            dir_path,
+                                                            new_dir_path,
+                                                            err
+                                                        );
+                                                    } else {
+                                                        let old_meta = grandparent.join(format!(
+                                                            "{}.meta.json5",
+                                                            old_name
+                                                        ));
+                                                        if old_meta.exists() {
+                                                            let new_meta =
+                                                                grandparent.join(format!(
+                                                                    "{}.meta.json5",
+                                                                    new_name
+                                                                ));
+                                                            let _ =
+                                                                fs::rename(&old_meta, &new_meta);
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        } else if let Some(parent) = path.parent() {
                                             let new_file_name =
-                                                old_file_name.replacen(old_name, new_name, 1);
+                                                file_name.replacen(old_name, new_name, 1);
                                             let new_path = parent.join(&new_file_name);
 
                                             if new_path != *path {
@@ -520,7 +569,6 @@ impl JobThreadContext {
                                                         err
                                                     );
                                                 } else {
-                                                    // Also rename adjacent meta file if it exists
                                                     let old_meta = parent
                                                         .join(format!("{}.meta.json5", old_name));
                                                     if old_meta.exists() {

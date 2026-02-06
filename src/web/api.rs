@@ -1035,9 +1035,12 @@ impl ApiService {
                 let raw = fs::read(standalone_path).unwrap_or_default();
                 let init_meta_path = new_dir.join("init.meta.json5");
 
-                // Parse the model JSON to extract only meta-compatible fields
+                // Parse the model JSON5 to extract only meta-compatible fields.
+                // Use json5::from_str (not serde_json) because .model.json5 files
+                // can contain JSON5 features (comments, trailing commas, unquoted keys).
+                let raw_str = String::from_utf8_lossy(&raw);
                 let meta_content =
-                    if let Ok(model) = serde_json::from_slice::<serde_json::Value>(&raw) {
+                    if let Ok(model) = json5::from_str::<serde_json::Value>(&raw_str) {
                         // Warn about inline children that will be lost
                         if let Some(children) = model.get("children").or(model.get("Children")) {
                             if children.is_array()
