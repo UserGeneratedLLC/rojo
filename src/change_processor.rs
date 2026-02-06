@@ -520,8 +520,7 @@ impl JobThreadContext {
                                                     .file_name()
                                                     .and_then(|f| f.to_str())
                                                     .unwrap_or("");
-                                                let encoded_new_name =
-                                                    encode_path_name(new_name);
+                                                let encoded_new_name = encode_path_name(new_name);
                                                 let new_dir_path =
                                                     grandparent.join(&encoded_new_name);
 
@@ -549,12 +548,11 @@ impl JobThreadContext {
                                                             dir_name
                                                         ));
                                                         if old_meta.exists() {
-                                                            let new_meta = grandparent.join(
-                                                                format!(
+                                                            let new_meta =
+                                                                grandparent.join(format!(
                                                                     "{}.meta.json5",
                                                                     encoded_new_name
-                                                                ),
-                                                            );
+                                                                ));
                                                             let _ =
                                                                 fs::rename(&old_meta, &new_meta);
                                                         }
@@ -589,19 +587,13 @@ impl JobThreadContext {
                                                 &stem[..stem.len() - script_suffix.len()]
                                             };
 
-                                            let encoded_new_name =
-                                                encode_path_name(new_name);
+                                            let encoded_new_name = encode_path_name(new_name);
                                             let new_file_name = if extension.is_empty() {
-                                                format!(
-                                                    "{}{}",
-                                                    encoded_new_name, script_suffix
-                                                )
+                                                format!("{}{}", encoded_new_name, script_suffix)
                                             } else {
                                                 format!(
                                                     "{}{}.{}",
-                                                    encoded_new_name,
-                                                    script_suffix,
-                                                    extension
+                                                    encoded_new_name, script_suffix, extension
                                                 )
                                             };
                                             let new_path = parent.join(&new_file_name);
@@ -621,10 +613,8 @@ impl JobThreadContext {
                                                     );
                                                 } else {
                                                     overridden_source_path = Some(new_path.clone());
-                                                    let old_meta = parent.join(format!(
-                                                        "{}.meta.json5",
-                                                        old_base
-                                                    ));
+                                                    let old_meta = parent
+                                                        .join(format!("{}.meta.json5", old_base));
                                                     if old_meta.exists() {
                                                         let new_meta = parent.join(format!(
                                                             "{}.meta.json5",
@@ -897,14 +887,13 @@ fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<
                         snapshot_path.display()
                     );
 
-                    let snapshot =
-                        match snapshot_from_vfs(&metadata.context, vfs, snapshot_path) {
-                            Ok(snapshot) => snapshot,
-                            Err(err) => {
-                                log::error!("Snapshot error: {:?}", err);
-                                return None;
-                            }
-                        };
+                    let snapshot = match snapshot_from_vfs(&metadata.context, vfs, snapshot_path) {
+                        Ok(snapshot) => snapshot,
+                        Err(err) => {
+                            log::error!("Snapshot error: {:?}", err);
+                            return None;
+                        }
+                    };
 
                     let patch_set = compute_patch_set(snapshot, tree, id);
                     let applied = apply_patch_set(tree, patch_set);

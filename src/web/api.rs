@@ -351,10 +351,7 @@ impl ApiService {
                         // Strip known script suffixes (.server, .client, etc.)
                         // rather than splitting on dots, so that names containing
                         // dots (e.g. "Config.Client.server.luau") resolve correctly.
-                        if let Some(file_stem) = path
-                            .file_stem()
-                            .and_then(|s| s.to_str())
-                        {
+                        if let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) {
                             let base_name = file_stem
                                 .strip_suffix(".server")
                                 .or_else(|| file_stem.strip_suffix(".client"))
