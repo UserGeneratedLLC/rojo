@@ -3,8 +3,6 @@ use std::{
     io,
     path::{Path, PathBuf},
     sync::atomic::{AtomicUsize, Ordering},
-    thread,
-    time::Duration,
 };
 
 use memofs::Vfs;

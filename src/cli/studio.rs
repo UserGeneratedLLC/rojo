@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::process::Command;
 
 use anyhow::Context;
 use clap::Parser;
