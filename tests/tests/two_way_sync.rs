@@ -634,3 +634,435 @@ fn echo_suppression_prevents_redundant_patches() {
         );
     });
 }
+
+// ---------------------------------------------------------------------------
+// Helpers (syncback_format_transitions fixture)
+// ---------------------------------------------------------------------------
+
+/// Look up an instance by name under ReplicatedStorage in the format_transitions fixture.
+fn get_format_transitions_instance(
+    session: &crate::rojo_test::serve_util::TestServeSession,
+    instance_name: &str,
+) -> (librojo::SessionId, Ref) {
+    let info = session.get_api_rojo().unwrap();
+    let root_read = session.get_api_read(info.root_instance_id).unwrap();
+    let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+    let rs_read = session.get_api_read(rs_id).unwrap();
+    let (instance_id, _) = find_by_name(&rs_read.instances, instance_name);
+    (info.session_id, instance_id)
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Directory-format operations
+// ---------------------------------------------------------------------------
+
+/// Test 13: Renaming a directory-format script renames the parent directory,
+/// not the init file inside it. Children should move with it.
+#[test]
+fn rename_directory_format_script() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let (session_id, dir_module_id) =
+            get_format_transitions_instance(&session, "DirModuleWithChildren");
+
+        let old_dir = session.path().join("src").join("DirModuleWithChildren");
+        let new_dir = session.path().join("src").join("RenamedDirModule");
+
+        assert!(old_dir.is_dir(), "Old directory should exist before rename");
+
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: dir_module_id,
+                changed_name: Some("RenamedDirModule".to_string()),
+                changed_class_name: None,
+                changed_properties: UstrMap::default(),
+                changed_metadata: None,
+            },
+        );
+
+        assert!(
+            !old_dir.exists(),
+            "Old directory should be gone after rename: {}",
+            old_dir.display()
+        );
+        assert!(
+            new_dir.is_dir(),
+            "New directory should exist after rename: {}",
+            new_dir.display()
+        );
+
+        // init.luau should be inside the renamed directory
+        let init_file = new_dir.join("init.luau");
+        assert_file_exists(&init_file, "init.luau inside renamed directory");
+
+        // Children should also be present in the renamed directory
+        let child_a = new_dir.join("ChildA.luau");
+        assert_file_exists(&child_a, "ChildA.luau inside renamed directory");
+    });
+}
+
+/// Test 14: Changing ClassName on a directory-format ModuleScript to Script
+/// renames the init file inside the directory (init.luau → init.server.luau).
+#[test]
+fn classname_change_directory_module_to_script() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let (session_id, dir_module_id) =
+            get_format_transitions_instance(&session, "DirModuleWithChildren");
+
+        let dir = session.path().join("src").join("DirModuleWithChildren");
+        let old_init = dir.join("init.luau");
+        let new_init = dir.join("init.server.luau");
+
+        assert_file_exists(&old_init, "init.luau before class change");
+        assert_not_exists(&new_init, "init.server.luau before class change");
+
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: dir_module_id,
+                changed_name: None,
+                changed_class_name: Some(ustr("Script")),
+                changed_properties: UstrMap::default(),
+                changed_metadata: None,
+            },
+        );
+
+        assert_not_exists(&old_init, "init.luau after class change to Script");
+        assert_file_exists(&new_init, "init.server.luau after class change to Script");
+
+        // Children should be unaffected
+        let child_a = dir.join("ChildA.luau");
+        assert_file_exists(&child_a, "ChildA.luau unaffected by class change");
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Reverse ClassName transitions (code paths added in these commits)
+// ---------------------------------------------------------------------------
+
+/// Test 15: Script → ModuleScript ClassName transition (reverse of test 6).
+/// Validates that the .server suffix is correctly stripped.
+#[test]
+fn classname_change_script_to_module() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let (session_id, script_id) =
+            get_format_transitions_instance(&session, "StandaloneScript");
+
+        let old_path = session
+            .path()
+            .join("src")
+            .join("StandaloneScript.server.luau");
+        let new_path = session.path().join("src").join("StandaloneScript.luau");
+
+        assert_file_exists(&old_path, "Script file before class change");
+
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: script_id,
+                changed_name: None,
+                changed_class_name: Some(ustr("ModuleScript")),
+                changed_properties: UstrMap::default(),
+                changed_metadata: None,
+            },
+        );
+
+        assert_not_exists(&old_path, "Script file after class change to ModuleScript");
+        assert_file_exists(&new_path, "ModuleScript file after class change");
+    });
+}
+
+/// Test 16: Script → LocalScript ClassName transition.
+/// Validates that .server is replaced with .local.
+#[test]
+fn classname_change_script_to_localscript() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let (session_id, script_id) =
+            get_format_transitions_instance(&session, "StandaloneScript");
+
+        let old_path = session
+            .path()
+            .join("src")
+            .join("StandaloneScript.server.luau");
+        let new_path = session
+            .path()
+            .join("src")
+            .join("StandaloneScript.local.luau");
+
+        assert_file_exists(&old_path, "Script file before class change");
+
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: script_id,
+                changed_name: None,
+                changed_class_name: Some(ustr("LocalScript")),
+                changed_properties: UstrMap::default(),
+                changed_metadata: None,
+            },
+        );
+
+        assert_not_exists(&old_path, "Script file after class change to LocalScript");
+        assert_file_exists(&new_path, "LocalScript file after class change");
+    });
+}
+
+/// Test 17: LocalScript → Script ClassName transition.
+/// Exercises .client suffix handling (the fixture uses .client.luau for LocalScript).
+#[test]
+fn classname_change_localscript_to_script() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let (session_id, local_id) =
+            get_format_transitions_instance(&session, "StandaloneLocalScript");
+
+        let old_path = session
+            .path()
+            .join("src")
+            .join("StandaloneLocalScript.client.luau");
+        let new_path = session
+            .path()
+            .join("src")
+            .join("StandaloneLocalScript.server.luau");
+
+        assert_file_exists(&old_path, "LocalScript file before class change");
+
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: local_id,
+                changed_name: None,
+                changed_class_name: Some(ustr("Script")),
+                changed_properties: UstrMap::default(),
+                changed_metadata: None,
+            },
+        );
+
+        assert_not_exists(&old_path, "LocalScript file after class change to Script");
+        assert_file_exists(&new_path, "Script file after class change");
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Combined operations (overridden_source_path logic)
+// ---------------------------------------------------------------------------
+
+/// Test 18: Combined rename + Source update in a single request.
+/// Validates that Source is written to the RENAMED file, not the old location.
+/// This exercises the `overridden_source_path` tracking in ChangeProcessor.
+#[test]
+fn combined_rename_and_source_update() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let (session_id, _rs_id, existing_id) = get_rs_and_existing(&session);
+
+        let old_path = session.path().join("src").join("existing.luau");
+        let new_path = session.path().join("src").join("CombinedRename.luau");
+
+        assert_file_exists(&old_path, "existing.luau before combined update");
+
+        let mut props = UstrMap::default();
+        props.insert(
+            ustr("Source"),
+            Some(Variant::String("-- Written after rename".to_string())),
+        );
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: existing_id,
+                changed_name: Some("CombinedRename".to_string()),
+                changed_class_name: None,
+                changed_properties: props,
+                changed_metadata: None,
+            },
+        );
+
+        assert_not_exists(&old_path, "Old file after combined rename+source");
+        assert_file_exists(&new_path, "Renamed file after combined rename+source");
+
+        let content = fs::read_to_string(&new_path).unwrap();
+        assert!(
+            content.contains("Written after rename"),
+            "Source should be written to the NEW file location, got: {}",
+            content
+        );
+    });
+}
+
+/// Test 19: Combined ClassName change + Source update in a single request.
+/// Validates that Source is written to the file with the NEW extension.
+#[test]
+fn combined_classname_and_source_update() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let (session_id, _rs_id, existing_id) = get_rs_and_existing(&session);
+
+        let old_path = session.path().join("src").join("existing.luau");
+        let new_path = session.path().join("src").join("existing.server.luau");
+
+        assert_file_exists(&old_path, "existing.luau before combined update");
+
+        let mut props = UstrMap::default();
+        props.insert(
+            ustr("Source"),
+            Some(Variant::String(
+                "-- Source after class change".to_string(),
+            )),
+        );
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: existing_id,
+                changed_name: None,
+                changed_class_name: Some(ustr("Script")),
+                changed_properties: props,
+                changed_metadata: None,
+            },
+        );
+
+        assert_not_exists(&old_path, "ModuleScript file after ClassName+Source");
+        assert_file_exists(&new_path, "Script file after ClassName+Source");
+
+        let content = fs::read_to_string(&new_path).unwrap();
+        assert!(
+            content.contains("Source after class change"),
+            "Source should be in the new file, got: {}",
+            content
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Standalone → directory conversion & suffix-aware removal
+// ---------------------------------------------------------------------------
+
+/// Test 20: Adding a child instance to a standalone script converts it to
+/// directory format (e.g., StandaloneModule.luau → StandaloneModule/init.luau).
+/// This exercises `convert_standalone_script_to_directory` in ApiService.
+#[test]
+fn add_child_converts_standalone_to_directory() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let info = session.get_api_rojo().unwrap();
+        let root_read = session.get_api_read(info.root_instance_id).unwrap();
+        let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+        let rs_read = session.get_api_read(rs_id).unwrap();
+        let (standalone_id, _) = find_by_name(&rs_read.instances, "StandaloneModule");
+
+        let standalone_file = session.path().join("src").join("StandaloneModule.luau");
+        let dir_path = session.path().join("src").join("StandaloneModule");
+
+        assert_file_exists(&standalone_file, "Standalone file before child add");
+        assert!(
+            !dir_path.exists(),
+            "Directory should NOT exist before child add"
+        );
+
+        // Add a child ModuleScript to StandaloneModule
+        let mut properties = HashMap::new();
+        properties.insert(
+            "Source".to_string(),
+            Variant::String("-- New child module".to_string()),
+        );
+        let added = AddedInstance {
+            parent: Some(standalone_id),
+            name: "NewChild".to_string(),
+            class_name: "ModuleScript".to_string(),
+            properties,
+            children: vec![],
+        };
+        let mut added_map = HashMap::new();
+        added_map.insert(Ref::new(), added);
+        let write_request = WriteRequest {
+            session_id: info.session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![],
+        };
+        session.post_api_write(&write_request).unwrap();
+        thread::sleep(Duration::from_millis(500));
+
+        // Standalone file should be gone, replaced by directory
+        assert_not_exists(
+            &standalone_file,
+            "Standalone file after child add (converted to directory)",
+        );
+        assert!(
+            dir_path.is_dir(),
+            "Directory should exist after conversion: {}",
+            dir_path.display()
+        );
+
+        // init.luau should contain the original source
+        let init_file = dir_path.join("init.luau");
+        assert_file_exists(&init_file, "init.luau after standalone→directory conversion");
+
+        let init_content = fs::read_to_string(&init_file).unwrap();
+        assert!(
+            init_content.contains("Standalone ModuleScript"),
+            "init.luau should contain original source, got: {}",
+            init_content
+        );
+
+        // Child should be created inside the directory
+        let child_file = dir_path.join("NewChild.luau");
+        assert_file_exists(&child_file, "NewChild.luau inside converted directory");
+    });
+}
+
+/// Test 21: Removing a Script (with .server suffix) properly cleans up
+/// the adjacent meta file by stripping the script suffix to find the
+/// correct meta file name (e.g., StandaloneScript.meta.json5).
+#[test]
+fn remove_script_with_suffix_cleans_meta() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let (session_id, script_id) =
+            get_format_transitions_instance(&session, "StandaloneScript");
+
+        let script_path = session
+            .path()
+            .join("src")
+            .join("StandaloneScript.server.luau");
+        let meta_path = session
+            .path()
+            .join("src")
+            .join("StandaloneScript.meta.json5");
+
+        assert_file_exists(&script_path, "Script file before operations");
+
+        // First, create a meta file by sending a non-Source property update
+        let mut attrs = rbx_dom_weak::types::Attributes::new();
+        attrs.insert("ScriptAttr".to_string(), Variant::Float64(7.0));
+        let mut props = UstrMap::default();
+        props.insert(ustr("Attributes"), Some(Variant::Attributes(attrs)));
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: script_id,
+                changed_name: None,
+                changed_class_name: None,
+                changed_properties: props,
+                changed_metadata: None,
+            },
+        );
+
+        assert_file_exists(&meta_path, "Meta file after property update");
+
+        // Re-read ID in case tree was rebuilt after the update
+        let (session_id, script_id) =
+            get_format_transitions_instance(&session, "StandaloneScript");
+
+        // Now remove the instance — both script and meta should be deleted
+        send_removal(&session, &session_id, vec![script_id]);
+
+        assert_not_exists(&script_path, "Script file after removal");
+        assert_not_exists(
+            &meta_path,
+            "Meta file after removal (suffix-stripped cleanup)",
+        );
+    });
+}

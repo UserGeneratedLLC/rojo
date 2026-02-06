@@ -159,6 +159,56 @@ pub struct ApiService {
     suppressed_paths: Arc<Mutex<HashMap<PathBuf, usize>>>,
 }
 
+/// Derives the directory name from a standalone script's filesystem path.
+///
+/// Uses `file_stem()` with script suffix stripping instead of the decoded
+/// instance name, so that Windows-invalid character encoding (e.g., `%3F`
+/// for `?`) is preserved.
+///
+/// Examples:
+/// - `What%3F.server.luau` → `What%3F`
+/// - `MyModule.luau` → `MyModule`
+/// - `Handler.client.lua` → `Handler`
+fn dir_name_from_script_path(standalone_path: &Path) -> &str {
+    let file_stem = standalone_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    file_stem
+        .strip_suffix(".server")
+        .or_else(|| file_stem.strip_suffix(".client"))
+        .or_else(|| file_stem.strip_suffix(".plugin"))
+        .or_else(|| file_stem.strip_suffix(".local"))
+        .or_else(|| file_stem.strip_suffix(".legacy"))
+        .unwrap_or(file_stem)
+}
+
+/// Derives the directory name from a standalone non-script instance's filesystem path.
+///
+/// Strips compound extensions (`.model.json5`, `.model.json`) or falls back
+/// to `file_stem()` for single-extension types (`.txt`, `.csv`, etc.).
+///
+/// Examples:
+/// - `What%3F.model.json5` → `What%3F`
+/// - `MyPart.model.json` → `MyPart`
+/// - `Greeting.txt` → `Greeting`
+/// - `Translations.csv` → `Translations`
+fn dir_name_from_instance_path(standalone_path: &Path) -> &str {
+    let file_name = standalone_path
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("");
+    file_name
+        .strip_suffix(".model.json5")
+        .or_else(|| file_name.strip_suffix(".model.json"))
+        .unwrap_or_else(|| {
+            standalone_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or(file_name)
+        })
+}
+
 impl ApiService {
     pub fn new(serve_session: Arc<ServeSession>) -> Self {
         let suppressed_paths = serve_session.suppressed_paths();
@@ -921,7 +971,7 @@ impl ApiService {
     fn convert_standalone_script_to_directory(
         &self,
         standalone_path: &std::path::Path,
-        script_name: &str,
+        _script_name: &str,
         class_name: &str,
         containing_dir: &std::path::Path,
     ) -> anyhow::Result<std::path::PathBuf> {
@@ -934,8 +984,10 @@ impl ApiService {
             String::new()
         };
 
+        let dir_name = dir_name_from_script_path(standalone_path);
+
         // Create the directory
-        let new_dir = containing_dir.join(script_name);
+        let new_dir = containing_dir.join(dir_name);
         self.suppress_path(&new_dir);
         fs::create_dir_all(&new_dir).with_context(|| {
             format!(
@@ -970,7 +1022,7 @@ impl ApiService {
         }
 
         // Move adjacent meta file into directory if it exists
-        let meta_path = containing_dir.join(format!("{}.meta.json5", script_name));
+        let meta_path = containing_dir.join(format!("{}.meta.json5", dir_name));
         if meta_path.exists() {
             let init_meta_path = new_dir.join("init.meta.json5");
             self.suppress_path(&meta_path);
@@ -1012,7 +1064,9 @@ impl ApiService {
     ) -> anyhow::Result<std::path::PathBuf> {
         use anyhow::Context;
 
-        let new_dir = containing_dir.join(instance_name);
+        let dir_name = dir_name_from_instance_path(standalone_path);
+
+        let new_dir = containing_dir.join(dir_name);
         self.suppress_path(&new_dir);
         fs::create_dir_all(&new_dir).with_context(|| {
             format!(
@@ -5138,6 +5192,165 @@ mod tests {
                 instance.metadata().instigating_source.is_none(),
                 "Instance should have no instigating_source"
             );
+        }
+    }
+
+    mod dir_name_from_script_path_tests {
+        use super::*;
+
+        #[test]
+        fn module_script_luau() {
+            let path = Path::new("src/MyModule.luau");
+            assert_eq!(dir_name_from_script_path(path), "MyModule");
+        }
+
+        #[test]
+        fn server_script_luau() {
+            let path = Path::new("src/Handler.server.luau");
+            assert_eq!(dir_name_from_script_path(path), "Handler");
+        }
+
+        #[test]
+        fn client_script_luau() {
+            let path = Path::new("src/UI.client.luau");
+            assert_eq!(dir_name_from_script_path(path), "UI");
+        }
+
+        #[test]
+        fn local_script_luau() {
+            let path = Path::new("src/Input.local.luau");
+            assert_eq!(dir_name_from_script_path(path), "Input");
+        }
+
+        #[test]
+        fn plugin_script_luau() {
+            let path = Path::new("src/MyPlugin.plugin.luau");
+            assert_eq!(dir_name_from_script_path(path), "MyPlugin");
+        }
+
+        #[test]
+        fn legacy_script_luau() {
+            let path = Path::new("src/OldCode.legacy.luau");
+            assert_eq!(dir_name_from_script_path(path), "OldCode");
+        }
+
+        #[test]
+        fn legacy_lua_extension() {
+            let path = Path::new("src/OldModule.lua");
+            assert_eq!(dir_name_from_script_path(path), "OldModule");
+        }
+
+        #[test]
+        fn legacy_server_lua() {
+            let path = Path::new("src/Main.server.lua");
+            assert_eq!(dir_name_from_script_path(path), "Main");
+        }
+
+        #[test]
+        fn legacy_client_lua() {
+            let path = Path::new("src/Client.client.lua");
+            assert_eq!(dir_name_from_script_path(path), "Client");
+        }
+
+        #[test]
+        fn encoded_windows_chars_module() {
+            // ? is invalid on Windows, encoded as %3F
+            let path = Path::new("src/What%3F.luau");
+            assert_eq!(dir_name_from_script_path(path), "What%3F");
+        }
+
+        #[test]
+        fn encoded_windows_chars_server() {
+            let path = Path::new("src/What%3F.server.luau");
+            assert_eq!(dir_name_from_script_path(path), "What%3F");
+        }
+
+        #[test]
+        fn encoded_colon_char() {
+            // : is invalid on Windows, encoded as %3A
+            let path = Path::new("src/Key%3AValue.client.luau");
+            assert_eq!(dir_name_from_script_path(path), "Key%3AValue");
+        }
+
+        #[test]
+        fn multiple_dots_in_name() {
+            // Name like "my.module.luau" — file_stem is "my.module", no suffix match
+            let path = Path::new("src/my.module.luau");
+            assert_eq!(dir_name_from_script_path(path), "my.module");
+        }
+
+        #[test]
+        fn name_ending_with_suffix_substring() {
+            // "MyServer" should NOT be stripped to "My" — ".server" stripping only
+            // applies to the suffix after file_stem strips ".luau"
+            let path = Path::new("src/MyServer.luau");
+            assert_eq!(dir_name_from_script_path(path), "MyServer");
+        }
+    }
+
+    mod dir_name_from_instance_path_tests {
+        use super::*;
+
+        #[test]
+        fn model_json5() {
+            let path = Path::new("src/MyPart.model.json5");
+            assert_eq!(dir_name_from_instance_path(path), "MyPart");
+        }
+
+        #[test]
+        fn model_json_legacy() {
+            let path = Path::new("src/MyPart.model.json");
+            assert_eq!(dir_name_from_instance_path(path), "MyPart");
+        }
+
+        #[test]
+        fn txt_file() {
+            let path = Path::new("src/Greeting.txt");
+            assert_eq!(dir_name_from_instance_path(path), "Greeting");
+        }
+
+        #[test]
+        fn csv_file() {
+            let path = Path::new("src/Translations.csv");
+            assert_eq!(dir_name_from_instance_path(path), "Translations");
+        }
+
+        #[test]
+        fn encoded_windows_chars_model() {
+            let path = Path::new("src/What%3F.model.json5");
+            assert_eq!(dir_name_from_instance_path(path), "What%3F");
+        }
+
+        #[test]
+        fn encoded_windows_chars_txt() {
+            let path = Path::new("src/Ask%3F.txt");
+            assert_eq!(dir_name_from_instance_path(path), "Ask%3F");
+        }
+
+        #[test]
+        fn encoded_colon_model() {
+            let path = Path::new("src/Key%3AValue.model.json5");
+            assert_eq!(dir_name_from_instance_path(path), "Key%3AValue");
+        }
+
+        #[test]
+        fn encoded_colon_legacy_model() {
+            let path = Path::new("src/Key%3AValue.model.json");
+            assert_eq!(dir_name_from_instance_path(path), "Key%3AValue");
+        }
+
+        #[test]
+        fn multiple_dots_in_name_model() {
+            // "my.part.model.json5" — should strip ".model.json5"
+            let path = Path::new("src/my.part.model.json5");
+            assert_eq!(dir_name_from_instance_path(path), "my.part");
+        }
+
+        #[test]
+        fn unknown_extension_uses_file_stem() {
+            // Fallback to file_stem for unrecognized extensions
+            let path = Path::new("src/Something.toml");
+            assert_eq!(dir_name_from_instance_path(path), "Something");
         }
     }
 }
