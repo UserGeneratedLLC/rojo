@@ -3256,3 +3256,1373 @@ fn watcher_multi_file_simultaneous_edits() {
         }
     });
 }
+
+// ===========================================================================
+// PART 3: VFS & Change Processor Stress Tests
+//
+// These tests exercise every combination of rename, ClassName change, Source
+// write, and format transition (standalone ↔ directory) under maximum
+// pressure — zero-wait fire-and-forget, rapid interleaving, concurrent API +
+// filesystem ops, encoded names through all paths, and multi-instance
+// batches. The goal is to find every race condition in event suppression,
+// metadata updates, and the snapshot pipeline.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Section A: No-Wait Rapid Chains (maximum VFS pressure)
+//
+// Every request is sent with ZERO sleep between them. The server and change
+// processor must handle a firehose of overlapping PatchSets and VFS events.
+// ---------------------------------------------------------------------------
+
+/// No-wait rename chain: 10 renames fired as fast as the HTTP stack allows.
+#[test]
+fn no_wait_rename_chain_10x() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let mut current_name = "existing".to_string();
+
+        for i in 1..=10 {
+            let new_name = format!("NWR{}", i);
+            let info = session.get_api_rojo().unwrap();
+            let root_read = session.get_api_read(info.root_instance_id).unwrap();
+            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+            let rs_read = session.get_api_read(rs_id).unwrap();
+            let (id, _) = find_by_name(&rs_read.instances, &current_name);
+            send_update_no_wait(&session, &info.session_id, make_rename_update(id, &new_name));
+            current_name = new_name;
+        }
+
+        wait_for_settle();
+        assert_file_exists(&src.join("NWR10.luau"), "NWR10.luau after no-wait chain");
+        for i in 1..10 {
+            assert_not_exists(
+                &src.join(format!("NWR{}.luau", i)),
+                &format!("Intermediate NWR{}.luau", i),
+            );
+        }
+        assert_not_exists(&src.join("existing.luau"), "Original file");
+    });
+}
+
+/// No-wait ClassName cycling: 10 class changes fired instantly.
+#[test]
+fn no_wait_classchange_chain_10x() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let classes = [
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "LocalScript",
+        ];
+
+        for class in &classes {
+            let (session_id, _rs_id, id) = get_rs_and_existing(&session);
+            send_update_no_wait(&session, &session_id, make_class_update(id, class));
+        }
+
+        wait_for_settle();
+        // Final: LocalScript -> existing.local.luau
+        verify_instance_file(&src, "existing", "LocalScript", None);
+    });
+}
+
+/// No-wait combined rename + source: 10 fire-and-forget.
+#[test]
+fn no_wait_combined_rename_source_chain_10x() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let mut current_name = "existing".to_string();
+
+        for i in 1..=10 {
+            let new_name = format!("NWRS{}", i);
+            let info = session.get_api_rojo().unwrap();
+            let root_read = session.get_api_read(info.root_instance_id).unwrap();
+            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+            let rs_read = session.get_api_read(rs_id).unwrap();
+            let (id, _) = find_by_name(&rs_read.instances, &current_name);
+            send_update_no_wait(
+                &session,
+                &info.session_id,
+                make_combined_update(id, Some(&new_name), None, Some(&format!("-- nwrs {}", i))),
+            );
+            current_name = new_name;
+        }
+
+        wait_for_settle();
+        verify_instance_file(&src, "NWRS10", "ModuleScript", Some("-- nwrs 10"));
+    });
+}
+
+/// No-wait combined rename + ClassName: 10 fire-and-forget.
+#[test]
+fn no_wait_combined_rename_class_chain_10x() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let classes = [
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+        ];
+        let mut current_name = "existing".to_string();
+
+        for (i, class) in classes.iter().enumerate() {
+            let new_name = format!("NWRC{}", i + 1);
+            let info = session.get_api_rojo().unwrap();
+            let root_read = session.get_api_read(info.root_instance_id).unwrap();
+            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+            let rs_read = session.get_api_read(rs_id).unwrap();
+            let (id, _) = find_by_name(&rs_read.instances, &current_name);
+            send_update_no_wait(
+                &session,
+                &info.session_id,
+                make_combined_update(id, Some(&new_name), Some(class), None),
+            );
+            current_name = new_name;
+        }
+
+        wait_for_settle();
+        // Final: Script -> NWRC10.server.luau
+        verify_instance_file(&src, "NWRC10", "Script", None);
+    });
+}
+
+/// No-wait combined rename + ClassName + source: the ultimate firehose.
+#[test]
+fn no_wait_combined_all_three_chain_10x() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let classes = [
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "LocalScript",
+        ];
+        let mut current_name = "existing".to_string();
+
+        for (i, class) in classes.iter().enumerate() {
+            let new_name = format!("NWA{}", i + 1);
+            let info = session.get_api_rojo().unwrap();
+            let root_read = session.get_api_read(info.root_instance_id).unwrap();
+            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+            let rs_read = session.get_api_read(rs_id).unwrap();
+            let (id, _) = find_by_name(&rs_read.instances, &current_name);
+            send_update_no_wait(
+                &session,
+                &info.session_id,
+                make_combined_update(
+                    id,
+                    Some(&new_name),
+                    Some(class),
+                    Some(&format!("-- nwa {}", i + 1)),
+                ),
+            );
+            current_name = new_name;
+        }
+
+        wait_for_settle();
+        // Final: LocalScript -> NWA10.local.luau with "-- nwa 10"
+        verify_instance_file(&src, "NWA10", "LocalScript", Some("-- nwa 10"));
+    });
+}
+
+/// No-wait directory rename chain: 10 directory renames fired instantly.
+#[test]
+fn no_wait_directory_rename_chain_10x() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let mut current_name = "DirModuleWithChildren".to_string();
+
+        for i in 1..=10 {
+            let new_name = format!("NWD{}", i);
+            let (session_id, id) = get_format_transitions_instance(&session, &current_name);
+            send_update_no_wait(&session, &session_id, make_rename_update(id, &new_name));
+            current_name = new_name;
+        }
+
+        wait_for_settle();
+        let final_dir = src.join("NWD10");
+        assert!(final_dir.is_dir(), "NWD10 should exist as directory");
+        assert_file_exists(&final_dir.join("init.luau"), "init.luau in NWD10");
+        assert_file_exists(&final_dir.join("ChildA.luau"), "ChildA in NWD10");
+        assert_file_exists(&final_dir.join("ChildB.luau"), "ChildB in NWD10");
+    });
+}
+
+/// No-wait directory ClassName cycling: 10 init file type changes instantly.
+#[test]
+fn no_wait_directory_class_chain_10x() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let dir = src.join("DirModuleWithChildren");
+        let classes = [
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "LocalScript",
+        ];
+
+        for class in &classes {
+            let (session_id, id) =
+                get_format_transitions_instance(&session, "DirModuleWithChildren");
+            send_update_no_wait(&session, &session_id, make_class_update(id, class));
+        }
+
+        wait_for_settle();
+        // Final: LocalScript -> init.local.luau
+        assert_file_exists(
+            &dir.join("init.local.luau"),
+            "init.local.luau after no-wait class chain",
+        );
+        assert_file_exists(&dir.join("ChildA.luau"), "ChildA survived class chain");
+        assert_file_exists(&dir.join("ChildB.luau"), "ChildB survived class chain");
+    });
+}
+
+/// No-wait directory all-three: rename + class + source on init, 10x instant.
+#[test]
+fn no_wait_directory_all_three_chain_10x() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let classes = [
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+        ];
+        let mut current_name = "DirModuleWithChildren".to_string();
+
+        for (i, class) in classes.iter().enumerate() {
+            let new_name = format!("NWDA{}", i + 1);
+            let (session_id, id) = get_format_transitions_instance(&session, &current_name);
+            send_update_no_wait(
+                &session,
+                &session_id,
+                make_combined_update(
+                    id,
+                    Some(&new_name),
+                    Some(class),
+                    Some(&format!("-- nwda {}", i + 1)),
+                ),
+            );
+            current_name = new_name;
+        }
+
+        wait_for_settle();
+        let final_dir = src.join("NWDA10");
+        assert!(final_dir.is_dir(), "NWDA10 should be a directory");
+        // Final class: Script -> init.server.luau
+        assert_file_exists(
+            &final_dir.join("init.server.luau"),
+            "init.server.luau in NWDA10",
+        );
+        let content =
+            fs::read_to_string(final_dir.join("init.server.luau")).unwrap();
+        assert!(
+            content.contains("-- nwda 10"),
+            "Final source should contain '-- nwda 10', got: {}",
+            content
+        );
+        assert_file_exists(&final_dir.join("ChildA.luau"), "ChildA in NWDA10");
+        assert_file_exists(&final_dir.join("ChildB.luau"), "ChildB in NWDA10");
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Section B: Interleaved Rename + ClassName Combinations
+//
+// Tests that alternate between different operations on each step to maximise
+// the chance of stale metadata / wrong instigating_source.
+// ---------------------------------------------------------------------------
+
+/// Alternate: even steps rename, odd steps change class.
+#[test]
+fn alternating_rename_classchange_10x() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let class_seq = ["Script", "LocalScript", "ModuleScript", "Script", "LocalScript"];
+        let mut current_name = "existing".to_string();
+        let mut current_class = "ModuleScript";
+
+        for i in 1..=10 {
+            let info = session.get_api_rojo().unwrap();
+            let root_read = session.get_api_read(info.root_instance_id).unwrap();
+            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+            let rs_read = session.get_api_read(rs_id).unwrap();
+            let (id, _) = find_by_name(&rs_read.instances, &current_name);
+
+            if i % 2 == 0 {
+                // Rename on even steps
+                let new_name = format!("Alt{}", i);
+                send_update_fast(&session, &info.session_id, make_rename_update(id, &new_name));
+                current_name = new_name;
+            } else {
+                // Class change on odd steps
+                let new_class = class_seq[(i / 2) % class_seq.len()];
+                send_update_fast(&session, &info.session_id, make_class_update(id, new_class));
+                current_class = new_class;
+            }
+        }
+
+        wait_for_settle();
+        let suffix = class_suffix(current_class);
+        let expected = src.join(format!("{}{}.luau", current_name, suffix));
+        assert!(
+            expected.is_file(),
+            "Expected {}, class={}",
+            expected.display(),
+            current_class
+        );
+    });
+}
+
+/// 5 renames, then 5 class changes, rapid fire.
+#[test]
+fn rename_burst_then_class_burst() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let mut current_name = "existing".to_string();
+
+        // 5 rapid renames
+        for i in 1..=5 {
+            let new_name = format!("RB{}", i);
+            let info = session.get_api_rojo().unwrap();
+            let root_read = session.get_api_read(info.root_instance_id).unwrap();
+            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+            let rs_read = session.get_api_read(rs_id).unwrap();
+            let (id, _) = find_by_name(&rs_read.instances, &current_name);
+            send_update_fast(&session, &info.session_id, make_rename_update(id, &new_name));
+            current_name = new_name;
+        }
+
+        // 5 rapid class changes
+        let classes = ["Script", "LocalScript", "ModuleScript", "Script", "LocalScript"];
+        for class in &classes {
+            let info = session.get_api_rojo().unwrap();
+            let root_read = session.get_api_read(info.root_instance_id).unwrap();
+            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+            let rs_read = session.get_api_read(rs_id).unwrap();
+            let (id, _) = find_by_name(&rs_read.instances, &current_name);
+            send_update_fast(&session, &info.session_id, make_class_update(id, class));
+        }
+
+        wait_for_settle();
+        // Final: RB5 as LocalScript -> RB5.local.luau
+        verify_instance_file(&src, "RB5", "LocalScript", None);
+    });
+}
+
+/// Directory: alternate rename and class change on each step.
+#[test]
+fn directory_alternating_rename_classchange_10x() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let class_seq = ["Script", "LocalScript", "ModuleScript", "Script", "LocalScript"];
+        let mut current_name = "DirModuleWithChildren".to_string();
+        let mut current_class = "ModuleScript";
+
+        for i in 1..=10 {
+            let (session_id, id) = get_format_transitions_instance(&session, &current_name);
+            if i % 2 == 0 {
+                let new_name = format!("DAlt{}", i);
+                send_update_fast(&session, &session_id, make_rename_update(id, &new_name));
+                current_name = new_name;
+            } else {
+                let new_class = class_seq[(i / 2) % class_seq.len()];
+                send_update_fast(&session, &session_id, make_class_update(id, new_class));
+                current_class = new_class;
+            }
+        }
+
+        wait_for_settle();
+        let final_dir = src.join(&current_name);
+        assert!(final_dir.is_dir(), "{} should be a directory", current_name);
+        let init_suffix = class_suffix(current_class);
+        let init_name = if init_suffix.is_empty() {
+            "init.luau".to_string()
+        } else {
+            format!("init{}.luau", init_suffix)
+        };
+        assert_file_exists(
+            &final_dir.join(&init_name),
+            &format!("{} in {}", init_name, current_name),
+        );
+        assert_file_exists(&final_dir.join("ChildA.luau"), "ChildA survived");
+        assert_file_exists(&final_dir.join("ChildB.luau"), "ChildB survived");
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Section C: Format Transition Stress (standalone ↔ directory via watcher)
+//
+// Tests that convert files between standalone and directory format via direct
+// filesystem manipulation, then layer renames and class changes on top.
+// ---------------------------------------------------------------------------
+
+/// Convert standalone to directory on disk, then immediately rename the dir.
+#[test]
+fn watcher_standalone_to_dir_then_rename() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let standalone = src.join("StandaloneModule.luau");
+        let original = fs::read_to_string(&standalone).unwrap();
+
+        // Step 1: Convert standalone -> directory
+        fs::remove_file(&standalone).unwrap();
+        let dir = src.join("StandaloneModule");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("init.luau"), &original).unwrap();
+        fs::write(dir.join("NewChild.luau"), "-- new child\nreturn {}").unwrap();
+
+        // Wait for conversion to register
+        poll_tree_has_child(&session, rs_id, "StandaloneModule", "NewChild", 5000);
+
+        // Step 2: Immediately rename the directory
+        let new_dir = src.join("RenamedAfterConversion");
+        fs::rename(&dir, &new_dir).unwrap();
+
+        poll_tree_has_instance(&session, rs_id, "RenamedAfterConversion", 5000);
+        poll_tree_no_instance(&session, rs_id, "StandaloneModule", 3000);
+    });
+}
+
+/// Convert directory to standalone on disk, then immediately rename the file.
+#[test]
+fn watcher_dir_to_standalone_then_rename() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let dir = src.join("DirModuleWithChildren");
+        let init_content = fs::read_to_string(dir.join("init.luau")).unwrap();
+
+        // Step 1: Convert directory -> standalone
+        fs::remove_dir_all(&dir).unwrap();
+        let standalone = src.join("DirModuleWithChildren.luau");
+        fs::write(&standalone, &init_content).unwrap();
+
+        // Wait for conversion
+        poll_tree_has_instance(&session, rs_id, "DirModuleWithChildren", 5000);
+
+        // Step 2: Rename the file
+        let renamed = src.join("CollapsedAndRenamed.luau");
+        fs::rename(&standalone, &renamed).unwrap();
+
+        poll_tree_has_instance(&session, rs_id, "CollapsedAndRenamed", 5000);
+        poll_tree_no_instance(&session, rs_id, "DirModuleWithChildren", 3000);
+    });
+}
+
+/// Convert to directory, then change the init file type.
+#[test]
+fn watcher_standalone_to_dir_then_change_init_type() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let standalone = src.join("StandaloneModule.luau");
+        let original = fs::read_to_string(&standalone).unwrap();
+
+        // Convert standalone -> directory with init.luau
+        fs::remove_file(&standalone).unwrap();
+        let dir = src.join("StandaloneModule");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("init.luau"), &original).unwrap();
+
+        poll_tree_class(&session, rs_id, "StandaloneModule", "ModuleScript", 5000);
+
+        // Change init type: init.luau -> init.server.luau
+        fs::rename(dir.join("init.luau"), dir.join("init.server.luau")).unwrap();
+
+        poll_tree_class(&session, rs_id, "StandaloneModule", "Script", 5000);
+    });
+}
+
+/// Delete init.luau, recreate as init.server.luau (different type).
+#[test]
+fn watcher_init_delete_recreate_different_type() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let dir = src.join("DirModuleWithChildren");
+
+        // Delete init.luau
+        fs::remove_file(dir.join("init.luau")).unwrap();
+
+        // Becomes Folder first
+        poll_tree_class(&session, rs_id, "DirModuleWithChildren", "Folder", 3000);
+
+        // Recreate as init.server.luau
+        fs::write(
+            dir.join("init.server.luau"),
+            "-- now a Script\nprint('hello')",
+        )
+        .unwrap();
+
+        poll_tree_class(&session, rs_id, "DirModuleWithChildren", "Script", 5000);
+
+        // Children still intact
+        let dir_id = poll_tree_has_instance(&session, rs_id, "DirModuleWithChildren", 1000);
+        let child_read = session.get_api_read(dir_id).unwrap();
+        assert!(
+            child_read.instances.values().any(|i| i.name == "ChildA"),
+            "ChildA should survive init type transition"
+        );
+    });
+}
+
+/// Delete init file: children must survive as a Folder.
+#[test]
+fn watcher_init_delete_children_survive() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let dir = src.join("DirModuleWithChildren");
+
+        fs::remove_file(dir.join("init.luau")).unwrap();
+
+        // Should become Folder
+        poll_tree_class(&session, rs_id, "DirModuleWithChildren", "Folder", 3000);
+
+        // Children should still be there
+        let dir_id = poll_tree_has_instance(&session, rs_id, "DirModuleWithChildren", 1000);
+        let child_read = session.get_api_read(dir_id).unwrap();
+        assert!(
+            child_read.instances.values().any(|i| i.name == "ChildA"),
+            "ChildA should exist after init deletion"
+        );
+        assert!(
+            child_read.instances.values().any(|i| i.name == "ChildB"),
+            "ChildB should exist after init deletion"
+        );
+    });
+}
+
+/// Rapid format flip-flop with a rename mid-cycle.
+#[test]
+fn watcher_format_flip_flop_with_rename() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let standalone_path = src.join("StandaloneModule.luau");
+        let content = fs::read_to_string(&standalone_path).unwrap();
+
+        // Cycle 1: Standalone -> Directory
+        fs::remove_file(&standalone_path).unwrap();
+        let dir = src.join("StandaloneModule");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("init.luau"), &content).unwrap();
+        fs::write(dir.join("C1.luau"), "-- c1").unwrap();
+
+        poll_tree_has_child(&session, rs_id, "StandaloneModule", "C1", 5000);
+
+        // Cycle 2: Rename directory while it's a directory
+        let renamed_dir = src.join("FlipRenamed");
+        fs::rename(&dir, &renamed_dir).unwrap();
+
+        poll_tree_has_instance(&session, rs_id, "FlipRenamed", 5000);
+
+        // Cycle 3: Collapse back to standalone
+        fs::remove_dir_all(&renamed_dir).unwrap();
+        fs::write(
+            src.join("FlipRenamed.luau"),
+            "-- collapsed back\nreturn {}",
+        )
+        .unwrap();
+
+        poll_tree_source(&session, rs_id, "FlipRenamed", "-- collapsed back", 5000);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Section D: Multi-Instance Concurrent VFS Stress
+//
+// Hammer multiple files simultaneously to generate a storm of VFS events.
+// ---------------------------------------------------------------------------
+
+/// Rename all 5 stress files on disk simultaneously.
+#[test]
+fn watcher_rename_5_files_simultaneously() {
+    run_serve_test("syncback_stress", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let names = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"];
+        let new_names = ["A1", "B1", "C1", "D1", "E1"];
+
+        // Rename all 5 as fast as possible
+        for (old, new) in names.iter().zip(new_names.iter()) {
+            fs::rename(
+                src.join(format!("{}.luau", old)),
+                src.join(format!("{}.luau", new)),
+            )
+            .unwrap();
+        }
+
+        // All new names should appear
+        for new in &new_names {
+            poll_tree_has_instance(&session, rs_id, new, 5000);
+        }
+        // All old names should be gone
+        for old in &names {
+            poll_tree_no_instance(&session, rs_id, old, 3000);
+        }
+    });
+}
+
+/// Delete + recreate all 5 stress files simultaneously.
+#[test]
+fn watcher_delete_recreate_5_files_simultaneously() {
+    run_serve_test("syncback_stress", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let names = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"];
+
+        // Delete all
+        for name in &names {
+            fs::remove_file(src.join(format!("{}.luau", name))).unwrap();
+        }
+        // Recreate all immediately
+        for (i, name) in names.iter().enumerate() {
+            fs::write(
+                src.join(format!("{}.luau", name)),
+                format!("-- recreated {}\nreturn {{}}", i),
+            )
+            .unwrap();
+        }
+
+        for (i, name) in names.iter().enumerate() {
+            poll_tree_source(
+                &session,
+                rs_id,
+                name,
+                &format!("-- recreated {}", i),
+                5000,
+            );
+        }
+    });
+}
+
+/// Mixed operations on 5 files: rename some, edit others, delete+recreate rest.
+#[test]
+fn watcher_mixed_rename_edit_delete_5_files() {
+    run_serve_test("syncback_stress", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+
+        // Rename Alpha -> AlphaMoved
+        fs::rename(src.join("Alpha.luau"), src.join("AlphaMoved.luau")).unwrap();
+        // Edit Bravo
+        fs::write(src.join("Bravo.luau"), "-- bravo edited\nreturn {}").unwrap();
+        // Delete + recreate Charlie
+        fs::remove_file(src.join("Charlie.luau")).unwrap();
+        fs::write(src.join("Charlie.luau"), "-- charlie fresh\nreturn {}").unwrap();
+        // Rename Delta -> DeltaMoved
+        fs::rename(src.join("Delta.luau"), src.join("DeltaMoved.luau")).unwrap();
+        // Edit Echo
+        fs::write(src.join("Echo.luau"), "-- echo edited\nreturn {}").unwrap();
+
+        poll_tree_has_instance(&session, rs_id, "AlphaMoved", 5000);
+        poll_tree_source(&session, rs_id, "Bravo", "-- bravo edited", 5000);
+        poll_tree_source(&session, rs_id, "Charlie", "-- charlie fresh", 5000);
+        poll_tree_has_instance(&session, rs_id, "DeltaMoved", 5000);
+        poll_tree_source(&session, rs_id, "Echo", "-- echo edited", 5000);
+    });
+}
+
+/// API batch: rename + class + source on all 5 instances in one request.
+#[test]
+fn multi_instance_combined_rename_class_source_batch() {
+    run_serve_test("syncback_stress", |session, _redactions| {
+        let (session_id, _rs_id, instances) = get_stress_instances(&session);
+        let src = session.path().join("src");
+
+        let configs: Vec<(&str, &str, &str)> = vec![
+            ("A_Script", "Script", "-- alpha as script"),
+            ("B_Local", "LocalScript", "-- bravo as local"),
+            ("C_Module", "ModuleScript", "-- charlie as module"),
+            ("D_Script", "Script", "-- delta as script"),
+            ("E_Local", "LocalScript", "-- echo as local"),
+        ];
+
+        let updates: Vec<InstanceUpdate> = instances
+            .iter()
+            .zip(configs.iter())
+            .map(|((id, _), (name, class, source))| {
+                make_combined_update(*id, Some(name), Some(class), Some(source))
+            })
+            .collect();
+
+        let write_request = WriteRequest {
+            session_id,
+            removed: vec![],
+            added: HashMap::new(),
+            updated: updates,
+        };
+        session.post_api_write(&write_request).unwrap();
+        wait_for_settle();
+
+        for (name, class, source) in &configs {
+            verify_instance_file(&src, name, class, Some(source));
+        }
+        // All old files should be gone
+        for old in &["Alpha", "Bravo", "Charlie", "Delta", "Echo"] {
+            for sfx in &["", ".server", ".local"] {
+                assert_not_exists(
+                    &src.join(format!("{}{}.luau", old, sfx)),
+                    &format!("Old {}{}.luau", old, sfx),
+                );
+            }
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Section E: Encoded Names Through All Operation Types
+//
+// Encoded path names (special chars like ? : ) through rename, class change,
+// and source update paths to verify encoding is preserved throughout.
+// ---------------------------------------------------------------------------
+
+/// Encoded name: rapid rename + source.
+#[test]
+fn encoded_rename_and_source_rapid() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let src = session.path().join("src");
+        let mut current_name = "What?Module".to_string();
+
+        let names_and_sources = [
+            ("Test?One", "-- test one"),
+            ("Another:Name", "-- another name"),
+            ("Back?Again", "-- back again"),
+            ("Final:Encoded", "-- final encoded"),
+        ];
+
+        for (new_name, new_source) in &names_and_sources {
+            let info = session.get_api_rojo().unwrap();
+            let root_read = session.get_api_read(info.root_instance_id).unwrap();
+            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+            let rs_read = session.get_api_read(rs_id).unwrap();
+            let (id, _) = find_by_name(&rs_read.instances, &current_name);
+            send_update_fast(
+                &session,
+                &info.session_id,
+                make_combined_update(id, Some(new_name), None, Some(new_source)),
+            );
+            current_name = new_name.to_string();
+        }
+
+        wait_for_settle();
+        // Final: Final:Encoded -> Final%COLON%Encoded.luau
+        let final_file = src.join("Final%COLON%Encoded.luau");
+        assert_file_exists(&final_file, "Final encoded file");
+        let content = fs::read_to_string(&final_file).unwrap();
+        assert!(
+            content.contains("-- final encoded"),
+            "Content should be final, got: {}",
+            content
+        );
+    });
+}
+
+/// Encoded name: rapid rename + ClassName.
+#[test]
+fn encoded_rename_and_classchange_rapid() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let src = session.path().join("src");
+        let (_session_id, _id) = get_encoded_names_instance(&session, "What?Module");
+
+        let ops: Vec<(&str, &str)> = vec![
+            ("Enc?Script", "Script"),
+            ("Enc:Local", "LocalScript"),
+            ("Enc?Module", "ModuleScript"),
+            ("Enc:Final", "Script"),
+        ];
+
+        let mut current_name = "What?Module".to_string();
+        for (new_name, new_class) in &ops {
+            let info = session.get_api_rojo().unwrap();
+            let root_read = session.get_api_read(info.root_instance_id).unwrap();
+            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+            let rs_read = session.get_api_read(rs_id).unwrap();
+            let (id, _) = find_by_name(&rs_read.instances, &current_name);
+            send_update_fast(
+                &session,
+                &info.session_id,
+                make_combined_update(id, Some(new_name), Some(new_class), None),
+            );
+            current_name = new_name.to_string();
+        }
+
+        wait_for_settle();
+        // Final: Enc:Final as Script -> Enc%COLON%Final.server.luau
+        let final_file = src.join("Enc%COLON%Final.server.luau");
+        assert_file_exists(&final_file, "Final encoded+class file");
+    });
+}
+
+/// Encoded name: all three combined rapid.
+#[test]
+fn encoded_all_three_combined_rapid() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let src = session.path().join("src");
+
+        let ops: Vec<(&str, &str, &str)> = vec![
+            ("A?B", "Script", "-- a?b script"),
+            ("C:D", "LocalScript", "-- c:d local"),
+            ("E?F", "ModuleScript", "-- e?f module"),
+            ("G:H", "Script", "-- g:h script"),
+            ("End?Now", "LocalScript", "-- end now"),
+        ];
+
+        let mut current_name = "What?Module".to_string();
+        for (new_name, new_class, new_source) in &ops {
+            let info = session.get_api_rojo().unwrap();
+            let root_read = session.get_api_read(info.root_instance_id).unwrap();
+            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+            let rs_read = session.get_api_read(rs_id).unwrap();
+            let (id, _) = find_by_name(&rs_read.instances, &current_name);
+            send_update_fast(
+                &session,
+                &info.session_id,
+                make_combined_update(id, Some(new_name), Some(new_class), Some(new_source)),
+            );
+            current_name = new_name.to_string();
+        }
+
+        wait_for_settle();
+        // Final: End?Now as LocalScript -> End%QUESTION%Now.local.luau
+        let final_file = src.join("End%QUESTION%Now.local.luau");
+        assert_file_exists(&final_file, "Final all-three encoded file");
+        let content = fs::read_to_string(&final_file).unwrap();
+        assert!(
+            content.contains("-- end now"),
+            "Content should be final, got: {}",
+            content
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Section F: Concurrent API + Filesystem Operations
+//
+// Hit the server from both directions at once: API writes (rename/class/
+// source) on one instance while the filesystem changes another.
+// ---------------------------------------------------------------------------
+
+/// API renames one instance while filesystem edits a different one.
+#[test]
+fn concurrent_api_rename_fs_edit_different_instances() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+
+        // Filesystem: edit StandaloneModule
+        fs::write(
+            src.join("StandaloneModule.luau"),
+            "-- fs concurrent edit\nreturn {}",
+        )
+        .unwrap();
+
+        // API: rename StandaloneScript
+        let (session_id, script_id) =
+            get_format_transitions_instance(&session, "StandaloneScript");
+        send_update_no_wait(
+            &session,
+            &session_id,
+            make_rename_update(script_id, "ScriptRenamed"),
+        );
+
+        // Both should propagate
+        poll_tree_source(
+            &session,
+            rs_id,
+            "StandaloneModule",
+            "-- fs concurrent edit",
+            5000,
+        );
+        wait_for_settle();
+        assert_file_exists(
+            &src.join("ScriptRenamed.server.luau"),
+            "ScriptRenamed.server.luau",
+        );
+        assert_not_exists(
+            &src.join("StandaloneScript.server.luau"),
+            "Old StandaloneScript.server.luau",
+        );
+    });
+}
+
+/// API class change + filesystem rename on different instances simultaneously.
+#[test]
+fn concurrent_api_classchange_fs_rename_different_instances() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+
+        // Filesystem: rename StandaloneModule.luau -> MovedModule.luau
+        fs::rename(
+            src.join("StandaloneModule.luau"),
+            src.join("MovedModule.luau"),
+        )
+        .unwrap();
+
+        // API: change StandaloneScript's class to LocalScript
+        let (session_id, script_id) =
+            get_format_transitions_instance(&session, "StandaloneScript");
+        send_update_no_wait(
+            &session,
+            &session_id,
+            make_class_update(script_id, "LocalScript"),
+        );
+
+        poll_tree_has_instance(&session, rs_id, "MovedModule", 5000);
+        wait_for_settle();
+        // StandaloneScript -> existing.local.luau (class changed to LocalScript)
+        assert_file_exists(
+            &src.join("StandaloneScript.local.luau"),
+            "StandaloneScript.local.luau after class change",
+        );
+    });
+}
+
+/// API rename + source on one instance, filesystem dir rename on another.
+#[test]
+fn concurrent_api_combined_fs_dir_rename() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+
+        // Filesystem: rename DirModuleWithChildren -> MovedDir
+        fs::rename(
+            src.join("DirModuleWithChildren"),
+            src.join("MovedDir"),
+        )
+        .unwrap();
+
+        // API: rename + source on StandaloneModule
+        let (session_id, module_id) =
+            get_format_transitions_instance(&session, "StandaloneModule");
+        send_update_no_wait(
+            &session,
+            &session_id,
+            make_combined_update(
+                module_id,
+                Some("ModuleRenamed"),
+                None,
+                Some("-- api renamed module"),
+            ),
+        );
+
+        poll_tree_has_instance(&session, rs_id, "MovedDir", 5000);
+        wait_for_settle();
+        assert_file_exists(
+            &src.join("ModuleRenamed.luau"),
+            "ModuleRenamed.luau after API rename",
+        );
+        let content = fs::read_to_string(src.join("ModuleRenamed.luau")).unwrap();
+        assert!(
+            content.contains("-- api renamed module"),
+            "Content should reflect API update, got: {}",
+            content
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Section G: Directory-Specific VFS Stress
+//
+// Hammer directory-format scripts with every combination of operations.
+// ---------------------------------------------------------------------------
+
+/// Directory: rename then immediately edit init source (API).
+#[test]
+fn directory_rename_then_source_update() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+
+        // Rename
+        let (session_id, id) =
+            get_format_transitions_instance(&session, "DirModuleWithChildren");
+        send_update_fast(
+            &session,
+            &session_id,
+            make_rename_update(id, "DirRenamed"),
+        );
+
+        // Re-fetch after rename settles
+        let (session_id2, id2) = get_format_transitions_instance(&session, "DirRenamed");
+        send_update_fast(
+            &session,
+            &session_id2,
+            make_source_update(id2, "-- renamed then sourced"),
+        );
+
+        wait_for_settle();
+        let dir = src.join("DirRenamed");
+        assert!(dir.is_dir(), "DirRenamed should exist");
+        let content = fs::read_to_string(dir.join("init.luau")).unwrap();
+        assert!(
+            content.contains("-- renamed then sourced"),
+            "Init should have new source, got: {}",
+            content
+        );
+        assert_file_exists(&dir.join("ChildA.luau"), "ChildA in DirRenamed");
+    });
+}
+
+/// Directory: rename + class change combined in one update.
+#[test]
+fn directory_combined_rename_classchange() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+
+        let (session_id, id) =
+            get_format_transitions_instance(&session, "DirModuleWithChildren");
+        send_update(
+            &session,
+            &session_id,
+            make_combined_update(id, Some("DirRC"), Some("Script"), None),
+        );
+
+        wait_for_settle();
+        let dir = src.join("DirRC");
+        assert!(dir.is_dir(), "DirRC should exist");
+        assert_file_exists(&dir.join("init.server.luau"), "init.server.luau in DirRC");
+        assert_file_exists(&dir.join("ChildA.luau"), "ChildA in DirRC");
+        assert_file_exists(&dir.join("ChildB.luau"), "ChildB in DirRC");
+    });
+}
+
+/// Directory: rename + class + source all in one update.
+#[test]
+fn directory_combined_all_three() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+
+        let (session_id, id) =
+            get_format_transitions_instance(&session, "DirModuleWithChildren");
+        send_update(
+            &session,
+            &session_id,
+            make_combined_update(
+                id,
+                Some("DirAll3"),
+                Some("LocalScript"),
+                Some("-- dir all three"),
+            ),
+        );
+
+        wait_for_settle();
+        let dir = src.join("DirAll3");
+        assert!(dir.is_dir(), "DirAll3 should exist");
+        assert_file_exists(
+            &dir.join("init.local.luau"),
+            "init.local.luau in DirAll3",
+        );
+        let content = fs::read_to_string(dir.join("init.local.luau")).unwrap();
+        assert!(
+            content.contains("-- dir all three"),
+            "Init should have new source, got: {}",
+            content
+        );
+        assert_file_exists(&dir.join("ChildA.luau"), "ChildA in DirAll3");
+        assert_file_exists(&dir.join("ChildB.luau"), "ChildB in DirAll3");
+    });
+}
+
+/// Filesystem: rename dir, then delete init -> becomes Folder under new name.
+#[test]
+fn watcher_directory_rename_then_delete_init() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+
+        // Rename directory
+        let old_dir = src.join("DirModuleWithChildren");
+        let new_dir = src.join("RenamedThenStripped");
+        fs::rename(&old_dir, &new_dir).unwrap();
+
+        poll_tree_has_instance(&session, rs_id, "RenamedThenStripped", 5000);
+
+        // Delete init file -> should become Folder
+        fs::remove_file(new_dir.join("init.luau")).unwrap();
+
+        poll_tree_class(&session, rs_id, "RenamedThenStripped", "Folder", 5000);
+
+        // Children should survive
+        let dir_id = poll_tree_has_instance(&session, rs_id, "RenamedThenStripped", 1000);
+        let child_read = session.get_api_read(dir_id).unwrap();
+        assert!(
+            child_read.instances.values().any(|i| i.name == "ChildA"),
+            "ChildA should survive rename + init deletion"
+        );
+    });
+}
+
+/// Filesystem: delete init, add different type, all while renaming dir.
+#[test]
+fn watcher_directory_init_swap_and_rename() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let dir = src.join("DirModuleWithChildren");
+
+        // Delete init.luau, rename dir, add init.server.luau
+        let content = fs::read_to_string(dir.join("init.luau")).unwrap();
+        fs::remove_file(dir.join("init.luau")).unwrap();
+        let new_dir = src.join("SwappedAndRenamed");
+        fs::rename(&dir, &new_dir).unwrap();
+        fs::write(new_dir.join("init.server.luau"), &content).unwrap();
+
+        poll_tree_has_instance(&session, rs_id, "SwappedAndRenamed", 5000);
+        poll_tree_class(&session, rs_id, "SwappedAndRenamed", "Script", 5000);
+    });
+}
+
+/// Rapid directory init type cycling + rename interleaved via filesystem.
+#[test]
+fn watcher_directory_rapid_init_cycling_and_rename() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let mut dir = src.join("DirModuleWithChildren");
+
+        // Step 1: init.luau -> init.server.luau
+        fs::rename(dir.join("init.luau"), dir.join("init.server.luau")).unwrap();
+        poll_tree_class(&session, rs_id, "DirModuleWithChildren", "Script", 3000);
+
+        // Step 2: rename dir
+        let new_dir = src.join("CycledDir");
+        fs::rename(&dir, &new_dir).unwrap();
+        dir = new_dir;
+        poll_tree_has_instance(&session, rs_id, "CycledDir", 5000);
+
+        // Step 3: init.server.luau -> init.local.luau
+        fs::rename(
+            dir.join("init.server.luau"),
+            dir.join("init.local.luau"),
+        )
+        .unwrap();
+        poll_tree_class(&session, rs_id, "CycledDir", "LocalScript", 5000);
+
+        // Step 4: rename dir again
+        let final_dir = src.join("FinalCycled");
+        fs::rename(&dir, &final_dir).unwrap();
+        poll_tree_has_instance(&session, rs_id, "FinalCycled", 5000);
+
+        // Children intact
+        assert_file_exists(&final_dir.join("ChildA.luau"), "ChildA in FinalCycled");
+        assert_file_exists(&final_dir.join("ChildB.luau"), "ChildB in FinalCycled");
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Section H: Extreme Back-to-Back Stress
+//
+// Tests designed to be the absolute worst case for the change processor:
+// maximum overlap, maximum event storms, minimum settle time.
+// ---------------------------------------------------------------------------
+
+/// 20 no-wait renames: the absolute maximum rename pressure on a single file.
+#[test]
+fn extreme_no_wait_rename_chain_20x() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let mut current_name = "existing".to_string();
+
+        for i in 1..=20 {
+            let new_name = format!("X{}", i);
+            let info = session.get_api_rojo().unwrap();
+            let root_read = session.get_api_read(info.root_instance_id).unwrap();
+            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+            let rs_read = session.get_api_read(rs_id).unwrap();
+            let (id, _) = find_by_name(&rs_read.instances, &current_name);
+            send_update_no_wait(&session, &info.session_id, make_rename_update(id, &new_name));
+            current_name = new_name;
+        }
+
+        wait_for_settle();
+        assert_file_exists(&src.join("X20.luau"), "X20.luau after 20 no-wait renames");
+        assert_not_exists(&src.join("existing.luau"), "Original after 20 renames");
+    });
+}
+
+/// 20 no-wait all-three-combined on a directory: rename + class + source.
+#[test]
+fn extreme_no_wait_directory_all_three_20x() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let classes = [
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+        ];
+        let mut current_name = "DirModuleWithChildren".to_string();
+
+        for i in 1..=20 {
+            let new_name = format!("XD{}", i);
+            let new_class = classes[i % 3];
+            let (session_id, id) = get_format_transitions_instance(&session, &current_name);
+            send_update_no_wait(
+                &session,
+                &session_id,
+                make_combined_update(
+                    id,
+                    Some(&new_name),
+                    Some(new_class),
+                    Some(&format!("-- xd {}", i)),
+                ),
+            );
+            current_name = new_name;
+        }
+
+        wait_for_settle();
+        let final_dir = src.join("XD20");
+        assert!(final_dir.is_dir(), "XD20 should be a directory");
+        // class at i=20: classes[20 % 3] = classes[2] = ModuleScript
+        assert_file_exists(
+            &final_dir.join("init.luau"),
+            "init.luau in XD20 (ModuleScript)",
+        );
+        let content = fs::read_to_string(final_dir.join("init.luau")).unwrap();
+        assert!(
+            content.contains("-- xd 20"),
+            "Final source in XD20, got: {}",
+            content
+        );
+        assert_file_exists(&final_dir.join("ChildA.luau"), "ChildA in XD20");
+        assert_file_exists(&final_dir.join("ChildB.luau"), "ChildB in XD20");
+    });
+}
+
+/// Multi-instance: rename all 5 stress files in rapid succession via API,
+/// each with a different class and source — all no-wait.
+#[test]
+fn extreme_multi_instance_rename_class_source_no_wait() {
+    run_serve_test("syncback_stress", |session, _redactions| {
+        let src = session.path().join("src");
+        let configs: Vec<(&str, &str, &str)> = vec![
+            ("X_A", "Script", "-- xa"),
+            ("X_B", "LocalScript", "-- xb"),
+            ("X_C", "ModuleScript", "-- xc"),
+            ("X_D", "Script", "-- xd"),
+            ("X_E", "LocalScript", "-- xe"),
+        ];
+
+        // Send all 5 as individual no-wait requests
+        let (session_id, _rs_id, instances) = get_stress_instances(&session);
+        for ((id, _), (name, class, source)) in instances.iter().zip(configs.iter()) {
+            send_update_no_wait(
+                &session,
+                &session_id,
+                make_combined_update(*id, Some(name), Some(class), Some(source)),
+            );
+        }
+
+        wait_for_settle();
+        for (name, class, source) in &configs {
+            verify_instance_file(&src, name, class, Some(source));
+        }
+    });
+}
+
+/// Filesystem: rename + edit + delete + recreate + rename again, all on the
+/// same file in rapid succession.
+#[test]
+fn extreme_filesystem_chaos_single_file() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let file = src.join("existing.luau");
+
+        // Step 1: Edit
+        fs::write(&file, "-- chaos v1\nreturn {}").unwrap();
+        thread::sleep(Duration::from_millis(30));
+
+        // Step 2: Rename
+        let file2 = src.join("Chaos.luau");
+        fs::rename(&file, &file2).unwrap();
+        thread::sleep(Duration::from_millis(30));
+
+        // Step 3: Edit renamed file
+        fs::write(&file2, "-- chaos v2\nreturn {}").unwrap();
+        thread::sleep(Duration::from_millis(30));
+
+        // Step 4: Delete
+        fs::remove_file(&file2).unwrap();
+        thread::sleep(Duration::from_millis(30));
+
+        // Step 5: Recreate with original name
+        fs::write(&file, "-- chaos v3\nreturn {}").unwrap();
+        thread::sleep(Duration::from_millis(30));
+
+        // Step 6: Edit again
+        fs::write(&file, "-- chaos final\nreturn {}").unwrap();
+
+        poll_tree_source(&session, rs_id, "existing", "-- chaos final", 5000);
+    });
+}
+
+/// Filesystem: 5 files undergoing simultaneous rename chains.
+#[test]
+fn extreme_filesystem_5_file_rename_chains() {
+    run_serve_test("syncback_stress", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let names = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"];
+        let mut current: Vec<String> = names.iter().map(|n| n.to_string()).collect();
+
+        // 5 rounds of renaming all 5 files
+        for round in 1..=5 {
+            let mut next = Vec::new();
+            for (j, name) in current.iter().enumerate() {
+                let new_name = format!("{}_r{}", names[j], round);
+                fs::rename(
+                    src.join(format!("{}.luau", name)),
+                    src.join(format!("{}.luau", new_name)),
+                )
+                .unwrap();
+                next.push(new_name);
+            }
+            current = next;
+            thread::sleep(Duration::from_millis(50));
+        }
+
+        // All final names should exist
+        for (j, _) in names.iter().enumerate() {
+            let final_name = format!("{}_r5", names[j]);
+            poll_tree_has_instance(&session, rs_id, &final_name, 5000);
+        }
+    });
+}
