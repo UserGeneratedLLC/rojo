@@ -332,6 +332,10 @@ impl ApiService {
         // Process removed instances (syncback: delete files from Rojo filesystem)
         // Phase 1: Gather paths with the tree lock held.
         // Phase 2: Delete files without the lock.
+        // Only IDs that are actually removable (have a Path instigating source)
+        // are included in the PatchSet. ProjectNode instances are skipped so
+        // they are NOT removed from the in-memory tree.
+        let mut actually_removed: Vec<Ref> = Vec::new();
         if !request.removed.is_empty() {
             let removal_actions: Vec<(Ref, Option<(PathBuf, bool)>)> = {
                 let tree = self.serve_session.tree();
@@ -371,6 +375,7 @@ impl ApiService {
                             "Syncback: Path already removed (likely parent was deleted): {}",
                             path.display()
                         );
+                        actually_removed.push(id);
                         continue;
                     }
                     if is_dir {
@@ -384,6 +389,7 @@ impl ApiService {
                             );
                         } else {
                             log::info!("Syncback: Removed directory at {}", path.display());
+                            actually_removed.push(id);
                         }
                     } else {
                         self.suppress_path(&path);
@@ -396,6 +402,7 @@ impl ApiService {
                             );
                         } else {
                             log::info!("Syncback: Removed file at {}", path.display());
+                            actually_removed.push(id);
                         }
                         // Also remove adjacent meta file.
                         // Strip known script suffixes (.server, .client, etc.)
@@ -506,7 +513,7 @@ impl ApiService {
 
         tree_mutation_sender
             .send(PatchSet {
-                removed_instances: request.removed,
+                removed_instances: actually_removed,
                 added_instances: Vec::new(),
                 updated_instances,
             })

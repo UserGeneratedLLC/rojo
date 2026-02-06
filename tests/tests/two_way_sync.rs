@@ -1154,13 +1154,9 @@ fn get_encoded_names_instance(
 #[test]
 fn add_child_to_encoded_module_creates_encoded_directory() {
     run_serve_test("syncback_encoded_names", |session, _redactions| {
-        let (session_id, encoded_module_id) =
-            get_encoded_names_instance(&session, "What?Module");
+        let (session_id, encoded_module_id) = get_encoded_names_instance(&session, "What?Module");
 
-        let standalone_file = session
-            .path()
-            .join("src")
-            .join("What%QUESTION%Module.luau");
+        let standalone_file = session.path().join("src").join("What%QUESTION%Module.luau");
         // The CORRECT directory name uses the encoded filesystem name
         let encoded_dir = session.path().join("src").join("What%QUESTION%Module");
         // The WRONG directory name would use the decoded instance name
@@ -1231,8 +1227,7 @@ fn add_child_to_encoded_module_creates_encoded_directory() {
 #[test]
 fn add_child_to_encoded_script_strips_suffix_correctly() {
     run_serve_test("syncback_encoded_names", |session, _redactions| {
-        let (session_id, encoded_script_id) =
-            get_encoded_names_instance(&session, "Key:Script");
+        let (session_id, encoded_script_id) = get_encoded_names_instance(&session, "Key:Script");
 
         let standalone_file = session
             .path()
@@ -1304,8 +1299,7 @@ fn add_child_to_encoded_script_strips_suffix_correctly() {
 #[test]
 fn add_child_to_encoded_model_creates_encoded_directory() {
     run_serve_test("syncback_encoded_names", |session, _redactions| {
-        let (session_id, encoded_model_id) =
-            get_encoded_names_instance(&session, "What?Model");
+        let (session_id, encoded_model_id) = get_encoded_names_instance(&session, "What?Model");
 
         let standalone_file = session
             .path()
@@ -1369,21 +1363,14 @@ fn add_child_to_encoded_model_creates_encoded_directory() {
 #[test]
 fn property_update_on_encoded_script_uses_encoded_meta_path() {
     run_serve_test("syncback_encoded_names", |session, _redactions| {
-        let (session_id, encoded_module_id) =
-            get_encoded_names_instance(&session, "What?Module");
+        let (session_id, encoded_module_id) = get_encoded_names_instance(&session, "What?Module");
 
-        let script_file = session
-            .path()
-            .join("src")
-            .join("What%QUESTION%Module.luau");
+        let script_file = session.path().join("src").join("What%QUESTION%Module.luau");
         let encoded_meta = session
             .path()
             .join("src")
             .join("What%QUESTION%Module.meta.json5");
-        let decoded_meta = session
-            .path()
-            .join("src")
-            .join("What?Module.meta.json5");
+        let decoded_meta = session.path().join("src").join("What?Module.meta.json5");
 
         assert_file_exists(&script_file, "Encoded script file before property update");
         assert_not_exists(&encoded_meta, "Meta file before property update");

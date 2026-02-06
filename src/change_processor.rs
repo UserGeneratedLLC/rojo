@@ -657,9 +657,8 @@ impl JobThreadContext {
                                     // If a rename handler already moved the file,
                                     // use the new path instead of the stale
                                     // instigating_source path.
-                                    let effective_path = overridden_source_path
-                                        .as_deref()
-                                        .unwrap_or(path.as_path());
+                                    let effective_path =
+                                        overridden_source_path.as_deref().unwrap_or(path.as_path());
 
                                     if old_is_script && new_is_script && effective_path.exists() {
                                         // Script-to-script transition: rename the file extension.
