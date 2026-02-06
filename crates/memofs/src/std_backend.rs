@@ -5,18 +5,10 @@ use std::{collections::HashSet, io};
 use crossbeam_channel::{Receiver, Sender};
 use notify::RecursiveMode;
 use notify_debouncer_full::{
-    new_debouncer_opt,
+    new_debouncer,
     notify::event::{CreateKind, EventKind, ModifyKind, RemoveKind, RenameMode},
-    DebounceEventResult, Debouncer, FileIdMap,
+    DebounceEventResult, Debouncer, RecommendedCache,
 };
-
-/// On macOS, FSEvents silently fails to deliver events in `/var/folders/`
-/// temp directories (a known platform limitation). Use PollWatcher instead
-/// for reliable event delivery on all directory types.
-#[cfg(target_os = "macos")]
-type PlatformWatcher = notify::PollWatcher;
-#[cfg(not(target_os = "macos"))]
-type PlatformWatcher = notify::RecommendedWatcher;
 
 use crate::{DirEntry, Metadata, ReadDir, VfsBackend, VfsEvent};
 
@@ -63,7 +55,7 @@ pub type CriticalErrorHandler = Box<dyn Fn(WatcherCriticalError) -> bool + Send 
 
 /// `VfsBackend` that uses `std::fs` and the `notify` crate.
 pub struct StdBackend {
-    debouncer: Debouncer<PlatformWatcher, FileIdMap>,
+    debouncer: Debouncer<notify::RecommendedWatcher, RecommendedCache>,
     watcher_receiver: Receiver<VfsEvent>,
     watches: HashSet<PathBuf>,
     /// Receiver for critical errors from the watcher thread.
@@ -106,15 +98,11 @@ impl StdBackend {
         event_tx: Sender<VfsEvent>,
         error_tx: Sender<WatcherCriticalError>,
         error_handler: CriticalErrorHandler,
-    ) -> Debouncer<PlatformWatcher, FileIdMap> {
+    ) -> Debouncer<notify::RecommendedWatcher, RecommendedCache> {
         // Use 50ms debounce timeout (same as the old v4 implementation)
         let debounce_timeout = Duration::from_millis(50);
 
-        // On macOS we use PollWatcher which needs an explicit poll interval.
-        // On other platforms this field is ignored by RecommendedWatcher.
-        let config = notify::Config::default().with_poll_interval(debounce_timeout);
-
-        new_debouncer_opt::<_, PlatformWatcher, FileIdMap>(
+        new_debouncer(
             debounce_timeout,
             None, // Use default tick rate
             move |result: DebounceEventResult| {
@@ -157,8 +145,6 @@ impl StdBackend {
                     }
                 }
             },
-            FileIdMap::new(),
-            config,
         )
         .expect("Failed to create file watcher debouncer")
     }
