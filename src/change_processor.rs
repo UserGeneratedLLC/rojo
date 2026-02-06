@@ -236,16 +236,34 @@ impl JobThreadContext {
         }
 
         // Check if this event should be suppressed (one-shot, from API syncback).
+        // Try both the raw event path and its canonical form since suppress_path
+        // stores whichever form it could resolve at insertion time.
         let event_path = match &event {
             VfsEvent::Create(p) | VfsEvent::Write(p) | VfsEvent::Remove(p) => Some(p.clone()),
             _ => None,
         };
         if let Some(ref path) = event_path {
+            let canonical = std::fs::canonicalize(path).ok();
             let mut suppressed = self.suppressed_paths.lock().unwrap();
-            if let Some(count) = suppressed.get_mut(path) {
-                *count = count.saturating_sub(1);
-                if *count == 0 {
-                    suppressed.remove(path);
+            // Determine which key matches: try canonical first (most likely
+            // to match what suppress_path stored), then fall back to raw.
+            let matched_key = canonical
+                .as_ref()
+                .filter(|c| suppressed.contains_key(c.as_path()))
+                .cloned()
+                .or_else(|| {
+                    if suppressed.contains_key(path) {
+                        Some(path.clone())
+                    } else {
+                        None
+                    }
+                });
+            if let Some(key) = matched_key {
+                if let Some(count) = suppressed.get_mut(&key) {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        suppressed.remove(&key);
+                    }
                 }
                 drop(suppressed);
                 // Still commit so VFS stays consistent, but skip patching.

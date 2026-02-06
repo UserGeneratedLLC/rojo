@@ -221,23 +221,29 @@ impl ApiService {
     /// Register a path in the suppression map so that the ChangeProcessor
     /// ignores the next VFS event for it (counter-based echo suppression).
     /// Each call increments the counter; each suppressed VFS event decrements it.
+    ///
+    /// Inserts exactly ONE entry per call — canonical form preferred, raw as
+    /// fallback — to avoid leaking the unmatched variant.
     fn suppress_path(&self, path: &Path) {
         let mut suppressed = self.suppressed_paths.lock().unwrap();
         // Try to canonicalize (adds \\?\ prefix on Windows, resolves symlinks).
         // For files that don't exist yet, canonicalize the parent and join.
-        if let Ok(canonical) = std::fs::canonicalize(path) {
-            *suppressed.entry(canonical).or_insert(0) += 1;
+        let key = if let Ok(canonical) = std::fs::canonicalize(path) {
+            canonical
         } else if let Some(parent) = path.parent() {
             if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
                 if let Some(file_name) = path.file_name() {
-                    *suppressed
-                        .entry(canonical_parent.join(file_name))
-                        .or_insert(0) += 1;
+                    canonical_parent.join(file_name)
+                } else {
+                    path.to_path_buf()
                 }
+            } else {
+                path.to_path_buf()
             }
-        }
-        // Also increment the raw path as fallback.
-        *suppressed.entry(path.to_path_buf()).or_insert(0) += 1;
+        } else {
+            path.to_path_buf()
+        };
+        *suppressed.entry(key).or_insert(0) += 1;
     }
 
     /// Get a summary of information about the server
