@@ -488,6 +488,11 @@ impl JobThreadContext {
                 let id = update.id;
 
                 if let Some(instance) = tree.get_instance(id) {
+                    // Track the current source file path — rename and ClassName
+                    // handlers may move the file, so the Source write must target
+                    // the new location instead of the stale instigating_source.
+                    let mut overridden_source_path: Option<PathBuf> = None;
+
                     // Handle instance rename on disk
                     if let Some(ref new_name) = update.changed_name {
                         if let Some(instigating_source) = &instance.metadata().instigating_source {
@@ -495,10 +500,8 @@ impl JobThreadContext {
                                 InstigatingSource::Path(path) => {
                                     if path.exists() {
                                         let old_name = instance.name();
-                                        let file_name = path
-                                            .file_name()
-                                            .and_then(|f| f.to_str())
-                                            .unwrap_or("");
+                                        let file_name =
+                                            path.file_name().and_then(|f| f.to_str()).unwrap_or("");
 
                                         // For directory-format scripts, the instigating_source
                                         // is the init file (e.g., src/MyModule/init.luau).
@@ -515,8 +518,7 @@ impl JobThreadContext {
                                                     .unwrap_or("");
                                                 let new_dir_name =
                                                     dir_name.replacen(old_name, new_name, 1);
-                                                let new_dir_path =
-                                                    grandparent.join(&new_dir_name);
+                                                let new_dir_path = grandparent.join(&new_dir_name);
 
                                                 if new_dir_path != dir_path {
                                                     log::info!(
@@ -534,16 +536,17 @@ impl JobThreadContext {
                                                             err
                                                         );
                                                     } else {
+                                                        // The init file moved with the directory.
+                                                        overridden_source_path =
+                                                            Some(new_dir_path.join(file_name));
                                                         let old_meta = grandparent.join(format!(
                                                             "{}.meta.json5",
                                                             old_name
                                                         ));
                                                         if old_meta.exists() {
-                                                            let new_meta =
-                                                                grandparent.join(format!(
-                                                                    "{}.meta.json5",
-                                                                    new_name
-                                                                ));
+                                                            let new_meta = grandparent.join(
+                                                                format!("{}.meta.json5", new_name),
+                                                            );
                                                             let _ =
                                                                 fs::rename(&old_meta, &new_meta);
                                                         }
@@ -569,6 +572,7 @@ impl JobThreadContext {
                                                         err
                                                     );
                                                 } else {
+                                                    overridden_source_path = Some(new_path.clone());
                                                     let old_meta = parent
                                                         .join(format!("{}.meta.json5", old_name));
                                                     if old_meta.exists() {
@@ -674,6 +678,8 @@ impl JobThreadContext {
                                                         new_path,
                                                         err
                                                     );
+                                                } else {
+                                                    overridden_source_path = Some(new_path.clone());
                                                 }
                                             }
                                         } else {
@@ -709,33 +715,22 @@ impl JobThreadContext {
 
                     for (key, changed_value) in &update.changed_properties {
                         if key == "Source" {
-                            if let Some(instigating_source) =
+                            // If a rename or ClassName change moved the file
+                            // earlier in this update, write to the new location
+                            // instead of the stale instigating_source path.
+                            let source_path = if let Some(ref overridden) = overridden_source_path {
+                                Some(overridden.clone())
+                            } else if let Some(instigating_source) =
                                 &instance.metadata().instigating_source
                             {
                                 match instigating_source {
-                                    InstigatingSource::Path(path) => {
-                                        if let Some(Variant::String(value)) = changed_value {
-                                            log::info!(
-                                                "Two-way sync: Writing Source to {}",
-                                                path.display()
-                                            );
-                                            if let Err(err) = fs::write(path, value) {
-                                                log::error!(
-                                                    "Failed to write Source to {:?} for instance {:?}: {}",
-                                                    path,
-                                                    id,
-                                                    err
-                                                );
-                                            }
-                                        } else {
-                                            log::warn!("Cannot change Source to non-string value.");
-                                        }
-                                    }
+                                    InstigatingSource::Path(path) => Some(path.clone()),
                                     InstigatingSource::ProjectNode { .. } => {
                                         log::warn!(
                                             "Cannot update instance {:?}, it's from a project file",
                                             id
                                         );
+                                        None
                                     }
                                 }
                             } else {
@@ -743,6 +738,26 @@ impl JobThreadContext {
                                     "Cannot update instance {:?}, it is not an instigating source.",
                                     id
                                 );
+                                None
+                            };
+
+                            if let Some(ref write_path) = source_path {
+                                if let Some(Variant::String(value)) = changed_value {
+                                    log::info!(
+                                        "Two-way sync: Writing Source to {}",
+                                        write_path.display()
+                                    );
+                                    if let Err(err) = fs::write(write_path, value) {
+                                        log::error!(
+                                            "Failed to write Source to {:?} for instance {:?}: {}",
+                                            write_path,
+                                            id,
+                                            err
+                                        );
+                                    }
+                                } else {
+                                    log::warn!("Cannot change Source to non-string value.");
+                                }
                             }
                         } else {
                             log::trace!("Skipping non-Source property change: {}", key);

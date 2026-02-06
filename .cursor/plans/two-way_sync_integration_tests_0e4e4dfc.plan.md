@@ -4,34 +4,34 @@ overview: "Add integration tests covering the critical untested two-way sync ope
 todos:
   - id: create-test-file
     content: Create tests/tests/two_way_sync.rs with test module structure, imports, and helper functions
-    status: pending
+    status: completed
   - id: register-module
     content: Register two_way_sync module in tests/end_to_end.rs
-    status: pending
+    status: completed
   - id: basic-source-write
     content: "Test: update_source_writes_to_disk — verify Source property write to disk via InstanceUpdate"
-    status: pending
+    status: completed
   - id: property-persistence
     content: "Tests: update_non_source_property_creates_meta_file + update_properties_for_directory_script_writes_init_meta"
-    status: pending
+    status: completed
   - id: rename-tests
     content: "Tests: rename_standalone_script + rename_preserves_adjacent_meta_file"
-    status: pending
+    status: completed
   - id: classname-tests
     content: "Tests: classname_change_standalone_module_to_script + classname_change_directory_script_renames_init_file"
-    status: pending
+    status: completed
   - id: removal-tests
     content: "Tests: remove_instance_deletes_file_and_meta + remove_directory_instance"
-    status: pending
+    status: completed
   - id: round-trip
     content: "Test: round_trip_add_modify_rename_remove — end-to-end lifecycle"
-    status: pending
+    status: completed
   - id: edge-cases
     content: "Tests: property_update_skips_project_node_instances + echo_suppression_prevents_redundant_patches"
-    status: pending
+    status: completed
   - id: ci-verify
     content: Run /ci to verify all new tests pass alongside existing 606+397 tests
-    status: pending
+    status: completed
 isProject: false
 ---
 

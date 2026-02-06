@@ -967,6 +967,8 @@ impl ApiService {
         let meta_path = containing_dir.join(format!("{}.meta.json5", script_name));
         if meta_path.exists() {
             let init_meta_path = new_dir.join("init.meta.json5");
+            self.suppress_path(&meta_path);
+            self.suppress_path(&init_meta_path);
             fs::rename(&meta_path, &init_meta_path).with_context(|| {
                 format!(
                     "Failed to move meta file {} to {}",
@@ -1039,71 +1041,58 @@ impl ApiService {
                 // Use json5::from_str (not serde_json) because .model.json5 files
                 // can contain JSON5 features (comments, trailing commas, unquoted keys).
                 let raw_str = String::from_utf8_lossy(&raw);
-                let meta_content =
-                    if let Ok(model) = json5::from_str::<serde_json::Value>(&raw_str) {
-                        // Warn about inline children that will be lost
-                        if let Some(children) = model.get("children").or(model.get("Children")) {
-                            if children.is_array()
-                                && children.as_array().map_or(false, |a| !a.is_empty())
-                            {
-                                log::warn!(
-                                    "Syncback: .model.json5 at {} contains inline children \
+                let meta_content = if let Ok(model) = json5::from_str::<serde_json::Value>(&raw_str)
+                {
+                    // Warn about inline children that will be lost
+                    if let Some(children) = model.get("children").or(model.get("Children")) {
+                        if children.is_array() && children.as_array().is_some_and(|a| !a.is_empty())
+                        {
+                            log::warn!(
+                                "Syncback: .model.json5 at {} contains inline children \
                                      that cannot be represented in init.meta.json5 — \
                                      these children will be lost during directory conversion",
-                                    standalone_path.display()
-                                );
-                            }
+                                standalone_path.display()
+                            );
                         }
+                    }
 
-                        // Build init.meta.json5 with only the supported fields
-                        let mut meta = serde_json::Map::new();
-                        if let Some(cn) = model
-                            .get("className")
-                            .or(model.get("ClassName"))
-                            .cloned()
-                        {
-                            meta.insert("className".to_string(), cn);
+                    // Build init.meta.json5 with only the supported fields
+                    let mut meta = serde_json::Map::new();
+                    if let Some(cn) = model.get("className").or(model.get("ClassName")).cloned() {
+                        meta.insert("className".to_string(), cn);
+                    }
+                    if let Some(props) =
+                        model.get("properties").or(model.get("Properties")).cloned()
+                    {
+                        if props.is_object() && props.as_object().is_some_and(|o| !o.is_empty()) {
+                            meta.insert("properties".to_string(), props);
                         }
-                        if let Some(props) = model
-                            .get("properties")
-                            .or(model.get("Properties"))
-                            .cloned()
-                        {
-                            if props.is_object()
-                                && props.as_object().map_or(false, |o| !o.is_empty())
-                            {
-                                meta.insert("properties".to_string(), props);
-                            }
+                    }
+                    if let Some(attrs) =
+                        model.get("attributes").or(model.get("Attributes")).cloned()
+                    {
+                        if attrs.is_object() && attrs.as_object().is_some_and(|o| !o.is_empty()) {
+                            meta.insert("attributes".to_string(), attrs);
                         }
-                        if let Some(attrs) = model
-                            .get("attributes")
-                            .or(model.get("Attributes"))
-                            .cloned()
-                        {
-                            if attrs.is_object()
-                                && attrs.as_object().map_or(false, |o| !o.is_empty())
-                            {
-                                meta.insert("attributes".to_string(), attrs);
-                            }
-                        }
-                        if let Some(ignore) = model.get("ignoreUnknownInstances").cloned() {
-                            meta.insert("ignoreUnknownInstances".to_string(), ignore);
-                        }
-                        if let Some(id) = model.get("id").cloned() {
-                            meta.insert("id".to_string(), id);
-                        }
+                    }
+                    if let Some(ignore) = model.get("ignoreUnknownInstances").cloned() {
+                        meta.insert("ignoreUnknownInstances".to_string(), ignore);
+                    }
+                    if let Some(id) = model.get("id").cloned() {
+                        meta.insert("id".to_string(), id);
+                    }
 
-                        crate::json::to_vec_pretty_sorted(&serde_json::Value::Object(meta))
-                            .unwrap_or(raw.clone())
-                    } else {
-                        // Parse failed — copy raw as fallback (best-effort)
-                        log::warn!(
-                            "Syncback: Could not parse {} as JSON — \
+                    crate::json::to_vec_pretty_sorted(&serde_json::Value::Object(meta))
+                        .unwrap_or(raw.clone())
+                } else {
+                    // Parse failed — copy raw as fallback (best-effort)
+                    log::warn!(
+                        "Syncback: Could not parse {} as JSON — \
                              copying raw content to init.meta.json5",
-                            standalone_path.display()
-                        );
-                        raw
-                    };
+                        standalone_path.display()
+                    );
+                    raw
+                };
 
                 self.suppress_path(&init_meta_path);
                 fs::write(&init_meta_path, &meta_content)
@@ -2201,10 +2190,7 @@ impl ApiService {
             // to preserve Windows-invalid character encoding (e.g., %3F for ?).
             // This matches AdjacentMetadata::read_and_apply_all which uses file_stem().
             let parent_dir = inst_path.parent().context("No parent directory")?;
-            let file_stem = inst_path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("");
+            let file_stem = inst_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
             let base_name = file_stem
                 .strip_suffix(".server")
                 .or_else(|| file_stem.strip_suffix(".client"))
