@@ -702,8 +702,8 @@ impl JobThreadContext {
                                                     .and_then(|s| s.to_str())
                                                     .unwrap_or("");
                                                 let known_suffixes = [
-                                                    ".server", ".client", ".plugin",
-                                                    ".local", ".legacy",
+                                                    ".server", ".client", ".plugin", ".local",
+                                                    ".legacy",
                                                 ];
                                                 let base = known_suffixes
                                                     .iter()

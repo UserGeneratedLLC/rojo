@@ -747,8 +747,7 @@ fn classname_change_directory_module_to_script() {
 #[test]
 fn classname_change_script_to_module() {
     run_serve_test("syncback_format_transitions", |session, _redactions| {
-        let (session_id, script_id) =
-            get_format_transitions_instance(&session, "StandaloneScript");
+        let (session_id, script_id) = get_format_transitions_instance(&session, "StandaloneScript");
 
         let old_path = session
             .path()
@@ -780,8 +779,7 @@ fn classname_change_script_to_module() {
 #[test]
 fn classname_change_script_to_localscript() {
     run_serve_test("syncback_format_transitions", |session, _redactions| {
-        let (session_id, script_id) =
-            get_format_transitions_instance(&session, "StandaloneScript");
+        let (session_id, script_id) = get_format_transitions_instance(&session, "StandaloneScript");
 
         let old_path = session
             .path()
@@ -908,9 +906,7 @@ fn combined_classname_and_source_update() {
         let mut props = UstrMap::default();
         props.insert(
             ustr("Source"),
-            Some(Variant::String(
-                "-- Source after class change".to_string(),
-            )),
+            Some(Variant::String("-- Source after class change".to_string())),
         );
         send_update(
             &session,
@@ -998,7 +994,10 @@ fn add_child_converts_standalone_to_directory() {
 
         // init.luau should contain the original source
         let init_file = dir_path.join("init.luau");
-        assert_file_exists(&init_file, "init.luau after standalone→directory conversion");
+        assert_file_exists(
+            &init_file,
+            "init.luau after standalone→directory conversion",
+        );
 
         let init_content = fs::read_to_string(&init_file).unwrap();
         assert!(
@@ -1019,8 +1018,7 @@ fn add_child_converts_standalone_to_directory() {
 #[test]
 fn remove_script_with_suffix_cleans_meta() {
     run_serve_test("syncback_format_transitions", |session, _redactions| {
-        let (session_id, script_id) =
-            get_format_transitions_instance(&session, "StandaloneScript");
+        let (session_id, script_id) = get_format_transitions_instance(&session, "StandaloneScript");
 
         let script_path = session
             .path()
@@ -1053,8 +1051,7 @@ fn remove_script_with_suffix_cleans_meta() {
         assert_file_exists(&meta_path, "Meta file after property update");
 
         // Re-read ID in case tree was rebuilt after the update
-        let (session_id, script_id) =
-            get_format_transitions_instance(&session, "StandaloneScript");
+        let (session_id, script_id) = get_format_transitions_instance(&session, "StandaloneScript");
 
         // Now remove the instance — both script and meta should be deleted
         send_removal(&session, &session_id, vec![script_id]);
@@ -1063,6 +1060,310 @@ fn remove_script_with_suffix_cleans_meta() {
         assert_not_exists(
             &meta_path,
             "Meta file after removal (suffix-stripped cleanup)",
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Helpers (syncback_encoded_names fixture)
+// ---------------------------------------------------------------------------
+
+/// Look up an instance by name under ReplicatedStorage in the encoded_names fixture.
+/// Instance names are DECODED (e.g., `Encoded?Module`), not the filesystem names.
+fn get_encoded_names_instance(
+    session: &crate::rojo_test::serve_util::TestServeSession,
+    instance_name: &str,
+) -> (librojo::SessionId, Ref) {
+    let info = session.get_api_rojo().unwrap();
+    let root_read = session.get_api_read(info.root_instance_id).unwrap();
+    let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+    let rs_read = session.get_api_read(rs_id).unwrap();
+    let (instance_id, _) = find_by_name(&rs_read.instances, instance_name);
+    (info.session_id, instance_id)
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Encoded name directory conversion (path encoding fix)
+// ---------------------------------------------------------------------------
+
+/// Test 22: Adding a child to a standalone ModuleScript with Rojo-encoded
+/// characters (e.g., `What%QUESTION%Module.luau`) creates the directory using
+/// the filesystem-encoded name (`What%QUESTION%Module/`), NOT the decoded
+/// instance name (`What?Module/`).
+///
+/// This is the core regression test for the path encoding fix in
+/// `convert_standalone_script_to_directory`.
+#[test]
+fn add_child_to_encoded_module_creates_encoded_directory() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let (session_id, encoded_module_id) =
+            get_encoded_names_instance(&session, "What?Module");
+
+        let standalone_file = session
+            .path()
+            .join("src")
+            .join("What%QUESTION%Module.luau");
+        // The CORRECT directory name uses the encoded filesystem name
+        let encoded_dir = session.path().join("src").join("What%QUESTION%Module");
+        // The WRONG directory name would use the decoded instance name
+        let decoded_dir = session.path().join("src").join("What?Module");
+
+        assert_file_exists(&standalone_file, "Encoded standalone file before child add");
+
+        // Add a child to trigger standalone → directory conversion
+        let mut properties = HashMap::new();
+        properties.insert(
+            "Source".to_string(),
+            Variant::String("-- Child of encoded module".to_string()),
+        );
+        let added = AddedInstance {
+            parent: Some(encoded_module_id),
+            name: "EncodedChild".to_string(),
+            class_name: "ModuleScript".to_string(),
+            properties,
+            children: vec![],
+        };
+        let mut added_map = HashMap::new();
+        added_map.insert(Ref::new(), added);
+        let write_request = WriteRequest {
+            session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![],
+        };
+        session.post_api_write(&write_request).unwrap();
+        thread::sleep(Duration::from_millis(500));
+
+        // Standalone file should be removed
+        assert_not_exists(
+            &standalone_file,
+            "Standalone file after directory conversion",
+        );
+
+        // Directory should use ENCODED name (the fix)
+        assert!(
+            encoded_dir.is_dir(),
+            "Directory should use encoded name (What%QUESTION%Module/): {}",
+            encoded_dir.display()
+        );
+
+        // Decoded name directory should NOT exist (the bug we fixed)
+        assert!(
+            !decoded_dir.exists(),
+            "Directory with decoded name (What?Module/) must NOT be created: {}",
+            decoded_dir.display()
+        );
+
+        // init.luau should exist inside the encoded directory
+        let init_file = encoded_dir.join("init.luau");
+        assert_file_exists(&init_file, "init.luau inside encoded directory");
+
+        // Child should be created inside the encoded directory
+        let child_file = encoded_dir.join("EncodedChild.luau");
+        assert_file_exists(&child_file, "Child inside encoded directory");
+    });
+}
+
+/// Test 23: Adding a child to a standalone Script with Rojo-encoded characters
+/// AND a script suffix (e.g., `Key%COLON%Script.server.luau`) strips the suffix
+/// correctly when creating the directory name.
+///
+/// The directory should be `Key%COLON%Script/`, not `Key%COLON%Script.server/`
+/// or `Key:Script/`.
+#[test]
+fn add_child_to_encoded_script_strips_suffix_correctly() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let (session_id, encoded_script_id) =
+            get_encoded_names_instance(&session, "Key:Script");
+
+        let standalone_file = session
+            .path()
+            .join("src")
+            .join("Key%COLON%Script.server.luau");
+        let encoded_dir = session.path().join("src").join("Key%COLON%Script");
+        // Wrong: decoded name
+        let decoded_dir = session.path().join("src").join("Key:Script");
+        // Wrong: suffix not stripped
+        let unsuffixed_dir = session.path().join("src").join("Key%COLON%Script.server");
+
+        assert_file_exists(&standalone_file, "Encoded script before child add");
+
+        let mut properties = HashMap::new();
+        properties.insert(
+            "Source".to_string(),
+            Variant::String("-- Child of encoded script".to_string()),
+        );
+        let added = AddedInstance {
+            parent: Some(encoded_script_id),
+            name: "ScriptChild".to_string(),
+            class_name: "ModuleScript".to_string(),
+            properties,
+            children: vec![],
+        };
+        let mut added_map = HashMap::new();
+        added_map.insert(Ref::new(), added);
+        let write_request = WriteRequest {
+            session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![],
+        };
+        session.post_api_write(&write_request).unwrap();
+        thread::sleep(Duration::from_millis(500));
+
+        assert_not_exists(&standalone_file, "Standalone script after conversion");
+
+        assert!(
+            encoded_dir.is_dir(),
+            "Directory should be Key%COLON%Script/ (suffix stripped, encoded): {}",
+            encoded_dir.display()
+        );
+        assert!(
+            !decoded_dir.exists(),
+            "Directory with decoded name must NOT be created: {}",
+            decoded_dir.display()
+        );
+        assert!(
+            !unsuffixed_dir.exists(),
+            "Directory with unsuffixed name must NOT be created: {}",
+            unsuffixed_dir.display()
+        );
+
+        // Script → init.server.luau (preserves class)
+        let init_file = encoded_dir.join("init.server.luau");
+        assert_file_exists(&init_file, "init.server.luau inside encoded directory");
+
+        let child_file = encoded_dir.join("ScriptChild.luau");
+        assert_file_exists(&child_file, "Child inside encoded script directory");
+    });
+}
+
+/// Test 24: Adding a child to a non-script standalone instance with Rojo-encoded
+/// characters (e.g., `What%QUESTION%Model.model.json5`) creates the directory
+/// using the encoded name with the compound extension stripped.
+///
+/// This exercises `convert_standalone_instance_to_directory`.
+#[test]
+fn add_child_to_encoded_model_creates_encoded_directory() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let (session_id, encoded_model_id) =
+            get_encoded_names_instance(&session, "What?Model");
+
+        let standalone_file = session
+            .path()
+            .join("src")
+            .join("What%QUESTION%Model.model.json5");
+        let encoded_dir = session.path().join("src").join("What%QUESTION%Model");
+        let decoded_dir = session.path().join("src").join("What?Model");
+
+        assert_file_exists(&standalone_file, "Encoded model file before child add");
+
+        let mut properties = HashMap::new();
+        properties.insert(
+            "Source".to_string(),
+            Variant::String("-- Child of encoded model".to_string()),
+        );
+        let added = AddedInstance {
+            parent: Some(encoded_model_id),
+            name: "ModelChild".to_string(),
+            class_name: "ModuleScript".to_string(),
+            properties,
+            children: vec![],
+        };
+        let mut added_map = HashMap::new();
+        added_map.insert(Ref::new(), added);
+        let write_request = WriteRequest {
+            session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![],
+        };
+        session.post_api_write(&write_request).unwrap();
+        thread::sleep(Duration::from_millis(500));
+
+        assert_not_exists(&standalone_file, "Standalone model after conversion");
+
+        assert!(
+            encoded_dir.is_dir(),
+            "Directory should use encoded name (What%QUESTION%Model/): {}",
+            encoded_dir.display()
+        );
+        assert!(
+            !decoded_dir.exists(),
+            "Directory with decoded name must NOT be created: {}",
+            decoded_dir.display()
+        );
+
+        // init.meta.json5 should exist inside the directory (converted from .model.json5)
+        let init_meta = encoded_dir.join("init.meta.json5");
+        assert_file_exists(&init_meta, "init.meta.json5 inside encoded model directory");
+
+        let child_file = encoded_dir.join("ModelChild.luau");
+        assert_file_exists(&child_file, "Child inside encoded model directory");
+    });
+}
+
+/// Test 25: Non-Source property update on a standalone script with Rojo-encoded
+/// name creates the adjacent meta file using the encoded filesystem name,
+/// not the decoded instance name.
+///
+/// e.g., `What%QUESTION%Module.meta.json5` NOT `What?Module.meta.json5`
+#[test]
+fn property_update_on_encoded_script_uses_encoded_meta_path() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let (session_id, encoded_module_id) =
+            get_encoded_names_instance(&session, "What?Module");
+
+        let script_file = session
+            .path()
+            .join("src")
+            .join("What%QUESTION%Module.luau");
+        let encoded_meta = session
+            .path()
+            .join("src")
+            .join("What%QUESTION%Module.meta.json5");
+        let decoded_meta = session
+            .path()
+            .join("src")
+            .join("What?Module.meta.json5");
+
+        assert_file_exists(&script_file, "Encoded script file before property update");
+        assert_not_exists(&encoded_meta, "Meta file before property update");
+
+        let mut attrs = rbx_dom_weak::types::Attributes::new();
+        attrs.insert("EncodedAttr".to_string(), Variant::Float64(99.0));
+
+        let mut props = UstrMap::default();
+        props.insert(ustr("Attributes"), Some(Variant::Attributes(attrs)));
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: encoded_module_id,
+                changed_name: None,
+                changed_class_name: None,
+                changed_properties: props,
+                changed_metadata: None,
+            },
+        );
+
+        // Meta file should use encoded name
+        assert_file_exists(
+            &encoded_meta,
+            "Meta file should use encoded name (What%QUESTION%Module.meta.json5)",
+        );
+        assert!(
+            !decoded_meta.exists(),
+            "Meta file with decoded name must NOT be created: {}",
+            decoded_meta.display()
+        );
+
+        // Script file should be unchanged
+        let content = fs::read_to_string(&script_file).unwrap();
+        assert!(
+            content.contains("Module with encoded"),
+            "Script content should be unchanged, got: {}",
+            content
         );
     });
 }

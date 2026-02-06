@@ -1,0 +1,10 @@
+{
+  "name": "syncback_encoded_names",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "$path": "src"
+    }
+  }
+}
