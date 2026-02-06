@@ -160,6 +160,29 @@ impl JobThreadContext {
         None
     }
 
+    /// Suppress a single VFS event for the given path. Prevents the
+    /// ChangeProcessor from re-processing a file-watcher event that we
+    /// triggered ourselves (renames, writes).
+    fn suppress_path(&self, path: &Path) {
+        let mut suppressed = self.suppressed_paths.lock().unwrap();
+        let key = if let Ok(canonical) = std::fs::canonicalize(path) {
+            canonical
+        } else if let Some(parent) = path.parent() {
+            if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
+                if let Some(file_name) = path.file_name() {
+                    canonical_parent.join(file_name)
+                } else {
+                    path.to_path_buf()
+                }
+            } else {
+                path.to_path_buf()
+            }
+        } else {
+            path.to_path_buf()
+        };
+        *suppressed.entry(key).or_insert(0) += 1;
+    }
+
     /// Computes and applies patches to the DOM for a given file path.
     ///
     /// This function finds the nearest ancestor to the given path that has associated instances
@@ -503,6 +526,11 @@ impl JobThreadContext {
                 }
             }
 
+            // Collect (Ref, new_instigating_source) for instances whose
+            // filesystem path changed (rename / ClassName transition).
+            // Applied after the PatchSet to keep metadata in sync.
+            let mut metadata_updates: Vec<(Ref, PathBuf)> = Vec::new();
+
             for update in &patch_set.updated_instances {
                 let id = update.id;
 
@@ -548,6 +576,8 @@ impl JobThreadContext {
                                                         dir_path.display(),
                                                         new_dir_path.display()
                                                     );
+                                                    self.suppress_path(dir_path);
+                                                    self.suppress_path(&new_dir_path);
                                                     if let Err(err) =
                                                         fs::rename(dir_path, &new_dir_path)
                                                     {
@@ -571,6 +601,8 @@ impl JobThreadContext {
                                                                     "{}.meta.json5",
                                                                     encoded_new_name
                                                                 ));
+                                                            self.suppress_path(&old_meta);
+                                                            self.suppress_path(&new_meta);
                                                             let _ =
                                                                 fs::rename(&old_meta, &new_meta);
                                                         }
@@ -622,6 +654,8 @@ impl JobThreadContext {
                                                     path.display(),
                                                     new_path.display()
                                                 );
+                                                self.suppress_path(path);
+                                                self.suppress_path(&new_path);
                                                 if let Err(err) = fs::rename(path, &new_path) {
                                                     log::error!(
                                                         "Failed to rename {:?} to {:?}: {}",
@@ -638,6 +672,8 @@ impl JobThreadContext {
                                                             "{}.meta.json5",
                                                             encoded_new_name
                                                         ));
+                                                        self.suppress_path(&old_meta);
+                                                        self.suppress_path(&new_meta);
                                                         let _ = fs::rename(&old_meta, &new_meta);
                                                     }
                                                 }
@@ -751,6 +787,8 @@ impl JobThreadContext {
                                                     actual_file.display(),
                                                     new_path.display()
                                                 );
+                                                self.suppress_path(&actual_file);
+                                                self.suppress_path(&new_path);
                                                 if let Err(err) =
                                                     fs::rename(&actual_file, &new_path)
                                                 {
@@ -829,6 +867,7 @@ impl JobThreadContext {
                                         "Two-way sync: Writing Source to {}",
                                         write_path.display()
                                     );
+                                    self.suppress_path(write_path);
                                     if let Err(err) = fs::write(write_path, value) {
                                         log::error!(
                                             "Failed to write Source to {:?} for instance {:?}: {}",
@@ -845,12 +884,35 @@ impl JobThreadContext {
                             log::trace!("Skipping non-Source property change: {}", key);
                         }
                     }
+
+                    // Record metadata update so instigating_source and
+                    // relevant_paths stay in sync after rename / class change.
+                    if let Some(ref new_path) = overridden_source_path {
+                        metadata_updates.push((id, new_path.clone()));
+                    }
                 } else {
                     log::warn!("Cannot update instance {:?}, it does not exist.", id);
                 }
             }
 
-            apply_patch_set(&mut tree, patch_set)
+            let applied = apply_patch_set(&mut tree, patch_set);
+
+            // Update metadata for instances whose filesystem path changed.
+            // This keeps instigating_source and path_to_ids in sync so that
+            // subsequent VFS events (and future renames) target the correct
+            // instance and path.
+            for (id, new_instigating_source) in metadata_updates {
+                if let Some(old_metadata) = tree.get_metadata(id).cloned() {
+                    let mut new_metadata = old_metadata;
+                    new_metadata.instigating_source =
+                        Some(InstigatingSource::Path(new_instigating_source.clone()));
+                    new_metadata.relevant_paths =
+                        rebuild_relevant_paths(&new_instigating_source);
+                    tree.update_metadata(id, new_metadata);
+                }
+            }
+
+            applied
         };
 
         if !applied_patch.is_empty() {
@@ -977,6 +1039,37 @@ fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<
                             applied,
                             removed_path: None,
                         })
+                    } else if is_init_file && std::fs::metadata(snapshot_path).is_ok() {
+                        // Init file was deleted but the parent directory still
+                        // exists. Re-snapshot the directory — it will become a
+                        // Folder (or whatever the directory middleware produces
+                        // without an init file).
+                        log::info!(
+                            "compute_and_apply_changes: init file {} deleted but parent \
+                             directory {} still exists. Re-snapshotting directory.",
+                            path.display(),
+                            snapshot_path.display()
+                        );
+
+                        let snapshot =
+                            match snapshot_from_vfs(&metadata.context, vfs, snapshot_path) {
+                                Ok(snapshot) => snapshot,
+                                Err(err) => {
+                                    log::error!(
+                                        "Directory re-snapshot error for {}: {:?}",
+                                        snapshot_path.display(),
+                                        err
+                                    );
+                                    return None;
+                                }
+                            };
+
+                        let patch_set = compute_patch_set(snapshot, tree, id);
+                        let applied = apply_patch_set(tree, patch_set);
+                        Some(ComputeResult {
+                            applied,
+                            removed_path: None,
+                        })
                     } else {
                         // Path is genuinely gone from both VFS and real filesystem.
                         // Remove the instance, but record the path for recovery
@@ -1049,5 +1142,53 @@ fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<
                 removed_path: None,
             })
         }
+    }
+}
+
+/// Rebuild the `relevant_paths` list for an instance given its new
+/// `instigating_source` path. This mirrors the logic in the snapshot
+/// middleware so that `path_to_ids` stays correct after a rename.
+fn rebuild_relevant_paths(new_path: &Path) -> Vec<PathBuf> {
+    let file_name = new_path
+        .file_name()
+        .and_then(|f| f.to_str())
+        .unwrap_or("");
+    let is_init = file_name.starts_with("init.");
+
+    if is_init {
+        // Directory-format script: relevant paths are the directory itself
+        // plus every possible init file variant inside it.
+        let dir_path = new_path.parent().unwrap().to_path_buf();
+        vec![
+            dir_path.clone(),
+            dir_path.join("init.luau"),
+            dir_path.join("init.server.luau"),
+            dir_path.join("init.client.luau"),
+            dir_path.join("init.local.luau"),
+            dir_path.join("init.legacy.luau"),
+            dir_path.join("init.csv"),
+            dir_path.join("init.lua"),
+            dir_path.join("init.server.lua"),
+            dir_path.join("init.client.lua"),
+            dir_path.join("init.meta.json5"),
+        ]
+    } else {
+        // Standalone file: relevant paths are the file itself and its
+        // adjacent meta file.
+        let stem = new_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        let base_name = stem
+            .strip_suffix(".server")
+            .or_else(|| stem.strip_suffix(".client"))
+            .or_else(|| stem.strip_suffix(".plugin"))
+            .or_else(|| stem.strip_suffix(".local"))
+            .or_else(|| stem.strip_suffix(".legacy"))
+            .unwrap_or(stem);
+        vec![
+            new_path.to_path_buf(),
+            new_path.with_file_name(format!("{base_name}.meta.json5")),
+        ]
     }
 }
