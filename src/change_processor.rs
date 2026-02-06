@@ -183,6 +183,34 @@ impl JobThreadContext {
         *suppressed.entry(key).or_insert(0) += 1;
     }
 
+    /// Remove a suppression previously added by [`suppress_path`]. Called when
+    /// the filesystem operation that warranted the suppression failed, so that
+    /// future VFS events for that path are not incorrectly swallowed.
+    fn unsuppress_path(&self, path: &Path) {
+        let mut suppressed = self.suppressed_paths.lock().unwrap();
+        let key = if let Ok(canonical) = std::fs::canonicalize(path) {
+            canonical
+        } else if let Some(parent) = path.parent() {
+            if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
+                if let Some(file_name) = path.file_name() {
+                    canonical_parent.join(file_name)
+                } else {
+                    path.to_path_buf()
+                }
+            } else {
+                path.to_path_buf()
+            }
+        } else {
+            path.to_path_buf()
+        };
+        if let Some(count) = suppressed.get_mut(&key) {
+            *count -= 1;
+            if *count == 0 {
+                suppressed.remove(&key);
+            }
+        }
+    }
+
     /// Computes and applies patches to the DOM for a given file path.
     ///
     /// This function finds the nearest ancestor to the given path that has associated instances
@@ -581,6 +609,8 @@ impl JobThreadContext {
                                                     if let Err(err) =
                                                         fs::rename(dir_path, &new_dir_path)
                                                     {
+                                                        self.unsuppress_path(dir_path);
+                                                        self.unsuppress_path(&new_dir_path);
                                                         log::error!(
                                                             "Failed to rename directory {:?} to {:?}: {}",
                                                             dir_path,
@@ -603,8 +633,12 @@ impl JobThreadContext {
                                                                 ));
                                                             self.suppress_path(&old_meta);
                                                             self.suppress_path(&new_meta);
-                                                            let _ =
-                                                                fs::rename(&old_meta, &new_meta);
+                                                            if fs::rename(&old_meta, &new_meta)
+                                                                .is_err()
+                                                            {
+                                                                self.unsuppress_path(&old_meta);
+                                                                self.unsuppress_path(&new_meta);
+                                                            }
                                                         }
                                                     }
                                                 }
@@ -657,6 +691,8 @@ impl JobThreadContext {
                                                 self.suppress_path(path);
                                                 self.suppress_path(&new_path);
                                                 if let Err(err) = fs::rename(path, &new_path) {
+                                                    self.unsuppress_path(path);
+                                                    self.unsuppress_path(&new_path);
                                                     log::error!(
                                                         "Failed to rename {:?} to {:?}: {}",
                                                         path,
@@ -674,7 +710,11 @@ impl JobThreadContext {
                                                         ));
                                                         self.suppress_path(&old_meta);
                                                         self.suppress_path(&new_meta);
-                                                        let _ = fs::rename(&old_meta, &new_meta);
+                                                        if fs::rename(&old_meta, &new_meta).is_err()
+                                                        {
+                                                            self.unsuppress_path(&old_meta);
+                                                            self.unsuppress_path(&new_meta);
+                                                        }
                                                     }
                                                 }
                                             }
@@ -792,6 +832,8 @@ impl JobThreadContext {
                                                 if let Err(err) =
                                                     fs::rename(&actual_file, &new_path)
                                                 {
+                                                    self.unsuppress_path(&actual_file);
+                                                    self.unsuppress_path(&new_path);
                                                     log::error!(
                                                         "Failed to rename {:?} to {:?}: {}",
                                                         actual_file,
@@ -869,6 +911,7 @@ impl JobThreadContext {
                                     );
                                     self.suppress_path(write_path);
                                     if let Err(err) = fs::write(write_path, value) {
+                                        self.unsuppress_path(write_path);
                                         log::error!(
                                             "Failed to write Source to {:?} for instance {:?}: {}",
                                             write_path,
@@ -906,8 +949,7 @@ impl JobThreadContext {
                     let mut new_metadata = old_metadata;
                     new_metadata.instigating_source =
                         Some(InstigatingSource::Path(new_instigating_source.clone()));
-                    new_metadata.relevant_paths =
-                        rebuild_relevant_paths(&new_instigating_source);
+                    new_metadata.relevant_paths = rebuild_relevant_paths(&new_instigating_source);
                     tree.update_metadata(id, new_metadata);
                 }
             }
@@ -1149,10 +1191,7 @@ fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<
 /// `instigating_source` path. This mirrors the logic in the snapshot
 /// middleware so that `path_to_ids` stays correct after a rename.
 fn rebuild_relevant_paths(new_path: &Path) -> Vec<PathBuf> {
-    let file_name = new_path
-        .file_name()
-        .and_then(|f| f.to_str())
-        .unwrap_or("");
+    let file_name = new_path.file_name().and_then(|f| f.to_str()).unwrap_or("");
     let is_init = file_name.starts_with("init.");
 
     if is_init {
@@ -1164,6 +1203,7 @@ fn rebuild_relevant_paths(new_path: &Path) -> Vec<PathBuf> {
             dir_path.join("init.luau"),
             dir_path.join("init.server.luau"),
             dir_path.join("init.client.luau"),
+            dir_path.join("init.plugin.luau"),
             dir_path.join("init.local.luau"),
             dir_path.join("init.legacy.luau"),
             dir_path.join("init.csv"),
@@ -1175,10 +1215,7 @@ fn rebuild_relevant_paths(new_path: &Path) -> Vec<PathBuf> {
     } else {
         // Standalone file: relevant paths are the file itself and its
         // adjacent meta file.
-        let stem = new_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
+        let stem = new_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         let base_name = stem
             .strip_suffix(".server")
             .or_else(|| stem.strip_suffix(".client"))

@@ -3289,7 +3289,11 @@ fn no_wait_rename_chain_10x() {
             let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
             let rs_read = session.get_api_read(rs_id).unwrap();
             let (id, _) = find_by_name(&rs_read.instances, &current_name);
-            send_update_no_wait(&session, &info.session_id, make_rename_update(id, &new_name));
+            send_update_no_wait(
+                &session,
+                &info.session_id,
+                make_rename_update(id, &new_name),
+            );
             current_name = new_name;
         }
 
@@ -3548,8 +3552,7 @@ fn no_wait_directory_all_three_chain_10x() {
             &final_dir.join("init.server.luau"),
             "init.server.luau in NWDA10",
         );
-        let content =
-            fs::read_to_string(final_dir.join("init.server.luau")).unwrap();
+        let content = fs::read_to_string(final_dir.join("init.server.luau")).unwrap();
         assert!(
             content.contains("-- nwda 10"),
             "Final source should contain '-- nwda 10', got: {}",
@@ -3572,7 +3575,13 @@ fn no_wait_directory_all_three_chain_10x() {
 fn alternating_rename_classchange_10x() {
     run_serve_test("syncback_write", |session, _redactions| {
         let src = session.path().join("src");
-        let class_seq = ["Script", "LocalScript", "ModuleScript", "Script", "LocalScript"];
+        let class_seq = [
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+            "LocalScript",
+        ];
         let mut current_name = "existing".to_string();
         let mut current_class = "ModuleScript";
 
@@ -3586,7 +3595,11 @@ fn alternating_rename_classchange_10x() {
             if i % 2 == 0 {
                 // Rename on even steps
                 let new_name = format!("Alt{}", i);
-                send_update_fast(&session, &info.session_id, make_rename_update(id, &new_name));
+                send_update_fast(
+                    &session,
+                    &info.session_id,
+                    make_rename_update(id, &new_name),
+                );
                 current_name = new_name;
             } else {
                 // Class change on odd steps
@@ -3623,12 +3636,22 @@ fn rename_burst_then_class_burst() {
             let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
             let rs_read = session.get_api_read(rs_id).unwrap();
             let (id, _) = find_by_name(&rs_read.instances, &current_name);
-            send_update_fast(&session, &info.session_id, make_rename_update(id, &new_name));
+            send_update_fast(
+                &session,
+                &info.session_id,
+                make_rename_update(id, &new_name),
+            );
             current_name = new_name;
         }
 
         // 5 rapid class changes
-        let classes = ["Script", "LocalScript", "ModuleScript", "Script", "LocalScript"];
+        let classes = [
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+            "LocalScript",
+        ];
         for class in &classes {
             let info = session.get_api_rojo().unwrap();
             let root_read = session.get_api_read(info.root_instance_id).unwrap();
@@ -3649,7 +3672,13 @@ fn rename_burst_then_class_burst() {
 fn directory_alternating_rename_classchange_10x() {
     run_serve_test("syncback_format_transitions", |session, _redactions| {
         let src = session.path().join("src");
-        let class_seq = ["Script", "LocalScript", "ModuleScript", "Script", "LocalScript"];
+        let class_seq = [
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+            "LocalScript",
+        ];
         let mut current_name = "DirModuleWithChildren".to_string();
         let mut current_class = "ModuleScript";
 
@@ -3855,11 +3884,7 @@ fn watcher_format_flip_flop_with_rename() {
 
         // Cycle 3: Collapse back to standalone
         fs::remove_dir_all(&renamed_dir).unwrap();
-        fs::write(
-            src.join("FlipRenamed.luau"),
-            "-- collapsed back\nreturn {}",
-        )
-        .unwrap();
+        fs::write(src.join("FlipRenamed.luau"), "-- collapsed back\nreturn {}").unwrap();
 
         poll_tree_source(&session, rs_id, "FlipRenamed", "-- collapsed back", 5000);
     });
@@ -3922,13 +3947,7 @@ fn watcher_delete_recreate_5_files_simultaneously() {
         }
 
         for (i, name) in names.iter().enumerate() {
-            poll_tree_source(
-                &session,
-                rs_id,
-                name,
-                &format!("-- recreated {}", i),
-                5000,
-            );
+            poll_tree_source(&session, rs_id, name, &format!("-- recreated {}", i), 5000);
         }
     });
 }
@@ -4155,8 +4174,7 @@ fn concurrent_api_rename_fs_edit_different_instances() {
         .unwrap();
 
         // API: rename StandaloneScript
-        let (session_id, script_id) =
-            get_format_transitions_instance(&session, "StandaloneScript");
+        let (session_id, script_id) = get_format_transitions_instance(&session, "StandaloneScript");
         send_update_no_wait(
             &session,
             &session_id,
@@ -4198,8 +4216,7 @@ fn concurrent_api_classchange_fs_rename_different_instances() {
         .unwrap();
 
         // API: change StandaloneScript's class to LocalScript
-        let (session_id, script_id) =
-            get_format_transitions_instance(&session, "StandaloneScript");
+        let (session_id, script_id) = get_format_transitions_instance(&session, "StandaloneScript");
         send_update_no_wait(
             &session,
             &session_id,
@@ -4224,15 +4241,10 @@ fn concurrent_api_combined_fs_dir_rename() {
         let rs_id = get_rs_id(&session);
 
         // Filesystem: rename DirModuleWithChildren -> MovedDir
-        fs::rename(
-            src.join("DirModuleWithChildren"),
-            src.join("MovedDir"),
-        )
-        .unwrap();
+        fs::rename(src.join("DirModuleWithChildren"), src.join("MovedDir")).unwrap();
 
         // API: rename + source on StandaloneModule
-        let (session_id, module_id) =
-            get_format_transitions_instance(&session, "StandaloneModule");
+        let (session_id, module_id) = get_format_transitions_instance(&session, "StandaloneModule");
         send_update_no_wait(
             &session,
             &session_id,
@@ -4272,13 +4284,8 @@ fn directory_rename_then_source_update() {
         let src = session.path().join("src");
 
         // Rename
-        let (session_id, id) =
-            get_format_transitions_instance(&session, "DirModuleWithChildren");
-        send_update_fast(
-            &session,
-            &session_id,
-            make_rename_update(id, "DirRenamed"),
-        );
+        let (session_id, id) = get_format_transitions_instance(&session, "DirModuleWithChildren");
+        send_update_fast(&session, &session_id, make_rename_update(id, "DirRenamed"));
 
         // Re-fetch after rename settles
         let (session_id2, id2) = get_format_transitions_instance(&session, "DirRenamed");
@@ -4307,8 +4314,7 @@ fn directory_combined_rename_classchange() {
     run_serve_test("syncback_format_transitions", |session, _redactions| {
         let src = session.path().join("src");
 
-        let (session_id, id) =
-            get_format_transitions_instance(&session, "DirModuleWithChildren");
+        let (session_id, id) = get_format_transitions_instance(&session, "DirModuleWithChildren");
         send_update(
             &session,
             &session_id,
@@ -4330,8 +4336,7 @@ fn directory_combined_all_three() {
     run_serve_test("syncback_format_transitions", |session, _redactions| {
         let src = session.path().join("src");
 
-        let (session_id, id) =
-            get_format_transitions_instance(&session, "DirModuleWithChildren");
+        let (session_id, id) = get_format_transitions_instance(&session, "DirModuleWithChildren");
         send_update(
             &session,
             &session_id,
@@ -4346,10 +4351,7 @@ fn directory_combined_all_three() {
         wait_for_settle();
         let dir = src.join("DirAll3");
         assert!(dir.is_dir(), "DirAll3 should exist");
-        assert_file_exists(
-            &dir.join("init.local.luau"),
-            "init.local.luau in DirAll3",
-        );
+        assert_file_exists(&dir.join("init.local.luau"), "init.local.luau in DirAll3");
         let content = fs::read_to_string(dir.join("init.local.luau")).unwrap();
         assert!(
             content.contains("-- dir all three"),
@@ -4429,11 +4431,7 @@ fn watcher_directory_rapid_init_cycling_and_rename() {
         poll_tree_has_instance(&session, rs_id, "CycledDir", 5000);
 
         // Step 3: init.server.luau -> init.local.luau
-        fs::rename(
-            dir.join("init.server.luau"),
-            dir.join("init.local.luau"),
-        )
-        .unwrap();
+        fs::rename(dir.join("init.server.luau"), dir.join("init.local.luau")).unwrap();
         poll_tree_class(&session, rs_id, "CycledDir", "LocalScript", 5000);
 
         // Step 4: rename dir again
@@ -4468,7 +4466,11 @@ fn extreme_no_wait_rename_chain_20x() {
             let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
             let rs_read = session.get_api_read(rs_id).unwrap();
             let (id, _) = find_by_name(&rs_read.instances, &current_name);
-            send_update_no_wait(&session, &info.session_id, make_rename_update(id, &new_name));
+            send_update_no_wait(
+                &session,
+                &info.session_id,
+                make_rename_update(id, &new_name),
+            );
             current_name = new_name;
         }
 
@@ -4483,11 +4485,7 @@ fn extreme_no_wait_rename_chain_20x() {
 fn extreme_no_wait_directory_all_three_20x() {
     run_serve_test("syncback_format_transitions", |session, _redactions| {
         let src = session.path().join("src");
-        let classes = [
-            "Script",
-            "LocalScript",
-            "ModuleScript",
-        ];
+        let classes = ["Script", "LocalScript", "ModuleScript"];
         let mut current_name = "DirModuleWithChildren".to_string();
 
         for i in 1..=20 {
@@ -4624,5 +4622,309 @@ fn extreme_filesystem_5_file_rename_chains() {
             let final_name = format!("{}_r5", names[j]);
             poll_tree_has_instance(&session, rs_id, &final_name, 5000);
         }
+    });
+}
+
+// ===========================================================================
+// PART 4: Failed Operation Suppression Cleanup
+//
+// When the change_processor suppresses a VFS path before a filesystem
+// operation (rename, write) and that operation fails, the suppression must be
+// cleaned up. Otherwise a stale entry sits in the suppression map and
+// silently swallows the next real VFS event for that path — e.g. an external
+// edit in VS Code would be lost.
+//
+// Strategy: block the filesystem operation by placing a non-empty directory
+// at the rename target (or making the file read-only for writes), then
+// verify that subsequent external edits are still picked up by the watcher.
+// ===========================================================================
+
+/// When a standalone file rename fails (target blocked by directory),
+/// subsequent external edits to the original file must still be detected.
+#[test]
+fn failed_rename_no_stale_suppression() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+
+        // Block the rename target: create a non-empty directory at the path
+        // that fs::rename would target. fs::rename("existing.luau",
+        // "Blocked.luau") fails because "Blocked.luau" is a directory.
+        let blocker = src.join("Blocked.luau");
+        fs::create_dir(&blocker).unwrap();
+        fs::write(blocker.join("placeholder"), "").unwrap();
+
+        // Send a rename that will fail internally.
+        let (session_id, _rs_id, id) = get_rs_and_existing(&session);
+        send_update_fast(&session, &session_id, make_rename_update(id, "Blocked"));
+        wait_for_settle();
+
+        // existing.luau must still be on disk (rename failed).
+        assert_file_exists(
+            &src.join("existing.luau"),
+            "existing.luau should survive failed rename",
+        );
+
+        // Remove the blocker so it doesn't interfere.
+        fs::remove_dir_all(&blocker).unwrap();
+
+        // Edit existing.luau externally — this VFS event must NOT be
+        // suppressed. If the suppression leaked, this edit is silently lost.
+        fs::write(
+            src.join("existing.luau"),
+            "-- after failed rename\nreturn {}",
+        )
+        .unwrap();
+
+        // The re-snapshot should pick up the edit (and fix the DOM name back
+        // to "existing" since the file is still named existing.luau).
+        poll_tree_source(&session, rs_id, "existing", "-- after failed rename", 5000);
+    });
+}
+
+/// When a ClassName change rename fails (target blocked), subsequent
+/// external edits to the original file must still be detected.
+#[test]
+fn failed_classchange_rename_no_stale_suppression() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+
+        // ModuleScript→Script renames existing.luau → existing.server.luau.
+        // Block that target with a directory.
+        let blocker = src.join("existing.server.luau");
+        fs::create_dir(&blocker).unwrap();
+        fs::write(blocker.join("placeholder"), "").unwrap();
+
+        // Send ClassName change whose internal rename will fail.
+        let (session_id, _rs_id, id) = get_rs_and_existing(&session);
+        send_update_fast(&session, &session_id, make_class_update(id, "Script"));
+        wait_for_settle();
+
+        // Original file must still exist.
+        assert_file_exists(
+            &src.join("existing.luau"),
+            "existing.luau should survive failed class rename",
+        );
+
+        // Remove blocker.
+        fs::remove_dir_all(&blocker).unwrap();
+
+        // External edit — must not be suppressed.
+        fs::write(
+            src.join("existing.luau"),
+            "-- after failed classchange\nreturn {}",
+        )
+        .unwrap();
+
+        poll_tree_source(
+            &session,
+            rs_id,
+            "existing",
+            "-- after failed classchange",
+            5000,
+        );
+    });
+}
+
+/// When a directory rename fails (target blocked), subsequent external
+/// edits to the init file must still be detected.
+#[test]
+fn failed_directory_rename_no_stale_suppression() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+
+        // Block the rename target with a non-empty directory.
+        let blocker = src.join("BlockedDir");
+        fs::create_dir(&blocker).unwrap();
+        fs::write(blocker.join("placeholder"), "").unwrap();
+
+        // Send directory rename that will fail internally.
+        let (session_id, id) = get_format_transitions_instance(&session, "DirModuleWithChildren");
+        send_update_fast(&session, &session_id, make_rename_update(id, "BlockedDir"));
+        wait_for_settle();
+
+        // Original directory must still exist.
+        assert!(
+            src.join("DirModuleWithChildren").is_dir(),
+            "DirModuleWithChildren should survive failed rename"
+        );
+
+        // Remove blocker.
+        fs::remove_dir_all(&blocker).unwrap();
+
+        // Edit the init file externally — VFS must not suppress this.
+        fs::write(
+            src.join("DirModuleWithChildren").join("init.luau"),
+            "-- after failed dir rename\nreturn {}",
+        )
+        .unwrap();
+
+        poll_tree_source(
+            &session,
+            rs_id,
+            "DirModuleWithChildren",
+            "-- after failed dir rename",
+            5000,
+        );
+    });
+}
+
+/// When a Source write fails (read-only file), subsequent external edits
+/// must still be detected after the file is made writable again.
+#[test]
+#[allow(clippy::permissions_set_readonly_false)]
+fn failed_write_no_stale_suppression() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let file = src.join("existing.luau");
+
+        // Make the file read-only so fs::write fails.
+        let mut perms = fs::metadata(&file).unwrap().permissions();
+        perms.set_readonly(true);
+        fs::set_permissions(&file, perms).unwrap();
+
+        // Send Source change that will fail internally.
+        let (session_id, _rs_id, id) = get_rs_and_existing(&session);
+        send_update_fast(
+            &session,
+            &session_id,
+            make_combined_update(id, None, None, Some("-- should fail to write")),
+        );
+        wait_for_settle();
+
+        // Restore write permission.
+        let mut perms = fs::metadata(&file).unwrap().permissions();
+        perms.set_readonly(false);
+        fs::set_permissions(&file, perms).unwrap();
+
+        // External edit — VFS event must not be suppressed.
+        fs::write(&file, "-- after failed write\nreturn {}").unwrap();
+
+        poll_tree_source(&session, rs_id, "existing", "-- after failed write", 5000);
+    });
+}
+
+/// After a failed rename, verify the instance can still be successfully
+/// renamed on a retry (no permanently broken state).
+#[test]
+fn failed_rename_then_successful_rename() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+
+        // Block first rename attempt.
+        let blocker = src.join("FirstAttempt.luau");
+        fs::create_dir(&blocker).unwrap();
+        fs::write(blocker.join("placeholder"), "").unwrap();
+
+        let (session_id, _rs_id, id) = get_rs_and_existing(&session);
+        send_update_fast(
+            &session,
+            &session_id,
+            make_rename_update(id, "FirstAttempt"),
+        );
+        wait_for_settle();
+
+        // First rename failed — original file still here.
+        assert_file_exists(
+            &src.join("existing.luau"),
+            "existing.luau after blocked rename",
+        );
+
+        // Remove blocker.
+        fs::remove_dir_all(&blocker).unwrap();
+
+        // Edit the file to reset DOM name back to "existing" via VFS.
+        fs::write(
+            src.join("existing.luau"),
+            "-- reset after failure\nreturn {}",
+        )
+        .unwrap();
+        poll_tree_source(&session, rs_id, "existing", "-- reset after failure", 5000);
+
+        // Now retry with an unblocked target — should succeed.
+        let (session_id, _rs_id, id) = get_rs_and_existing(&session);
+        send_update_fast(
+            &session,
+            &session_id,
+            make_rename_update(id, "SuccessfulRetry"),
+        );
+        wait_for_settle();
+
+        assert_file_exists(
+            &src.join("SuccessfulRetry.luau"),
+            "SuccessfulRetry.luau after unblocked rename",
+        );
+        assert_not_exists(
+            &src.join("existing.luau"),
+            "existing.luau should be gone after successful rename",
+        );
+    });
+}
+
+/// After a failed directory rename, verify the directory can still be
+/// renamed on retry.
+#[test]
+fn failed_directory_rename_then_successful_rename() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+
+        // Block first rename.
+        let blocker = src.join("DirBlocked");
+        fs::create_dir(&blocker).unwrap();
+        fs::write(blocker.join("placeholder"), "").unwrap();
+
+        let (session_id, id) = get_format_transitions_instance(&session, "DirModuleWithChildren");
+        send_update_fast(&session, &session_id, make_rename_update(id, "DirBlocked"));
+        wait_for_settle();
+
+        // Original directory still exists.
+        assert!(
+            src.join("DirModuleWithChildren").is_dir(),
+            "DirModuleWithChildren should survive blocked rename"
+        );
+
+        // Remove blocker.
+        fs::remove_dir_all(&blocker).unwrap();
+
+        // Edit init to reset DOM name via VFS.
+        fs::write(
+            src.join("DirModuleWithChildren").join("init.luau"),
+            "-- dir reset\nreturn {}",
+        )
+        .unwrap();
+        poll_tree_source(
+            &session,
+            rs_id,
+            "DirModuleWithChildren",
+            "-- dir reset",
+            5000,
+        );
+
+        // Retry rename — should succeed now.
+        let (session_id, id) = get_format_transitions_instance(&session, "DirModuleWithChildren");
+        send_update_fast(
+            &session,
+            &session_id,
+            make_rename_update(id, "DirRetrySuccess"),
+        );
+        wait_for_settle();
+
+        assert!(
+            src.join("DirRetrySuccess").is_dir(),
+            "DirRetrySuccess should exist after unblocked rename"
+        );
+        assert_file_exists(
+            &src.join("DirRetrySuccess").join("init.luau"),
+            "init.luau in DirRetrySuccess",
+        );
+        assert_file_exists(
+            &src.join("DirRetrySuccess").join("ChildA.luau"),
+            "ChildA in DirRetrySuccess",
+        );
     });
 }
