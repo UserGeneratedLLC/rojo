@@ -19,6 +19,7 @@ use rbx_dom_weak::{
 };
 
 use crate::{
+    path_encoding::encode_path_name,
     serve_session::ServeSession,
     snapshot::{InstanceWithMeta, InstigatingSource, PatchSet, PatchUpdate},
     syncback::VISIBLE_SERVICES,
@@ -1478,6 +1479,10 @@ impl ApiService {
             )
         })?;
 
+        // Encode instance name for filesystem safety (Windows-invalid chars, dots, etc.)
+        // This matches change_processor.rs which uses encode_path_name for renames.
+        let encoded_name = encode_path_name(&added.name);
+
         // Build path string for stats
         let inst_path = format!("{}/{}", parent_dir.display(), added.name);
 
@@ -1495,7 +1500,7 @@ impl ApiService {
         //   - None       + has_children    → directory (new instance)
         //   - None       + no children     → standalone (new instance)
         let existing_format =
-            Self::detect_existing_script_format(parent_dir, &added.name, &added.class_name);
+            Self::detect_existing_script_format(parent_dir, &encoded_name, &added.class_name);
 
         match added.class_name.as_str() {
             // Script types: .luau files, or directories with init files if has children.
@@ -1524,14 +1529,14 @@ impl ApiService {
                             self.suppress_path(old_path);
                             let _ = fs::remove_file(old_path);
                         }
-                        let meta_path = parent_dir.join(format!("{}.meta.json5", added.name));
+                        let meta_path = parent_dir.join(format!("{}.meta.json5", encoded_name));
                         if meta_path.exists() {
                             self.suppress_path(&meta_path);
                             let _ = fs::remove_file(&meta_path);
                         }
                     }
 
-                    let dir_path = parent_dir.join(&added.name);
+                    let dir_path = parent_dir.join(&encoded_name);
                     self.suppress_path(&dir_path);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
@@ -1547,12 +1552,12 @@ impl ApiService {
                         self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
                     }
                 } else {
-                    let file_path = parent_dir.join(format!("{}.luau", added.name));
+                    let file_path = parent_dir.join(format!("{}.luau", encoded_name));
                     self.suppress_path(&file_path);
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
-                    self.write_adjacent_script_meta_if_needed(parent_dir, &added.name, added)?;
+                    self.write_adjacent_script_meta_if_needed(parent_dir, &encoded_name, added)?;
                     log::info!("Syncback: Updated ModuleScript at {}", file_path.display());
                 }
             }
@@ -1576,14 +1581,14 @@ impl ApiService {
                             self.suppress_path(old_path);
                             let _ = fs::remove_file(old_path);
                         }
-                        let meta_path = parent_dir.join(format!("{}.meta.json5", added.name));
+                        let meta_path = parent_dir.join(format!("{}.meta.json5", encoded_name));
                         if meta_path.exists() {
                             self.suppress_path(&meta_path);
                             let _ = fs::remove_file(&meta_path);
                         }
                     }
 
-                    let dir_path = parent_dir.join(&added.name);
+                    let dir_path = parent_dir.join(&encoded_name);
                     self.suppress_path(&dir_path);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
@@ -1600,12 +1605,12 @@ impl ApiService {
                     }
                 } else {
                     let file_path =
-                        parent_dir.join(format!("{}.{}.luau", added.name, script_suffix));
+                        parent_dir.join(format!("{}.{}.luau", encoded_name, script_suffix));
                     self.suppress_path(&file_path);
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
-                    self.write_adjacent_script_meta_if_needed(parent_dir, &added.name, added)?;
+                    self.write_adjacent_script_meta_if_needed(parent_dir, &encoded_name, added)?;
                     log::info!("Syncback: Updated Script at {}", file_path.display());
                 }
             }
@@ -1628,14 +1633,14 @@ impl ApiService {
                             self.suppress_path(old_path);
                             let _ = fs::remove_file(old_path);
                         }
-                        let meta_path = parent_dir.join(format!("{}.meta.json5", added.name));
+                        let meta_path = parent_dir.join(format!("{}.meta.json5", encoded_name));
                         if meta_path.exists() {
                             self.suppress_path(&meta_path);
                             let _ = fs::remove_file(&meta_path);
                         }
                     }
 
-                    let dir_path = parent_dir.join(&added.name);
+                    let dir_path = parent_dir.join(&encoded_name);
                     self.suppress_path(&dir_path);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
@@ -1651,12 +1656,12 @@ impl ApiService {
                         self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
                     }
                 } else {
-                    let file_path = parent_dir.join(format!("{}.local.luau", added.name));
+                    let file_path = parent_dir.join(format!("{}.local.luau", encoded_name));
                     self.suppress_path(&file_path);
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
-                    self.write_adjacent_script_meta_if_needed(parent_dir, &added.name, added)?;
+                    self.write_adjacent_script_meta_if_needed(parent_dir, &encoded_name, added)?;
                     log::info!("Syncback: Updated LocalScript at {}", file_path.display());
                 }
             }
@@ -1664,7 +1669,7 @@ impl ApiService {
             // Directory-native classes: always become directories
             "Folder" | "Configuration" | "Tool" | "ScreenGui" | "SurfaceGui" | "BillboardGui"
             | "AdGui" => {
-                let dir_path = parent_dir.join(&added.name);
+                let dir_path = parent_dir.join(&encoded_name);
                 self.suppress_path(&dir_path);
                 fs::create_dir_all(&dir_path).with_context(|| {
                     format!("Failed to create directory: {}", dir_path.display())
@@ -1702,7 +1707,7 @@ impl ApiService {
             "StringValue" => {
                 if has_children {
                     // Must become directory - store StringValue data in init.meta.json5
-                    let dir_path = parent_dir.join(&added.name);
+                    let dir_path = parent_dir.join(&encoded_name);
                     self.suppress_path(&dir_path);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
@@ -1724,7 +1729,7 @@ impl ApiService {
                             _ => None,
                         })
                         .unwrap_or_default();
-                    let file_path = parent_dir.join(format!("{}.txt", added.name));
+                    let file_path = parent_dir.join(format!("{}.txt", encoded_name));
                     self.suppress_path(&file_path);
                     fs::write(&file_path, value.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
@@ -1740,7 +1745,7 @@ impl ApiService {
 
                 if has_children {
                     // Must become directory with init.csv
-                    let dir_path = parent_dir.join(&added.name);
+                    let dir_path = parent_dir.join(&encoded_name);
                     self.suppress_path(&dir_path);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
@@ -1758,7 +1763,7 @@ impl ApiService {
                         self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
                     }
                 } else {
-                    let file_path = parent_dir.join(format!("{}.csv", added.name));
+                    let file_path = parent_dir.join(format!("{}.csv", encoded_name));
                     self.suppress_path(&file_path);
                     fs::write(&file_path, content.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
@@ -1792,7 +1797,7 @@ impl ApiService {
                         }
                     }
 
-                    let dir_path = parent_dir.join(&added.name);
+                    let dir_path = parent_dir.join(&encoded_name);
                     self.suppress_path(&dir_path);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
@@ -1817,7 +1822,7 @@ impl ApiService {
                     // vs .model.json5), otherwise default to .model.json5
                     let file_path = match &existing_format {
                         ExistingFileFormat::Standalone(p) => p.clone(),
-                        _ => parent_dir.join(format!("{}.model.json5", added.name)),
+                        _ => parent_dir.join(format!("{}.model.json5", encoded_name)),
                     };
                     self.suppress_path(&file_path);
                     fs::write(&file_path, &content).with_context(|| {

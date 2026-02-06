@@ -1,15 +1,15 @@
 ---
 name: Stress Tests Two-Way Sync
-overview: Nuclear-grade stress tests and randomized fuzzing for two_way_sync.rs. Deterministic tests cranked to 10+ cycles. Randomized fuzzer generates hundreds of random operation sequences per test with seeded PRNG for reproducibility.
+overview: Nuclear-grade stress tests, randomized fuzzing, and file watcher stress tests. Deterministic tests at 10+ cycles. Randomized fuzzer generates hundreds of random operation sequences. File watcher tests hammer the VFS pipeline with direct filesystem operations, init file shenanigans, singular/directory format flips, and editor save pattern simulations.
 todos:
   - id: fixture
     content: Create syncback_stress fixture (default.project.json5 + 5 .luau files)
     status: pending
   - id: helpers
-    content: Add timing helpers (send_update_fast, send_update_no_wait, wait_for_settle) and lookup helpers (get_stress_instances)
+    content: Add timing helpers (send_update_fast, send_update_no_wait, wait_for_settle), lookup helpers (get_stress_instances), and filesystem polling helpers (poll_tree_source, poll_tree_has_instance, poll_tree_no_instance)
     status: pending
   - id: prng
-    content: Add XorShift64 PRNG and FuzzOp enum for randomized test generation
+    content: Add XorShift64 PRNG, FuzzOp enum, FuzzState tracker, and verify_instance_file helper
     status: pending
   - id: rapid-source
     content: "Tests 26-27: rapid_source_writes_10x, rapid_source_writes_no_wait_10x"
@@ -36,350 +36,428 @@ todos:
     content: "Test 41: encoded_name_rapid_rename_chain"
     status: pending
   - id: fuzz-source-rename
-    content: "Test 42: fuzz_source_and_rename_200_iterations - randomized Source writes and renames"
+    content: "Test 42: fuzz_source_and_rename_200_iterations"
     status: pending
   - id: fuzz-classname
-    content: "Test 43: fuzz_classname_cycling_200_iterations - randomized ClassName transitions"
+    content: "Test 43: fuzz_classname_cycling_200_iterations"
     status: pending
   - id: fuzz-combined
-    content: "Test 44: fuzz_combined_operations_200_iterations - randomized mix of ALL operation types"
+    content: "Test 44: fuzz_combined_operations_200_iterations"
     status: pending
   - id: fuzz-multi-instance
-    content: "Test 45: fuzz_multi_instance_100_iterations - randomized operations across 5 instances simultaneously"
+    content: "Test 45: fuzz_multi_instance_100_iterations"
     status: pending
   - id: fuzz-directory
-    content: "Test 46: fuzz_directory_format_operations_100_iterations - randomized rename/class changes on directory-format scripts"
+    content: "Test 46: fuzz_directory_format_operations_100_iterations"
+    status: pending
+  - id: watcher-rapid-edits
+    content: "Tests 47-48: watcher_rapid_source_edits_on_disk_10x, watcher_burst_writes_100x"
+    status: pending
+  - id: watcher-rename
+    content: "Tests 49-50: watcher_filesystem_rename_chain_10x, watcher_rename_with_content_change"
+    status: pending
+  - id: watcher-delete-recreate
+    content: "Tests 51-53: watcher_delete_recreate_immediate, watcher_delete_recreate_cycle_5x, watcher_delete_recreate_different_content"
+    status: pending
+  - id: watcher-init
+    content: "Tests 54-57: watcher_edit_init_file, watcher_init_type_cycling_10x, watcher_delete_init_file, watcher_replace_init_file_type"
+    status: pending
+  - id: watcher-format-flip
+    content: "Tests 58-60: watcher_standalone_to_directory_conversion, watcher_directory_to_standalone_conversion, watcher_format_flip_flop_5x"
+    status: pending
+  - id: watcher-editor-patterns
+    content: "Tests 61-62: watcher_atomic_save_pattern, watcher_backup_rename_write_pattern"
+    status: pending
+  - id: watcher-parent-dir
+    content: "Tests 63-64: watcher_parent_directory_rename, watcher_parent_directory_delete_all"
+    status: pending
+  - id: watcher-concurrent
+    content: "Tests 65-66: watcher_filesystem_and_api_concurrent, watcher_multi_file_simultaneous_edits"
     status: pending
 isProject: false
 ---
 
-# Nuclear-Grade Stress Tests + Randomized Fuzzing for Two-Way Sync
+# Nuclear-Grade Stress Tests + Fuzzing + File Watcher Stress
 
 ## Context
 
-14 commits ahead of origin introduced major changes to:
+16 commits ahead of origin. Major changes to:
 
-- [src/change_processor.rs](src/change_processor.rs) (+780 lines) -- event suppression, pending recovery, rename/ClassName/Source handling, `overridden_source_path` chaining, `ComputeResult` with recovery tracking
-- [src/web/api.rs](src/web/api.rs) (+1284 lines) -- syncback deletion, `suppress_path`, standalone-to-directory conversion, encoded name handling
+- [src/change_processor.rs](src/change_processor.rs) -- event suppression (canonical+raw matching), pending recovery, rename/ClassName/Source handling, `overridden_source_path`, canonicalize retry, init file detection
+- [src/web/api.rs](src/web/api.rs) -- syncback deletion (two-phase, `actually_removed` tracking), `suppress_path` (single canonical entry), standalone-to-directory conversion, encoded name handling
+- [crates/memofs/src/lib.rs](crates/memofs/src/lib.rs) -- watches NOT removed on delete (for rapid recreate)
 
-Existing 25 tests cover each operation once. No tests exercise rapid multi-cycle operations, race conditions between VFS events and API calls, or the recovery mechanism under stress.
+Existing tests: 25 in `two_way_sync.rs` (API-driven), ~10 in `serve.rs` (filesystem-driven). No tests exercise:
+
+- Rapid multi-cycle operations
+- Recovery mechanism under stress
+- Init file type cycling on disk
+- Singular/directory format conversion via filesystem
+- Editor save patterns (atomic write, backup-rename-write)
+- Concurrent filesystem + API operations
+
+## Files Changed
+
+- [tests/tests/two_way_sync.rs](tests/tests/two_way_sync.rs) -- ALL new tests go here
+- [rojo-test/serve-tests/syncback_stress/](rojo-test/serve-tests/syncback_stress/) -- new fixture (5 ModuleScripts)
 
 ## New Fixture
 
-`**rojo-test/serve-tests/syncback_stress/**` -- 5 standalone ModuleScripts:
+`**rojo-test/serve-tests/syncback_stress/**`
 
 - `default.project.json5` (DataModel with ReplicatedStorage -> `src/`)
 - `src/Alpha.luau`, `src/Bravo.luau`, `src/Charlie.luau`, `src/Delta.luau`, `src/Echo.luau`
 
-## New Infrastructure in `two_way_sync.rs`
+Each file: `-- {Name} module\nreturn {}`
+
+---
+
+## New Infrastructure
 
 ### Timing Helpers
 
-- `send_update_fast(session, session_id, update)` -- 50ms sleep (races the 200ms recovery delay)
-- `send_update_no_wait(session, session_id, update)` -- 0ms sleep (fire and forget)
-- `send_removal_fast(session, session_id, ids)` -- 50ms sleep
-- `wait_for_settle()` -- 800ms sleep (covers 200ms recovery + 500ms periodic sweep + buffer)
-- `get_stress_instances(session)` -- Returns `(SessionId, Vec<(Ref, String)>)` for Alpha-Echo
+```rust
+fn send_update_fast(session, session_id, update)  // 50ms sleep
+fn send_update_no_wait(session, session_id, update) // 0ms sleep
+fn send_removal_fast(session, session_id, ids)     // 50ms sleep
+fn wait_for_settle()                                // 800ms sleep
+```
 
-### Deterministic PRNG (no external dependency)
+### Tree Polling Helpers (for file-watcher tests)
+
+```rust
+/// Poll tree until an instance with `name` under `parent_id` has Source containing `expected`.
+/// Panics after `timeout_ms` if not found.
+fn poll_tree_source(
+    session: &TestServeSession,
+    parent_id: Ref,
+    instance_name: &str,
+    expected_content: &str,
+    timeout_ms: u64,
+)
+
+/// Poll tree until an instance with `name` exists under `parent_id`.
+fn poll_tree_has_instance(
+    session: &TestServeSession,
+    parent_id: Ref,
+    instance_name: &str,
+    timeout_ms: u64,
+) -> Ref
+
+/// Poll tree until NO instance with `name` exists under `parent_id`.
+fn poll_tree_no_instance(
+    session: &TestServeSession,
+    parent_id: Ref,
+    instance_name: &str,
+    timeout_ms: u64,
+)
+
+/// Poll tree until instance `name` has the expected ClassName.
+fn poll_tree_class(
+    session: &TestServeSession,
+    parent_id: Ref,
+    instance_name: &str,
+    expected_class: &str,
+    timeout_ms: u64,
+)
+```
+
+These all use a 50ms polling interval with `get_api_read()`. The typical timeout for file watcher propagation is 2000ms (50ms debounce + processing time + safety margin).
+
+### Deterministic PRNG
 
 ```rust
 struct XorShift64(u64);
 impl XorShift64 {
-    fn new(seed: u64) -> Self { Self(seed) }
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-    fn range(&mut self, min: u64, max: u64) -> u64 {
-        min + (self.next() % (max - min))
-    }
-    fn choose<'a, T>(&mut self, items: &'a [T]) -> &'a T {
-        &items[self.next() as usize % items.len()]
-    }
+    fn new(seed: u64) -> Self { ... }
+    fn next(&mut self) -> u64 { ... }
+    fn range(&mut self, min: u64, max: u64) -> u64 { ... }
+    fn choose<'a, T>(&mut self, items: &'a [T]) -> &'a T { ... }
 }
 ```
 
-### FuzzOp Enum
+### FuzzOp / FuzzState / verify_instance_file
 
-```rust
-enum FuzzOp {
-    WriteSource(String),
-    Rename(String),
-    ChangeClass(&'static str),
-    RenameAndSource(String, String),
-    ClassAndSource(&'static str, String),
-    RenameAndClass(String, &'static str),
-    RenameClassAndSource(String, &'static str, String),
-}
-```
-
-### FuzzState Tracker
-
-Tracks expected state after each operation for invariant checking:
-
-```rust
-struct FuzzState {
-    current_name: String,
-    current_class: &'static str,
-    current_source: String,
-}
-```
-
-After `wait_for_settle()`, verify:
-
-1. Exactly one file matching `{current_name}{suffix}.luau` exists (where suffix depends on class)
-2. No stale files from previous names/extensions
-3. File content matches `current_source`
-
-### `run_fuzz_iteration` Helper
-
-Takes a `FuzzState`, generates a random `FuzzOp`, executes it, updates state, and returns the new state. This is the core building block for all fuzz tests.
+(Same as previous plan revision -- FuzzOp enum with 7 variants, FuzzState tracking current_name/class/source, verify_instance_file checking file existence + extension + content + no stale files)
 
 ---
 
-## PART 1: Deterministic Stress Tests (10+ cycles)
+## PART 1: API-Driven Stress Tests (Tests 26-41)
 
-All deterministic tests cranked from 5 to 10+ cycles with 50ms timing.
+All tests use `send_update_fast` (50ms) or `send_update_no_wait` (0ms) and verify final state.
 
-### A. Rapid Source Flip-Flop (Tests 26-27)
+### A. Rapid Source (26-27)
 
-**Test 26: `rapid_source_writes_10x**`
+- **26: `rapid_source_writes_10x**` -- 10 Source writes at 50ms gaps. Fixture: `syncback_write`
+- **27: `rapid_source_writes_no_wait_10x**` -- 10 Source writes with 0ms gaps. Fixture: `syncback_write`
 
-- Write Source to `existing.luau` 10 times with `send_update_fast` (50ms gaps)
-- Content: `"-- v1"` through `"-- v10"`
-- Verify final content is `"-- v10"`
-- Fixture: `syncback_write`
+### B. Rapid Rename (28-29)
 
-**Test 27: `rapid_source_writes_no_wait_10x**`
+- **28: `rapid_rename_chain_10x**` -- 10 sequential renames (re-read tree each time). Fixture: `syncback_write`
+- **29: `rapid_rename_chain_directory_10x**` -- 10 renames of directory-format script, verify children intact. Fixture: `syncback_format_transitions`
 
-- Fire 10 Source writes back-to-back with ZERO delay
-- Wait 800ms at end
-- Verify file contains last write
-- Fixture: `syncback_write`
+### C. Rapid ClassName (30-31)
 
-### B. Rapid Rename Chain (Tests 28-29)
+- **30: `rapid_classname_cycle_10x**` -- 10 class transitions (Module->Script->Local->...). Fixture: `syncback_write`
+- **31: `rapid_classname_cycle_directory_init_10x**` -- 10 class transitions on directory init, verify children survive. Fixture: `syncback_format_transitions`
 
-**Test 28: `rapid_rename_chain_10x**`
+### D. Combined Blitz (32-34)
 
-- Rename through 10 names: `existing` -> `R1` -> `R2` -> ... -> `R10`
-- Re-read tree between each rename, 50ms delay
-- Verify only `R10.luau` exists; ALL intermediates gone
-- Verify content preserved through all 10 renames
-- Fixture: `syncback_write`
+- **32: `combined_rename_classname_source_blitz_10x**` -- All 3 in one update, 10 rounds cycling classes. Fixture: `syncback_write`
+- **33: `combined_rename_and_source_rapid_10x**` -- Rename + Source, 10 rounds. Fixture: `syncback_write`
+- **34: `combined_classname_and_source_rapid_10x**` -- ClassName + Source, 10 rounds. Fixture: `syncback_write`
 
-**Test 29: `rapid_rename_chain_directory_10x**`
+### E. Multi-Instance (35-36)
 
-- Rename `DirModuleWithChildren` through 10 names
-- Verify final directory has `init.luau` + `ChildA.luau` + `ChildB.luau` intact
-- Verify ALL 9 intermediate directory names are gone
-- Fixture: `syncback_format_transitions`
+- **35: `multi_instance_source_update_single_request**` -- Single WriteRequest updating 5 instances. Fixture: `syncback_stress`
+- **36: `multi_instance_rename_single_request**` -- Single WriteRequest renaming 5 instances. Fixture: `syncback_stress`
 
-### C. Rapid ClassName Cycling (Tests 30-31)
+### F. Delete + Recreate Race (37-38)
 
-**Test 30: `rapid_classname_cycle_10x**`
+- **37: `delete_and_recreate_via_filesystem_recovery**` -- API delete, then `fs::write` file back, wait for recovery. Fixture: `syncback_write`
+- **38: `rapid_delete_recreate_cycle_5x**` -- 5 cycles of API delete + filesystem recreate. Fixture: `syncback_write`
 
-- Cycle `existing` through 10 transitions: Module -> Script -> Local -> Module -> Script -> Local -> Module -> Script -> Local -> Module
-- Re-read tree between each
-- Verify final file is `.luau` (ModuleScript); no stale `.server.luau` or `.local.luau`
-- Fixture: `syncback_write`
+### G. Echo Suppression (39-40)
 
-**Test 31: `rapid_classname_cycle_directory_init_10x**`
+- **39: `echo_suppression_rapid_adds_10x**` -- 10 rapid instance additions, verify cursor doesn't explode. Fixture: `syncback_write`
+- **40: `echo_suppression_mixed_operations**` -- 2 adds + 2 updates + 1 removal in one request. Fixture: `syncback_stress`
 
-- Cycle `DirModuleWithChildren` init through 10 transitions
-- Verify children (ChildA.luau, ChildB.luau) survive ALL transitions
-- Fixture: `syncback_format_transitions`
+### H. Encoded Names (41)
 
-### D. Combined Operations Blitz (Tests 32-34)
-
-**Test 32: `combined_rename_classname_source_blitz_10x**`
-
-- 10 rounds, each sending rename + ClassName + Source in a single update
-- Cycles through all 3 class types with different names and sources each round
-- Verify final file matches expected name, extension, and content
-- Verify ZERO intermediate files remain
-- Fixture: `syncback_write`
-
-**Test 33: `combined_rename_and_source_rapid_10x**`
-
-- 10 rounds of rename + Source update (no class change)
-- Verify Source always in the renamed file, never in stale location
-- Fixture: `syncback_write`
-
-**Test 34: `combined_classname_and_source_rapid_10x**`
-
-- 10 rounds of ClassName cycling + Source update (no rename)
-- Verify Source always in the file with correct extension
-- Fixture: `syncback_write`
-
-### E. Multi-Instance Concurrent (Tests 35-36)
-
-**Test 35: `multi_instance_source_update_single_request**`
-
-- Single WriteRequest updating Source for all 5 instances (Alpha-Echo)
-- Verify all 5 files updated correctly
-- Fixture: `syncback_stress`
-
-**Test 36: `multi_instance_rename_single_request**`
-
-- Single WriteRequest renaming all 5 instances at once
-- Verify all 5 renames succeed, no collisions
-- Fixture: `syncback_stress`
-
-### F. Delete + Recreate Race (Tests 37-38)
-
-**Test 37: `delete_and_recreate_via_filesystem_recovery**`
-
-- Delete instance via API
-- Immediately `fs::write` file back (simulating editor undo)
-- Wait 800ms for `process_pending_recoveries`
-- Verify tree recovers (instance in read API)
-- Exercises `pending_recovery` + `ComputeResult::removed_path`
-- Fixture: `syncback_write`
-
-**Test 38: `rapid_delete_recreate_cycle_5x**`
-
-- 5 cycles of: delete via API -> `fs::write` file back -> wait for recovery -> verify tree
-- Exercises recovery system under repeated hammering
-- Fixture: `syncback_write`
-
-### G. Echo Suppression Under Load (Tests 39-40)
-
-**Test 39: `echo_suppression_rapid_adds_10x**`
-
-- Add 10 new instances in rapid succession (10 separate write requests, no delay)
-- Verify all 10 files exist on disk
-- Verify message cursor hasn't exploded
-- Fixture: `syncback_write`
-
-**Test 40: `echo_suppression_mixed_operations**`
-
-- Single write request: 2 adds + 2 updates + 1 removal
-- Verify all operations complete correctly
-- Verify server responsive
-- Fixture: `syncback_stress`
-
-### H. Encoded Name Stress (Test 41)
-
-**Test 41: `encoded_name_rapid_rename_chain**`
-
-- Rename `What?Module` through 5 names containing special characters
-- Example names: `What?V2`, `Key:V3`, `Slash/V4`, `Dot.V5`, `Star*V6`
-- Verify all renames use `%QUESTION%`, `%COLON%`, etc. encoded filesystem names
-- Fixture: `syncback_encoded_names`
+- **41: `encoded_name_rapid_rename_chain**` -- Rename `What?Module` through 5 special-char names. Fixture: `syncback_encoded_names`
 
 ---
 
-## PART 2: Randomized Fuzzing (hundreds of iterations)
+## PART 2: Randomized Fuzzing (Tests 42-46)
 
-Each fuzz test uses the `XorShift64` PRNG with a fixed seed for reproducibility. On failure, the seed and iteration number are printed so the exact failing sequence can be replayed.
+Seeded `XorShift64` PRNG. On failure, prints seed + iteration for exact replay.
 
-### Test 42: `fuzz_source_and_rename_200_iterations`
+- **42: `fuzz_source_and_rename_200_iterations**` -- Random Source writes and renames, 3-8 ops per iteration. Fixture: `syncback_write`
+- **43: `fuzz_classname_cycling_200_iterations**` -- Random ClassName transitions, 3-8 ops per iteration. Fixture: `syncback_write`
+- **44: `fuzz_combined_operations_200_iterations**` -- ALL 7 FuzzOp variants random, 3-8 ops per iteration. Fixture: `syncback_write`
+- **45: `fuzz_multi_instance_100_iterations**` -- Random ops across 1-5 instances per WriteRequest. Fixture: `syncback_stress`
+- **46: `fuzz_directory_format_operations_100_iterations**` -- Random rename/class on directory-format script. Fixture: `syncback_format_transitions`
 
-- **Fixture:** `syncback_write`
-- **Per iteration:** Generate a random sequence of 3-8 operations, each being either `WriteSource` or `Rename`
-- **200 iterations** with seeds 1..200
-- **Timing:** `send_update_fast` (50ms) between ops
-- **Invariants after each iteration:**
-  1. Exactly one `.luau` file exists in `src/` with the current name
-  2. File content matches the last Source write (if any)
-  3. No stale files from previous names
-- **Between iterations:** clean up by renaming back to `existing` and restoring original source
+---
 
-### Test 43: `fuzz_classname_cycling_200_iterations`
+## PART 3: File Watcher Stress Tests (Tests 47-66)
 
-- **Fixture:** `syncback_write`
-- **Per iteration:** Generate a random sequence of 3-8 `ChangeClass` operations (randomly picking ModuleScript/Script/LocalScript each time)
-- **200 iterations** with seeds 1..200
-- **Invariants:** file extension matches last class, no stale extensions
+These exercise the **filesystem -> VFS -> ChangeProcessor -> Tree** pipeline by directly manipulating files with `fs::write`, `fs::rename`, `fs::remove_file`, `fs::create_dir`, etc. Verification uses the `poll_tree_*` helpers to wait for the tree to update via `get_api_read()`.
 
-### Test 44: `fuzz_combined_operations_200_iterations`
+Pattern for all watcher tests:
 
-- **Fixture:** `syncback_write`
-- **Per iteration:** Generate a random sequence of 3-8 operations of ANY type (`WriteSource`, `Rename`, `ChangeClass`, `RenameAndSource`, `ClassAndSource`, `RenameAndClass`, `RenameClassAndSource`)
-- **200 iterations** with seeds 1..200
-- **This is the nuclear option** -- every possible combination of operations in random order with random timing
-- **Invariants:** correct file name, extension, content after each iteration
+1. Get the ReplicatedStorage ID via API
+2. Directly manipulate files in `session.path().join("src")`
+3. Poll the tree until it reflects the change (2000ms timeout)
+4. Assert final state
 
-### Test 45: `fuzz_multi_instance_100_iterations`
+### I. Rapid Source Edits on Disk (47-48)
 
-- **Fixture:** `syncback_stress`
-- **Per iteration:** Randomly select 1-5 of the Alpha-Echo instances, generate a random operation for each, send as a SINGLE WriteRequest with multiple updates
-- **100 iterations** with seeds 1..100
-- **Invariants:** all 5 instances are in a consistent state after each iteration (correct files, no stale artifacts)
+**Test 47: `watcher_rapid_source_edits_on_disk_10x**`
 
-### Test 46: `fuzz_directory_format_operations_100_iterations`
+- Write `existing.luau` directly 10 times via `fs::write` with 30ms gaps
+- Each write has distinct content: `"-- disk v1"` through `"-- disk v10"`
+- Poll tree until Source contains `"-- disk v10"`
+- Exercises: debouncer coalescing, snapshot regeneration, no lost updates
+- Fixture: `syncback_write`
 
-- **Fixture:** `syncback_format_transitions`
-- **Per iteration:** Randomly choose between rename and ClassName change for `DirModuleWithChildren`
-- **100 iterations** with seeds 1..100
-- **Invariants:** directory exists with correct name, init file has correct extension, children (ChildA.luau, ChildB.luau) present
+**Test 48: `watcher_burst_writes_100x**`
+
+- Write `existing.luau` 100 times with ZERO delay (as fast as possible)
+- Final content: `"-- burst final"`
+- Poll tree until Source contains `"-- burst final"`
+- Exercises: debouncer under extreme load, final state correctness
+- Fixture: `syncback_write`
+
+### J. Filesystem Rename (49-50)
+
+**Test 49: `watcher_filesystem_rename_chain_10x**`
+
+- Rename `existing.luau` on disk through 10 names: `R1.luau` -> `R2.luau` -> ... -> `R10.luau`
+- 30ms between renames
+- Poll tree until instance named `R10` exists
+- Verify: no instances with intermediate names, content preserved
+- Exercises: VFS Remove+Create events from renames, tree path tracking
+- Fixture: `syncback_write`
+
+**Test 50: `watcher_rename_with_content_change**`
+
+- Write new content to a temp file, then `fs::rename` temp -> `existing.luau` (atomic overwrite)
+- Poll tree until Source reflects new content
+- Exercises: editor-style atomic writes via rename
+- Fixture: `syncback_write`
+
+### K. Delete + Recreate via Filesystem (51-53)
+
+**Test 51: `watcher_delete_recreate_immediate**`
+
+- `fs::remove_file("existing.luau")`, immediately `fs::write("existing.luau", new_content)`
+- Poll tree until Source contains new content
+- Exercises: `pending_recovery` mechanism -- VFS Remove may arrive but file already exists on disk
+- Fixture: `syncback_write`
+
+**Test 52: `watcher_delete_recreate_cycle_5x**`
+
+- 5 cycles of: `fs::remove_file` -> 50ms delay -> `fs::write` with new content
+- Each cycle uses distinct content
+- After each cycle, poll tree for the new content
+- Exercises: repeated recovery under stress (the recovery delay is 200ms, sweep is 500ms)
+- Fixture: `syncback_write`
+
+**Test 53: `watcher_delete_recreate_different_content**`
+
+- Delete `existing.luau`, wait 300ms (let removal propagate), recreate with completely different content
+- Poll tree until Source matches the new content AND instance still exists
+- Exercises: instance removal + recreation via recovery mechanism
+- Fixture: `syncback_write`
+
+### L. Init File Shenanigans (54-57)
+
+All use `syncback_format_transitions` fixture which has `DirModuleWithChildren/init.luau` + `ChildA.luau` + `ChildB.luau`.
+
+**Test 54: `watcher_edit_init_file**`
+
+- `fs::write("DirModuleWithChildren/init.luau", "-- edited init")`
+- Poll tree until `DirModuleWithChildren` instance Source contains `"-- edited init"`
+- Verify children still exist
+- Exercises: init file instigating_source -> parent directory snapshot
+
+**Test 55: `watcher_init_type_cycling_10x**`
+
+- 10 cycles of renaming the init file: `init.luau` -> `init.server.luau` -> `init.local.luau` -> `init.luau` -> ...
+- After each rename, poll tree until ClassName matches expected (ModuleScript/Script/LocalScript)
+- Verify children (ChildA, ChildB) survive all 10 transitions
+- Exercises: init file detection (`find_init_file`), snapshot_path resolution, tree ClassName updates
+
+**Test 56: `watcher_delete_init_file**`
+
+- Delete `DirModuleWithChildren/init.luau`
+- Poll tree until `DirModuleWithChildren` ClassName changes (no longer a ModuleScript since init file is gone -- becomes a Folder)
+- Verify children still exist (directory still exists on disk)
+- Exercises: init file removal edge case
+
+**Test 57: `watcher_replace_init_file_type**`
+
+- Delete `init.luau`, immediately create `init.server.luau` with same content
+- Poll tree until ClassName is "Script"
+- Verify children unaffected
+- Exercises: atomic init file type swap
+
+### M. Singular <-> Directory Format Conversion (58-60)
+
+**Test 58: `watcher_standalone_to_directory_conversion**`
+
+- Start with `StandaloneModule.luau` (standalone ModuleScript)
+- On disk: `fs::remove_file("StandaloneModule.luau")`, `fs::create_dir("StandaloneModule")`, `fs::write("StandaloneModule/init.luau", original_content)`, `fs::write("StandaloneModule/ChildNew.luau", child_content)`
+- Poll tree until `StandaloneModule` instance has a child named `ChildNew`
+- Verify `StandaloneModule` Source matches original content
+- Exercises: complete format transition via filesystem, VFS picks up directory + init + children
+- Fixture: `syncback_format_transitions`
+
+**Test 59: `watcher_directory_to_standalone_conversion**`
+
+- Start with `DirModuleWithChildren/` (directory with init.luau + children)
+- Read original init.luau content
+- On disk: `fs::remove_dir_all("DirModuleWithChildren")`, `fs::write("DirModuleWithChildren.luau", original_content)`
+- Poll tree until `DirModuleWithChildren` has NO children (standalone script)
+- Verify Source matches
+- Exercises: directory removal + standalone file creation detected by watcher
+- Fixture: `syncback_format_transitions`
+
+**Test 60: `watcher_format_flip_flop_5x**`
+
+- 5 cycles of: standalone -> directory -> standalone -> directory -> standalone
+- Start with `StandaloneModule.luau`
+- Each "to directory" step: remove file, create dir + init.luau + child
+- Each "to standalone" step: remove dir, create .luau file
+- Verify final state correct after all 5 cycles
+- Exercises: the ultimate format conversion stress test
+- Fixture: `syncback_format_transitions`
+
+### N. Editor Save Patterns (61-62)
+
+**Test 61: `watcher_atomic_save_pattern**`
+
+- Simulate VSCode/Vim atomic save: write to `existing.luau.tmp`, then `fs::rename("existing.luau.tmp", "existing.luau")`
+- Poll tree until Source reflects new content
+- Do this 5 times with different content
+- Exercises: the most common real-world save pattern
+- Fixture: `syncback_write`
+
+**Test 62: `watcher_backup_rename_write_pattern**`
+
+- Simulate editor backup-rename-write: `fs::rename("existing.luau", "existing.luau.bak")`, then `fs::write("existing.luau", new_content)`
+- Poll tree until Source reflects new content
+- Clean up .bak file
+- Exercises: rename-away + create-new pattern (generates Remove + Create events)
+- Fixture: `syncback_write`
+
+### O. Parent Directory Operations (63-64)
+
+**Test 63: `watcher_parent_directory_rename**`
+
+- Rename `DirModuleWithChildren` directory to `RenamedDir` on disk
+- Poll tree until instance `RenamedDir` appears with children intact
+- Verify `DirModuleWithChildren` instance is gone
+- Exercises: directory rename generates Remove(old/init.luau) + Create(new/init.luau), tree rebuilt
+- Fixture: `syncback_format_transitions`
+
+**Test 64: `watcher_parent_directory_delete_all**`
+
+- `fs::remove_dir_all("DirModuleWithChildren")`
+- Poll tree until `DirModuleWithChildren` instance is gone
+- Verify no orphaned children remain
+- Exercises: recursive delete generates Remove events for all children + init file
+- Fixture: `syncback_format_transitions`
+
+### P. Concurrent Filesystem + API (65-66)
+
+**Test 65: `watcher_filesystem_and_api_concurrent**`
+
+- Simultaneously: `fs::write` to `StandaloneModule.luau` on disk AND send API Source update to `StandaloneScript`
+- Both operations target different instances to avoid data races
+- Poll tree until BOTH instances reflect their respective changes
+- Exercises: VFS events and tree mutation channel both active at same time
+- Fixture: `syncback_format_transitions`
+
+**Test 66: `watcher_multi_file_simultaneous_edits**`
+
+- Write to 5 different files on disk simultaneously (Alpha through Echo) with distinct content
+- Poll tree until ALL 5 instances reflect new Source
+- Exercises: multiple VFS events in quick succession, all processed correctly
+- Fixture: `syncback_stress`
 
 ---
 
 ## Implementation Details
 
+### Polling Timeout Strategy
+
+File watcher tests use 2000ms timeout (generous for: 50ms debounce + processing + recovery + Windows slowness). Polling interval is 50ms.
+
+### Test Isolation
+
+Each test uses `run_serve_test` which copies the fixture to a temp directory and spawns a fresh `rojo serve` process. Tests can freely mutate files without affecting other tests.
+
 ### PRNG Reproducibility
 
-Every fuzz test prints the seed on failure:
+Fuzz tests print `"Fuzz test failed at seed {seed}. Replay with this seed to reproduce."` on failure.
 
-```rust
-for seed in 1..=200 {
-    let result = std::panic::catch_unwind(|| {
-        run_fuzz_iteration(seed, ...);
-    });
-    if result.is_err() {
-        panic!("Fuzz test failed at seed {}. Replay with this seed to reproduce.", seed);
-    }
-}
-```
+### State Reset Between Fuzz Iterations
 
-### State Reset Between Iterations
+After each fuzz iteration: rename instance back to original name, restore original class, write original source, wait 300ms. Avoids restarting the serve session (which would be slow).
 
-For the fuzz tests that run hundreds of iterations on the same fixture, we need to reset state between iterations. The approach:
+### File Watcher Test Timing
 
-1. After each iteration, rename the instance back to its original name
-2. Change ClassName back to original
-3. Write original Source back
-4. Wait for settle
+- After `fs::write`: poll immediately (debouncer needs ~50-100ms)
+- After `fs::rename`: poll immediately (rename events come fast)
+- After `fs::remove_file` + `fs::write` (delete+recreate): poll with 800ms initial wait (recovery delay 200ms + sweep 500ms)
+- After directory operations: poll with extra buffer (multiple events to process)
 
-This avoids needing to restart the serve session between iterations (which would be slow).
+### Total Test Count
 
-### Timing Strategy
-
-- `send_update_fast`: 50ms -- tight enough to race the 200ms recovery delay
-- `send_update_no_wait`: 0ms -- fires before VFS events from previous op are processed
-- `wait_for_settle`: 800ms -- covers recovery delay (200ms) + periodic sweep (500ms) + buffer (100ms)
-- Between fuzz iterations: 300ms settle time (lighter than full settle since we just need API to finish)
-
-### File Verification Helper
-
-```rust
-fn verify_instance_file(
-    src_dir: &Path,
-    expected_name: &str,
-    expected_class: &str,
-    expected_source: Option<&str>,
-) {
-    let suffix = match expected_class {
-        "Script" => ".server",
-        "LocalScript" => ".local",
-        _ => "",
-    };
-    let expected_file = src_dir.join(format!("{}{}.luau", expected_name, suffix));
-    assert!(expected_file.is_file(), "Expected file: {}", expected_file.display());
-    if let Some(source) = expected_source {
-        let content = fs::read_to_string(&expected_file).unwrap();
-        assert!(content.contains(source), "Expected source '{}' in {}", source, content);
-    }
-    // Verify no stale files with the same name but wrong extension
-    for stale_suffix in &[".server", ".local", ".client", ".plugin", ""] {
-        if *stale_suffix == suffix { continue; }
-        let stale = src_dir.join(format!("{}{}.luau", expected_name, stale_suffix));
-        assert!(!stale.exists(), "Stale file should not exist: {}", stale.display());
-    }
-}
-```
+- Part 1 (API stress): 16 tests (26-41)
+- Part 2 (Fuzzing): 5 tests (42-46) with 900 total iterations
+- Part 3 (File watcher): 20 tests (47-66)
+- **Total: 41 new tests**
 
