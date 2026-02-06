@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+#[cfg(windows)]
+use std::process::Command;
 
 use anyhow::Context;
 use clap::Parser;

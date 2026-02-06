@@ -157,7 +157,7 @@ pub async fn call(serve_session: Arc<ServeSession>, mut request: Request<Body>) 
 
 pub struct ApiService {
     serve_session: Arc<ServeSession>,
-    suppressed_paths: Arc<Mutex<HashMap<PathBuf, usize>>>,
+    suppressed_paths: Arc<Mutex<HashMap<PathBuf, (usize, usize)>>>,
 }
 
 /// Derives the directory name from a standalone script's filesystem path.
@@ -219,17 +219,9 @@ impl ApiService {
         }
     }
 
-    /// Register a path in the suppression map so that the ChangeProcessor
-    /// ignores the next VFS event for it (counter-based echo suppression).
-    /// Each call increments the counter; each suppressed VFS event decrements it.
-    ///
-    /// Inserts exactly ONE entry per call — canonical form preferred, raw as
-    /// fallback — to avoid leaking the unmatched variant.
-    fn suppress_path(&self, path: &Path) {
-        let mut suppressed = self.suppressed_paths.lock().unwrap();
-        // Try to canonicalize (adds \\?\ prefix on Windows, resolves symlinks).
-        // For files that don't exist yet, canonicalize the parent and join.
-        let key = if let Ok(canonical) = std::fs::canonicalize(path) {
+    /// Canonicalize a path for use as a suppression map key.
+    fn suppression_key(path: &Path) -> PathBuf {
+        if let Ok(canonical) = std::fs::canonicalize(path) {
             canonical
         } else if let Some(parent) = path.parent() {
             if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
@@ -243,8 +235,21 @@ impl ApiService {
             }
         } else {
             path.to_path_buf()
-        };
-        *suppressed.entry(key).or_insert(0) += 1;
+        }
+    }
+
+    /// Suppress the next Create/Write VFS event for the given path.
+    fn suppress_path(&self, path: &Path) {
+        let mut suppressed = self.suppressed_paths.lock().unwrap();
+        let key = Self::suppression_key(path);
+        suppressed.entry(key).or_insert((0, 0)).1 += 1;
+    }
+
+    /// Suppress the next Remove VFS event for the given path.
+    fn suppress_path_remove(&self, path: &Path) {
+        let mut suppressed = self.suppressed_paths.lock().unwrap();
+        let key = Self::suppression_key(path);
+        suppressed.entry(key).or_insert((0, 0)).0 += 1;
     }
 
     /// Get a summary of information about the server
@@ -386,7 +391,7 @@ impl ApiService {
                         continue;
                     }
                     if is_dir {
-                        self.suppress_path(&path);
+                        self.suppress_path_remove(&path);
                         if let Err(err) = fs::remove_dir_all(&path) {
                             log::warn!(
                                 "Failed to remove directory {:?} for instance {:?}: {}",
@@ -399,7 +404,7 @@ impl ApiService {
                             actually_removed.push(id);
                         }
                     } else {
-                        self.suppress_path(&path);
+                        self.suppress_path_remove(&path);
                         if let Err(err) = fs::remove_file(&path) {
                             log::warn!(
                                 "Failed to remove file {:?} for instance {:?}: {}",
@@ -427,7 +432,7 @@ impl ApiService {
                                 let meta_path =
                                     parent_dir.join(format!("{}.meta.json5", base_name));
                                 if meta_path.exists() {
-                                    self.suppress_path(&meta_path);
+                                    self.suppress_path_remove(&meta_path);
                                     let _ = fs::remove_file(&meta_path);
                                     log::info!(
                                         "Syncback: Removed adjacent meta file at {}",
@@ -915,7 +920,7 @@ impl ApiService {
 
                         // Remove the old standalone file
                         if existing_path.exists() && existing_path != init_path {
-                            self.suppress_path(existing_path);
+                            self.suppress_path_remove(existing_path);
                             fs::remove_file(existing_path).with_context(|| {
                                 format!(
                                     "Failed to remove old standalone script: {}",
@@ -1038,7 +1043,7 @@ impl ApiService {
 
         // Remove the old standalone file
         if standalone_path.exists() && standalone_path != init_path {
-            self.suppress_path(standalone_path);
+            self.suppress_path_remove(standalone_path);
             fs::remove_file(standalone_path).with_context(|| {
                 format!(
                     "Failed to remove old standalone script: {}",
@@ -1051,7 +1056,7 @@ impl ApiService {
         let meta_path = containing_dir.join(format!("{}.meta.json5", dir_name));
         if meta_path.exists() {
             let init_meta_path = new_dir.join("init.meta.json5");
-            self.suppress_path(&meta_path);
+            self.suppress_path_remove(&meta_path);
             self.suppress_path(&init_meta_path);
             fs::rename(&meta_path, &init_meta_path).with_context(|| {
                 format!(
@@ -1227,7 +1232,7 @@ impl ApiService {
 
         // Remove the old standalone file
         if standalone_path.exists() {
-            self.suppress_path(standalone_path);
+            self.suppress_path_remove(standalone_path);
             fs::remove_file(standalone_path).with_context(|| {
                 format!(
                     "Failed to remove old standalone file: {}",
@@ -1303,13 +1308,13 @@ impl ApiService {
 
         // Delete the file or directory
         if instance_path.is_dir() {
-            self.suppress_path(instance_path);
+            self.suppress_path_remove(instance_path);
             fs::remove_dir_all(instance_path).with_context(|| {
                 format!("Failed to remove directory: {}", instance_path.display())
             })?;
             log::info!("Syncback: Removed directory at {}", instance_path.display());
         } else if instance_path.is_file() {
-            self.suppress_path(instance_path);
+            self.suppress_path_remove(instance_path);
             fs::remove_file(instance_path)
                 .with_context(|| format!("Failed to remove file: {}", instance_path.display()))?;
             log::info!("Syncback: Removed file at {}", instance_path.display());
@@ -1538,12 +1543,12 @@ impl ApiService {
                             added.name
                         );
                         if old_path.exists() {
-                            self.suppress_path(old_path);
+                            self.suppress_path_remove(old_path);
                             let _ = fs::remove_file(old_path);
                         }
                         let meta_path = parent_dir.join(format!("{}.meta.json5", encoded_name));
                         if meta_path.exists() {
-                            self.suppress_path(&meta_path);
+                            self.suppress_path_remove(&meta_path);
                             let _ = fs::remove_file(&meta_path);
                         }
                     }
@@ -1590,12 +1595,12 @@ impl ApiService {
                             added.name
                         );
                         if old_path.exists() {
-                            self.suppress_path(old_path);
+                            self.suppress_path_remove(old_path);
                             let _ = fs::remove_file(old_path);
                         }
                         let meta_path = parent_dir.join(format!("{}.meta.json5", encoded_name));
                         if meta_path.exists() {
-                            self.suppress_path(&meta_path);
+                            self.suppress_path_remove(&meta_path);
                             let _ = fs::remove_file(&meta_path);
                         }
                     }
@@ -1642,12 +1647,12 @@ impl ApiService {
                             added.name
                         );
                         if old_path.exists() {
-                            self.suppress_path(old_path);
+                            self.suppress_path_remove(old_path);
                             let _ = fs::remove_file(old_path);
                         }
                         let meta_path = parent_dir.join(format!("{}.meta.json5", encoded_name));
                         if meta_path.exists() {
-                            self.suppress_path(&meta_path);
+                            self.suppress_path_remove(&meta_path);
                             let _ = fs::remove_file(&meta_path);
                         }
                     }
@@ -1804,7 +1809,7 @@ impl ApiService {
                             added.name
                         );
                         if old_path.exists() {
-                            self.suppress_path(old_path);
+                            self.suppress_path_remove(old_path);
                             let _ = fs::remove_file(old_path);
                         }
                     }

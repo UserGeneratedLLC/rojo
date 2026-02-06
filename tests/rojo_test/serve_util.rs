@@ -38,6 +38,14 @@ pub fn run_serve_test(test_name: &str, callback: impl FnOnce(TestServeSession, R
     let mut session = TestServeSession::new(test_name);
     let info = session.wait_to_come_online();
 
+    // On macOS, the FSEvents-backed file watcher (via notify-debouncer-full)
+    // may not have fully populated its internal cache by the time the HTTP
+    // server reports as online. Without a warm cache, the debouncer cannot
+    // correctly classify events (e.g., it may miss a Remove if the file was
+    // not yet in the cache). Give it time to complete its initial scan.
+    #[cfg(target_os = "macos")]
+    thread::sleep(Duration::from_secs(1));
+
     redactions.intern(info.session_id);
     redactions.intern(info.root_instance_id);
 
@@ -91,11 +99,9 @@ impl TestServeSession {
         // This is an ugly workaround for FSEvents sometimes reporting events
         // for the above copy operations, similar to this Stack Overflow question:
         // https://stackoverflow.com/questions/47679298/howto-avoid-receiving-old-events-in-fseventstream-callback-fsevents-framework-o
-        // We'll hope that 100ms is enough for FSEvents to get whatever it is
-        // out of its system.
-        // TODO: find a better way to avoid processing these spurious events.
+        // 500ms gives FSEvents time to flush any stale events from the copy.
         #[cfg(target_os = "macos")]
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(500));
 
         let port = get_port_number();
         let port_string = port.to_string();
@@ -324,8 +330,8 @@ fn deserialize_msgpack<'a, T: Deserialize<'a>>(
 /// reads back the assigned port, then drops the listener. The brief
 /// TOCTOU window before Rojo rebinds is negligible on localhost.
 fn get_port_number() -> usize {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")
-        .expect("Failed to bind ephemeral port for test");
+    let listener =
+        std::net::TcpListener::bind("127.0.0.1:0").expect("Failed to bind ephemeral port for test");
     let port = listener.local_addr().unwrap().port() as usize;
     drop(listener);
     port

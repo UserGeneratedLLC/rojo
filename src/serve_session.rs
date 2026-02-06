@@ -89,9 +89,10 @@ pub struct ServeSession {
     /// Paths recently written by the API's syncback. The ChangeProcessor
     /// checks this map and suppresses the file watcher echo for these paths
     /// to avoid redundant re-snapshots and WebSocket messages.
-    /// Values are counts — each API write increments, each suppressed VFS event decrements.
+    /// Values are `(remove_count, create_write_count)` — each API write increments
+    /// the appropriate counter, each suppressed VFS event decrements it.
     #[allow(dead_code)]
-    suppressed_paths: Arc<Mutex<std::collections::HashMap<std::path::PathBuf, usize>>>,
+    suppressed_paths: Arc<Mutex<std::collections::HashMap<std::path::PathBuf, (usize, usize)>>>,
 }
 
 impl ServeSession {
@@ -180,7 +181,7 @@ impl ServeSession {
     #[allow(dead_code)]
     pub fn suppressed_paths(
         &self,
-    ) -> Arc<Mutex<std::collections::HashMap<std::path::PathBuf, usize>>> {
+    ) -> Arc<Mutex<std::collections::HashMap<std::path::PathBuf, (usize, usize)>>> {
         Arc::clone(&self.suppressed_paths)
     }
 

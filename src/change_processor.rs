@@ -53,7 +53,7 @@ impl ChangeProcessor {
         vfs: Arc<Vfs>,
         message_queue: Arc<MessageQueue<AppliedPatchSet>>,
         tree_mutation_receiver: Receiver<PatchSet>,
-        suppressed_paths: Arc<Mutex<std::collections::HashMap<PathBuf, usize>>>,
+        suppressed_paths: Arc<Mutex<std::collections::HashMap<PathBuf, (usize, usize)>>>,
     ) -> Self {
         let (shutdown_sender, shutdown_receiver) = crossbeam_channel::bounded(1);
         let vfs_receiver = vfs.event_receiver();
@@ -130,8 +130,8 @@ struct JobThreadContext {
     pending_recovery: Mutex<Vec<(PathBuf, Instant)>>,
 
     /// Paths recently written by the API's syncback. Events for these paths
-    /// are suppressed to avoid redundant re-snapshots. Values are counts.
-    suppressed_paths: Arc<Mutex<std::collections::HashMap<PathBuf, usize>>>,
+    /// are suppressed to avoid redundant re-snapshots. Values are `(remove_count, create_write_count)`.
+    suppressed_paths: Arc<Mutex<std::collections::HashMap<PathBuf, (usize, usize)>>>,
 }
 
 impl JobThreadContext {
@@ -160,12 +160,9 @@ impl JobThreadContext {
         None
     }
 
-    /// Suppress a single VFS event for the given path. Prevents the
-    /// ChangeProcessor from re-processing a file-watcher event that we
-    /// triggered ourselves (renames, writes).
-    fn suppress_path(&self, path: &Path) {
-        let mut suppressed = self.suppressed_paths.lock().unwrap();
-        let key = if let Ok(canonical) = std::fs::canonicalize(path) {
+    /// Canonicalize a path for use as a suppression map key.
+    fn suppression_key(path: &Path) -> PathBuf {
+        if let Ok(canonical) = std::fs::canonicalize(path) {
             canonical
         } else if let Some(parent) = path.parent() {
             if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
@@ -179,33 +176,45 @@ impl JobThreadContext {
             }
         } else {
             path.to_path_buf()
-        };
-        *suppressed.entry(key).or_insert(0) += 1;
+        }
     }
 
-    /// Remove a suppression previously added by [`suppress_path`]. Called when
-    /// the filesystem operation that warranted the suppression failed, so that
-    /// future VFS events for that path are not incorrectly swallowed.
+    /// Suppress the next Create/Write VFS event for the given path.
+    /// Prevents re-processing a file-watcher event we triggered ourselves.
+    fn suppress_path(&self, path: &Path) {
+        let mut suppressed = self.suppressed_paths.lock().unwrap();
+        let key = Self::suppression_key(path);
+        suppressed.entry(key).or_insert((0, 0)).1 += 1;
+    }
+
+    /// Suppress the next Remove VFS event for the given path.
+    fn suppress_path_remove(&self, path: &Path) {
+        let mut suppressed = self.suppressed_paths.lock().unwrap();
+        let key = Self::suppression_key(path);
+        suppressed.entry(key).or_insert((0, 0)).0 += 1;
+    }
+
+    /// Remove a Create/Write suppression previously added by [`suppress_path`].
+    /// Called when the filesystem operation failed, so that future VFS events
+    /// for that path are not incorrectly swallowed.
     fn unsuppress_path(&self, path: &Path) {
         let mut suppressed = self.suppressed_paths.lock().unwrap();
-        let key = if let Ok(canonical) = std::fs::canonicalize(path) {
-            canonical
-        } else if let Some(parent) = path.parent() {
-            if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
-                if let Some(file_name) = path.file_name() {
-                    canonical_parent.join(file_name)
-                } else {
-                    path.to_path_buf()
-                }
-            } else {
-                path.to_path_buf()
+        let key = Self::suppression_key(path);
+        if let Some(counts) = suppressed.get_mut(&key) {
+            counts.1 = counts.1.saturating_sub(1);
+            if counts.0 == 0 && counts.1 == 0 {
+                suppressed.remove(&key);
             }
-        } else {
-            path.to_path_buf()
-        };
-        if let Some(count) = suppressed.get_mut(&key) {
-            *count -= 1;
-            if *count == 0 {
+        }
+    }
+
+    /// Remove a Remove suppression previously added by [`suppress_path_remove`].
+    fn unsuppress_path_remove(&self, path: &Path) {
+        let mut suppressed = self.suppressed_paths.lock().unwrap();
+        let key = Self::suppression_key(path);
+        if let Some(counts) = suppressed.get_mut(&key) {
+            counts.0 = counts.0.saturating_sub(1);
+            if counts.0 == 0 && counts.1 == 0 {
                 suppressed.remove(&key);
             }
         }
@@ -287,8 +296,10 @@ impl JobThreadContext {
         }
 
         // Check if this event should be suppressed (one-shot, from API syncback).
-        // Try both the raw event path and its canonical form since suppress_path
-        // stores whichever form it could resolve at insertion time.
+        // Suppressions are event-type-aware: a Remove suppression only matches
+        // Remove events, and a Create/Write suppression only matches Create/Write
+        // events. This prevents a Remove suppression from consuming a Create event
+        // (which can happen on macOS when FSEvents coalesces delete+recreate).
         let event_path = match &event {
             VfsEvent::Create(p) | VfsEvent::Write(p) | VfsEvent::Remove(p) => Some(p.clone()),
             _ => None,
@@ -310,22 +321,34 @@ impl JobThreadContext {
                     }
                 });
             if let Some(key) = matched_key {
-                if let Some(count) = suppressed.get_mut(&key) {
-                    *count = count.saturating_sub(1);
-                    if *count == 0 {
+                if let Some(counts) = suppressed.get_mut(&key) {
+                    let should_suppress = match &event {
+                        VfsEvent::Remove(_) if counts.0 > 0 => {
+                            counts.0 -= 1;
+                            true
+                        }
+                        VfsEvent::Create(_) | VfsEvent::Write(_) if counts.1 > 0 => {
+                            counts.1 -= 1;
+                            true
+                        }
+                        _ => false,
+                    };
+                    if counts.0 == 0 && counts.1 == 0 {
                         suppressed.remove(&key);
                     }
+                    if should_suppress {
+                        drop(suppressed);
+                        // Still commit so VFS stays consistent, but skip patching.
+                        self.vfs
+                            .commit_event(&event)
+                            .expect("Error applying VFS change");
+                        log::info!(
+                            "VFS event SUPPRESSED (API syncback echo): {}",
+                            path.display()
+                        );
+                        return;
+                    }
                 }
-                drop(suppressed);
-                // Still commit so VFS stays consistent, but skip patching.
-                self.vfs
-                    .commit_event(&event)
-                    .expect("Error applying VFS change");
-                log::info!(
-                    "VFS event SUPPRESSED (API syncback echo): {}",
-                    path.display()
-                );
-                return;
             }
         }
 
@@ -604,12 +627,12 @@ impl JobThreadContext {
                                                         dir_path.display(),
                                                         new_dir_path.display()
                                                     );
-                                                    self.suppress_path(dir_path);
+                                                    self.suppress_path_remove(dir_path);
                                                     self.suppress_path(&new_dir_path);
                                                     if let Err(err) =
                                                         fs::rename(dir_path, &new_dir_path)
                                                     {
-                                                        self.unsuppress_path(dir_path);
+                                                        self.unsuppress_path_remove(dir_path);
                                                         self.unsuppress_path(&new_dir_path);
                                                         log::error!(
                                                             "Failed to rename directory {:?} to {:?}: {}",
@@ -631,12 +654,14 @@ impl JobThreadContext {
                                                                     "{}.meta.json5",
                                                                     encoded_new_name
                                                                 ));
-                                                            self.suppress_path(&old_meta);
+                                                            self.suppress_path_remove(&old_meta);
                                                             self.suppress_path(&new_meta);
                                                             if fs::rename(&old_meta, &new_meta)
                                                                 .is_err()
                                                             {
-                                                                self.unsuppress_path(&old_meta);
+                                                                self.unsuppress_path_remove(
+                                                                    &old_meta,
+                                                                );
                                                                 self.unsuppress_path(&new_meta);
                                                             }
                                                         }
@@ -688,10 +713,10 @@ impl JobThreadContext {
                                                     path.display(),
                                                     new_path.display()
                                                 );
-                                                self.suppress_path(path);
+                                                self.suppress_path_remove(path);
                                                 self.suppress_path(&new_path);
                                                 if let Err(err) = fs::rename(path, &new_path) {
-                                                    self.unsuppress_path(path);
+                                                    self.unsuppress_path_remove(path);
                                                     self.unsuppress_path(&new_path);
                                                     log::error!(
                                                         "Failed to rename {:?} to {:?}: {}",
@@ -708,11 +733,11 @@ impl JobThreadContext {
                                                             "{}.meta.json5",
                                                             encoded_new_name
                                                         ));
-                                                        self.suppress_path(&old_meta);
+                                                        self.suppress_path_remove(&old_meta);
                                                         self.suppress_path(&new_meta);
                                                         if fs::rename(&old_meta, &new_meta).is_err()
                                                         {
-                                                            self.unsuppress_path(&old_meta);
+                                                            self.unsuppress_path_remove(&old_meta);
                                                             self.unsuppress_path(&new_meta);
                                                         }
                                                     }
@@ -827,12 +852,12 @@ impl JobThreadContext {
                                                     actual_file.display(),
                                                     new_path.display()
                                                 );
-                                                self.suppress_path(&actual_file);
+                                                self.suppress_path_remove(&actual_file);
                                                 self.suppress_path(&new_path);
                                                 if let Err(err) =
                                                     fs::rename(&actual_file, &new_path)
                                                 {
-                                                    self.unsuppress_path(&actual_file);
+                                                    self.unsuppress_path_remove(&actual_file);
                                                     self.unsuppress_path(&new_path);
                                                     log::error!(
                                                         "Failed to rename {:?} to {:?}: {}",

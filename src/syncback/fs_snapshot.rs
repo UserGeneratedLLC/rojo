@@ -5,6 +5,9 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
 };
 
+#[cfg(windows)]
+use std::{thread, time::Duration};
+
 use memofs::Vfs;
 use rayon::prelude::*;
 
