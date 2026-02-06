@@ -1,0 +1,10 @@
+{
+  "name": "syncback_stress",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "$path": "src"
+    }
+  }
+}

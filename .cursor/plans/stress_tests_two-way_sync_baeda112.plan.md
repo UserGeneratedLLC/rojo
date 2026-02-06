@@ -4,76 +4,76 @@ overview: Nuclear-grade stress tests, randomized fuzzing, and file watcher stres
 todos:
   - id: fixture
     content: Create syncback_stress fixture (default.project.json5 + 5 .luau files)
-    status: pending
+    status: completed
   - id: helpers
     content: Add timing helpers (send_update_fast, send_update_no_wait, wait_for_settle), lookup helpers (get_stress_instances), and filesystem polling helpers (poll_tree_source, poll_tree_has_instance, poll_tree_no_instance)
-    status: pending
+    status: completed
   - id: prng
     content: Add XorShift64 PRNG, FuzzOp enum, FuzzState tracker, and verify_instance_file helper
-    status: pending
+    status: completed
   - id: rapid-source
     content: "Tests 26-27: rapid_source_writes_10x, rapid_source_writes_no_wait_10x"
-    status: pending
+    status: completed
   - id: rapid-rename
     content: "Tests 28-29: rapid_rename_chain_10x, rapid_rename_chain_directory_10x"
-    status: pending
+    status: completed
   - id: rapid-classname
     content: "Tests 30-31: rapid_classname_cycle_10x, rapid_classname_cycle_directory_init_10x"
-    status: pending
+    status: completed
   - id: combined-blitz
     content: "Tests 32-34: combined_rename_classname_source_blitz_10x, combined_rename_and_source_rapid_10x, combined_classname_and_source_rapid_10x"
-    status: pending
+    status: completed
   - id: multi-instance
     content: "Tests 35-36: multi_instance_source_update_single_request, multi_instance_rename_single_request"
-    status: pending
+    status: completed
   - id: delete-recreate
     content: "Tests 37-38: delete_and_recreate_via_filesystem_recovery, rapid_delete_recreate_cycle_5x"
-    status: pending
+    status: completed
   - id: echo-stress
     content: "Tests 39-40: echo_suppression_rapid_adds_10x, echo_suppression_mixed_operations"
-    status: pending
+    status: completed
   - id: encoded-stress
     content: "Test 41: encoded_name_rapid_rename_chain"
-    status: pending
+    status: completed
   - id: fuzz-source-rename
     content: "Test 42: fuzz_source_and_rename_200_iterations"
-    status: pending
+    status: completed
   - id: fuzz-classname
     content: "Test 43: fuzz_classname_cycling_200_iterations"
-    status: pending
+    status: completed
   - id: fuzz-combined
     content: "Test 44: fuzz_combined_operations_200_iterations"
-    status: pending
+    status: completed
   - id: fuzz-multi-instance
     content: "Test 45: fuzz_multi_instance_100_iterations"
-    status: pending
+    status: completed
   - id: fuzz-directory
     content: "Test 46: fuzz_directory_format_operations_100_iterations"
-    status: pending
+    status: completed
   - id: watcher-rapid-edits
     content: "Tests 47-48: watcher_rapid_source_edits_on_disk_10x, watcher_burst_writes_100x"
-    status: pending
+    status: completed
   - id: watcher-rename
     content: "Tests 49-50: watcher_filesystem_rename_chain_10x, watcher_rename_with_content_change"
-    status: pending
+    status: completed
   - id: watcher-delete-recreate
     content: "Tests 51-53: watcher_delete_recreate_immediate, watcher_delete_recreate_cycle_5x, watcher_delete_recreate_different_content"
-    status: pending
+    status: completed
   - id: watcher-init
     content: "Tests 54-57: watcher_edit_init_file, watcher_init_type_cycling_10x, watcher_delete_init_file, watcher_replace_init_file_type"
-    status: pending
+    status: completed
   - id: watcher-format-flip
     content: "Tests 58-60: watcher_standalone_to_directory_conversion, watcher_directory_to_standalone_conversion, watcher_format_flip_flop_5x"
-    status: pending
+    status: completed
   - id: watcher-editor-patterns
     content: "Tests 61-62: watcher_atomic_save_pattern, watcher_backup_rename_write_pattern"
-    status: pending
+    status: completed
   - id: watcher-parent-dir
     content: "Tests 63-64: watcher_parent_directory_rename, watcher_parent_directory_delete_all"
-    status: pending
+    status: completed
   - id: watcher-concurrent
     content: "Tests 65-66: watcher_filesystem_and_api_concurrent, watcher_multi_file_simultaneous_edits"
-    status: pending
+    status: completed
 isProject: false
 ---
 

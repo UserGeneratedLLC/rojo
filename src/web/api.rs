@@ -872,12 +872,15 @@ impl ApiService {
                     } else if existing_path
                         .file_name()
                         .and_then(|n| n.to_str())
-                        .map_or(false, |n| n.starts_with("init."))
+                        .is_some_and(|n| n.starts_with("init."))
                     {
                         // existing_path is an init file (e.g., DirFoo/init.luau).
                         // The instance is already in directory format -- children go
                         // into the same directory that contains the init file.
-                        existing_path.parent().unwrap_or(existing_path).to_path_buf()
+                        existing_path
+                            .parent()
+                            .unwrap_or(existing_path)
+                            .to_path_buf()
                     } else {
                         // Standalone scripts cannot have children in Rojo's file format.
                         // We need to convert from standalone (e.g., MyScript.server.luau)

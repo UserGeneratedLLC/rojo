@@ -22,7 +22,7 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{fs, thread};
 
 use librojo::web_api::{AddedInstance, InstanceUpdate, WriteRequest};
@@ -1410,5 +1410,1849 @@ fn property_update_on_encoded_script_uses_encoded_meta_path() {
             "Script content should be unchanged, got: {}",
             content
         );
+    });
+}
+
+// ===========================================================================
+// PART 1: API-Driven Stress Tests (Tests 26-41)
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Stress helpers
+// ---------------------------------------------------------------------------
+
+/// Send an InstanceUpdate with a short 50ms wait (races the 200ms recovery).
+fn send_update_fast(
+    session: &crate::rojo_test::serve_util::TestServeSession,
+    session_id: &librojo::SessionId,
+    update: InstanceUpdate,
+) {
+    let write_request = WriteRequest {
+        session_id: *session_id,
+        removed: vec![],
+        added: HashMap::new(),
+        updated: vec![update],
+    };
+    session
+        .post_api_write(&write_request)
+        .expect("Write request should succeed");
+    thread::sleep(Duration::from_millis(50));
+}
+
+/// Send an InstanceUpdate with zero wait (fire and forget).
+fn send_update_no_wait(
+    session: &crate::rojo_test::serve_util::TestServeSession,
+    session_id: &librojo::SessionId,
+    update: InstanceUpdate,
+) {
+    let write_request = WriteRequest {
+        session_id: *session_id,
+        removed: vec![],
+        added: HashMap::new(),
+        updated: vec![update],
+    };
+    session
+        .post_api_write(&write_request)
+        .expect("Write request should succeed");
+}
+
+/// Send a removal with a short 50ms wait.
+fn send_removal_fast(
+    session: &crate::rojo_test::serve_util::TestServeSession,
+    session_id: &librojo::SessionId,
+    ids: Vec<Ref>,
+) {
+    let write_request = WriteRequest {
+        session_id: *session_id,
+        removed: ids,
+        added: HashMap::new(),
+        updated: vec![],
+    };
+    session
+        .post_api_write(&write_request)
+        .expect("Write request should succeed");
+    thread::sleep(Duration::from_millis(50));
+}
+
+/// Wait long enough for all VFS events, recovery sweeps, and debouncing.
+fn wait_for_settle() {
+    thread::sleep(Duration::from_millis(800));
+}
+
+/// Get session_id and Refs for Alpha-Echo in the syncback_stress fixture.
+fn get_stress_instances(
+    session: &crate::rojo_test::serve_util::TestServeSession,
+) -> (librojo::SessionId, Ref, Vec<(Ref, String)>) {
+    let info = session.get_api_rojo().unwrap();
+    let root_read = session.get_api_read(info.root_instance_id).unwrap();
+    let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+    let rs_read = session.get_api_read(rs_id).unwrap();
+    let names = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"];
+    let mut instances = Vec::new();
+    for name in &names {
+        let (id, _) = find_by_name(&rs_read.instances, name);
+        instances.push((id, name.to_string()));
+    }
+    (info.session_id, rs_id, instances)
+}
+
+/// Build a Source update for an instance.
+fn make_source_update(id: Ref, source: &str) -> InstanceUpdate {
+    let mut props = UstrMap::default();
+    props.insert(ustr("Source"), Some(Variant::String(source.to_string())));
+    InstanceUpdate {
+        id,
+        changed_name: None,
+        changed_class_name: None,
+        changed_properties: props,
+        changed_metadata: None,
+    }
+}
+
+/// Build a rename update.
+fn make_rename_update(id: Ref, new_name: &str) -> InstanceUpdate {
+    InstanceUpdate {
+        id,
+        changed_name: Some(new_name.to_string()),
+        changed_class_name: None,
+        changed_properties: UstrMap::default(),
+        changed_metadata: None,
+    }
+}
+
+/// Build a ClassName update.
+fn make_class_update(id: Ref, class: &str) -> InstanceUpdate {
+    InstanceUpdate {
+        id,
+        changed_name: None,
+        changed_class_name: Some(ustr(class)),
+        changed_properties: UstrMap::default(),
+        changed_metadata: None,
+    }
+}
+
+/// Build a combined rename + class + source update.
+fn make_combined_update(
+    id: Ref,
+    name: Option<&str>,
+    class: Option<&str>,
+    source: Option<&str>,
+) -> InstanceUpdate {
+    let mut props = UstrMap::default();
+    if let Some(src) = source {
+        props.insert(ustr("Source"), Some(Variant::String(src.to_string())));
+    }
+    InstanceUpdate {
+        id,
+        changed_name: name.map(|n| n.to_string()),
+        changed_class_name: class.map(ustr),
+        changed_properties: props,
+        changed_metadata: None,
+    }
+}
+
+/// Get the expected file extension suffix for a class name.
+fn class_suffix(class: &str) -> &'static str {
+    match class {
+        "Script" => ".server",
+        "LocalScript" => ".local",
+        _ => "",
+    }
+}
+
+/// Verify that exactly one file exists for the given name+class, and no stale
+/// files remain with other extensions.
+fn verify_instance_file(src_dir: &Path, name: &str, class: &str, expected_source: Option<&str>) {
+    let suffix = class_suffix(class);
+    let expected_file = src_dir.join(format!("{}{}.luau", name, suffix));
+    assert!(
+        expected_file.is_file(),
+        "Expected file: {}",
+        expected_file.display()
+    );
+    if let Some(source) = expected_source {
+        let content = fs::read_to_string(&expected_file).unwrap();
+        assert!(
+            content.contains(source),
+            "Expected source '{}' in file {}, got: {}",
+            source,
+            expected_file.display(),
+            content
+        );
+    }
+    // Check no stale files with wrong extension
+    for stale_suffix in &[".server", ".local", ".client", ".plugin", ""] {
+        if *stale_suffix == suffix {
+            continue;
+        }
+        let stale = src_dir.join(format!("{}{}.luau", name, stale_suffix));
+        assert!(
+            !stale.exists(),
+            "Stale file should not exist: {}",
+            stale.display()
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tree polling helpers (for file-watcher tests)
+// ---------------------------------------------------------------------------
+
+/// Get ReplicatedStorage Ref.
+fn get_rs_id(session: &crate::rojo_test::serve_util::TestServeSession) -> Ref {
+    let info = session.get_api_rojo().unwrap();
+    let root_read = session.get_api_read(info.root_instance_id).unwrap();
+    let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+    rs_id
+}
+
+/// Poll tree until an instance named `name` under `parent_id` has Source
+/// containing `expected`. Panics after `timeout_ms`.
+fn poll_tree_source(
+    session: &crate::rojo_test::serve_util::TestServeSession,
+    parent_id: Ref,
+    instance_name: &str,
+    expected_content: &str,
+    timeout_ms: u64,
+) {
+    let start = Instant::now();
+    loop {
+        if let Ok(read) = session.get_api_read(parent_id) {
+            for inst in read.instances.values() {
+                if inst.name == instance_name {
+                    if let Some(source) = inst.properties.get(&ustr("Source")) {
+                        if let Variant::String(s) = source.as_ref() {
+                            if s.contains(expected_content) {
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if start.elapsed() > Duration::from_millis(timeout_ms) {
+            panic!(
+                "Timed out after {}ms waiting for instance '{}' Source to contain '{}'",
+                timeout_ms, instance_name, expected_content
+            );
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Poll tree until an instance named `name` exists under `parent_id`.
+fn poll_tree_has_instance(
+    session: &crate::rojo_test::serve_util::TestServeSession,
+    parent_id: Ref,
+    instance_name: &str,
+    timeout_ms: u64,
+) -> Ref {
+    let start = Instant::now();
+    loop {
+        if let Ok(read) = session.get_api_read(parent_id) {
+            for (&id, inst) in &read.instances {
+                if inst.name == instance_name {
+                    return id;
+                }
+            }
+        }
+        if start.elapsed() > Duration::from_millis(timeout_ms) {
+            panic!(
+                "Timed out after {}ms waiting for instance '{}' to appear",
+                timeout_ms, instance_name
+            );
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Poll tree until NO instance named `name` exists under `parent_id`.
+fn poll_tree_no_instance(
+    session: &crate::rojo_test::serve_util::TestServeSession,
+    parent_id: Ref,
+    instance_name: &str,
+    timeout_ms: u64,
+) {
+    let start = Instant::now();
+    loop {
+        if let Ok(read) = session.get_api_read(parent_id) {
+            let found = read
+                .instances
+                .values()
+                .any(|inst| inst.name == instance_name);
+            if !found {
+                return;
+            }
+        }
+        if start.elapsed() > Duration::from_millis(timeout_ms) {
+            panic!(
+                "Timed out after {}ms waiting for instance '{}' to disappear",
+                timeout_ms, instance_name
+            );
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Poll tree until instance `name` has the expected ClassName.
+fn poll_tree_class(
+    session: &crate::rojo_test::serve_util::TestServeSession,
+    parent_id: Ref,
+    instance_name: &str,
+    expected_class: &str,
+    timeout_ms: u64,
+) {
+    let start = Instant::now();
+    loop {
+        if let Ok(read) = session.get_api_read(parent_id) {
+            for inst in read.instances.values() {
+                if inst.name == instance_name && inst.class_name == expected_class {
+                    return;
+                }
+            }
+        }
+        if start.elapsed() > Duration::from_millis(timeout_ms) {
+            panic!(
+                "Timed out after {}ms waiting for instance '{}' to have class '{}'",
+                timeout_ms, instance_name, expected_class
+            );
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Poll tree until instance `name` under `parent_id` has at least one child
+/// with the given `child_name`. Returns the child's Ref.
+fn poll_tree_has_child(
+    session: &crate::rojo_test::serve_util::TestServeSession,
+    parent_id: Ref,
+    instance_name: &str,
+    child_name: &str,
+    timeout_ms: u64,
+) -> Ref {
+    let start = Instant::now();
+    loop {
+        if let Ok(read) = session.get_api_read(parent_id) {
+            for (&id, inst) in &read.instances {
+                if inst.name == instance_name {
+                    // Now read this instance's children
+                    if let Ok(child_read) = session.get_api_read(id) {
+                        for (&cid, cinst) in &child_read.instances {
+                            if cinst.name == child_name {
+                                return cid;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if start.elapsed() > Duration::from_millis(timeout_ms) {
+            panic!(
+                "Timed out after {}ms waiting for '{}'.'{}'",
+                timeout_ms, instance_name, child_name
+            );
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests 26-27: Rapid Source writes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rapid_source_writes_10x() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let (session_id, _rs_id, existing_id) = get_rs_and_existing(&session);
+        let file_path = session.path().join("src").join("existing.luau");
+
+        for i in 1..=10 {
+            send_update_fast(
+                &session,
+                &session_id,
+                make_source_update(existing_id, &format!("-- rapid v{}", i)),
+            );
+        }
+
+        wait_for_settle();
+        let content = fs::read_to_string(&file_path).unwrap();
+        assert!(
+            content.contains("-- rapid v10"),
+            "Final source should be v10, got: {}",
+            content
+        );
+    });
+}
+
+#[test]
+fn rapid_source_writes_no_wait_10x() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let (session_id, _rs_id, existing_id) = get_rs_and_existing(&session);
+        let file_path = session.path().join("src").join("existing.luau");
+
+        for i in 1..=10 {
+            send_update_no_wait(
+                &session,
+                &session_id,
+                make_source_update(existing_id, &format!("-- nowait v{}", i)),
+            );
+        }
+
+        wait_for_settle();
+        let content = fs::read_to_string(&file_path).unwrap();
+        assert!(
+            content.contains("-- nowait v10"),
+            "Final source should be v10, got: {}",
+            content
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests 28-29: Rapid rename chain
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rapid_rename_chain_10x() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let original_content = fs::read_to_string(src.join("existing.luau")).unwrap();
+
+        let mut current_name = "existing".to_string();
+        for i in 1..=10 {
+            let new_name = format!("R{}", i);
+            let info = session.get_api_rojo().unwrap();
+            let root_read = session.get_api_read(info.root_instance_id).unwrap();
+            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+            let rs_read = session.get_api_read(rs_id).unwrap();
+            let (id, _) = find_by_name(&rs_read.instances, &current_name);
+            send_update_fast(
+                &session,
+                &info.session_id,
+                make_rename_update(id, &new_name),
+            );
+            current_name = new_name;
+        }
+
+        wait_for_settle();
+
+        // Only R10.luau should exist
+        assert_file_exists(&src.join("R10.luau"), "R10.luau after chain");
+        for i in 1..10 {
+            assert_not_exists(
+                &src.join(format!("R{}.luau", i)),
+                &format!("Intermediate R{}.luau", i),
+            );
+        }
+        assert_not_exists(&src.join("existing.luau"), "Original file");
+
+        let content = fs::read_to_string(src.join("R10.luau")).unwrap();
+        assert_eq!(
+            original_content, content,
+            "Content preserved through 10 renames"
+        );
+    });
+}
+
+#[test]
+fn rapid_rename_chain_directory_10x() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let mut current_name = "DirModuleWithChildren".to_string();
+
+        for i in 1..=10 {
+            let new_name = format!("DirR{}", i);
+            let (session_id, id) = get_format_transitions_instance(&session, &current_name);
+            send_update_fast(&session, &session_id, make_rename_update(id, &new_name));
+            current_name = new_name;
+        }
+
+        wait_for_settle();
+
+        let final_dir = src.join("DirR10");
+        assert!(final_dir.is_dir(), "DirR10 should exist");
+        assert_file_exists(&final_dir.join("init.luau"), "init.luau in DirR10");
+        assert_file_exists(&final_dir.join("ChildA.luau"), "ChildA in DirR10");
+        assert_file_exists(&final_dir.join("ChildB.luau"), "ChildB in DirR10");
+
+        // All intermediates should be gone
+        assert_not_exists(&src.join("DirModuleWithChildren"), "Original directory");
+        for i in 1..10 {
+            assert!(
+                !src.join(format!("DirR{}", i)).exists(),
+                "Intermediate DirR{} should not exist",
+                i
+            );
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests 30-31: Rapid ClassName cycling
+// ---------------------------------------------------------------------------
+
+#[test]
+fn rapid_classname_cycle_10x() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let classes = [
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+        ];
+
+        for class in &classes {
+            let (session_id, _rs_id, id) = get_rs_and_existing(&session);
+            send_update_fast(&session, &session_id, make_class_update(id, class));
+            thread::sleep(Duration::from_millis(200)); // Let tree rebuild
+        }
+
+        wait_for_settle();
+
+        // Final class is Script -> existing.server.luau
+        verify_instance_file(&src, "existing", "Script", None);
+    });
+}
+
+#[test]
+fn rapid_classname_cycle_directory_init_10x() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let dir = src.join("DirModuleWithChildren");
+        let classes = [
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+        ];
+
+        for class in &classes {
+            let (session_id, id) =
+                get_format_transitions_instance(&session, "DirModuleWithChildren");
+            send_update_fast(&session, &session_id, make_class_update(id, class));
+            thread::sleep(Duration::from_millis(200));
+        }
+
+        wait_for_settle();
+
+        // Final class is Script -> init.server.luau
+        assert_file_exists(
+            &dir.join("init.server.luau"),
+            "init.server.luau after 10 cycles",
+        );
+        // Children survive
+        assert_file_exists(&dir.join("ChildA.luau"), "ChildA after 10 cycles");
+        assert_file_exists(&dir.join("ChildB.luau"), "ChildB after 10 cycles");
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests 32-34: Combined operations blitz
+// ---------------------------------------------------------------------------
+
+#[test]
+fn combined_rename_classname_source_blitz_10x() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let rounds: Vec<(&str, &str, &str)> = vec![
+            ("Blitz1", "Script", "-- blitz v1"),
+            ("Blitz2", "LocalScript", "-- blitz v2"),
+            ("Blitz3", "ModuleScript", "-- blitz v3"),
+            ("Blitz4", "Script", "-- blitz v4"),
+            ("Blitz5", "LocalScript", "-- blitz v5"),
+            ("Blitz6", "ModuleScript", "-- blitz v6"),
+            ("Blitz7", "Script", "-- blitz v7"),
+            ("Blitz8", "LocalScript", "-- blitz v8"),
+            ("Blitz9", "ModuleScript", "-- blitz v9"),
+            ("Blitz10", "Script", "-- blitz v10"),
+        ];
+
+        let mut current_name = "existing".to_string();
+        for (name, class, source) in &rounds {
+            let info = session.get_api_rojo().unwrap();
+            let root_read = session.get_api_read(info.root_instance_id).unwrap();
+            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+            let rs_read = session.get_api_read(rs_id).unwrap();
+            let (id, _) = find_by_name(&rs_read.instances, &current_name);
+            send_update_fast(
+                &session,
+                &info.session_id,
+                make_combined_update(id, Some(name), Some(class), Some(source)),
+            );
+            current_name = name.to_string();
+            thread::sleep(Duration::from_millis(200));
+        }
+
+        wait_for_settle();
+
+        // Final: Blitz10.server.luau with "-- blitz v10"
+        verify_instance_file(&src, "Blitz10", "Script", Some("-- blitz v10"));
+
+        // All intermediates gone
+        for i in 1..10 {
+            let name = format!("Blitz{}", i);
+            for suffix in &[".server", ".local", ""] {
+                assert_not_exists(
+                    &src.join(format!("{}{}.luau", name, suffix)),
+                    &format!("Intermediate {}{}.luau", name, suffix),
+                );
+            }
+        }
+        assert_not_exists(&src.join("existing.luau"), "Original file");
+    });
+}
+
+#[test]
+fn combined_rename_and_source_rapid_10x() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let mut current_name = "existing".to_string();
+
+        for i in 1..=10 {
+            let new_name = format!("RS{}", i);
+            let info = session.get_api_rojo().unwrap();
+            let root_read = session.get_api_read(info.root_instance_id).unwrap();
+            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+            let rs_read = session.get_api_read(rs_id).unwrap();
+            let (id, _) = find_by_name(&rs_read.instances, &current_name);
+            send_update_fast(
+                &session,
+                &info.session_id,
+                make_combined_update(id, Some(&new_name), None, Some(&format!("-- rs v{}", i))),
+            );
+            current_name = new_name;
+        }
+
+        wait_for_settle();
+        verify_instance_file(&src, "RS10", "ModuleScript", Some("-- rs v10"));
+    });
+}
+
+#[test]
+fn combined_classname_and_source_rapid_10x() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let classes = [
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+            "LocalScript",
+            "ModuleScript",
+            "Script",
+        ];
+
+        for (i, class) in classes.iter().enumerate() {
+            let (session_id, _rs_id, existing_id) = get_rs_and_existing(&session);
+            send_update_fast(
+                &session,
+                &session_id,
+                make_combined_update(
+                    existing_id,
+                    None,
+                    Some(class),
+                    Some(&format!("-- cs v{}", i + 1)),
+                ),
+            );
+            thread::sleep(Duration::from_millis(200));
+        }
+
+        wait_for_settle();
+        verify_instance_file(&src, "existing", "Script", Some("-- cs v10"));
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests 35-36: Multi-instance concurrent
+// ---------------------------------------------------------------------------
+
+#[test]
+fn multi_instance_source_update_single_request() {
+    run_serve_test("syncback_stress", |session, _redactions| {
+        let (session_id, _rs_id, instances) = get_stress_instances(&session);
+        let src = session.path().join("src");
+
+        let updates: Vec<InstanceUpdate> = instances
+            .iter()
+            .enumerate()
+            .map(|(i, (id, _name))| make_source_update(*id, &format!("-- multi source v{}", i + 1)))
+            .collect();
+
+        let write_request = WriteRequest {
+            session_id,
+            removed: vec![],
+            added: HashMap::new(),
+            updated: updates,
+        };
+        session.post_api_write(&write_request).unwrap();
+        wait_for_settle();
+
+        let names = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"];
+        for (i, name) in names.iter().enumerate() {
+            let file = src.join(format!("{}.luau", name));
+            let content = fs::read_to_string(&file).unwrap();
+            assert!(
+                content.contains(&format!("-- multi source v{}", i + 1)),
+                "{}.luau should contain expected source, got: {}",
+                name,
+                content
+            );
+        }
+    });
+}
+
+#[test]
+fn multi_instance_rename_single_request() {
+    run_serve_test("syncback_stress", |session, _redactions| {
+        let (session_id, _rs_id, instances) = get_stress_instances(&session);
+        let src = session.path().join("src");
+
+        let new_names = ["AlphaR", "BravoR", "CharlieR", "DeltaR", "EchoR"];
+        let updates: Vec<InstanceUpdate> = instances
+            .iter()
+            .zip(new_names.iter())
+            .map(|((id, _), new_name)| make_rename_update(*id, new_name))
+            .collect();
+
+        let write_request = WriteRequest {
+            session_id,
+            removed: vec![],
+            added: HashMap::new(),
+            updated: updates,
+        };
+        session.post_api_write(&write_request).unwrap();
+        wait_for_settle();
+
+        for new_name in &new_names {
+            assert_file_exists(
+                &src.join(format!("{}.luau", new_name)),
+                &format!("{}.luau after rename", new_name),
+            );
+        }
+        for old_name in &["Alpha", "Bravo", "Charlie", "Delta", "Echo"] {
+            assert_not_exists(
+                &src.join(format!("{}.luau", old_name)),
+                &format!("Old {}.luau", old_name),
+            );
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests 37-38: Delete + recreate race
+// ---------------------------------------------------------------------------
+
+#[test]
+fn delete_and_recreate_via_filesystem_recovery() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let (session_id, _rs_id, existing_id) = get_rs_and_existing(&session);
+        let file_path = session.path().join("src").join("existing.luau");
+
+        // Delete via API
+        send_removal_fast(&session, &session_id, vec![existing_id]);
+
+        // Immediately recreate the file on disk (simulating editor undo)
+        fs::write(&file_path, "-- recovered content\nreturn {}").unwrap();
+
+        // Wait for the recovery mechanism (200ms delay + 500ms sweep + buffer)
+        thread::sleep(Duration::from_millis(1500));
+
+        // Instance should be back in the tree
+        let rs_id = get_rs_id(&session);
+        poll_tree_has_instance(&session, rs_id, "existing", 3000);
+    });
+}
+
+#[test]
+fn rapid_delete_recreate_cycle_5x() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let file_path = session.path().join("src").join("existing.luau");
+
+        for cycle in 1..=5 {
+            // Re-read tree to get current instance
+            let (session_id, _rs_id, existing_id) = get_rs_and_existing(&session);
+
+            // Delete via API
+            send_removal_fast(&session, &session_id, vec![existing_id]);
+
+            // Recreate on disk
+            let content = format!("-- cycle {} recovered\nreturn {{}}", cycle);
+            fs::write(&file_path, &content).unwrap();
+
+            // Wait for recovery
+            thread::sleep(Duration::from_millis(1500));
+
+            // Verify instance is back
+            let rs_id = get_rs_id(&session);
+            poll_tree_has_instance(&session, rs_id, "existing", 3000);
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests 39-40: Echo suppression under load
+// ---------------------------------------------------------------------------
+
+#[test]
+fn echo_suppression_rapid_adds_10x() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let info = session.get_api_rojo().unwrap();
+        let root_id = info.root_instance_id;
+        let root_read = session.get_api_read(root_id).unwrap();
+        let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+        let initial_cursor = root_read.message_cursor;
+
+        for i in 0..10 {
+            let mut properties = HashMap::new();
+            properties.insert(
+                "Source".to_string(),
+                Variant::String(format!("-- echo add {}", i)),
+            );
+            let added = AddedInstance {
+                parent: Some(rs_id),
+                name: format!("EchoAdd{}", i),
+                class_name: "ModuleScript".to_string(),
+                properties,
+                children: vec![],
+            };
+            let mut added_map = HashMap::new();
+            added_map.insert(Ref::new(), added);
+            let write_request = WriteRequest {
+                session_id: info.session_id,
+                removed: vec![],
+                added: added_map,
+                updated: vec![],
+            };
+            session.post_api_write(&write_request).unwrap();
+        }
+
+        wait_for_settle();
+
+        // All 10 files should exist
+        let src = session.path().join("src");
+        for i in 0..10 {
+            assert_file_exists(
+                &src.join(format!("EchoAdd{}.luau", i)),
+                &format!("EchoAdd{}.luau", i),
+            );
+        }
+
+        // Server should still be responsive
+        let read_after = session.get_api_read(root_id).unwrap();
+        let cursor_delta = read_after.message_cursor - initial_cursor;
+        assert!(
+            cursor_delta < 50,
+            "Cursor delta {} should be reasonable with echo suppression",
+            cursor_delta
+        );
+    });
+}
+
+#[test]
+fn echo_suppression_mixed_operations() {
+    run_serve_test("syncback_stress", |session, _redactions| {
+        let (session_id, rs_id, instances) = get_stress_instances(&session);
+        let src = session.path().join("src");
+
+        // 2 adds
+        let mut added_map = HashMap::new();
+        for i in 0..2 {
+            let mut properties = HashMap::new();
+            properties.insert(
+                "Source".to_string(),
+                Variant::String(format!("-- mixed add {}", i)),
+            );
+            added_map.insert(
+                Ref::new(),
+                AddedInstance {
+                    parent: Some(rs_id),
+                    name: format!("MixedAdd{}", i),
+                    class_name: "ModuleScript".to_string(),
+                    properties,
+                    children: vec![],
+                },
+            );
+        }
+
+        // 2 updates (Alpha and Bravo)
+        let updates: Vec<InstanceUpdate> = instances
+            .iter()
+            .take(2)
+            .enumerate()
+            .map(|(i, (id, _))| make_source_update(*id, &format!("-- mixed update {}", i)))
+            .collect();
+
+        // 1 removal (Echo)
+        let removed = vec![instances[4].0];
+
+        let write_request = WriteRequest {
+            session_id,
+            removed,
+            added: added_map,
+            updated: updates,
+        };
+        session.post_api_write(&write_request).unwrap();
+        wait_for_settle();
+
+        // Verify adds
+        for i in 0..2 {
+            assert_file_exists(
+                &src.join(format!("MixedAdd{}.luau", i)),
+                &format!("MixedAdd{}.luau", i),
+            );
+        }
+
+        // Verify updates
+        let alpha_content = fs::read_to_string(src.join("Alpha.luau")).unwrap();
+        assert!(
+            alpha_content.contains("-- mixed update 0"),
+            "Alpha should be updated"
+        );
+
+        // Verify removal
+        assert_not_exists(&src.join("Echo.luau"), "Echo.luau after removal");
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Test 41: Encoded name rapid rename chain
+// ---------------------------------------------------------------------------
+
+#[test]
+fn encoded_name_rapid_rename_chain() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let src = session.path().join("src");
+        let (_session_id, _module_id) = get_encoded_names_instance(&session, "What?Module");
+
+        // Rename through names with special characters
+        let names = ["Foo?Bar", "Key:Value", "Test?End", "Final:Name", "Done?Now"];
+        let mut current_name = "What?Module".to_string();
+
+        for new_name in &names {
+            let info = session.get_api_rojo().unwrap();
+            let root_read = session.get_api_read(info.root_instance_id).unwrap();
+            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+            let rs_read = session.get_api_read(rs_id).unwrap();
+            let (id, _) = find_by_name(&rs_read.instances, &current_name);
+            send_update_fast(&session, &info.session_id, make_rename_update(id, new_name));
+            current_name = new_name.to_string();
+        }
+
+        wait_for_settle();
+
+        // Final file should use encoded name: Done%QUESTION%Now.luau
+        let final_file = src.join("Done%QUESTION%Now.luau");
+        assert_file_exists(&final_file, "Final encoded file");
+
+        // Original should be gone
+        assert_not_exists(
+            &src.join("What%QUESTION%Module.luau"),
+            "Original encoded file",
+        );
+    });
+}
+
+// ===========================================================================
+// PART 2: Randomized Fuzzing (Tests 42-46)
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// PRNG and fuzzing infrastructure
+// ---------------------------------------------------------------------------
+
+struct XorShift64(u64);
+
+impl XorShift64 {
+    fn new(seed: u64) -> Self {
+        Self(if seed == 0 { 1 } else { seed })
+    }
+
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    fn range(&mut self, min: u64, max: u64) -> u64 {
+        min + (self.next() % (max - min))
+    }
+
+    fn choose<'a, T>(&mut self, items: &'a [T]) -> &'a T {
+        &items[self.next() as usize % items.len()]
+    }
+}
+
+/// State tracker for fuzzing — knows expected file name, class, and content.
+struct FuzzState {
+    current_name: String,
+    current_class: String,
+    current_source: String,
+}
+
+impl FuzzState {
+    fn new(name: &str, class: &str, source: &str) -> Self {
+        Self {
+            current_name: name.to_string(),
+            current_class: class.to_string(),
+            current_source: source.to_string(),
+        }
+    }
+
+    fn expected_file(&self) -> String {
+        let suffix = class_suffix(&self.current_class);
+        format!("{}{}.luau", self.current_name, suffix)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Test 42: Fuzz source and rename
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fuzz_source_and_rename_20_iterations() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let mut rng = XorShift64::new(42);
+        let mut state = FuzzState::new(
+            "existing",
+            "ModuleScript",
+            "-- Existing module for testing\nreturn {}",
+        );
+
+        // 20 random operations in a single continuous chain (no reset)
+        for op_idx in 0..20 {
+            let info = session.get_api_rojo().unwrap();
+            let root_read = session.get_api_read(info.root_instance_id).unwrap();
+            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+            let rs_read = session.get_api_read(rs_id).unwrap();
+            let found = rs_read
+                .instances
+                .iter()
+                .find(|(_, inst)| inst.name == state.current_name);
+            let inst_id = match found {
+                Some((&id, _)) => id,
+                None => {
+                    thread::sleep(Duration::from_millis(500));
+                    continue;
+                }
+            };
+
+            if rng.next().is_multiple_of(2) {
+                let new_name = format!("Fz{}", op_idx);
+                send_update(
+                    &session,
+                    &info.session_id,
+                    make_rename_update(inst_id, &new_name),
+                );
+                state.current_name = new_name;
+            } else {
+                let new_source = format!("-- fuzz o{}", op_idx);
+                send_update(
+                    &session,
+                    &info.session_id,
+                    make_source_update(inst_id, &new_source),
+                );
+                state.current_source = new_source;
+            }
+        }
+
+        wait_for_settle();
+        let expected = src.join(state.expected_file());
+        assert!(
+            expected.is_file(),
+            "Expected file {} to exist after 20 fuzz ops",
+            expected.display()
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Test 43: Fuzz ClassName cycling
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fuzz_classname_cycling_20_iterations() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let class_options = ["ModuleScript", "Script", "LocalScript"];
+        let mut rng = XorShift64::new(77);
+        let mut state = FuzzState::new(
+            "existing",
+            "ModuleScript",
+            "-- Existing module for testing\nreturn {}",
+        );
+
+        // 20 random ClassName changes in a single continuous chain
+        for _ in 0..20 {
+            let (session_id, _rs_id, id) = get_rs_and_existing(&session);
+            let new_class = *rng.choose(&class_options);
+            send_update(&session, &session_id, make_class_update(id, new_class));
+            state.current_class = new_class.to_string();
+        }
+
+        wait_for_settle();
+        let expected = src.join(state.expected_file());
+        assert!(
+            expected.is_file(),
+            "Expected file {} to exist after 20 class changes",
+            expected.display()
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Test 44: Fuzz combined operations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fuzz_combined_operations_20_iterations() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let class_options = ["ModuleScript", "Script", "LocalScript"];
+        let mut rng = XorShift64::new(99);
+        let mut state = FuzzState::new(
+            "existing",
+            "ModuleScript",
+            "-- Existing module for testing\nreturn {}",
+        );
+
+        // 20 random combined operations in a single continuous chain
+        for op_idx in 0..20 {
+            let info = session.get_api_rojo().unwrap();
+            let root_read = session.get_api_read(info.root_instance_id).unwrap();
+            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+            let rs_read = session.get_api_read(rs_id).unwrap();
+            let found = rs_read
+                .instances
+                .iter()
+                .find(|(_, inst)| inst.name == state.current_name);
+            let inst_id = match found {
+                Some((&id, _)) => id,
+                None => {
+                    thread::sleep(Duration::from_millis(500));
+                    continue;
+                }
+            };
+
+            let op_type = rng.range(0, 4);
+            let new_name = format!("CF{}", op_idx);
+            let new_source = format!("-- cf o{}", op_idx);
+            let new_class = *rng.choose(&class_options);
+
+            match op_type {
+                0 => {
+                    send_update(
+                        &session,
+                        &info.session_id,
+                        make_source_update(inst_id, &new_source),
+                    );
+                    state.current_source = new_source;
+                }
+                1 => {
+                    send_update(
+                        &session,
+                        &info.session_id,
+                        make_rename_update(inst_id, &new_name),
+                    );
+                    state.current_name = new_name;
+                }
+                2 => {
+                    send_update(
+                        &session,
+                        &info.session_id,
+                        make_class_update(inst_id, new_class),
+                    );
+                    state.current_class = new_class.to_string();
+                }
+                _ => {
+                    send_update(
+                        &session,
+                        &info.session_id,
+                        make_combined_update(
+                            inst_id,
+                            Some(&new_name),
+                            Some(new_class),
+                            Some(&new_source),
+                        ),
+                    );
+                    state.current_name = new_name;
+                    state.current_class = new_class.to_string();
+                    state.current_source = new_source;
+                }
+            }
+        }
+
+        wait_for_settle();
+        let expected = src.join(state.expected_file());
+        assert!(
+            expected.is_file(),
+            "Expected file {} to exist after 20 combined fuzz ops. State: name={}, class={}",
+            expected.display(),
+            state.current_name,
+            state.current_class,
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Test 45: Fuzz multi-instance
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fuzz_multi_instance_15_iterations() {
+    run_serve_test("syncback_stress", |session, _redactions| {
+        let src = session.path().join("src");
+        let original_names = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"];
+
+        for seed in 1u64..=15 {
+            let mut rng = XorShift64::new(seed);
+
+            // Pick 1-5 instances to update
+            let count = rng.range(1, 6) as usize;
+            let (session_id, _rs_id, instances) = get_stress_instances(&session);
+
+            let updates: Vec<InstanceUpdate> = instances
+                .iter()
+                .take(count)
+                .enumerate()
+                .map(|(i, (id, _name))| {
+                    make_source_update(*id, &format!("-- fuzz mi s{} i{}", seed, i))
+                })
+                .collect();
+
+            let write_request = WriteRequest {
+                session_id,
+                removed: vec![],
+                added: HashMap::new(),
+                updated: updates,
+            };
+            session.post_api_write(&write_request).unwrap();
+            thread::sleep(Duration::from_millis(100));
+        }
+
+        wait_for_settle();
+
+        // All 5 files should still exist (we only did Source updates)
+        for name in &original_names {
+            assert_file_exists(
+                &src.join(format!("{}.luau", name)),
+                &format!("{}.luau after 100 fuzz iterations", name),
+            );
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Test 46: Fuzz directory format operations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fuzz_directory_format_operations_15_iterations() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let class_options = ["ModuleScript", "Script", "LocalScript"];
+        let mut current_name = "DirModuleWithChildren".to_string();
+
+        for seed in 1u64..=15 {
+            let mut rng = XorShift64::new(seed);
+            let is_rename = rng.next().is_multiple_of(2);
+
+            let info = session.get_api_rojo().unwrap();
+            let root_read = session.get_api_read(info.root_instance_id).unwrap();
+            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+            let rs_read = session.get_api_read(rs_id).unwrap();
+            let found = rs_read
+                .instances
+                .iter()
+                .find(|(_, inst)| inst.name == current_name);
+            let inst_id = match found {
+                Some((&id, _)) => id,
+                None => {
+                    thread::sleep(Duration::from_millis(500));
+                    continue;
+                }
+            };
+
+            if is_rename {
+                let new_name = format!("DirFz{}", seed);
+                send_update_fast(
+                    &session,
+                    &info.session_id,
+                    make_rename_update(inst_id, &new_name),
+                );
+                current_name = new_name;
+            } else {
+                let new_class = *rng.choose(&class_options);
+                send_update_fast(
+                    &session,
+                    &info.session_id,
+                    make_class_update(inst_id, new_class),
+                );
+            }
+            thread::sleep(Duration::from_millis(200));
+        }
+
+        wait_for_settle();
+
+        // Directory should exist with children intact
+        let final_dir = src.join(&current_name);
+        assert!(
+            final_dir.is_dir(),
+            "Final directory {} should exist",
+            final_dir.display()
+        );
+        assert_file_exists(
+            &final_dir.join("ChildA.luau"),
+            "ChildA.luau after 100 iterations",
+        );
+        assert_file_exists(
+            &final_dir.join("ChildB.luau"),
+            "ChildB.luau after 100 iterations",
+        );
+    });
+}
+
+// ===========================================================================
+// PART 3: File Watcher Stress Tests (Tests 47-66)
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// Tests 47-48: Rapid source edits on disk
+// ---------------------------------------------------------------------------
+
+#[test]
+fn watcher_rapid_source_edits_on_disk_10x() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let file_path = session.path().join("src").join("existing.luau");
+        let rs_id = get_rs_id(&session);
+
+        for i in 1..=10 {
+            fs::write(&file_path, format!("-- disk v{}\nreturn {{}}", i)).unwrap();
+            thread::sleep(Duration::from_millis(30));
+        }
+
+        poll_tree_source(&session, rs_id, "existing", "-- disk v10", 3000);
+    });
+}
+
+#[test]
+fn watcher_burst_writes_100x() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let file_path = session.path().join("src").join("existing.luau");
+        let rs_id = get_rs_id(&session);
+
+        for i in 0..100 {
+            fs::write(&file_path, format!("-- burst {}\nreturn {{}}", i)).unwrap();
+        }
+        fs::write(&file_path, "-- burst final\nreturn {}").unwrap();
+
+        poll_tree_source(&session, rs_id, "existing", "-- burst final", 3000);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests 49-50: Filesystem rename
+// ---------------------------------------------------------------------------
+
+#[test]
+fn watcher_filesystem_rename_chain_10x() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let original_content = fs::read_to_string(src.join("existing.luau")).unwrap();
+
+        let mut current_file = src.join("existing.luau");
+        for i in 1..=10 {
+            let new_file = src.join(format!("R{}.luau", i));
+            fs::rename(&current_file, &new_file).unwrap();
+            current_file = new_file;
+            thread::sleep(Duration::from_millis(30));
+        }
+
+        poll_tree_has_instance(&session, rs_id, "R10", 3000);
+
+        let content = fs::read_to_string(&current_file).unwrap();
+        assert_eq!(
+            original_content, content,
+            "Content preserved through renames"
+        );
+    });
+}
+
+#[test]
+fn watcher_rename_with_content_change() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+
+        // Atomic overwrite: write temp file, rename over existing
+        let temp = src.join("existing.luau.tmp");
+        fs::write(&temp, "-- atomic overwrite content\nreturn {}").unwrap();
+        fs::rename(&temp, src.join("existing.luau")).unwrap();
+
+        poll_tree_source(
+            &session,
+            rs_id,
+            "existing",
+            "-- atomic overwrite content",
+            3000,
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests 51-53: Delete + recreate via filesystem
+// ---------------------------------------------------------------------------
+
+#[test]
+fn watcher_delete_recreate_immediate() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let file_path = session.path().join("src").join("existing.luau");
+        let rs_id = get_rs_id(&session);
+
+        fs::remove_file(&file_path).unwrap();
+        fs::write(&file_path, "-- recreated immediately\nreturn {}").unwrap();
+
+        poll_tree_source(
+            &session,
+            rs_id,
+            "existing",
+            "-- recreated immediately",
+            3000,
+        );
+    });
+}
+
+#[test]
+fn watcher_delete_recreate_cycle_5x() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let file_path = session.path().join("src").join("existing.luau");
+        let rs_id = get_rs_id(&session);
+
+        for cycle in 1..=5 {
+            fs::remove_file(&file_path).unwrap();
+            thread::sleep(Duration::from_millis(50));
+            let content = format!("-- cycle {} content\nreturn {{}}", cycle);
+            fs::write(&file_path, &content).unwrap();
+
+            poll_tree_source(
+                &session,
+                rs_id,
+                "existing",
+                &format!("-- cycle {} content", cycle),
+                5000,
+            );
+        }
+    });
+}
+
+#[test]
+fn watcher_delete_recreate_different_content() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let file_path = session.path().join("src").join("existing.luau");
+        let rs_id = get_rs_id(&session);
+
+        fs::remove_file(&file_path).unwrap();
+        // Wait for removal to propagate
+        thread::sleep(Duration::from_millis(300));
+        // Recreate with completely different content
+        fs::write(
+            &file_path,
+            "-- completely different\nlocal x = 42\nreturn x",
+        )
+        .unwrap();
+
+        poll_tree_source(&session, rs_id, "existing", "-- completely different", 5000);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests 54-57: Init file shenanigans
+// ---------------------------------------------------------------------------
+
+#[test]
+fn watcher_edit_init_file() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let init_path = src.join("DirModuleWithChildren").join("init.luau");
+
+        fs::write(&init_path, "-- edited init content\nreturn {}").unwrap();
+
+        poll_tree_source(
+            &session,
+            rs_id,
+            "DirModuleWithChildren",
+            "-- edited init content",
+            3000,
+        );
+
+        // Children should still exist
+        let dir_id = poll_tree_has_instance(&session, rs_id, "DirModuleWithChildren", 1000);
+        let child_read = session.get_api_read(dir_id).unwrap();
+        assert!(
+            child_read.instances.values().any(|i| i.name == "ChildA"),
+            "ChildA should still exist after init edit"
+        );
+    });
+}
+
+#[test]
+fn watcher_init_type_cycling_10x() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let dir = src.join("DirModuleWithChildren");
+
+        // Cycle: init.luau -> init.server.luau -> init.local.luau -> init.luau -> ...
+        let transitions = [
+            ("init.luau", "init.server.luau", "Script"),
+            ("init.server.luau", "init.local.luau", "LocalScript"),
+            ("init.local.luau", "init.luau", "ModuleScript"),
+            ("init.luau", "init.server.luau", "Script"),
+            ("init.server.luau", "init.local.luau", "LocalScript"),
+            ("init.local.luau", "init.luau", "ModuleScript"),
+            ("init.luau", "init.server.luau", "Script"),
+            ("init.server.luau", "init.local.luau", "LocalScript"),
+            ("init.local.luau", "init.luau", "ModuleScript"),
+            ("init.luau", "init.server.luau", "Script"),
+        ];
+
+        for (from, to, expected_class) in &transitions {
+            fs::rename(dir.join(from), dir.join(to)).unwrap();
+            poll_tree_class(
+                &session,
+                rs_id,
+                "DirModuleWithChildren",
+                expected_class,
+                3000,
+            );
+        }
+
+        // Children should survive all transitions
+        let dir_id = poll_tree_has_instance(&session, rs_id, "DirModuleWithChildren", 1000);
+        let child_read = session.get_api_read(dir_id).unwrap();
+        assert!(
+            child_read.instances.values().any(|i| i.name == "ChildA"),
+            "ChildA should survive init type cycling"
+        );
+        assert!(
+            child_read.instances.values().any(|i| i.name == "ChildB"),
+            "ChildB should survive init type cycling"
+        );
+    });
+}
+
+#[test]
+fn watcher_delete_init_file() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let init_path = src.join("DirModuleWithChildren").join("init.luau");
+
+        fs::remove_file(&init_path).unwrap();
+
+        // Without init file, directory becomes a Folder
+        poll_tree_class(&session, rs_id, "DirModuleWithChildren", "Folder", 3000);
+    });
+}
+
+#[test]
+fn watcher_replace_init_file_type() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let dir = src.join("DirModuleWithChildren");
+        let old_init = dir.join("init.luau");
+        let new_init = dir.join("init.server.luau");
+        let content = fs::read_to_string(&old_init).unwrap();
+
+        fs::remove_file(&old_init).unwrap();
+        fs::write(&new_init, &content).unwrap();
+
+        poll_tree_class(&session, rs_id, "DirModuleWithChildren", "Script", 3000);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests 58-60: Singular <-> directory format conversion
+// ---------------------------------------------------------------------------
+
+#[test]
+fn watcher_standalone_to_directory_conversion() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let standalone = src.join("StandaloneModule.luau");
+        let original = fs::read_to_string(&standalone).unwrap();
+
+        // Convert: remove file, create directory with init + child
+        fs::remove_file(&standalone).unwrap();
+        let dir = src.join("StandaloneModule");
+        fs::create_dir(&dir).unwrap();
+        fs::write(dir.join("init.luau"), &original).unwrap();
+        fs::write(dir.join("ChildNew.luau"), "-- new child\nreturn {}").unwrap();
+
+        poll_tree_has_child(&session, rs_id, "StandaloneModule", "ChildNew", 5000);
+    });
+}
+
+#[test]
+fn watcher_directory_to_standalone_conversion() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let dir = src.join("DirModuleWithChildren");
+        let init_content = fs::read_to_string(dir.join("init.luau")).unwrap();
+
+        // Convert: remove directory, create standalone file
+        fs::remove_dir_all(&dir).unwrap();
+        fs::write(src.join("DirModuleWithChildren.luau"), &init_content).unwrap();
+
+        // Wait and verify no children remain
+        thread::sleep(Duration::from_millis(500));
+        let id = poll_tree_has_instance(&session, rs_id, "DirModuleWithChildren", 5000);
+        // Read children
+        let child_read = session.get_api_read(id).unwrap();
+        let child_count = child_read
+            .instances
+            .values()
+            .filter(|i| i.name != "DirModuleWithChildren")
+            .count();
+        assert!(
+            child_count == 0,
+            "Standalone should have no children, found {}",
+            child_count
+        );
+    });
+}
+
+#[test]
+fn watcher_format_flip_flop_5x() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let standalone_path = src.join("StandaloneModule.luau");
+        let dir_path = src.join("StandaloneModule");
+
+        for cycle in 1..=5 {
+            // Standalone -> Directory
+            if standalone_path.exists() {
+                fs::remove_file(&standalone_path).unwrap();
+            }
+            if !dir_path.exists() {
+                fs::create_dir(&dir_path).unwrap();
+            }
+            fs::write(
+                dir_path.join("init.luau"),
+                format!("-- dir cycle {}\nreturn {{}}", cycle),
+            )
+            .unwrap();
+            fs::write(
+                dir_path.join("Child.luau"),
+                format!("-- child cycle {}", cycle),
+            )
+            .unwrap();
+
+            poll_tree_has_child(&session, rs_id, "StandaloneModule", "Child", 5000);
+
+            // Directory -> Standalone
+            fs::remove_dir_all(&dir_path).unwrap();
+            fs::write(
+                &standalone_path,
+                format!("-- standalone cycle {}\nreturn {{}}", cycle),
+            )
+            .unwrap();
+
+            poll_tree_source(
+                &session,
+                rs_id,
+                "StandaloneModule",
+                &format!("-- standalone cycle {}", cycle),
+                5000,
+            );
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests 61-62: Editor save patterns
+// ---------------------------------------------------------------------------
+
+#[test]
+fn watcher_atomic_save_pattern() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let file = src.join("existing.luau");
+        let temp = src.join("existing.luau.tmp");
+
+        for i in 1..=5 {
+            let content = format!("-- atomic save v{}\nreturn {{}}", i);
+            fs::write(&temp, &content).unwrap();
+            fs::rename(&temp, &file).unwrap();
+
+            poll_tree_source(
+                &session,
+                rs_id,
+                "existing",
+                &format!("-- atomic save v{}", i),
+                3000,
+            );
+        }
+    });
+}
+
+#[test]
+fn watcher_backup_rename_write_pattern() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let file = src.join("existing.luau");
+        let backup = src.join("existing.luau.bak");
+
+        // Backup-rename-write: rename existing to .bak, write new content
+        fs::rename(&file, &backup).unwrap();
+        fs::write(&file, "-- backup-rename-write content\nreturn {}").unwrap();
+
+        poll_tree_source(
+            &session,
+            rs_id,
+            "existing",
+            "-- backup-rename-write content",
+            3000,
+        );
+
+        // Clean up backup
+        if backup.exists() {
+            fs::remove_file(&backup).unwrap();
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests 63-64: Parent directory operations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn watcher_parent_directory_rename() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let old_dir = src.join("DirModuleWithChildren");
+        let new_dir = src.join("RenamedDir");
+
+        fs::rename(&old_dir, &new_dir).unwrap();
+
+        poll_tree_has_instance(&session, rs_id, "RenamedDir", 5000);
+        poll_tree_no_instance(&session, rs_id, "DirModuleWithChildren", 3000);
+
+        // Children should be intact
+        let dir_id = poll_tree_has_instance(&session, rs_id, "RenamedDir", 1000);
+        let child_read = session.get_api_read(dir_id).unwrap();
+        assert!(
+            child_read.instances.values().any(|i| i.name == "ChildA"),
+            "ChildA should be in renamed directory"
+        );
+    });
+}
+
+#[test]
+fn watcher_parent_directory_delete_all() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+
+        fs::remove_dir_all(src.join("DirModuleWithChildren")).unwrap();
+
+        poll_tree_no_instance(&session, rs_id, "DirModuleWithChildren", 5000);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests 65-66: Concurrent filesystem + API
+// ---------------------------------------------------------------------------
+
+#[test]
+fn watcher_filesystem_and_api_concurrent() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+
+        // Filesystem edit on StandaloneModule
+        let standalone_file = src.join("StandaloneModule.luau");
+        fs::write(&standalone_file, "-- fs edited module\nreturn {}").unwrap();
+
+        // API edit on StandaloneScript
+        let (session_id, script_id) = get_format_transitions_instance(&session, "StandaloneScript");
+        send_update_no_wait(
+            &session,
+            &session_id,
+            make_source_update(script_id, "-- api edited script"),
+        );
+
+        // Both should propagate
+        poll_tree_source(
+            &session,
+            rs_id,
+            "StandaloneModule",
+            "-- fs edited module",
+            3000,
+        );
+        let script_file = src.join("StandaloneScript.server.luau");
+        // Wait for API write to complete
+        thread::sleep(Duration::from_millis(500));
+        let script_content = fs::read_to_string(&script_file).unwrap();
+        assert!(
+            script_content.contains("-- api edited script"),
+            "Script should be updated via API, got: {}",
+            script_content
+        );
+    });
+}
+
+#[test]
+fn watcher_multi_file_simultaneous_edits() {
+    run_serve_test("syncback_stress", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+        let names = ["Alpha", "Bravo", "Charlie", "Delta", "Echo"];
+
+        // Write all 5 files as fast as possible
+        for (i, name) in names.iter().enumerate() {
+            fs::write(
+                src.join(format!("{}.luau", name)),
+                format!("-- simultaneous edit {}\nreturn {{}}", i),
+            )
+            .unwrap();
+        }
+
+        // Poll for all 5 to update
+        for (i, name) in names.iter().enumerate() {
+            poll_tree_source(
+                &session,
+                rs_id,
+                name,
+                &format!("-- simultaneous edit {}", i),
+                5000,
+            );
+        }
     });
 }
