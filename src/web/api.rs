@@ -1026,13 +1026,84 @@ impl ApiService {
             .unwrap_or("");
 
         if file_name.ends_with(".model.json5") || file_name.ends_with(".model.json") {
-            // .model.json5 → init.meta.json5 with className and properties
-            // Read the model file and rewrite as init.meta.json5
+            // .model.json5 → init.meta.json5 with className and properties.
+            // IMPORTANT: .model.json5 supports a "children" field for inline child
+            // instances, but init.meta.json5 (DirectoryMetadata) does not. We must
+            // parse the model and extract only the compatible fields, warning if
+            // inline children would be lost.
             if standalone_path.exists() {
-                let content = fs::read(standalone_path).unwrap_or_default();
+                let raw = fs::read(standalone_path).unwrap_or_default();
                 let init_meta_path = new_dir.join("init.meta.json5");
+
+                // Parse the model JSON to extract only meta-compatible fields
+                let meta_content =
+                    if let Ok(model) = serde_json::from_slice::<serde_json::Value>(&raw) {
+                        // Warn about inline children that will be lost
+                        if let Some(children) = model.get("children").or(model.get("Children")) {
+                            if children.is_array()
+                                && children.as_array().map_or(false, |a| !a.is_empty())
+                            {
+                                log::warn!(
+                                    "Syncback: .model.json5 at {} contains inline children \
+                                     that cannot be represented in init.meta.json5 — \
+                                     these children will be lost during directory conversion",
+                                    standalone_path.display()
+                                );
+                            }
+                        }
+
+                        // Build init.meta.json5 with only the supported fields
+                        let mut meta = serde_json::Map::new();
+                        if let Some(cn) = model
+                            .get("className")
+                            .or(model.get("ClassName"))
+                            .cloned()
+                        {
+                            meta.insert("className".to_string(), cn);
+                        }
+                        if let Some(props) = model
+                            .get("properties")
+                            .or(model.get("Properties"))
+                            .cloned()
+                        {
+                            if props.is_object()
+                                && props.as_object().map_or(false, |o| !o.is_empty())
+                            {
+                                meta.insert("properties".to_string(), props);
+                            }
+                        }
+                        if let Some(attrs) = model
+                            .get("attributes")
+                            .or(model.get("Attributes"))
+                            .cloned()
+                        {
+                            if attrs.is_object()
+                                && attrs.as_object().map_or(false, |o| !o.is_empty())
+                            {
+                                meta.insert("attributes".to_string(), attrs);
+                            }
+                        }
+                        if let Some(ignore) = model.get("ignoreUnknownInstances").cloned() {
+                            meta.insert("ignoreUnknownInstances".to_string(), ignore);
+                        }
+                        if let Some(id) = model.get("id").cloned() {
+                            meta.insert("id".to_string(), id);
+                        }
+
+                        crate::json::to_vec_pretty_sorted(&serde_json::Value::Object(meta))
+                            .unwrap_or(raw.clone())
+                    } else {
+                        // Parse failed — copy raw as fallback (best-effort)
+                        log::warn!(
+                            "Syncback: Could not parse {} as JSON — \
+                             copying raw content to init.meta.json5",
+                            standalone_path.display()
+                        );
+                        raw
+                    };
+
                 self.suppress_path(&init_meta_path);
-                fs::write(&init_meta_path, &content)
+                fs::write(&init_meta_path, &meta_content)
                     .with_context(|| format!("Failed to write {}", init_meta_path.display()))?;
             }
         } else if file_ext == "txt" {
@@ -2123,9 +2194,22 @@ impl ApiService {
             );
         } else if is_script {
             // Standalone script: write to adjacent Name.meta.json5
+            // Derive the base name from the filesystem path (not instance.name())
+            // to preserve Windows-invalid character encoding (e.g., %3F for ?).
+            // This matches AdjacentMetadata::read_and_apply_all which uses file_stem().
             let parent_dir = inst_path.parent().context("No parent directory")?;
-            let name = instance.name();
-            let meta_path = parent_dir.join(format!("{}.meta.json5", name));
+            let file_stem = inst_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            let base_name = file_stem
+                .strip_suffix(".server")
+                .or_else(|| file_stem.strip_suffix(".client"))
+                .or_else(|| file_stem.strip_suffix(".plugin"))
+                .or_else(|| file_stem.strip_suffix(".local"))
+                .or_else(|| file_stem.strip_suffix(".legacy"))
+                .unwrap_or(file_stem);
+            let meta_path = parent_dir.join(format!("{}.meta.json5", base_name));
 
             let meta = self.merge_or_build_meta(&meta_path, None, properties, attributes)?;
             let content = crate::json::to_vec_pretty_sorted(&meta)
