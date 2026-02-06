@@ -11,6 +11,7 @@ use std::{
 
 use crate::{
     message_queue::MessageQueue,
+    path_encoding::encode_path_name,
     snapshot::{
         apply_patch_set, compute_patch_set, AppliedPatchSet, InstigatingSource, PatchSet, RojoTree,
     },
@@ -499,7 +500,6 @@ impl JobThreadContext {
                             match instigating_source {
                                 InstigatingSource::Path(path) => {
                                     if path.exists() {
-                                        let old_name = instance.name();
                                         let file_name =
                                             path.file_name().and_then(|f| f.to_str()).unwrap_or("");
 
@@ -512,13 +512,18 @@ impl JobThreadContext {
                                         if is_init_file {
                                             let dir_path = path.parent().unwrap();
                                             if let Some(grandparent) = dir_path.parent() {
+                                                // Use the encoded dir name from the filesystem
+                                                // for the old meta lookup, and encode the new
+                                                // name for the new path. Using instance.name()
+                                                // (decoded) would fail for encoded names.
                                                 let dir_name = dir_path
                                                     .file_name()
                                                     .and_then(|f| f.to_str())
                                                     .unwrap_or("");
-                                                let new_dir_name =
-                                                    dir_name.replacen(old_name, new_name, 1);
-                                                let new_dir_path = grandparent.join(&new_dir_name);
+                                                let encoded_new_name =
+                                                    encode_path_name(new_name);
+                                                let new_dir_path =
+                                                    grandparent.join(&encoded_new_name);
 
                                                 if new_dir_path != dir_path {
                                                     log::info!(
@@ -541,11 +546,14 @@ impl JobThreadContext {
                                                             Some(new_dir_path.join(file_name));
                                                         let old_meta = grandparent.join(format!(
                                                             "{}.meta.json5",
-                                                            old_name
+                                                            dir_name
                                                         ));
                                                         if old_meta.exists() {
                                                             let new_meta = grandparent.join(
-                                                                format!("{}.meta.json5", new_name),
+                                                                format!(
+                                                                    "{}.meta.json5",
+                                                                    encoded_new_name
+                                                                ),
                                                             );
                                                             let _ =
                                                                 fs::rename(&old_meta, &new_meta);
@@ -554,8 +562,48 @@ impl JobThreadContext {
                                                 }
                                             }
                                         } else if let Some(parent) = path.parent() {
-                                            let new_file_name =
-                                                file_name.replacen(old_name, new_name, 1);
+                                            // Derive the suffix from the existing filename
+                                            // rather than using replacen with the decoded
+                                            // instance name, which fails for encoded names
+                                            // (e.g., What%QUESTION%.server.luau).
+                                            let extension = path
+                                                .extension()
+                                                .and_then(|e| e.to_str())
+                                                .unwrap_or("");
+                                            let stem = path
+                                                .file_stem()
+                                                .and_then(|s| s.to_str())
+                                                .unwrap_or("");
+                                            let known_suffixes = [
+                                                ".server", ".client", ".plugin", ".local",
+                                                ".legacy",
+                                            ];
+                                            let script_suffix = known_suffixes
+                                                .iter()
+                                                .find(|s| stem.ends_with(*s))
+                                                .copied()
+                                                .unwrap_or("");
+                                            let old_base = if script_suffix.is_empty() {
+                                                stem
+                                            } else {
+                                                &stem[..stem.len() - script_suffix.len()]
+                                            };
+
+                                            let encoded_new_name =
+                                                encode_path_name(new_name);
+                                            let new_file_name = if extension.is_empty() {
+                                                format!(
+                                                    "{}{}",
+                                                    encoded_new_name, script_suffix
+                                                )
+                                            } else {
+                                                format!(
+                                                    "{}{}.{}",
+                                                    encoded_new_name,
+                                                    script_suffix,
+                                                    extension
+                                                )
+                                            };
                                             let new_path = parent.join(&new_file_name);
 
                                             if new_path != *path {
@@ -573,12 +621,14 @@ impl JobThreadContext {
                                                     );
                                                 } else {
                                                     overridden_source_path = Some(new_path.clone());
-                                                    let old_meta = parent
-                                                        .join(format!("{}.meta.json5", old_name));
+                                                    let old_meta = parent.join(format!(
+                                                        "{}.meta.json5",
+                                                        old_base
+                                                    ));
                                                     if old_meta.exists() {
                                                         let new_meta = parent.join(format!(
                                                             "{}.meta.json5",
-                                                            new_name
+                                                            encoded_new_name
                                                         ));
                                                         let _ = fs::rename(&old_meta, &new_meta);
                                                     }
@@ -807,10 +857,34 @@ fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<
     // file/folder in the first place.
     match instigating_source {
         InstigatingSource::Path(path) => {
+            // For directory-format scripts, the instigating_source is the
+            // init file (e.g., init.luau) so that two-way sync writes to the
+            // correct file. However, snapshot_from_vfs returns None for init
+            // files because they are handled as part of the parent directory
+            // snapshot. Detect this case and snapshot the parent directory.
+            let is_init_file = path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .map(|f| f.starts_with("init."))
+                .unwrap_or(false);
+            let snapshot_path = if is_init_file {
+                path.parent().unwrap_or(path.as_path())
+            } else {
+                path.as_path()
+            };
+
             log::info!(
-                "compute_and_apply_changes: checking path {} for instance {:?}",
+                "compute_and_apply_changes: checking path {} for instance {:?}{}",
                 path.display(),
-                id
+                id,
+                if is_init_file {
+                    format!(
+                        " (init file, will snapshot parent dir {})",
+                        snapshot_path.display()
+                    )
+                } else {
+                    String::new()
+                }
             );
 
             match vfs.metadata(path).with_not_found() {
@@ -820,16 +894,17 @@ fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<
                     // that path and use it as the source for our patch.
                     log::info!(
                         "compute_and_apply_changes: path EXISTS via VFS, re-snapshotting {}",
-                        path.display()
+                        snapshot_path.display()
                     );
 
-                    let snapshot = match snapshot_from_vfs(&metadata.context, vfs, path) {
-                        Ok(snapshot) => snapshot,
-                        Err(err) => {
-                            log::error!("Snapshot error: {:?}", err);
-                            return None;
-                        }
-                    };
+                    let snapshot =
+                        match snapshot_from_vfs(&metadata.context, vfs, snapshot_path) {
+                            Ok(snapshot) => snapshot,
+                            Err(err) => {
+                                log::error!("Snapshot error: {:?}", err);
+                                return None;
+                            }
+                        };
 
                     let patch_set = compute_patch_set(snapshot, tree, id);
                     let applied = apply_patch_set(tree, patch_set);
@@ -852,17 +927,18 @@ fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<
                             path.display()
                         );
 
-                        let snapshot = match snapshot_from_vfs(&metadata.context, vfs, path) {
-                            Ok(snapshot) => snapshot,
-                            Err(err) => {
-                                log::error!(
-                                    "Recovery snapshot error for {}: {:?}",
-                                    path.display(),
-                                    err
-                                );
-                                return None;
-                            }
-                        };
+                        let snapshot =
+                            match snapshot_from_vfs(&metadata.context, vfs, snapshot_path) {
+                                Ok(snapshot) => snapshot,
+                                Err(err) => {
+                                    log::error!(
+                                        "Recovery snapshot error for {}: {:?}",
+                                        snapshot_path.display(),
+                                        err
+                                    );
+                                    return None;
+                                }
+                            };
 
                         let patch_set = compute_patch_set(snapshot, tree, id);
                         let applied = apply_patch_set(tree, patch_set);
