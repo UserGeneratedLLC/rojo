@@ -2057,7 +2057,22 @@ impl ApiService {
             .as_ref()
             .context("Instance has no filesystem path")?;
 
-        let inst_path = instigating_source.path();
+        // ProjectNode instances are defined in the project file. Writing meta
+        // JSON to the project file path would corrupt it. Only filesystem-backed
+        // instances (InstigatingSource::Path) can have properties persisted.
+        let inst_path = match instigating_source {
+            InstigatingSource::Path(p) => p.as_path(),
+            InstigatingSource::ProjectNode { name, .. } => {
+                log::warn!(
+                    "Cannot persist non-Source properties for instance '{}' (id: {:?}) — \
+                     it is defined in a project file. Edit the project file directly.",
+                    name,
+                    update.id
+                );
+                return Ok(());
+            }
+        };
+
         let class_name = instance.class_name();
         let is_script = matches!(
             class_name.as_str(),

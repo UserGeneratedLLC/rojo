@@ -2,7 +2,7 @@ use crossbeam_channel::{select, Receiver, RecvError, Sender};
 use jod_thread::JoinHandle;
 use memofs::{IoResultExt, Vfs, VfsEvent};
 use rbx_dom_weak::types::{Ref, Variant};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use std::{
     fs,
@@ -134,6 +134,31 @@ struct JobThreadContext {
 }
 
 impl JobThreadContext {
+    /// Find the init file inside a directory-format script folder.
+    /// Returns the path to the first `init.*.luau` or `init.*.lua` found.
+    fn find_init_file(dir: &Path) -> Option<PathBuf> {
+        // Check known init file names in priority order
+        let candidates = [
+            "init.luau",
+            "init.server.luau",
+            "init.client.luau",
+            "init.local.luau",
+            "init.plugin.luau",
+            "init.legacy.luau",
+            "init.lua",
+            "init.server.lua",
+            "init.client.lua",
+            "init.local.lua",
+        ];
+        for name in &candidates {
+            let candidate = dir.join(name);
+            if candidate.exists() {
+                return Some(candidate);
+            }
+        }
+        None
+    }
+
     /// Computes and applies patches to the DOM for a given file path.
     ///
     /// This function finds the nearest ancestor to the given path that has associated instances
@@ -538,51 +563,77 @@ impl JobThreadContext {
                                     );
 
                                     if old_is_script && new_is_script && path.exists() {
-                                        // Script-to-script transition: rename the file extension
-                                        if let Some(parent) = path.parent() {
-                                            let name = instance.name();
-                                            let new_suffix = match new_class.as_str() {
-                                                "ModuleScript" => "",
-                                                "Script" => ".server",
-                                                "LocalScript" => ".local",
-                                                _ => "",
-                                            };
-                                            let is_init = path
-                                                .file_name()
-                                                .and_then(|f| f.to_str())
-                                                .map(|f| f.starts_with("init."))
-                                                .unwrap_or(false);
-
-                                            let new_file_name = if is_init {
-                                                if new_suffix.is_empty() {
-                                                    "init.luau".to_string()
-                                                } else {
-                                                    format!("init{}.luau", new_suffix)
-                                                }
-                                            } else if new_suffix.is_empty() {
-                                                format!("{}.luau", name)
-                                            } else {
-                                                format!("{}{}.luau", name, new_suffix)
-                                            };
-
-                                            let new_path = parent.join(&new_file_name);
-                                            if new_path != *path {
-                                                log::info!(
-                                                    "Two-way sync: Changing class {} -> {}, \
-                                                     renaming {} -> {}",
-                                                    old_class,
-                                                    new_class,
-                                                    path.display(),
-                                                    new_path.display()
-                                                );
-                                                if let Err(err) = fs::rename(path, &new_path) {
-                                                    log::error!(
-                                                        "Failed to rename {:?} to {:?}: {}",
-                                                        path,
-                                                        new_path,
-                                                        err
+                                        // Script-to-script transition: rename the file extension.
+                                        // For directory-format scripts, the path is the directory
+                                        // (e.g., src/MyModule/), not the init file inside. We must
+                                        // find and rename the init file, not the directory.
+                                        let (actual_file, file_parent) = if path.is_dir() {
+                                            // Find the init file inside the directory
+                                            let init_file = Self::find_init_file(path);
+                                            match init_file {
+                                                Some(f) => (f.clone(), path.to_path_buf()),
+                                                None => {
+                                                    log::warn!(
+                                                        "Cannot change ClassName for directory {} \
+                                                         — no init file found inside",
+                                                        path.display()
                                                     );
+                                                    continue;
                                                 }
+                                            }
+                                        } else {
+                                            (
+                                                path.clone(),
+                                                path.parent()
+                                                    .unwrap_or(path.as_path())
+                                                    .to_path_buf(),
+                                            )
+                                        };
+
+                                        let name = instance.name();
+                                        let new_suffix = match new_class.as_str() {
+                                            "ModuleScript" => "",
+                                            "Script" => ".server",
+                                            "LocalScript" => ".local",
+                                            _ => "",
+                                        };
+                                        let is_init = actual_file
+                                            .file_name()
+                                            .and_then(|f| f.to_str())
+                                            .map(|f| f.starts_with("init."))
+                                            .unwrap_or(false);
+
+                                        let new_file_name = if is_init {
+                                            if new_suffix.is_empty() {
+                                                "init.luau".to_string()
+                                            } else {
+                                                format!("init{}.luau", new_suffix)
+                                            }
+                                        } else if new_suffix.is_empty() {
+                                            format!("{}.luau", name)
+                                        } else {
+                                            format!("{}{}.luau", name, new_suffix)
+                                        };
+
+                                        let new_path = file_parent.join(&new_file_name);
+                                        if new_path != actual_file {
+                                            log::info!(
+                                                "Two-way sync: Changing class {} -> {}, \
+                                                 renaming {} -> {}",
+                                                old_class,
+                                                new_class,
+                                                actual_file.display(),
+                                                new_path.display()
+                                            );
+                                            if let Err(err) =
+                                                fs::rename(&actual_file, &new_path)
+                                            {
+                                                log::error!(
+                                                    "Failed to rename {:?} to {:?}: {}",
+                                                    actual_file,
+                                                    new_path,
+                                                    err
+                                                );
                                             }
                                         }
                                     } else if old_is_script != new_is_script {
