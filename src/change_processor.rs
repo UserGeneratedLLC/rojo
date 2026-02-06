@@ -674,7 +674,6 @@ impl JobThreadContext {
                                         };
 
                                         if let Some((actual_file, file_parent)) = init_result {
-                                            let name = instance.name();
                                             let new_suffix = match new_class.as_str() {
                                                 "ModuleScript" => "",
                                                 "Script" => ".server",
@@ -693,10 +692,28 @@ impl JobThreadContext {
                                                 } else {
                                                     format!("init{}.luau", new_suffix)
                                                 }
-                                            } else if new_suffix.is_empty() {
-                                                format!("{}.luau", name)
                                             } else {
-                                                format!("{}{}.luau", name, new_suffix)
+                                                // Derive the encoded base name from the
+                                                // filesystem path, not instance.name()
+                                                // (which is decoded). This preserves
+                                                // encoding like What%QUESTION% on disk.
+                                                let stem = actual_file
+                                                    .file_stem()
+                                                    .and_then(|s| s.to_str())
+                                                    .unwrap_or("");
+                                                let known_suffixes = [
+                                                    ".server", ".client", ".plugin",
+                                                    ".local", ".legacy",
+                                                ];
+                                                let base = known_suffixes
+                                                    .iter()
+                                                    .find_map(|s| stem.strip_suffix(s))
+                                                    .unwrap_or(stem);
+                                                if new_suffix.is_empty() {
+                                                    format!("{}.luau", base)
+                                                } else {
+                                                    format!("{}{}.luau", base, new_suffix)
+                                                }
                                             };
 
                                             let new_path = file_parent.join(&new_file_name);

@@ -2218,23 +2218,56 @@ impl ApiService {
                 meta_path.display()
             );
         } else {
-            // Non-script standalone file (e.g., .model.json5): update in place
-            let meta = self.merge_or_build_meta(
-                inst_path,
-                Some(class_name.as_str()),
-                properties,
-                attributes,
-            )?;
-            let content = crate::json::to_vec_pretty_sorted(&meta)
-                .context("Failed to serialize model file")?;
-            self.suppress_path(inst_path);
-            fs::write(inst_path, &content)
-                .with_context(|| format!("Failed to write {}", inst_path.display()))?;
+            // Non-script standalone file. Only .model.json5/.model.json support
+            // in-place JSON property updates. Other file types (.txt, .csv, .toml,
+            // .yaml, etc.) require an adjacent .meta.json5 file — writing JSON
+            // directly to them would corrupt their content.
+            let file_name = inst_path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or("");
+            let is_model_file = file_name.ends_with(".model.json5")
+                || file_name.ends_with(".model.json");
 
-            log::info!(
-                "Syncback: Persisted non-Source properties to {}",
-                inst_path.display()
-            );
+            if is_model_file {
+                let meta = self.merge_or_build_meta(
+                    inst_path,
+                    Some(class_name.as_str()),
+                    properties,
+                    attributes,
+                )?;
+                let content = crate::json::to_vec_pretty_sorted(&meta)
+                    .context("Failed to serialize model file")?;
+                self.suppress_path(inst_path);
+                fs::write(inst_path, &content)
+                    .with_context(|| format!("Failed to write {}", inst_path.display()))?;
+
+                log::info!(
+                    "Syncback: Persisted non-Source properties to {}",
+                    inst_path.display()
+                );
+            } else {
+                // For .txt, .csv, .toml, .yaml, etc. — use adjacent meta file
+                let parent_dir = inst_path.parent().context("No parent directory")?;
+                let file_stem = inst_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("");
+                let meta_path = parent_dir.join(format!("{}.meta.json5", file_stem));
+
+                let meta =
+                    self.merge_or_build_meta(&meta_path, None, properties, attributes)?;
+                let content = crate::json::to_vec_pretty_sorted(&meta)
+                    .context("Failed to serialize meta.json5")?;
+                self.suppress_path(&meta_path);
+                fs::write(&meta_path, &content)
+                    .with_context(|| format!("Failed to write {}", meta_path.display()))?;
+
+                log::info!(
+                    "Syncback: Persisted non-Source properties to {}",
+                    meta_path.display()
+                );
+            }
         }
 
         Ok(())
