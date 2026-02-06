@@ -187,13 +187,6 @@ impl JobThreadContext {
         suppressed.entry(key).or_insert((0, 0)).1 += 1;
     }
 
-    /// Suppress the next Remove VFS event for the given path.
-    fn suppress_path_remove(&self, path: &Path) {
-        let mut suppressed = self.suppressed_paths.lock().unwrap();
-        let key = Self::suppression_key(path);
-        suppressed.entry(key).or_insert((0, 0)).0 += 1;
-    }
-
     /// Remove a Create/Write suppression previously added by [`suppress_path`].
     /// Called when the filesystem operation failed, so that future VFS events
     /// for that path are not incorrectly swallowed.
@@ -208,12 +201,25 @@ impl JobThreadContext {
         }
     }
 
-    /// Remove a Remove suppression previously added by [`suppress_path_remove`].
-    fn unsuppress_path_remove(&self, path: &Path) {
+    /// Suppress the next VFS event of ANY type for the given path.
+    /// Used for the **old** path of renames: different platforms deliver
+    /// different event types for the source of a rename (REMOVE on
+    /// Linux/Windows, stale CREATE on macOS FSEvents).
+    fn suppress_path_any(&self, path: &Path) {
+        let mut suppressed = self.suppressed_paths.lock().unwrap();
+        let key = Self::suppression_key(path);
+        let entry = suppressed.entry(key).or_insert((0, 0));
+        entry.0 += 1;
+        entry.1 += 1;
+    }
+
+    /// Remove both counters previously added by [`suppress_path_any`].
+    fn unsuppress_path_any(&self, path: &Path) {
         let mut suppressed = self.suppressed_paths.lock().unwrap();
         let key = Self::suppression_key(path);
         if let Some(counts) = suppressed.get_mut(&key) {
             counts.0 = counts.0.saturating_sub(1);
+            counts.1 = counts.1.saturating_sub(1);
             if counts.0 == 0 && counts.1 == 0 {
                 suppressed.remove(&key);
             }
@@ -361,10 +367,6 @@ impl JobThreadContext {
         // of the tree. Calculate and apply all of these changes.
         let applied_patches = match event {
             VfsEvent::Create(path) | VfsEvent::Write(path) => {
-                // The path might have been deleted before we could process this event
-                // (e.g., during syncback when directories are being removed).
-                // If canonicalize fails, retry once after a brief delay — on Windows,
-                // the file may still be locked by the editor process.
                 match self.vfs.canonicalize(&path) {
                     Ok(canonical_path) => {
                         log::info!(
@@ -374,30 +376,72 @@ impl JobThreadContext {
                         );
                         self.apply_patches(canonical_path)
                     }
-                    Err(err) => {
-                        log::info!(
-                            "VFS: canonicalize FAILED for {} ({}), retrying after 50ms...",
-                            path.display(),
-                            err
-                        );
-                        std::thread::sleep(Duration::from_millis(50));
-                        match self.vfs.canonicalize(&path) {
-                            Ok(canonical_path) => {
-                                log::info!(
-                                    "VFS: retry canonicalize OK for {} -> {}",
-                                    path.display(),
-                                    canonical_path.display()
-                                );
-                                self.apply_patches(canonical_path)
+                    Err(_) => {
+                        // The path doesn't exist on disk. Two possible causes:
+                        //
+                        // 1. Phantom event from a rename we performed — macOS FSEvents
+                        //    can deliver a stale CREATE for the old path. If a pending
+                        //    suppression exists for this path, consume it and skip.
+                        //
+                        // 2. The file was deleted between the event firing and us
+                        //    processing it. Fall back to parent-directory canonicalize
+                        //    (same strategy as the Remove handler) so the tree can
+                        //    reconcile the disappearance.
+                        let consumed = {
+                            let key = Self::suppression_key(&path);
+                            let mut suppressed = self.suppressed_paths.lock().unwrap();
+                            if let Some(counts) = suppressed.get_mut(&key) {
+                                if counts.0 > 0 || counts.1 > 0 {
+                                    // Drain whichever counter is available
+                                    if counts.1 > 0 {
+                                        counts.1 -= 1;
+                                    } else {
+                                        counts.0 -= 1;
+                                    }
+                                    if counts.0 == 0 && counts.1 == 0 {
+                                        suppressed.remove(&key);
+                                    }
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
                             }
-                            Err(err2) => {
-                                log::warn!(
-                                    "VFS: Create/Write event DROPPED for {} after retry — \
-                                     canonicalize failed: {}. File may be desynchronized!",
-                                    path.display(),
-                                    err2
-                                );
-                                Vec::new()
+                        };
+
+                        if consumed {
+                            log::info!(
+                                "VFS: phantom Create/Write for non-existent {} — \
+                                 consumed pending suppression (likely stale rename event)",
+                                path.display()
+                            );
+                            Vec::new()
+                        } else {
+                            // No suppression — the file genuinely vanished. Use the
+                            // parent-directory fallback so the tree can reconcile.
+                            let parent = path.parent().unwrap();
+                            let file_name = path.file_name().unwrap();
+                            match self.vfs.canonicalize(parent) {
+                                Ok(parent_normalized) => {
+                                    let resolved = parent_normalized.join(file_name);
+                                    log::info!(
+                                        "VFS: Create/Write for vanished file {} — \
+                                         resolved via parent to {}",
+                                        path.display(),
+                                        resolved.display()
+                                    );
+                                    self.apply_patches(resolved)
+                                }
+                                Err(err) => {
+                                    log::info!(
+                                        "VFS: Skipping Create/Write for {} — \
+                                         parent no longer exists: {}",
+                                        path.display(),
+                                        err
+                                    );
+                                    Vec::new()
+                                }
                             }
                         }
                     }
@@ -627,12 +671,12 @@ impl JobThreadContext {
                                                         dir_path.display(),
                                                         new_dir_path.display()
                                                     );
-                                                    self.suppress_path_remove(dir_path);
+                                                    self.suppress_path_any(dir_path);
                                                     self.suppress_path(&new_dir_path);
                                                     if let Err(err) =
                                                         fs::rename(dir_path, &new_dir_path)
                                                     {
-                                                        self.unsuppress_path_remove(dir_path);
+                                                        self.unsuppress_path_any(dir_path);
                                                         self.unsuppress_path(&new_dir_path);
                                                         log::error!(
                                                             "Failed to rename directory {:?} to {:?}: {}",
@@ -654,14 +698,12 @@ impl JobThreadContext {
                                                                     "{}.meta.json5",
                                                                     encoded_new_name
                                                                 ));
-                                                            self.suppress_path_remove(&old_meta);
+                                                            self.suppress_path_any(&old_meta);
                                                             self.suppress_path(&new_meta);
                                                             if fs::rename(&old_meta, &new_meta)
                                                                 .is_err()
                                                             {
-                                                                self.unsuppress_path_remove(
-                                                                    &old_meta,
-                                                                );
+                                                                self.unsuppress_path_any(&old_meta);
                                                                 self.unsuppress_path(&new_meta);
                                                             }
                                                         }
@@ -713,10 +755,10 @@ impl JobThreadContext {
                                                     path.display(),
                                                     new_path.display()
                                                 );
-                                                self.suppress_path_remove(path);
+                                                self.suppress_path_any(path);
                                                 self.suppress_path(&new_path);
                                                 if let Err(err) = fs::rename(path, &new_path) {
-                                                    self.unsuppress_path_remove(path);
+                                                    self.unsuppress_path_any(path);
                                                     self.unsuppress_path(&new_path);
                                                     log::error!(
                                                         "Failed to rename {:?} to {:?}: {}",
@@ -733,11 +775,11 @@ impl JobThreadContext {
                                                             "{}.meta.json5",
                                                             encoded_new_name
                                                         ));
-                                                        self.suppress_path_remove(&old_meta);
+                                                        self.suppress_path_any(&old_meta);
                                                         self.suppress_path(&new_meta);
                                                         if fs::rename(&old_meta, &new_meta).is_err()
                                                         {
-                                                            self.unsuppress_path_remove(&old_meta);
+                                                            self.unsuppress_path_any(&old_meta);
                                                             self.unsuppress_path(&new_meta);
                                                         }
                                                     }
@@ -852,12 +894,12 @@ impl JobThreadContext {
                                                     actual_file.display(),
                                                     new_path.display()
                                                 );
-                                                self.suppress_path_remove(&actual_file);
+                                                self.suppress_path_any(&actual_file);
                                                 self.suppress_path(&new_path);
                                                 if let Err(err) =
                                                     fs::rename(&actual_file, &new_path)
                                                 {
-                                                    self.unsuppress_path_remove(&actual_file);
+                                                    self.unsuppress_path_any(&actual_file);
                                                     self.unsuppress_path(&new_path);
                                                     log::error!(
                                                         "Failed to rename {:?} to {:?}: {}",
