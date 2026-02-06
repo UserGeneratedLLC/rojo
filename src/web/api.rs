@@ -39,14 +39,15 @@ use crate::{
 /// When the plugin sends a script update, it might not include children info.
 /// We check the filesystem to see if this is already a directory (with init file)
 /// or a standalone file, and preserve that format to avoid creating duplicates.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 enum ExistingFileFormat {
     /// No existing file found - use has_children to decide
     None,
-    /// Standalone file exists (e.g., Name.luau)
-    Standalone,
-    /// Directory with init file exists (e.g., Name/init.luau)
-    Directory,
+    /// Standalone file exists (e.g., Name.luau). Carries the detected file path
+    /// so we write back to the same extension (.model.json vs .model.json5).
+    Standalone(PathBuf),
+    /// Directory with init file exists (e.g., Name/init.luau). Carries the dir path.
+    Directory(PathBuf),
 }
 
 /// Convert a Variant to a JSON-compatible value for .model.json5 files
@@ -252,18 +253,86 @@ impl ApiService {
         }
 
         // Process removed instances (syncback: delete files from Rojo filesystem)
-        // When user selects "pull" for an instance that exists in Rojo but not Studio,
-        // we need to delete the corresponding file(s) from the filesystem.
+        // Phase 1: Gather paths with the tree lock held.
+        // Phase 2: Delete files without the lock.
         if !request.removed.is_empty() {
-            let tree = self.serve_session.tree();
+            let removal_actions: Vec<(Ref, Option<(PathBuf, bool)>)> = {
+                let tree = self.serve_session.tree();
+                request
+                    .removed
+                    .iter()
+                    .map(|&id| {
+                        let action = tree.get_instance(id).and_then(|inst| {
+                            inst.metadata().instigating_source.as_ref().and_then(|src| {
+                                match src {
+                                    crate::snapshot::InstigatingSource::Path(p) => {
+                                        Some((p.clone(), p.is_dir()))
+                                    }
+                                    crate::snapshot::InstigatingSource::ProjectNode {
+                                        name,
+                                        ..
+                                    } => {
+                                        log::warn!(
+                                            "Syncback: Cannot remove '{}' — defined in project file",
+                                            name
+                                        );
+                                        None
+                                    }
+                                }
+                            })
+                        });
+                        (id, action)
+                    })
+                    .collect()
+            }; // tree lock dropped here
 
-            for removed_id in &request.removed {
-                if let Err(err) = self.syncback_removed_instance(*removed_id, &tree) {
-                    log::warn!(
-                        "Failed to syncback removed instance {:?}: {}",
-                        removed_id,
-                        err
-                    );
+            // Phase 2: Execute filesystem deletions without the lock
+            for (id, action) in removal_actions {
+                if let Some((path, is_dir)) = action {
+                    if !path.exists() {
+                        log::info!(
+                            "Syncback: Path already removed (likely parent was deleted): {}",
+                            path.display()
+                        );
+                        continue;
+                    }
+                    if is_dir {
+                        if let Err(err) = fs::remove_dir_all(&path) {
+                            log::warn!(
+                                "Failed to remove directory {:?} for instance {:?}: {}",
+                                path, id, err
+                            );
+                        } else {
+                            log::info!("Syncback: Removed directory at {}", path.display());
+                        }
+                    } else {
+                        if let Err(err) = fs::remove_file(&path) {
+                            log::warn!(
+                                "Failed to remove file {:?} for instance {:?}: {}",
+                                path, id, err
+                            );
+                        } else {
+                            log::info!("Syncback: Removed file at {}", path.display());
+                        }
+                        // Also remove adjacent meta file
+                        if let Some(instance_name) = path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .map(|s| s.split('.').next().unwrap_or(s).to_string())
+                        {
+                            if let Some(parent_dir) = path.parent() {
+                                let meta_path =
+                                    parent_dir.join(format!("{}.meta.json5", instance_name));
+                                if meta_path.exists() {
+                                    let _ = fs::remove_file(&meta_path);
+                                    log::info!(
+                                        "Syncback: Removed adjacent meta file at {}",
+                                        meta_path.display()
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -296,26 +365,40 @@ impl ApiService {
         // Log summary of any syncback issues
         stats.log_summary();
 
-        // Log property updates being synced back
-        for update in &request.updated {
-            let prop_names: Vec<&str> = update
-                .changed_properties
-                .keys()
-                .map(|k| k.as_str())
-                .collect();
-            if !prop_names.is_empty() {
-                log::info!(
-                    "Syncback: Updating properties for instance {:?}: {}",
-                    update.id,
-                    prop_names.join(", ")
-                );
-            }
-            if update.changed_name.is_some() {
-                log::info!(
-                    "Syncback: Renaming instance {:?} to {:?}",
-                    update.id,
-                    update.changed_name
-                );
+        // Persist non-Source property changes to disk (meta/model files).
+        // Source property changes are handled by ChangeProcessor when it
+        // receives the PatchSet below.
+        {
+            let tree = self.serve_session.tree();
+            for update in &request.updated {
+                let prop_names: Vec<&str> = update
+                    .changed_properties
+                    .keys()
+                    .map(|k| k.as_str())
+                    .collect();
+                if !prop_names.is_empty() {
+                    log::info!(
+                        "Syncback: Updating properties for instance {:?}: {}",
+                        update.id,
+                        prop_names.join(", ")
+                    );
+                }
+                if update.changed_name.is_some() {
+                    log::info!(
+                        "Syncback: Renaming instance {:?} to {:?}",
+                        update.id,
+                        update.changed_name
+                    );
+                }
+
+                // Write non-Source properties to meta/model files
+                if let Err(err) = self.syncback_updated_properties(update, &tree) {
+                    log::warn!(
+                        "Failed to persist non-Source properties for instance {:?}: {}",
+                        update.id,
+                        err
+                    );
+                }
             }
         }
 
@@ -333,7 +416,7 @@ impl ApiService {
 
         tree_mutation_sender
             .send(PatchSet {
-                removed_instances: Vec::new(),
+                removed_instances: request.removed,
                 added_instances: Vec::new(),
                 updated_instances,
             })
@@ -517,22 +600,83 @@ impl ApiService {
         }
 
         // Instance doesn't exist in tree - create new files
-        // Get the parent's filesystem path from its metadata
-        let parent_path = parent_instance
+        // Get the parent's filesystem path from its metadata.
+        // For ProjectNode sources, resolve the $path field relative to the project file.
+        let instigating_source = parent_instance
             .metadata()
             .instigating_source
             .as_ref()
-            .map(|s| s.path())
             .context("Parent instance has no filesystem path (not synced from filesystem)")?;
 
-        // Determine if parent is a directory or file
+        let parent_path: std::borrow::Cow<'_, std::path::Path> = match instigating_source {
+            crate::snapshot::InstigatingSource::Path(p) => std::borrow::Cow::Borrowed(p.as_path()),
+            crate::snapshot::InstigatingSource::ProjectNode {
+                path: project_path,
+                name,
+                node,
+                ..
+            } => {
+                if let Some(path_node) = &node.path {
+                    let fs_path = path_node.path();
+                    let resolved = if fs_path.is_relative() {
+                        project_path
+                            .parent()
+                            .unwrap_or(project_path.as_path())
+                            .join(fs_path)
+                    } else {
+                        fs_path.to_path_buf()
+                    };
+                    std::borrow::Cow::Owned(resolved)
+                } else {
+                    anyhow::bail!(
+                        "Cannot add '{}' — parent '{}' is defined in a project file without $path",
+                        added.name,
+                        name
+                    );
+                }
+            }
+        };
+
+        // Determine if parent is a directory or file.
+        // ANY instance can have children in Roblox, so if the parent is a
+        // standalone file (script, model, txt, csv, etc.), we must convert it
+        // to directory format before we can place children inside it.
         let parent_dir = if parent_path.is_dir() {
             parent_path.to_path_buf()
         } else {
-            parent_path
+            let parent_class = parent_instance.class_name();
+            let parent_name = parent_instance.name();
+            let containing_dir = parent_path
                 .parent()
-                .context("Could not get parent directory")?
-                .to_path_buf()
+                .context("Could not get parent directory")?;
+
+            log::info!(
+                "Syncback: Converting standalone {} '{}' at {} to directory format \
+                 (child '{}' being added)",
+                parent_class,
+                parent_name,
+                parent_path.display(),
+                added.name
+            );
+
+            if matches!(
+                parent_class.as_str(),
+                "ModuleScript" | "Script" | "LocalScript"
+            ) {
+                self.convert_standalone_script_to_directory(
+                    &parent_path,
+                    parent_name,
+                    parent_class.as_str(),
+                    containing_dir,
+                )?
+            } else {
+                self.convert_standalone_instance_to_directory(
+                    &parent_path,
+                    parent_name,
+                    parent_class.as_str(),
+                    containing_dir,
+                )?
+            }
         };
 
         // Create the instance at the resolved path
@@ -723,9 +867,197 @@ impl ApiService {
         Ok(())
     }
 
+    /// Converts a standalone script file (e.g., `MyModule.luau`) into directory
+    /// format (e.g., `MyModule/init.luau`). This is needed when a child is being
+    /// added to a standalone script — standalone scripts cannot have children in
+    /// Rojo's file format.
+    ///
+    /// Returns the path to the new directory.
+    fn convert_standalone_script_to_directory(
+        &self,
+        standalone_path: &std::path::Path,
+        script_name: &str,
+        class_name: &str,
+        containing_dir: &std::path::Path,
+    ) -> anyhow::Result<std::path::PathBuf> {
+        use anyhow::Context;
+
+        // Read the current script content before any modifications
+        let source = if standalone_path.exists() {
+            fs::read_to_string(standalone_path).unwrap_or_default()
+        } else {
+            String::new()
+        };
+
+        // Create the directory
+        let new_dir = containing_dir.join(script_name);
+        fs::create_dir_all(&new_dir).with_context(|| {
+            format!(
+                "Failed to create directory for script conversion: {}",
+                new_dir.display()
+            )
+        })?;
+
+        // Determine the init file name based on class
+        let init_name = match class_name {
+            "ModuleScript" => "init.luau",
+            "Script" => "init.server.luau",
+            "LocalScript" => "init.local.luau",
+            _ => "init.luau",
+        };
+
+        // Write source content to the init file
+        let init_path = new_dir.join(init_name);
+        fs::write(&init_path, source.as_bytes()).with_context(|| {
+            format!("Failed to write init file: {}", init_path.display())
+        })?;
+
+        // Remove the old standalone file
+        if standalone_path.exists() && standalone_path != init_path {
+            fs::remove_file(standalone_path).with_context(|| {
+                format!(
+                    "Failed to remove old standalone script: {}",
+                    standalone_path.display()
+                )
+            })?;
+        }
+
+        // Move adjacent meta file into directory if it exists
+        let meta_path = containing_dir.join(format!("{}.meta.json5", script_name));
+        if meta_path.exists() {
+            let init_meta_path = new_dir.join("init.meta.json5");
+            fs::rename(&meta_path, &init_meta_path).with_context(|| {
+                format!(
+                    "Failed to move meta file {} to {}",
+                    meta_path.display(),
+                    init_meta_path.display()
+                )
+            })?;
+            log::info!(
+                "Syncback: Moved {} to {}",
+                meta_path.display(),
+                init_meta_path.display()
+            );
+        }
+
+        log::info!(
+            "Syncback: Converted standalone {} to directory format at {}",
+            class_name,
+            new_dir.display()
+        );
+
+        Ok(new_dir)
+    }
+
+    /// Converts a standalone non-script file (e.g., `MyPart.model.json5`, `MyValue.txt`)
+    /// into directory format (e.g., `MyPart/init.meta.json5`). This is needed when a
+    /// child is being added to any non-script instance that is currently a standalone file.
+    ///
+    /// Returns the path to the new directory.
+    fn convert_standalone_instance_to_directory(
+        &self,
+        standalone_path: &std::path::Path,
+        instance_name: &str,
+        class_name: &str,
+        containing_dir: &std::path::Path,
+    ) -> anyhow::Result<std::path::PathBuf> {
+        use anyhow::Context;
+
+        let new_dir = containing_dir.join(instance_name);
+        fs::create_dir_all(&new_dir).with_context(|| {
+            format!(
+                "Failed to create directory for instance conversion: {}",
+                new_dir.display()
+            )
+        })?;
+
+        // Determine the init file based on the standalone file type.
+        // The content of the standalone file becomes the init file inside the directory.
+        let file_ext = standalone_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+
+        let file_name = standalone_path
+            .file_name()
+            .and_then(|f| f.to_str())
+            .unwrap_or("");
+
+        if file_name.ends_with(".model.json5") || file_name.ends_with(".model.json") {
+            // .model.json5 → init.meta.json5 with className and properties
+            // Read the model file and rewrite as init.meta.json5
+            if standalone_path.exists() {
+                let content = fs::read(standalone_path).unwrap_or_default();
+                let init_meta_path = new_dir.join("init.meta.json5");
+                fs::write(&init_meta_path, &content).with_context(|| {
+                    format!("Failed to write {}", init_meta_path.display())
+                })?;
+            }
+        } else if file_ext == "txt" {
+            // StringValue .txt → init.meta.json5 with className and Value property
+            let value = if standalone_path.exists() {
+                fs::read_to_string(standalone_path).unwrap_or_default()
+            } else {
+                String::new()
+            };
+            let meta = serde_json::json!({
+                "className": class_name,
+                "properties": {
+                    "Value": value
+                }
+            });
+            let init_meta_path = new_dir.join("init.meta.json5");
+            let content = crate::json::to_vec_pretty_sorted(&meta)
+                .context("Failed to serialize init.meta.json5")?;
+            fs::write(&init_meta_path, &content).with_context(|| {
+                format!("Failed to write {}", init_meta_path.display())
+            })?;
+        } else if file_ext == "csv" {
+            // LocalizationTable .csv → init.csv
+            if standalone_path.exists() {
+                let content = fs::read(standalone_path).unwrap_or_default();
+                let init_csv_path = new_dir.join("init.csv");
+                fs::write(&init_csv_path, &content).with_context(|| {
+                    format!("Failed to write {}", init_csv_path.display())
+                })?;
+            }
+        } else {
+            // Generic fallback: create init.meta.json5 with className
+            let meta = serde_json::json!({
+                "className": class_name
+            });
+            let init_meta_path = new_dir.join("init.meta.json5");
+            let content = crate::json::to_vec_pretty_sorted(&meta)
+                .context("Failed to serialize init.meta.json5")?;
+            fs::write(&init_meta_path, &content).with_context(|| {
+                format!("Failed to write {}", init_meta_path.display())
+            })?;
+        }
+
+        // Remove the old standalone file
+        if standalone_path.exists() {
+            fs::remove_file(standalone_path).with_context(|| {
+                format!(
+                    "Failed to remove old standalone file: {}",
+                    standalone_path.display()
+                )
+            })?;
+        }
+
+        log::info!(
+            "Syncback: Converted standalone {} '{}' to directory format at {}",
+            class_name,
+            instance_name,
+            new_dir.display()
+        );
+
+        Ok(new_dir)
+    }
+
     /// Syncback a removed instance by deleting its file(s) from the filesystem.
     /// This is called when the user selects "pull" for an instance that exists in Rojo
     /// but has been deleted in Studio.
+    #[allow(dead_code)]
     fn syncback_removed_instance(
         &self,
         removed_id: Ref,
@@ -893,7 +1225,7 @@ impl ApiService {
 
             for init_file in init_files {
                 if dir_path.join(init_file).exists() {
-                    return ExistingFileFormat::Directory;
+                    return ExistingFileFormat::Directory(dir_path.clone());
                 }
             }
         }
@@ -923,8 +1255,9 @@ impl ApiService {
         };
 
         for pattern in standalone_patterns {
-            if parent_dir.join(&pattern).exists() {
-                return ExistingFileFormat::Standalone;
+            let full_path = parent_dir.join(&pattern);
+            if full_path.exists() {
+                return ExistingFileFormat::Standalone(full_path);
             }
         }
 
@@ -971,81 +1304,47 @@ impl ApiService {
         let unique_children = self.filter_duplicate_children(&added.children, &inst_path, stats);
         let has_children = !unique_children.is_empty();
 
-        // Determine the appropriate middleware/file format based on class name
-        // This matches the logic in src/syncback/mod.rs::get_best_middleware
+        // Determine the appropriate middleware/file format based on class name.
+        // This matches the logic in src/syncback/mod.rs::get_best_middleware.
         //
-        // IMPORTANT: When an instance already exists on disk, preserve its format.
-        // The plugin might send a partial update (e.g., just the script source without
-        // children), so we can't rely solely on has_children to decide the format.
-        // Only transition formats when creating truly new instances.
+        // Format transitions (matching `rojo syncback` behavior):
+        //   - Standalone + children added  → convert to directory (clean up old standalone)
+        //   - Standalone + no children     → keep standalone
+        //   - Directory  + children or not → PRESERVE directory (plugin may omit children)
+        //   - None       + has_children    → directory (new instance)
+        //   - None       + no children     → standalone (new instance)
         let existing_format =
             Self::detect_existing_script_format(parent_dir, &added.name, &added.class_name);
 
         match added.class_name.as_str() {
-            // Script types: .luau files, or directories with init files if has children
-            // Non-Source properties (like Attributes) go into init.meta.json5
+            // Script types: .luau files, or directories with init files if has children.
+            // Format is driven by has_children (matching `rojo syncback` behavior).
+            // If the existing format doesn't match, we convert (standalone↔directory).
             "ModuleScript" => {
                 let source = self.get_source_property(added);
 
-                // Decide whether to use directory or standalone format:
-                // - If directory already exists on disk, preserve it (update init file)
-                // - If standalone already exists on disk, preserve it (update standalone)
-                // - If nothing exists, use has_children to decide (new instance)
-                let use_directory = match existing_format {
-                    ExistingFileFormat::Directory => {
-                        log::debug!(
-                            "Syncback: Preserving existing directory format for {}",
-                            added.name
-                        );
-                        true
-                    }
-                    ExistingFileFormat::Standalone => {
-                        // Standalone format can stay standalone only if there are no children.
-                        // If children were added in Studio, we must convert to directory format.
-                        if has_children {
-                            log::info!(
-                                "Syncback: Converting {} from standalone to directory format (children added)",
-                                added.name
-                            );
-                            true
-                        } else {
-                            log::debug!(
-                                "Syncback: Preserving existing standalone format for {}",
-                                added.name
-                            );
-                            false
-                        }
-                    }
-                    ExistingFileFormat::None => {
-                        // New instance - use has_children to decide
-                        has_children
-                    }
+                // Standalone→directory when children are added.
+                // Directory is preserved when no children (plugin may omit children in partial updates).
+                // New instances use has_children to decide.
+                let use_directory = match &existing_format {
+                    ExistingFileFormat::Directory(_) => true, // preserve directory
+                    ExistingFileFormat::Standalone(_) => has_children, // convert only if children added
+                    ExistingFileFormat::None => has_children,
                 };
 
                 if use_directory {
-                    // Directory format: Name/init.luau
-                    // Remove standalone file if transitioning to directory (new instance or format conversion)
-                    if existing_format == ExistingFileFormat::None
-                        || existing_format == ExistingFileFormat::Standalone
-                    {
-                        let standalone_path = parent_dir.join(format!("{}.luau", added.name));
-                        if standalone_path.exists() {
-                            if let Err(err) = fs::remove_file(&standalone_path) {
-                                log::warn!(
-                                    "Syncback: Failed to remove old standalone file {}: {}",
-                                    standalone_path.display(),
-                                    err
-                                );
-                            } else {
-                                log::info!(
-                                    "Syncback: Removed old standalone file {} (script now has children)",
-                                    standalone_path.display()
-                                );
-                            }
-                            let meta_path = parent_dir.join(format!("{}.meta.json5", added.name));
-                            if meta_path.exists() {
-                                let _ = fs::remove_file(&meta_path);
-                            }
+                    // Transition standalone → directory if needed
+                    if let ExistingFileFormat::Standalone(ref old_path) = existing_format {
+                        log::info!(
+                            "Syncback: Converting ModuleScript {} from standalone to directory (children added)",
+                            added.name
+                        );
+                        if old_path.exists() {
+                            let _ = fs::remove_file(old_path);
+                        }
+                        let meta_path = parent_dir.join(format!("{}.meta.json5", added.name));
+                        if meta_path.exists() {
+                            let _ = fs::remove_file(&meta_path);
                         }
                     }
 
@@ -1059,31 +1358,10 @@ impl ApiService {
                     })?;
                     self.write_script_meta_json_if_needed(&dir_path, added)?;
                     log::info!("Syncback: Updated ModuleScript at {}", init_path.display());
-                    // Recurse into children if any were provided
                     for child in &unique_children {
                         self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
                     }
                 } else {
-                    // Standalone format: Name.luau
-                    // Only remove directory if this is a new instance transitioning to standalone
-                    if existing_format == ExistingFileFormat::None {
-                        let dir_path = parent_dir.join(&added.name);
-                        if dir_path.is_dir() {
-                            if let Err(err) = fs::remove_dir_all(&dir_path) {
-                                log::warn!(
-                                    "Syncback: Failed to remove old directory {}: {}",
-                                    dir_path.display(),
-                                    err
-                                );
-                            } else {
-                                log::info!(
-                                    "Syncback: Removed old directory {} (script no longer has children)",
-                                    dir_path.display()
-                                );
-                            }
-                        }
-                    }
-
                     let file_path = parent_dir.join(format!("{}.luau", added.name));
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
@@ -1096,46 +1374,20 @@ impl ApiService {
                 let source = self.get_source_property(added);
                 let script_suffix = self.get_script_suffix_for_run_context(added);
 
-                // Use existing format if present, otherwise decide based on has_children
-                let use_directory = match existing_format {
-                    ExistingFileFormat::Directory => {
-                        log::debug!(
-                            "Syncback: Preserving existing directory format for Script {}",
-                            added.name
-                        );
-                        true
-                    }
-                    ExistingFileFormat::Standalone => {
-                        // Standalone format can stay standalone only if there are no children.
-                        // If children were added in Studio, we must convert to directory format.
-                        if has_children {
-                            log::info!(
-                                "Syncback: Converting Script {} from standalone to directory format (children added)",
-                                added.name
-                            );
-                            true
-                        } else {
-                            log::debug!(
-                                "Syncback: Preserving existing standalone format for Script {}",
-                                added.name
-                            );
-                            false
-                        }
-                    }
+                let use_directory = match &existing_format {
+                    ExistingFileFormat::Directory(_) => true,
+                    ExistingFileFormat::Standalone(_) => has_children,
                     ExistingFileFormat::None => has_children,
                 };
 
                 if use_directory {
-                    // Clean up standalone files if transitioning to directory (new instance or format conversion)
-                    if existing_format == ExistingFileFormat::None
-                        || existing_format == ExistingFileFormat::Standalone
-                    {
-                        for suffix in &["server", "client"] {
-                            let standalone_path =
-                                parent_dir.join(format!("{}.{}.luau", added.name, suffix));
-                            if standalone_path.exists() {
-                                let _ = fs::remove_file(&standalone_path);
-                            }
+                    if let ExistingFileFormat::Standalone(ref old_path) = existing_format {
+                        log::info!(
+                            "Syncback: Converting Script {} from standalone to directory (children added)",
+                            added.name
+                        );
+                        if old_path.exists() {
+                            let _ = fs::remove_file(old_path);
                         }
                         let meta_path = parent_dir.join(format!("{}.meta.json5", added.name));
                         if meta_path.exists() {
@@ -1157,14 +1409,6 @@ impl ApiService {
                         self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
                     }
                 } else {
-                    // Only clean up if this is a new instance
-                    if existing_format == ExistingFileFormat::None {
-                        let dir_path = parent_dir.join(&added.name);
-                        if dir_path.is_dir() {
-                            let _ = fs::remove_dir_all(&dir_path);
-                        }
-                    }
-
                     let file_path =
                         parent_dir.join(format!("{}.{}.luau", added.name, script_suffix));
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
@@ -1177,46 +1421,20 @@ impl ApiService {
             "LocalScript" => {
                 let source = self.get_source_property(added);
 
-                // Use existing format if present, otherwise decide based on has_children
-                let use_directory = match existing_format {
-                    ExistingFileFormat::Directory => {
-                        log::debug!(
-                            "Syncback: Preserving existing directory format for LocalScript {}",
-                            added.name
-                        );
-                        true
-                    }
-                    ExistingFileFormat::Standalone => {
-                        // Standalone format can stay standalone only if there are no children.
-                        // If children were added in Studio, we must convert to directory format.
-                        if has_children {
-                            log::info!(
-                                "Syncback: Converting LocalScript {} from standalone to directory format (children added)",
-                                added.name
-                            );
-                            true
-                        } else {
-                            log::debug!(
-                                "Syncback: Preserving existing standalone format for LocalScript {}",
-                                added.name
-                            );
-                            false
-                        }
-                    }
+                let use_directory = match &existing_format {
+                    ExistingFileFormat::Directory(_) => true,
+                    ExistingFileFormat::Standalone(_) => has_children,
                     ExistingFileFormat::None => has_children,
                 };
 
                 if use_directory {
-                    // Clean up standalone files if transitioning to directory (new instance or format conversion)
-                    if existing_format == ExistingFileFormat::None
-                        || existing_format == ExistingFileFormat::Standalone
-                    {
-                        for suffix in &["local", "client"] {
-                            let standalone_path =
-                                parent_dir.join(format!("{}.{}.luau", added.name, suffix));
-                            if standalone_path.exists() {
-                                let _ = fs::remove_file(&standalone_path);
-                            }
+                    if let ExistingFileFormat::Standalone(ref old_path) = existing_format {
+                        log::info!(
+                            "Syncback: Converting LocalScript {} from standalone to directory (children added)",
+                            added.name
+                        );
+                        if old_path.exists() {
+                            let _ = fs::remove_file(old_path);
                         }
                         let meta_path = parent_dir.join(format!("{}.meta.json5", added.name));
                         if meta_path.exists() {
@@ -1238,14 +1456,6 @@ impl ApiService {
                         self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
                     }
                 } else {
-                    // Only clean up if this is a new instance
-                    if existing_format == ExistingFileFormat::None {
-                        let dir_path = parent_dir.join(&added.name);
-                        if dir_path.is_dir() {
-                            let _ = fs::remove_dir_all(&dir_path);
-                        }
-                    }
-
                     let file_path = parent_dir.join(format!("{}.local.luau", added.name));
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
@@ -1357,31 +1567,27 @@ impl ApiService {
                 }
             }
 
-            // All other classes -> .model.json5 or directory if has children
-            // Preserves existing format to avoid creating duplicates during partial updates
+            // All other classes -> .model.json5 or directory if has children.
             _ => {
-                let use_directory = match existing_format {
-                    ExistingFileFormat::Directory => {
-                        log::debug!(
-                            "Syncback: Preserving existing directory format for {} {}",
-                            added.class_name,
-                            added.name
-                        );
-                        true
-                    }
-                    ExistingFileFormat::Standalone => {
-                        log::debug!(
-                            "Syncback: Preserving existing standalone format for {} {}",
-                            added.class_name,
-                            added.name
-                        );
-                        false
-                    }
+                let use_directory = match &existing_format {
+                    ExistingFileFormat::Directory(_) => true, // preserve directory
+                    ExistingFileFormat::Standalone(_) => has_children, // convert only if children added
                     ExistingFileFormat::None => has_children,
                 };
 
                 if use_directory {
-                    // Create directory and put the instance as init.meta.json5
+                    // Transition standalone → directory if needed
+                    if let ExistingFileFormat::Standalone(ref old_path) = existing_format {
+                        log::info!(
+                            "Syncback: Converting {} {} from standalone to directory (children added)",
+                            added.class_name,
+                            added.name
+                        );
+                        if old_path.exists() {
+                            let _ = fs::remove_file(old_path);
+                        }
+                    }
+
                     let dir_path = parent_dir.join(&added.name);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
@@ -1402,8 +1608,12 @@ impl ApiService {
                     }
                 } else {
                     let content = self.serialize_instance_to_model_json(added)?;
-                    // Use .model.json5 to match dedicated syncback (extension_for_middleware)
-                    let file_path = parent_dir.join(format!("{}.model.json5", added.name));
+                    // Use the detected file path if available (preserves .model.json
+                    // vs .model.json5), otherwise default to .model.json5
+                    let file_path = match &existing_format {
+                        ExistingFileFormat::Standalone(p) => p.clone(),
+                        _ => parent_dir.join(format!("{}.model.json5", added.name)),
+                    };
                     fs::write(&file_path, &content).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
@@ -1741,6 +1951,178 @@ impl ApiService {
 
         // Use sorted JSON5 serialization to match dedicated syncback
         crate::json::to_vec_pretty_sorted(&model).context("Failed to serialize model.json5")
+    }
+
+    /// Persist non-Source property changes to the appropriate meta/model file.
+    /// Source is handled by the ChangeProcessor; this handles everything else
+    /// (Attributes, custom properties, etc.) so they survive a Rojo restart.
+    fn syncback_updated_properties(
+        &self,
+        update: &crate::web::interface::InstanceUpdate,
+        tree: &crate::snapshot::RojoTree,
+    ) -> anyhow::Result<()> {
+        use anyhow::Context;
+
+        // Check if there are any non-Source property changes to persist
+        let has_non_source = update
+            .changed_properties
+            .iter()
+            .any(|(key, _)| key != "Source");
+
+        if !has_non_source {
+            return Ok(());
+        }
+
+        // Look up the instance in the tree
+        let instance = tree
+            .get_instance(update.id)
+            .context("Instance not found in tree for property persistence")?;
+
+        let instigating_source = instance
+            .metadata()
+            .instigating_source
+            .as_ref()
+            .context("Instance has no filesystem path")?;
+
+        let inst_path = instigating_source.path();
+        let class_name = instance.class_name();
+        let is_script = matches!(
+            class_name.as_str(),
+            "ModuleScript" | "Script" | "LocalScript"
+        );
+
+        // Collect the non-Source properties as a HashMap<String, Variant>
+        // for reuse with filter_properties_for_meta
+        let mut props: HashMap<String, Variant> = HashMap::new();
+        for (key, value) in &update.changed_properties {
+            if key == "Source" {
+                continue;
+            }
+            if let Some(v) = value {
+                props.insert(key.to_string(), v.clone());
+            }
+        }
+
+        if props.is_empty() {
+            return Ok(());
+        }
+
+        let skip_prop = if is_script { Some("Source") } else { None };
+        let (properties, attributes) =
+            self.filter_properties_for_meta(class_name.as_str(), &props, skip_prop);
+
+        if properties.is_empty() && attributes.is_empty() {
+            return Ok(());
+        }
+
+        // Determine which meta file to write based on file structure
+        if inst_path.is_dir() {
+            // Directory format: write to init.meta.json5
+            let meta_path = inst_path.join("init.meta.json5");
+
+            // Read existing meta if present, merge with new properties
+            let meta = self.merge_or_build_meta(&meta_path, None, properties, attributes)?;
+            let content = crate::json::to_vec_pretty_sorted(&meta)
+                .context("Failed to serialize init.meta.json5")?;
+            fs::write(&meta_path, &content)
+                .with_context(|| format!("Failed to write {}", meta_path.display()))?;
+
+            log::info!(
+                "Syncback: Persisted non-Source properties to {}",
+                meta_path.display()
+            );
+        } else if is_script {
+            // Standalone script: write to adjacent Name.meta.json5
+            let parent_dir = inst_path.parent().context("No parent directory")?;
+            let name = instance.name();
+            let meta_path = parent_dir.join(format!("{}.meta.json5", name));
+
+            let meta = self.merge_or_build_meta(&meta_path, None, properties, attributes)?;
+            let content = crate::json::to_vec_pretty_sorted(&meta)
+                .context("Failed to serialize meta.json5")?;
+            fs::write(&meta_path, &content)
+                .with_context(|| format!("Failed to write {}", meta_path.display()))?;
+
+            log::info!(
+                "Syncback: Persisted non-Source properties to {}",
+                meta_path.display()
+            );
+        } else {
+            // Non-script standalone file (e.g., .model.json5): update in place
+            let meta = self.merge_or_build_meta(
+                inst_path,
+                Some(class_name.as_str()),
+                properties,
+                attributes,
+            )?;
+            let content = crate::json::to_vec_pretty_sorted(&meta)
+                .context("Failed to serialize model file")?;
+            fs::write(inst_path, &content)
+                .with_context(|| format!("Failed to write {}", inst_path.display()))?;
+
+            log::info!(
+                "Syncback: Persisted non-Source properties to {}",
+                inst_path.display()
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Reads an existing meta/model JSON5 file and merges new properties into it.
+    /// If the file doesn't exist, builds a fresh meta object.
+    fn merge_or_build_meta(
+        &self,
+        existing_path: &std::path::Path,
+        class_name: Option<&str>,
+        new_properties: indexmap::IndexMap<String, serde_json::Value>,
+        new_attributes: indexmap::IndexMap<String, serde_json::Value>,
+    ) -> anyhow::Result<serde_json::Value> {
+        use anyhow::Context;
+
+        if existing_path.exists() {
+            // Read and parse existing file
+            let content = fs::read(existing_path)
+                .with_context(|| format!("Failed to read {}", existing_path.display()))?;
+            let mut existing: serde_json::Value =
+                json5::from_str(&String::from_utf8_lossy(&content))
+                    .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::new()));
+
+            // Ensure the existing value is an object
+            if !existing.is_object() {
+                existing = serde_json::Value::Object(serde_json::Map::new());
+            }
+            let obj = existing.as_object_mut().unwrap();
+
+            // Merge properties
+            if !new_properties.is_empty() {
+                let props = obj
+                    .entry("properties")
+                    .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+                if let Some(props_obj) = props.as_object_mut() {
+                    for (k, v) in new_properties {
+                        props_obj.insert(k, v);
+                    }
+                }
+            }
+
+            // Merge attributes
+            if !new_attributes.is_empty() {
+                let attrs = obj
+                    .entry("attributes")
+                    .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+                if let Some(attrs_obj) = attrs.as_object_mut() {
+                    for (k, v) in new_attributes {
+                        attrs_obj.insert(k, v);
+                    }
+                }
+            }
+
+            Ok(existing)
+        } else {
+            // No existing file — build from scratch
+            Ok(self.build_meta_object(class_name, new_properties, new_attributes))
+        }
     }
 
     async fn handle_api_read(&self, request: Request<Body>) -> Response<Body> {

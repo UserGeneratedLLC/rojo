@@ -236,10 +236,13 @@ impl VfsInner {
     }
 
     fn commit_event(&mut self, event: &VfsEvent) -> io::Result<()> {
-        if let VfsEvent::Remove(path) = event {
-            let _ = self.backend.unwatch(path);
-        }
-
+        // NOTE: We intentionally do NOT unwatch on Remove events.
+        // The path may be recreated immediately (e.g., editor undo), and
+        // unwatching causes future events for the recreated path to be missed.
+        // Stale watches are harmless — notify silently ignores events for
+        // non-existent paths, and the watch will be cleaned up when the
+        // parent is unwatched.
+        let _ = event;
         Ok(())
     }
 }
