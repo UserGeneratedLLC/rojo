@@ -178,7 +178,9 @@ impl ServeSession {
     /// Returns a handle to the suppressed paths map, used to avoid
     /// file watcher echo when the API writes files to disk.
     #[allow(dead_code)]
-    pub fn suppressed_paths(&self) -> Arc<Mutex<std::collections::HashMap<std::path::PathBuf, usize>>> {
+    pub fn suppressed_paths(
+        &self,
+    ) -> Arc<Mutex<std::collections::HashMap<std::path::PathBuf, usize>>> {
         Arc::clone(&self.suppressed_paths)
     }
 

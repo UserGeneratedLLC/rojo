@@ -567,74 +567,73 @@ impl JobThreadContext {
                                         // For directory-format scripts, the path is the directory
                                         // (e.g., src/MyModule/), not the init file inside. We must
                                         // find and rename the init file, not the directory.
-                                        let (actual_file, file_parent) = if path.is_dir() {
-                                            // Find the init file inside the directory
-                                            let init_file = Self::find_init_file(path);
-                                            match init_file {
-                                                Some(f) => (f.clone(), path.to_path_buf()),
-                                                None => {
-                                                    log::warn!(
-                                                        "Cannot change ClassName for directory {} \
-                                                         — no init file found inside",
-                                                        path.display()
-                                                    );
-                                                    continue;
-                                                }
-                                            }
+                                        // Resolve the actual file to rename. For directories,
+                                        // find the init file inside; for files, use directly.
+                                        let init_result = if path.is_dir() {
+                                            Self::find_init_file(path)
+                                                .map(|f| (f.clone(), path.to_path_buf()))
                                         } else {
-                                            (
+                                            Some((
                                                 path.clone(),
                                                 path.parent()
                                                     .unwrap_or(path.as_path())
                                                     .to_path_buf(),
-                                            )
+                                            ))
                                         };
 
-                                        let name = instance.name();
-                                        let new_suffix = match new_class.as_str() {
-                                            "ModuleScript" => "",
-                                            "Script" => ".server",
-                                            "LocalScript" => ".local",
-                                            _ => "",
-                                        };
-                                        let is_init = actual_file
-                                            .file_name()
-                                            .and_then(|f| f.to_str())
-                                            .map(|f| f.starts_with("init."))
-                                            .unwrap_or(false);
+                                        if let Some((actual_file, file_parent)) = init_result {
+                                            let name = instance.name();
+                                            let new_suffix = match new_class.as_str() {
+                                                "ModuleScript" => "",
+                                                "Script" => ".server",
+                                                "LocalScript" => ".local",
+                                                _ => "",
+                                            };
+                                            let is_init = actual_file
+                                                .file_name()
+                                                .and_then(|f| f.to_str())
+                                                .map(|f| f.starts_with("init."))
+                                                .unwrap_or(false);
 
-                                        let new_file_name = if is_init {
-                                            if new_suffix.is_empty() {
-                                                "init.luau".to_string()
+                                            let new_file_name = if is_init {
+                                                if new_suffix.is_empty() {
+                                                    "init.luau".to_string()
+                                                } else {
+                                                    format!("init{}.luau", new_suffix)
+                                                }
+                                            } else if new_suffix.is_empty() {
+                                                format!("{}.luau", name)
                                             } else {
-                                                format!("init{}.luau", new_suffix)
-                                            }
-                                        } else if new_suffix.is_empty() {
-                                            format!("{}.luau", name)
-                                        } else {
-                                            format!("{}{}.luau", name, new_suffix)
-                                        };
+                                                format!("{}{}.luau", name, new_suffix)
+                                            };
 
-                                        let new_path = file_parent.join(&new_file_name);
-                                        if new_path != actual_file {
-                                            log::info!(
-                                                "Two-way sync: Changing class {} -> {}, \
-                                                 renaming {} -> {}",
-                                                old_class,
-                                                new_class,
-                                                actual_file.display(),
-                                                new_path.display()
-                                            );
-                                            if let Err(err) =
-                                                fs::rename(&actual_file, &new_path)
-                                            {
-                                                log::error!(
-                                                    "Failed to rename {:?} to {:?}: {}",
-                                                    actual_file,
-                                                    new_path,
-                                                    err
+                                            let new_path = file_parent.join(&new_file_name);
+                                            if new_path != actual_file {
+                                                log::info!(
+                                                    "Two-way sync: Changing class {} -> {}, \
+                                                     renaming {} -> {}",
+                                                    old_class,
+                                                    new_class,
+                                                    actual_file.display(),
+                                                    new_path.display()
                                                 );
+                                                if let Err(err) =
+                                                    fs::rename(&actual_file, &new_path)
+                                                {
+                                                    log::error!(
+                                                        "Failed to rename {:?} to {:?}: {}",
+                                                        actual_file,
+                                                        new_path,
+                                                        err
+                                                    );
+                                                }
                                             }
+                                        } else {
+                                            log::warn!(
+                                                "Cannot change ClassName for directory {} \
+                                                 — no init file found inside",
+                                                path.display()
+                                            );
                                         }
                                     } else if old_is_script != new_is_script {
                                         log::warn!(

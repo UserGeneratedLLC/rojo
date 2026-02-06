@@ -180,7 +180,9 @@ impl ApiService {
         } else if let Some(parent) = path.parent() {
             if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
                 if let Some(file_name) = path.file_name() {
-                    *suppressed.entry(canonical_parent.join(file_name)).or_insert(0) += 1;
+                    *suppressed
+                        .entry(canonical_parent.join(file_name))
+                        .or_insert(0) += 1;
                 }
             }
         }
@@ -1545,8 +1547,7 @@ impl ApiService {
                 if !has_children && !has_metadata {
                     let gitkeep = dir_path.join(".gitkeep");
                     self.suppress_path(&gitkeep);
-                    fs::write(gitkeep, b"")
-                        .with_context(|| "Failed to write .gitkeep")?;
+                    fs::write(gitkeep, b"").with_context(|| "Failed to write .gitkeep")?;
                 }
 
                 log::info!(
