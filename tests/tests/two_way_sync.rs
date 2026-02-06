@@ -3288,11 +3288,7 @@ fn no_wait_rename_chain_10x() {
 
         for i in 1..=10 {
             let new_name = format!("NWR{}", i);
-            send_update_no_wait(
-                &session,
-                &session_id,
-                make_rename_update(id, &new_name),
-            );
+            send_update_no_wait(&session, &session_id, make_rename_update(id, &new_name));
         }
 
         wait_for_settle();
@@ -3439,8 +3435,7 @@ fn no_wait_directory_rename_chain_10x() {
     run_serve_test("syncback_format_transitions", |session, _redactions| {
         let src = session.path().join("src");
 
-        let (session_id, id) =
-            get_format_transitions_instance(&session, "DirModuleWithChildren");
+        let (session_id, id) = get_format_transitions_instance(&session, "DirModuleWithChildren");
 
         for i in 1..=10 {
             let new_name = format!("NWD{}", i);
@@ -3510,8 +3505,7 @@ fn no_wait_directory_all_three_chain_10x() {
             "Script",
         ];
 
-        let (session_id, id) =
-            get_format_transitions_instance(&session, "DirModuleWithChildren");
+        let (session_id, id) = get_format_transitions_instance(&session, "DirModuleWithChildren");
 
         for (i, class) in classes.iter().enumerate() {
             let new_name = format!("NWDA{}", i + 1);
@@ -4445,11 +4439,7 @@ fn extreme_no_wait_rename_chain_20x() {
 
         for i in 1..=20 {
             let new_name = format!("X{}", i);
-            send_update_no_wait(
-                &session,
-                &session_id,
-                make_rename_update(id, &new_name),
-            );
+            send_update_no_wait(&session, &session_id, make_rename_update(id, &new_name));
         }
 
         wait_for_settle();
@@ -4469,8 +4459,7 @@ fn extreme_no_wait_directory_all_three_15x() {
         let src = session.path().join("src");
         let classes = ["Script", "LocalScript", "ModuleScript"];
 
-        let (session_id, id) =
-            get_format_transitions_instance(&session, "DirModuleWithChildren");
+        let (session_id, id) = get_format_transitions_instance(&session, "DirModuleWithChildren");
 
         for i in 1..=15 {
             let new_name = format!("XD{}", i);
