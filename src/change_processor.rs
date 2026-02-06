@@ -654,21 +654,29 @@ impl JobThreadContext {
                                         "ModuleScript" | "Script" | "LocalScript"
                                     );
 
-                                    if old_is_script && new_is_script && path.exists() {
+                                    // If a rename handler already moved the file,
+                                    // use the new path instead of the stale
+                                    // instigating_source path.
+                                    let effective_path = overridden_source_path
+                                        .as_deref()
+                                        .unwrap_or(path.as_path());
+
+                                    if old_is_script && new_is_script && effective_path.exists() {
                                         // Script-to-script transition: rename the file extension.
                                         // For directory-format scripts, the path is the directory
                                         // (e.g., src/MyModule/), not the init file inside. We must
                                         // find and rename the init file, not the directory.
                                         // Resolve the actual file to rename. For directories,
                                         // find the init file inside; for files, use directly.
-                                        let init_result = if path.is_dir() {
-                                            Self::find_init_file(path)
-                                                .map(|f| (f.clone(), path.to_path_buf()))
+                                        let init_result = if effective_path.is_dir() {
+                                            Self::find_init_file(effective_path)
+                                                .map(|f| (f.clone(), effective_path.to_path_buf()))
                                         } else {
                                             Some((
-                                                path.clone(),
-                                                path.parent()
-                                                    .unwrap_or(path.as_path())
+                                                effective_path.to_path_buf(),
+                                                effective_path
+                                                    .parent()
+                                                    .unwrap_or(effective_path)
                                                     .to_path_buf(),
                                             ))
                                         };

@@ -932,6 +932,64 @@ fn combined_classname_and_source_update() {
     });
 }
 
+/// Test 19b: Combined rename + ClassName change in a single update.
+/// The rename handler moves the file first (existing.luau → Renamed.luau),
+/// then the ClassName handler must use the renamed path to apply the extension
+/// change (Renamed.luau → Renamed.server.luau). Without the fix, the ClassName
+/// handler checks the OLD path which no longer exists, silently skipping the
+/// extension rename.
+#[test]
+fn combined_rename_and_classname_change() {
+    run_serve_test("syncback_write", |session, _redactions| {
+        let (session_id, _rs_id, existing_id) = get_rs_and_existing(&session);
+
+        let old_path = session.path().join("src").join("existing.luau");
+        // After rename + ClassName change: should end up as Renamed.server.luau
+        let final_path = session.path().join("src").join("Renamed.server.luau");
+        // Should NOT exist: renamed but without extension change
+        let renamed_only = session.path().join("src").join("Renamed.luau");
+
+        assert_file_exists(&old_path, "existing.luau before combined update");
+
+        let mut props = UstrMap::default();
+        props.insert(
+            ustr("Source"),
+            Some(Variant::String(
+                "-- After rename + class change".to_string(),
+            )),
+        );
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: existing_id,
+                changed_name: Some("Renamed".to_string()),
+                changed_class_name: Some(ustr("Script")),
+                changed_properties: props,
+                changed_metadata: None,
+            },
+        );
+
+        assert_not_exists(&old_path, "Original file after combined rename+classname");
+        assert_not_exists(
+            &renamed_only,
+            "Renamed.luau should not exist — ClassName handler should have \
+             applied the .server extension",
+        );
+        assert_file_exists(
+            &final_path,
+            "Renamed.server.luau should exist after combined rename+classname",
+        );
+
+        let content = fs::read_to_string(&final_path).unwrap();
+        assert!(
+            content.contains("After rename + class change"),
+            "Source should be in the final file, got: {}",
+            content
+        );
+    });
+}
+
 // ---------------------------------------------------------------------------
 // Tests: Standalone → directory conversion & suffix-aware removal
 // ---------------------------------------------------------------------------
