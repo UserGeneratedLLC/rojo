@@ -4,7 +4,6 @@ use std::{
     io::Read as _,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::atomic::{AtomicUsize, Ordering},
     thread,
     time::Duration,
 };
@@ -319,16 +318,17 @@ fn deserialize_msgpack<'a, T: Deserialize<'a>>(
     T::deserialize(&mut deserializer)
 }
 
-/// Probably-okay way to generate random enough port numbers for running the
-/// Rojo live server.
+/// Obtain a free port by asking the OS to assign an ephemeral one.
 ///
-/// If this method ends up having problems, we should add an option for Rojo to
-/// use a random port chosen by the operating system and figure out a good way
-/// to get that port back to the test CLI.
+/// Binds a temporary TcpListener to port 0 (the OS picks a free port),
+/// reads back the assigned port, then drops the listener. The brief
+/// TOCTOU window before Rojo rebinds is negligible on localhost.
 fn get_port_number() -> usize {
-    static NEXT_PORT_NUMBER: AtomicUsize = AtomicUsize::new(35103);
-
-    NEXT_PORT_NUMBER.fetch_add(1, Ordering::SeqCst)
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")
+        .expect("Failed to bind ephemeral port for test");
+    let port = listener.local_addr().unwrap().port() as usize;
+    drop(listener);
+    port
 }
 
 /// Takes a SerializeResponse and creates an XML model out of the response.
