@@ -3280,21 +3280,19 @@ fn watcher_multi_file_simultaneous_edits() {
 fn no_wait_rename_chain_10x() {
     run_serve_test("syncback_write", |session, _redactions| {
         let src = session.path().join("src");
-        let mut current_name = "existing".to_string();
+
+        // Get instance ID once before the loop — the Ref is stable across
+        // renames, and reading the tree mid-chain is racy because the
+        // change_processor may not have applied the previous rename yet.
+        let (session_id, _rs_id, id) = get_rs_and_existing(&session);
 
         for i in 1..=10 {
             let new_name = format!("NWR{}", i);
-            let info = session.get_api_rojo().unwrap();
-            let root_read = session.get_api_read(info.root_instance_id).unwrap();
-            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
-            let rs_read = session.get_api_read(rs_id).unwrap();
-            let (id, _) = find_by_name(&rs_read.instances, &current_name);
             send_update_no_wait(
                 &session,
-                &info.session_id,
+                &session_id,
                 make_rename_update(id, &new_name),
             );
-            current_name = new_name;
         }
 
         wait_for_settle();
@@ -3343,21 +3341,16 @@ fn no_wait_classchange_chain_10x() {
 fn no_wait_combined_rename_source_chain_10x() {
     run_serve_test("syncback_write", |session, _redactions| {
         let src = session.path().join("src");
-        let mut current_name = "existing".to_string();
+
+        let (session_id, _rs_id, id) = get_rs_and_existing(&session);
 
         for i in 1..=10 {
             let new_name = format!("NWRS{}", i);
-            let info = session.get_api_rojo().unwrap();
-            let root_read = session.get_api_read(info.root_instance_id).unwrap();
-            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
-            let rs_read = session.get_api_read(rs_id).unwrap();
-            let (id, _) = find_by_name(&rs_read.instances, &current_name);
             send_update_no_wait(
                 &session,
-                &info.session_id,
+                &session_id,
                 make_combined_update(id, Some(&new_name), None, Some(&format!("-- nwrs {}", i))),
             );
-            current_name = new_name;
         }
 
         wait_for_settle();
@@ -3382,21 +3375,16 @@ fn no_wait_combined_rename_class_chain_10x() {
             "ModuleScript",
             "Script",
         ];
-        let mut current_name = "existing".to_string();
+
+        let (session_id, _rs_id, id) = get_rs_and_existing(&session);
 
         for (i, class) in classes.iter().enumerate() {
             let new_name = format!("NWRC{}", i + 1);
-            let info = session.get_api_rojo().unwrap();
-            let root_read = session.get_api_read(info.root_instance_id).unwrap();
-            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
-            let rs_read = session.get_api_read(rs_id).unwrap();
-            let (id, _) = find_by_name(&rs_read.instances, &current_name);
             send_update_no_wait(
                 &session,
-                &info.session_id,
+                &session_id,
                 make_combined_update(id, Some(&new_name), Some(class), None),
             );
-            current_name = new_name;
         }
 
         wait_for_settle();
@@ -3422,18 +3410,14 @@ fn no_wait_combined_all_three_chain_10x() {
             "ModuleScript",
             "LocalScript",
         ];
-        let mut current_name = "existing".to_string();
+
+        let (session_id, _rs_id, id) = get_rs_and_existing(&session);
 
         for (i, class) in classes.iter().enumerate() {
             let new_name = format!("NWA{}", i + 1);
-            let info = session.get_api_rojo().unwrap();
-            let root_read = session.get_api_read(info.root_instance_id).unwrap();
-            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
-            let rs_read = session.get_api_read(rs_id).unwrap();
-            let (id, _) = find_by_name(&rs_read.instances, &current_name);
             send_update_no_wait(
                 &session,
-                &info.session_id,
+                &session_id,
                 make_combined_update(
                     id,
                     Some(&new_name),
@@ -3441,7 +3425,6 @@ fn no_wait_combined_all_three_chain_10x() {
                     Some(&format!("-- nwa {}", i + 1)),
                 ),
             );
-            current_name = new_name;
         }
 
         wait_for_settle();
@@ -3455,13 +3438,13 @@ fn no_wait_combined_all_three_chain_10x() {
 fn no_wait_directory_rename_chain_10x() {
     run_serve_test("syncback_format_transitions", |session, _redactions| {
         let src = session.path().join("src");
-        let mut current_name = "DirModuleWithChildren".to_string();
+
+        let (session_id, id) =
+            get_format_transitions_instance(&session, "DirModuleWithChildren");
 
         for i in 1..=10 {
             let new_name = format!("NWD{}", i);
-            let (session_id, id) = get_format_transitions_instance(&session, &current_name);
             send_update_no_wait(&session, &session_id, make_rename_update(id, &new_name));
-            current_name = new_name;
         }
 
         wait_for_settle();
@@ -3526,11 +3509,12 @@ fn no_wait_directory_all_three_chain_10x() {
             "ModuleScript",
             "Script",
         ];
-        let mut current_name = "DirModuleWithChildren".to_string();
+
+        let (session_id, id) =
+            get_format_transitions_instance(&session, "DirModuleWithChildren");
 
         for (i, class) in classes.iter().enumerate() {
             let new_name = format!("NWDA{}", i + 1);
-            let (session_id, id) = get_format_transitions_instance(&session, &current_name);
             send_update_no_wait(
                 &session,
                 &session_id,
@@ -3541,7 +3525,6 @@ fn no_wait_directory_all_three_chain_10x() {
                     Some(&format!("-- nwda {}", i + 1)),
                 ),
             );
-            current_name = new_name;
         }
 
         wait_for_settle();
@@ -4457,21 +4440,16 @@ fn watcher_directory_rapid_init_cycling_and_rename() {
 fn extreme_no_wait_rename_chain_20x() {
     run_serve_test("syncback_write", |session, _redactions| {
         let src = session.path().join("src");
-        let mut current_name = "existing".to_string();
+
+        let (session_id, _rs_id, id) = get_rs_and_existing(&session);
 
         for i in 1..=20 {
             let new_name = format!("X{}", i);
-            let info = session.get_api_rojo().unwrap();
-            let root_read = session.get_api_read(info.root_instance_id).unwrap();
-            let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
-            let rs_read = session.get_api_read(rs_id).unwrap();
-            let (id, _) = find_by_name(&rs_read.instances, &current_name);
             send_update_no_wait(
                 &session,
-                &info.session_id,
+                &session_id,
                 make_rename_update(id, &new_name),
             );
-            current_name = new_name;
         }
 
         wait_for_settle();
@@ -4490,12 +4468,13 @@ fn extreme_no_wait_directory_all_three_15x() {
     run_serve_test("syncback_format_transitions", |session, _redactions| {
         let src = session.path().join("src");
         let classes = ["Script", "LocalScript", "ModuleScript"];
-        let mut current_name = "DirModuleWithChildren".to_string();
+
+        let (session_id, id) =
+            get_format_transitions_instance(&session, "DirModuleWithChildren");
 
         for i in 1..=15 {
             let new_name = format!("XD{}", i);
             let new_class = classes[i % 3];
-            let (session_id, id) = get_format_transitions_instance(&session, &current_name);
             send_update_no_wait(
                 &session,
                 &session_id,
@@ -4506,7 +4485,6 @@ fn extreme_no_wait_directory_all_three_15x() {
                     Some(&format!("-- xd {}", i)),
                 ),
             );
-            current_name = new_name;
         }
 
         wait_for_settle();
