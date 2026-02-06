@@ -52,7 +52,7 @@ impl ChangeProcessor {
         vfs: Arc<Vfs>,
         message_queue: Arc<MessageQueue<AppliedPatchSet>>,
         tree_mutation_receiver: Receiver<PatchSet>,
-        suppressed_paths: Arc<Mutex<std::collections::HashSet<PathBuf>>>,
+        suppressed_paths: Arc<Mutex<std::collections::HashMap<PathBuf, usize>>>,
     ) -> Self {
         let (shutdown_sender, shutdown_receiver) = crossbeam_channel::bounded(1);
         let vfs_receiver = vfs.event_receiver();
@@ -129,8 +129,8 @@ struct JobThreadContext {
     pending_recovery: Mutex<Vec<(PathBuf, Instant)>>,
 
     /// Paths recently written by the API's syncback. Events for these paths
-    /// are suppressed (one-shot) to avoid redundant re-snapshots.
-    suppressed_paths: Arc<Mutex<std::collections::HashSet<PathBuf>>>,
+    /// are suppressed to avoid redundant re-snapshots. Values are counts.
+    suppressed_paths: Arc<Mutex<std::collections::HashMap<PathBuf, usize>>>,
 }
 
 impl JobThreadContext {
@@ -163,7 +163,10 @@ impl JobThreadContext {
                 break ids.to_vec();
             }
 
-            log::info!("apply_patches: no IDs at {}, trying parent...", current_path.display());
+            log::info!(
+                "apply_patches: no IDs at {}, trying parent...",
+                current_path.display()
+            );
             match current_path.parent() {
                 Some(parent) => current_path = parent,
                 None => break Vec::new(),
@@ -213,12 +216,20 @@ impl JobThreadContext {
         };
         if let Some(ref path) = event_path {
             let mut suppressed = self.suppressed_paths.lock().unwrap();
-            if suppressed.remove(path) {
+            if let Some(count) = suppressed.get_mut(path) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    suppressed.remove(path);
+                }
+                drop(suppressed);
                 // Still commit so VFS stays consistent, but skip patching.
                 self.vfs
                     .commit_event(&event)
                     .expect("Error applying VFS change");
-                log::info!("VFS event SUPPRESSED (API syncback echo): {}", path.display());
+                log::info!(
+                    "VFS event SUPPRESSED (API syncback echo): {}",
+                    path.display()
+                );
                 return;
             }
         }
@@ -284,10 +295,7 @@ impl JobThreadContext {
                 match self.vfs.canonicalize(parent) {
                     Ok(parent_normalized) => {
                         let resolved = parent_normalized.join(file_name);
-                        log::info!(
-                            "VFS: Remove resolved to {}",
-                            resolved.display()
-                        );
+                        log::info!("VFS: Remove resolved to {}", resolved.display());
                         self.apply_patches(resolved)
                     }
                     Err(err) => {
@@ -488,11 +496,13 @@ impl JobThreadContext {
                                                     );
                                                 } else {
                                                     // Also rename adjacent meta file if it exists
-                                                    let old_meta =
-                                                        parent.join(format!("{}.meta.json5", old_name));
+                                                    let old_meta = parent
+                                                        .join(format!("{}.meta.json5", old_name));
                                                     if old_meta.exists() {
-                                                        let new_meta = parent
-                                                            .join(format!("{}.meta.json5", new_name));
+                                                        let new_meta = parent.join(format!(
+                                                            "{}.meta.json5",
+                                                            new_name
+                                                        ));
                                                         let _ = fs::rename(&old_meta, &new_meta);
                                                     }
                                                 }
@@ -508,10 +518,7 @@ impl JobThreadContext {
                                 }
                             }
                         } else {
-                            log::warn!(
-                                "Cannot rename instance {:?} — no instigating source",
-                                id
-                            );
+                            log::warn!("Cannot rename instance {:?} — no instigating source", id);
                         }
                     }
 
@@ -735,7 +742,11 @@ fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<
                         let snapshot = match snapshot_from_vfs(&metadata.context, vfs, path) {
                             Ok(snapshot) => snapshot,
                             Err(err) => {
-                                log::error!("Recovery snapshot error for {}: {:?}", path.display(), err);
+                                log::error!(
+                                    "Recovery snapshot error for {}: {:?}",
+                                    path.display(),
+                                    err
+                                );
                                 return None;
                             }
                         };

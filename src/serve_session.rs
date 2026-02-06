@@ -87,9 +87,11 @@ pub struct ServeSession {
     tree_mutation_sender: Sender<PatchSet>,
 
     /// Paths recently written by the API's syncback. The ChangeProcessor
-    /// checks this set and suppresses the file watcher echo for these paths
+    /// checks this map and suppresses the file watcher echo for these paths
     /// to avoid redundant re-snapshots and WebSocket messages.
-    suppressed_paths: Arc<Mutex<HashSet<std::path::PathBuf>>>,
+    /// Values are counts — each API write increments, each suppressed VFS event decrements.
+    #[allow(dead_code)]
+    suppressed_paths: Arc<Mutex<std::collections::HashMap<std::path::PathBuf, usize>>>,
 }
 
 impl ServeSession {
@@ -137,7 +139,7 @@ impl ServeSession {
         let vfs = Arc::new(vfs);
 
         let (tree_mutation_sender, tree_mutation_receiver) = crossbeam_channel::unbounded();
-        let suppressed_paths = Arc::new(Mutex::new(HashSet::new()));
+        let suppressed_paths = Arc::new(Mutex::new(std::collections::HashMap::new()));
 
         log::trace!("Starting ChangeProcessor");
         let change_processor = ChangeProcessor::start(
@@ -173,9 +175,10 @@ impl ServeSession {
         self.tree_mutation_sender.clone()
     }
 
-    /// Returns a handle to the suppressed paths set, used to avoid
+    /// Returns a handle to the suppressed paths map, used to avoid
     /// file watcher echo when the API writes files to disk.
-    pub fn suppressed_paths(&self) -> Arc<Mutex<HashSet<std::path::PathBuf>>> {
+    #[allow(dead_code)]
+    pub fn suppressed_paths(&self) -> Arc<Mutex<std::collections::HashMap<std::path::PathBuf, usize>>> {
         Arc::clone(&self.suppressed_paths)
     }
 

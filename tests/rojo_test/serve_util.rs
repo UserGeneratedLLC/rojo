@@ -293,7 +293,10 @@ impl TestServeSession {
             .serialize(&mut serializer)
             .expect("Failed to serialize WriteRequest");
 
-        let client = reqwest::blocking::Client::new();
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .expect("Failed to build reqwest client");
         let response = client.post(url).body(body).send()?;
 
         if !response.status().is_success() {

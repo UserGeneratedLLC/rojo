@@ -4,9 +4,9 @@
 use std::{
     collections::{HashMap, HashSet},
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, Mutex},
 };
 
 use futures::{sink::SinkExt, stream::StreamExt};
@@ -156,11 +156,36 @@ pub async fn call(serve_session: Arc<ServeSession>, mut request: Request<Body>) 
 
 pub struct ApiService {
     serve_session: Arc<ServeSession>,
+    suppressed_paths: Arc<Mutex<HashMap<PathBuf, usize>>>,
 }
 
 impl ApiService {
     pub fn new(serve_session: Arc<ServeSession>) -> Self {
-        ApiService { serve_session }
+        let suppressed_paths = serve_session.suppressed_paths();
+        ApiService {
+            serve_session,
+            suppressed_paths,
+        }
+    }
+
+    /// Register a path in the suppression map so that the ChangeProcessor
+    /// ignores the next VFS event for it (counter-based echo suppression).
+    /// Each call increments the counter; each suppressed VFS event decrements it.
+    fn suppress_path(&self, path: &Path) {
+        let mut suppressed = self.suppressed_paths.lock().unwrap();
+        // Try to canonicalize (adds \\?\ prefix on Windows, resolves symlinks).
+        // For files that don't exist yet, canonicalize the parent and join.
+        if let Ok(canonical) = std::fs::canonicalize(path) {
+            *suppressed.entry(canonical).or_insert(0) += 1;
+        } else if let Some(parent) = path.parent() {
+            if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
+                if let Some(file_name) = path.file_name() {
+                    *suppressed.entry(canonical_parent.join(file_name)).or_insert(0) += 1;
+                }
+            }
+        }
+        // Also increment the raw path as fallback.
+        *suppressed.entry(path.to_path_buf()).or_insert(0) += 1;
     }
 
     /// Get a summary of information about the server
@@ -297,19 +322,25 @@ impl ApiService {
                         continue;
                     }
                     if is_dir {
+                        self.suppress_path(&path);
                         if let Err(err) = fs::remove_dir_all(&path) {
                             log::warn!(
                                 "Failed to remove directory {:?} for instance {:?}: {}",
-                                path, id, err
+                                path,
+                                id,
+                                err
                             );
                         } else {
                             log::info!("Syncback: Removed directory at {}", path.display());
                         }
                     } else {
+                        self.suppress_path(&path);
                         if let Err(err) = fs::remove_file(&path) {
                             log::warn!(
                                 "Failed to remove file {:?} for instance {:?}: {}",
-                                path, id, err
+                                path,
+                                id,
+                                err
                             );
                         } else {
                             log::info!("Syncback: Removed file at {}", path.display());
@@ -324,6 +355,7 @@ impl ApiService {
                                 let meta_path =
                                     parent_dir.join(format!("{}.meta.json5", instance_name));
                                 if meta_path.exists() {
+                                    self.suppress_path(&meta_path);
                                     let _ = fs::remove_file(&meta_path);
                                     log::info!(
                                         "Syncback: Removed adjacent meta file at {}",
@@ -751,6 +783,7 @@ impl ApiService {
                     existing_path.to_path_buf()
                 };
 
+                self.suppress_path(&file_path);
                 fs::write(&file_path, source.as_bytes())
                     .with_context(|| format!("Failed to write file: {}", file_path.display()))?;
 
@@ -773,6 +806,7 @@ impl ApiService {
                         let new_dir = parent_dir.join(script_name);
 
                         // Create the directory
+                        self.suppress_path(&new_dir);
                         fs::create_dir_all(&new_dir).with_context(|| {
                             format!(
                                 "Failed to create directory for script with children: {}",
@@ -790,12 +824,14 @@ impl ApiService {
 
                         // Move the script content to init file
                         let init_path = new_dir.join(init_name);
+                        self.suppress_path(&init_path);
                         fs::write(&init_path, source.as_bytes()).with_context(|| {
                             format!("Failed to write init file: {}", init_path.display())
                         })?;
 
                         // Remove the old standalone file
                         if existing_path.exists() && existing_path != init_path {
+                            self.suppress_path(existing_path);
                             fs::remove_file(existing_path).with_context(|| {
                                 format!(
                                     "Failed to remove old standalone script: {}",
@@ -852,6 +888,7 @@ impl ApiService {
                 } else {
                     // It's a standalone file (e.g., .model.json5)
                     let content = self.serialize_instance_to_model_json(added)?;
+                    self.suppress_path(existing_path);
                     fs::write(existing_path, &content).with_context(|| {
                         format!("Failed to write file: {}", existing_path.display())
                     })?;
@@ -891,6 +928,7 @@ impl ApiService {
 
         // Create the directory
         let new_dir = containing_dir.join(script_name);
+        self.suppress_path(&new_dir);
         fs::create_dir_all(&new_dir).with_context(|| {
             format!(
                 "Failed to create directory for script conversion: {}",
@@ -908,12 +946,13 @@ impl ApiService {
 
         // Write source content to the init file
         let init_path = new_dir.join(init_name);
-        fs::write(&init_path, source.as_bytes()).with_context(|| {
-            format!("Failed to write init file: {}", init_path.display())
-        })?;
+        self.suppress_path(&init_path);
+        fs::write(&init_path, source.as_bytes())
+            .with_context(|| format!("Failed to write init file: {}", init_path.display()))?;
 
         // Remove the old standalone file
         if standalone_path.exists() && standalone_path != init_path {
+            self.suppress_path(standalone_path);
             fs::remove_file(standalone_path).with_context(|| {
                 format!(
                     "Failed to remove old standalone script: {}",
@@ -964,6 +1003,7 @@ impl ApiService {
         use anyhow::Context;
 
         let new_dir = containing_dir.join(instance_name);
+        self.suppress_path(&new_dir);
         fs::create_dir_all(&new_dir).with_context(|| {
             format!(
                 "Failed to create directory for instance conversion: {}",
@@ -989,9 +1029,9 @@ impl ApiService {
             if standalone_path.exists() {
                 let content = fs::read(standalone_path).unwrap_or_default();
                 let init_meta_path = new_dir.join("init.meta.json5");
-                fs::write(&init_meta_path, &content).with_context(|| {
-                    format!("Failed to write {}", init_meta_path.display())
-                })?;
+                self.suppress_path(&init_meta_path);
+                fs::write(&init_meta_path, &content)
+                    .with_context(|| format!("Failed to write {}", init_meta_path.display()))?;
             }
         } else if file_ext == "txt" {
             // StringValue .txt → init.meta.json5 with className and Value property
@@ -1009,17 +1049,17 @@ impl ApiService {
             let init_meta_path = new_dir.join("init.meta.json5");
             let content = crate::json::to_vec_pretty_sorted(&meta)
                 .context("Failed to serialize init.meta.json5")?;
-            fs::write(&init_meta_path, &content).with_context(|| {
-                format!("Failed to write {}", init_meta_path.display())
-            })?;
+            self.suppress_path(&init_meta_path);
+            fs::write(&init_meta_path, &content)
+                .with_context(|| format!("Failed to write {}", init_meta_path.display()))?;
         } else if file_ext == "csv" {
             // LocalizationTable .csv → init.csv
             if standalone_path.exists() {
                 let content = fs::read(standalone_path).unwrap_or_default();
                 let init_csv_path = new_dir.join("init.csv");
-                fs::write(&init_csv_path, &content).with_context(|| {
-                    format!("Failed to write {}", init_csv_path.display())
-                })?;
+                self.suppress_path(&init_csv_path);
+                fs::write(&init_csv_path, &content)
+                    .with_context(|| format!("Failed to write {}", init_csv_path.display()))?;
             }
         } else {
             // Generic fallback: create init.meta.json5 with className
@@ -1029,13 +1069,14 @@ impl ApiService {
             let init_meta_path = new_dir.join("init.meta.json5");
             let content = crate::json::to_vec_pretty_sorted(&meta)
                 .context("Failed to serialize init.meta.json5")?;
-            fs::write(&init_meta_path, &content).with_context(|| {
-                format!("Failed to write {}", init_meta_path.display())
-            })?;
+            self.suppress_path(&init_meta_path);
+            fs::write(&init_meta_path, &content)
+                .with_context(|| format!("Failed to write {}", init_meta_path.display()))?;
         }
 
         // Remove the old standalone file
         if standalone_path.exists() {
+            self.suppress_path(standalone_path);
             fs::remove_file(standalone_path).with_context(|| {
                 format!(
                     "Failed to remove old standalone file: {}",
@@ -1111,11 +1152,13 @@ impl ApiService {
 
         // Delete the file or directory
         if instance_path.is_dir() {
+            self.suppress_path(instance_path);
             fs::remove_dir_all(instance_path).with_context(|| {
                 format!("Failed to remove directory: {}", instance_path.display())
             })?;
             log::info!("Syncback: Removed directory at {}", instance_path.display());
         } else if instance_path.is_file() {
+            self.suppress_path(instance_path);
             fs::remove_file(instance_path)
                 .with_context(|| format!("Failed to remove file: {}", instance_path.display()))?;
             log::info!("Syncback: Removed file at {}", instance_path.display());
@@ -1340,19 +1383,23 @@ impl ApiService {
                             added.name
                         );
                         if old_path.exists() {
+                            self.suppress_path(old_path);
                             let _ = fs::remove_file(old_path);
                         }
                         let meta_path = parent_dir.join(format!("{}.meta.json5", added.name));
                         if meta_path.exists() {
+                            self.suppress_path(&meta_path);
                             let _ = fs::remove_file(&meta_path);
                         }
                     }
 
                     let dir_path = parent_dir.join(&added.name);
+                    self.suppress_path(&dir_path);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
                     })?;
                     let init_path = dir_path.join("init.luau");
+                    self.suppress_path(&init_path);
                     fs::write(&init_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", init_path.display())
                     })?;
@@ -1363,6 +1410,7 @@ impl ApiService {
                     }
                 } else {
                     let file_path = parent_dir.join(format!("{}.luau", added.name));
+                    self.suppress_path(&file_path);
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
@@ -1387,19 +1435,23 @@ impl ApiService {
                             added.name
                         );
                         if old_path.exists() {
+                            self.suppress_path(old_path);
                             let _ = fs::remove_file(old_path);
                         }
                         let meta_path = parent_dir.join(format!("{}.meta.json5", added.name));
                         if meta_path.exists() {
+                            self.suppress_path(&meta_path);
                             let _ = fs::remove_file(&meta_path);
                         }
                     }
 
                     let dir_path = parent_dir.join(&added.name);
+                    self.suppress_path(&dir_path);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
                     })?;
                     let init_path = dir_path.join(format!("init.{}.luau", script_suffix));
+                    self.suppress_path(&init_path);
                     fs::write(&init_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", init_path.display())
                     })?;
@@ -1411,6 +1463,7 @@ impl ApiService {
                 } else {
                     let file_path =
                         parent_dir.join(format!("{}.{}.luau", added.name, script_suffix));
+                    self.suppress_path(&file_path);
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
@@ -1434,19 +1487,23 @@ impl ApiService {
                             added.name
                         );
                         if old_path.exists() {
+                            self.suppress_path(old_path);
                             let _ = fs::remove_file(old_path);
                         }
                         let meta_path = parent_dir.join(format!("{}.meta.json5", added.name));
                         if meta_path.exists() {
+                            self.suppress_path(&meta_path);
                             let _ = fs::remove_file(&meta_path);
                         }
                     }
 
                     let dir_path = parent_dir.join(&added.name);
+                    self.suppress_path(&dir_path);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
                     })?;
                     let init_path = dir_path.join("init.local.luau");
+                    self.suppress_path(&init_path);
                     fs::write(&init_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", init_path.display())
                     })?;
@@ -1457,6 +1514,7 @@ impl ApiService {
                     }
                 } else {
                     let file_path = parent_dir.join(format!("{}.local.luau", added.name));
+                    self.suppress_path(&file_path);
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
@@ -1469,6 +1527,7 @@ impl ApiService {
             "Folder" | "Configuration" | "Tool" | "ScreenGui" | "SurfaceGui" | "BillboardGui"
             | "AdGui" => {
                 let dir_path = parent_dir.join(&added.name);
+                self.suppress_path(&dir_path);
                 fs::create_dir_all(&dir_path).with_context(|| {
                     format!("Failed to create directory: {}", dir_path.display())
                 })?;
@@ -1484,7 +1543,9 @@ impl ApiService {
                 // Add .gitkeep for empty directories with no metadata (matches dedicated syncback)
                 // Uses !has_children which accounts for filtered duplicate children
                 if !has_children && !has_metadata {
-                    fs::write(dir_path.join(".gitkeep"), b"")
+                    let gitkeep = dir_path.join(".gitkeep");
+                    self.suppress_path(&gitkeep);
+                    fs::write(gitkeep, b"")
                         .with_context(|| "Failed to write .gitkeep")?;
                 }
 
@@ -1505,6 +1566,7 @@ impl ApiService {
                 if has_children {
                     // Must become directory - store StringValue data in init.meta.json5
                     let dir_path = parent_dir.join(&added.name);
+                    self.suppress_path(&dir_path);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
                     })?;
@@ -1526,6 +1588,7 @@ impl ApiService {
                         })
                         .unwrap_or_default();
                     let file_path = parent_dir.join(format!("{}.txt", added.name));
+                    self.suppress_path(&file_path);
                     fs::write(&file_path, value.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
@@ -1541,10 +1604,12 @@ impl ApiService {
                 if has_children {
                     // Must become directory with init.csv
                     let dir_path = parent_dir.join(&added.name);
+                    self.suppress_path(&dir_path);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
                     })?;
                     let init_path = dir_path.join("init.csv");
+                    self.suppress_path(&init_path);
                     fs::write(&init_path, content.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", init_path.display())
                     })?;
@@ -1557,6 +1622,7 @@ impl ApiService {
                     }
                 } else {
                     let file_path = parent_dir.join(format!("{}.csv", added.name));
+                    self.suppress_path(&file_path);
                     fs::write(&file_path, content.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
@@ -1584,11 +1650,13 @@ impl ApiService {
                             added.name
                         );
                         if old_path.exists() {
+                            self.suppress_path(old_path);
                             let _ = fs::remove_file(old_path);
                         }
                     }
 
                     let dir_path = parent_dir.join(&added.name);
+                    self.suppress_path(&dir_path);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
                     })?;
@@ -1614,6 +1682,7 @@ impl ApiService {
                         ExistingFileFormat::Standalone(p) => p.clone(),
                         _ => parent_dir.join(format!("{}.model.json5", added.name)),
                     };
+                    self.suppress_path(&file_path);
                     fs::write(&file_path, &content).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
@@ -1651,6 +1720,7 @@ impl ApiService {
         let meta_path = dir_path.join("init.meta.json5");
         let content = crate::json::to_vec_pretty_sorted(&meta)
             .context("Failed to serialize init.meta.json5")?;
+        self.suppress_path(&meta_path);
         fs::write(&meta_path, &content)
             .with_context(|| format!("Failed to write meta file: {}", meta_path.display()))?;
         log::info!(
@@ -1682,6 +1752,7 @@ impl ApiService {
         let meta_path = dir_path.join("init.meta.json5");
         let content = crate::json::to_vec_pretty_sorted(&meta)
             .context("Failed to serialize init.meta.json5")?;
+        self.suppress_path(&meta_path);
         fs::write(&meta_path, &content)
             .with_context(|| format!("Failed to write meta file: {}", meta_path.display()))?;
         log::info!(
@@ -1709,6 +1780,7 @@ impl ApiService {
         let meta_path = dir_path.join("init.meta.json5");
         let content = crate::json::to_vec_pretty_sorted(&meta)
             .context("Failed to serialize init.meta.json5")?;
+        self.suppress_path(&meta_path);
         fs::write(&meta_path, &content)
             .with_context(|| format!("Failed to write meta file: {}", meta_path.display()))?;
         log::info!(
@@ -1913,6 +1985,7 @@ impl ApiService {
         let meta_path = parent_dir.join(format!("{}.meta.json5", name));
         let content =
             crate::json::to_vec_pretty_sorted(&meta).context("Failed to serialize meta.json5")?;
+        self.suppress_path(&meta_path);
         fs::write(&meta_path, &content)
             .with_context(|| format!("Failed to write meta file: {}", meta_path.display()))?;
         log::info!(
@@ -2024,6 +2097,7 @@ impl ApiService {
             let meta = self.merge_or_build_meta(&meta_path, None, properties, attributes)?;
             let content = crate::json::to_vec_pretty_sorted(&meta)
                 .context("Failed to serialize init.meta.json5")?;
+            self.suppress_path(&meta_path);
             fs::write(&meta_path, &content)
                 .with_context(|| format!("Failed to write {}", meta_path.display()))?;
 
@@ -2040,6 +2114,7 @@ impl ApiService {
             let meta = self.merge_or_build_meta(&meta_path, None, properties, attributes)?;
             let content = crate::json::to_vec_pretty_sorted(&meta)
                 .context("Failed to serialize meta.json5")?;
+            self.suppress_path(&meta_path);
             fs::write(&meta_path, &content)
                 .with_context(|| format!("Failed to write {}", meta_path.display()))?;
 
@@ -2057,6 +2132,7 @@ impl ApiService {
             )?;
             let content = crate::json::to_vec_pretty_sorted(&meta)
                 .context("Failed to serialize model file")?;
+            self.suppress_path(inst_path);
             fs::write(inst_path, &content)
                 .with_context(|| format!("Failed to write {}", inst_path.display()))?;
 
