@@ -116,9 +116,16 @@ function SelectionOption:render()
 			ZIndex = 10,
 			[Roact.Event.MouseEnter] = function()
 				self:setState({ isHovered = true })
+				-- Trigger subtree highlight when this button would apply to children
+				if (isParentOnly or (isSelected and hasChildren)) and props.onSubtreeHoverStart then
+					props.onSubtreeHoverStart()
+				end
 			end,
 			[Roact.Event.MouseLeave] = function()
 				self:setState({ isHovered = false })
+				if props.onSubtreeHoverEnd then
+					props.onSubtreeHoverEnd()
+				end
 			end,
 			[Roact.Event.Activated] = function()
 				if isParentOnly or (isSelected and hasChildren) then
@@ -173,6 +180,8 @@ local function SelectionRadio(props)
 			layoutOrder = 1,
 			hasChildren = hasChildren,
 			isParentOnly = isParentOnly,
+			onSubtreeHoverStart = props.onSubtreeHoverStart,
+			onSubtreeHoverEnd = props.onSubtreeHoverEnd,
 			onClick = function()
 				if props.onSelectionChange then
 					props.onSelectionChange(props.nodeId, "pull")
@@ -192,6 +201,8 @@ local function SelectionRadio(props)
 			layoutOrder = 2,
 			hasChildren = hasChildren,
 			isParentOnly = isParentOnly,
+			onSubtreeHoverStart = props.onSubtreeHoverStart,
+			onSubtreeHoverEnd = props.onSubtreeHoverEnd,
 			onClick = function()
 				if props.onSelectionChange then
 					props.onSelectionChange(props.nodeId, "ignore")
@@ -211,6 +222,8 @@ local function SelectionRadio(props)
 			layoutOrder = 3,
 			hasChildren = hasChildren,
 			isParentOnly = isParentOnly,
+			onSubtreeHoverStart = props.onSubtreeHoverStart,
+			onSubtreeHoverEnd = props.onSubtreeHoverEnd,
 			onClick = function()
 				if props.onSelectionChange then
 					props.onSelectionChange(props.nodeId, "push")
@@ -323,6 +336,17 @@ end
 function DomLabel:render()
 	local props = self.props
 	local depth = props.depth or 1
+
+	-- Derive subtree highlight state from binding (no re-renders needed)
+	local ancestorIds = props.ancestorIds
+	local isSubtreeHighlighted = if props.subtreeHighlightNodeId
+		then props.subtreeHighlightNodeId:map(function(highlightId)
+			if highlightId == nil then
+				return false
+			end
+			return ancestorIds[highlightId] == true
+		end)
+		else nil
 
 	return Theme.with(function(theme)
 		local color = if props.isWarning
@@ -520,6 +544,17 @@ function DomLabel:render()
 					})
 					else nil,
 			}),
+			SubtreeHighlight = if isSubtreeHighlighted
+				then e("Frame", {
+					Size = UDim2.fromScale(1, 1),
+					BackgroundColor3 = theme.Diff.SubtreeHighlight,
+					BackgroundTransparency = isSubtreeHighlighted:map(function(highlighted)
+						return if highlighted then 0.92 else 1
+					end),
+					BorderSizePixel = 0,
+					ZIndex = 0,
+				})
+				else nil,
 			SelectionRadio = e(SelectionRadio, {
 				-- Visible for nodes with patchType, or for parent-only nodes on hover
 				visible = (props.patchType ~= nil and props.onSelectionChange ~= nil)
@@ -537,6 +572,16 @@ function DomLabel:render()
 				isParentOnly = props.patchType == nil,
 				onSelectionChange = props.onSelectionChange,
 				onSubtreeSelectionChange = props.onSubtreeSelectionChange,
+				onSubtreeHoverStart = function()
+					if props.setSubtreeHighlightNodeId then
+						props.setSubtreeHighlightNodeId(props.nodeId)
+					end
+				end,
+				onSubtreeHoverEnd = function()
+					if props.setSubtreeHighlightNodeId then
+						props.setSubtreeHighlightNodeId(nil)
+					end
+				end,
 			}),
 			LineGuides = e("Folder", nil, lineGuides),
 		})

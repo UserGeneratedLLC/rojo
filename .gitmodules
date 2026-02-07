@@ -22,3 +22,6 @@
 [submodule "plugin/Packages/msgpack-luau"]
 	path = plugin/Packages/msgpack-luau
 	url = https://github.com/cipharius/msgpack-luau/
+[submodule "vscode-rojo"]
+	path = vscode-rojo
+	url = https://github.com/UserGeneratedLLC/vscode-rojo.git

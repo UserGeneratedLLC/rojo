@@ -60,6 +60,9 @@ function PatchVisualizer:init()
 	-- Without this, every render creates new bindings starting at 24,
 	-- causing expanded rows to visually glitch when unrelated props change.
 	self.nodeHeightBindings = {}
+
+	-- Binding for subtree hover preview: stores the nodeId whose children should highlight
+	self.subtreeHighlightNodeId, self.setSubtreeHighlightNodeId = Roact.createBinding(nil)
 end
 
 function PatchVisualizer:willUnmount()
@@ -180,6 +183,15 @@ function PatchVisualizer:render()
 			local elementHeight = self.nodeHeightBindings[nodeId].binding
 			local setElementHeight = self.nodeHeightBindings[nodeId].setBinding
 
+			-- Compute ancestor IDs for subtree hover highlight
+			local ancestorIds = {}
+			local currentParentId = node.parentId
+			while currentParentId and currentParentId ~= "ROOT" do
+				ancestorIds[currentParentId] = true
+				local parentNode = patchTree:getNode(currentParentId)
+				currentParentId = parentNode and parentNode.parentId
+			end
+
 			elementHeights[elementIndex] = elementHeight
 			scrollElements[elementIndex] = e(DomLabel, {
 				transparency = self.props.transparency,
@@ -206,6 +218,10 @@ function PatchVisualizer:render()
 				selection = self.props.selections and self.props.selections[node.id],
 				onSelectionChange = self.props.onSelectionChange,
 				onSubtreeSelectionChange = self.props.onSubtreeSelectionChange,
+				-- Subtree hover highlight props
+				ancestorIds = ancestorIds,
+				subtreeHighlightNodeId = self.subtreeHighlightNodeId,
+				setSubtreeHighlightNodeId = self.setSubtreeHighlightNodeId,
 			})
 
 			if isFinalChild then
