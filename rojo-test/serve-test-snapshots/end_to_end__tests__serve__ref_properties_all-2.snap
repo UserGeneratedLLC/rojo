@@ -13,9 +13,9 @@ instances:
     Parent: id-9
     Properties:
       Attributes:
-        Attributes: {}
+        "!Attributes": {}
       Value:
-        Ref: id-9
+        "!Ref": a014b12bf90014847f564374c73a5f38
   id-11:
     Children: []
     ClassName: Model
@@ -26,11 +26,11 @@ instances:
     Parent: id-7
     Properties:
       Attributes:
-        Attributes: {}
+        "!Attributes": {}
       NeedsPivotMigration:
-        Bool: false
+        "!Bool": false
       PrimaryPart:
-        Ref: id-9
+        "!Ref": a014b12bf90014847f564374c73a5f38
   id-2:
     Children:
       - id-3
@@ -55,7 +55,7 @@ instances:
     Parent: id-2
     Properties:
       NeedsPivotMigration:
-        Bool: false
+        "!Bool": false
   id-4:
     Children: []
     ClassName: ObjectValue
@@ -66,9 +66,9 @@ instances:
     Parent: id-3
     Properties:
       Attributes:
-        Attributes: {}
+        "!Attributes": {}
       Value:
-        Ref: id-5
+        "!Ref": 4d3455270f6618409e7d40dbcad9e25b
   id-5:
     Children:
       - id-6
@@ -89,9 +89,9 @@ instances:
     Parent: id-5
     Properties:
       Attributes:
-        Attributes: {}
+        "!Attributes": {}
       Value:
-        Ref: id-5
+        "!Ref": 4d3455270f6618409e7d40dbcad9e25b
   id-7:
     Children:
       - id-8
@@ -104,7 +104,7 @@ instances:
     Parent: id-3
     Properties:
       Attributes:
-        Attributes: {}
+        "!Attributes": {}
   id-8:
     Children: []
     ClassName: Model
@@ -115,11 +115,11 @@ instances:
     Parent: id-7
     Properties:
       Attributes:
-        Attributes: {}
+        "!Attributes": {}
       NeedsPivotMigration:
-        Bool: false
+        "!Bool": false
       PrimaryPart:
-        Ref: id-7
+        "!Ref": 4536e7ddde75409951458987be6ccfb5
   id-9:
     Children:
       - id-10

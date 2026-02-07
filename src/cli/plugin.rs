@@ -47,8 +47,9 @@ impl PluginSubcommand {
 }
 
 fn initialize_plugin() -> anyhow::Result<ServeSession> {
-    let plugin_snapshot: VfsSnapshot = bincode::deserialize(PLUGIN_BINCODE)
-        .expect("Rojo's plugin was not properly packed into Rojo's binary");
+    let (plugin_snapshot, _): (VfsSnapshot, usize) =
+        bincode::serde::decode_from_slice(PLUGIN_BINCODE, bincode::config::standard())
+            .expect("Rojo's plugin was not properly packed into Rojo's binary");
 
     let mut in_memory_fs = InMemoryFs::new();
     in_memory_fs.load_snapshot("/plugin", plugin_snapshot)?;

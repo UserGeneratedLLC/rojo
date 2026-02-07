@@ -33,7 +33,6 @@ instances:
     Parent: id-3
     Properties:
       Value:
-        Int64: 1337
+        "!Int64": 1337
 messageCursor: 0
 sessionId: id-1
-

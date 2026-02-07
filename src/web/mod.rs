@@ -12,11 +12,12 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use hyper::{
-    server::Server,
-    service::{make_service_fn, service_fn},
-    Body, Request,
-};
+use hyper::body::Incoming;
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper::Request;
+use hyper_util::rt::TokioIo;
+use tokio::net::TcpListener;
 use tokio::runtime::Runtime;
 
 use crate::serve_session::ServeSession;
@@ -33,29 +34,37 @@ impl LiveServer {
     pub fn start(self, address: SocketAddr) {
         let serve_session = Arc::clone(&self.serve_session);
 
-        let make_service = make_service_fn(move |_conn| {
-            let serve_session = Arc::clone(&serve_session);
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async move {
+            let listener = TcpListener::bind(address).await.unwrap();
 
-            async {
-                let service = move |req: Request<Body>| {
-                    let serve_session = Arc::clone(&serve_session);
+            loop {
+                let (stream, _) = listener.accept().await.unwrap();
+                let io = TokioIo::new(stream);
+                let serve_session = Arc::clone(&serve_session);
 
-                    async move {
-                        if req.uri().path().starts_with("/api") {
-                            Ok::<_, Infallible>(api::call(serve_session, req).await)
-                        } else {
-                            Ok::<_, Infallible>(ui::call(serve_session, req).await)
+                tokio::spawn(async move {
+                    let service = service_fn(move |req: Request<Incoming>| {
+                        let serve_session = Arc::clone(&serve_session);
+
+                        async move {
+                            if req.uri().path().starts_with("/api") {
+                                Ok::<_, Infallible>(api::call(serve_session, req).await)
+                            } else {
+                                Ok::<_, Infallible>(ui::call(serve_session, req).await)
+                            }
                         }
-                    }
-                };
+                    });
 
-                Ok::<_, Infallible>(service_fn(service))
+                    if let Err(err) = http1::Builder::new()
+                        .serve_connection(io, service)
+                        .with_upgrades()
+                        .await
+                    {
+                        log::error!("Error serving connection: {err}");
+                    }
+                });
             }
         });
-
-        let rt = Runtime::new().unwrap();
-        let _guard = rt.enter();
-        let server = Server::bind(&address).serve(make_service);
-        rt.block_on(server).unwrap();
     }
 }

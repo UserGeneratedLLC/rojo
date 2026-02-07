@@ -1,7 +1,6 @@
 ---
 source: tests/tests/serve.rs
 expression: "read_response.intern_and_redact(&mut redactions, root_id)"
-
 ---
 instances:
   id-2:
@@ -14,7 +13,6 @@ instances:
     Parent: "00000000000000000000000000000000"
     Properties:
       Source:
-        String: "-- Edited contents"
+        "!String": "-- Edited contents"
 messageCursor: 1
 sessionId: id-1
-

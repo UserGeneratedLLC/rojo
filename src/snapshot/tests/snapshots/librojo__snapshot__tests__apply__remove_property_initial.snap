@@ -7,7 +7,7 @@ name: ROOT
 class_name: ROOT
 properties:
   Foo:
-    String: Should be removed
+    "!String": Should be removed
 metadata:
   ignore_unknown_instances: false
   relevant_paths: []

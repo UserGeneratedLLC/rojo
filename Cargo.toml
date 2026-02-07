@@ -57,7 +57,7 @@ rbx_xml = { path = "rbx-dom/rbx_xml" }
 
 anyhow = "1.0.101"
 backtrace = "0.3.76"
-bincode = "1.3.3"
+bincode = { version = "2", features = ["serde"] }
 crossbeam-channel = "0.5.15"
 csv = "1.4.0"
 env_logger = "0.11"
@@ -65,18 +65,21 @@ fs-err = "3"
 futures = "0.3.31"
 globset = "0.4.18"
 humantime = "2.3.0"
-hyper = { version = "0.14.32", features = ["server", "tcp", "http1"] }
-hyper-tungstenite = "0.11.1"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
+hyper-tungstenite = "0.19"
 jod-thread = "1.0.0"
 log = "0.4.29"
 num_cpus = "1.17.0"
 opener = "0.8.4"
 rayon = "1.11.0"
 rbx_cookie = "0.1.5"
-reqwest = { version = "0.11.27", default-features = false, features = [
+reqwest = { version = "0.13", default-features = false, features = [
     "blocking",
     "json",
-    "rustls-tls",
+    "rustls",
     "gzip",
     "brotli",
     "deflate",
@@ -105,14 +108,14 @@ rmp-serde = "1.3.1"
 serde_bytes = "0.11.19"
 
 [target.'cfg(windows)'.dependencies]
-winreg = "0.10.1"
+winreg = "0.55"
 
 [build-dependencies]
 memofs = { version = "0.3.0", path = "crates/memofs" }
 
 embed-resource = "3.0.6"
 anyhow = "1.0.101"
-bincode = "1.3.3"
+bincode = { version = "2", features = ["serde"] }
 fs-err = "3"
 maplit = "1.0.2"
 semver = "1.0.27"
@@ -120,10 +123,10 @@ semver = "1.0.27"
 [dev-dependencies]
 rojo-insta-ext = { path = "crates/rojo-insta-ext" }
 
-criterion = "0.3.6"
+criterion = "0.8"
 insta = { version = "1.46.3", features = ["redactions", "yaml"] }
 paste = "1.0.15"
 pretty_assertions = "1.4.1"
 regex = "1"
-serde_yaml = "0.8.26"
+serde_yaml = "0.9"
 walkdir = "2.5.0"

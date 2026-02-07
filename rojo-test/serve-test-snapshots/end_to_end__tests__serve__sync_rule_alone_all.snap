@@ -23,6 +23,6 @@ instances:
     Parent: id-2
     Properties:
       Value:
-        String: "Hello, world!"
+        "!String": "Hello, world!"
 messageCursor: 0
 sessionId: id-1

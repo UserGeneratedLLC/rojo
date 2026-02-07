@@ -1,6 +1,5 @@
 ---
 source: tests/tests/serve.rs
-assertion_line: 338
 expression: "read_response.intern_and_redact(&mut redactions, root_id)"
 ---
 instances:
@@ -34,7 +33,6 @@ instances:
     Parent: id-3
     Properties:
       Value:
-        Bool: true
+        "!Bool": true
 messageCursor: 0
 sessionId: id-1
-

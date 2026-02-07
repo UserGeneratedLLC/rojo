@@ -13,7 +13,7 @@ body:
           changedName: ~
           changedProperties:
             Source:
-              String: Updated foo!
+              "!String": Updated foo!
           id: id-4
 packetType: messages
 sessionId: id-1

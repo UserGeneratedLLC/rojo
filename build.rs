@@ -99,11 +99,19 @@ fn main() -> Result<(), anyhow::Error> {
         }),
     });
 
-    let template_file = File::create(Path::new(&out_dir).join("templates.bincode"))?;
-    let plugin_file = File::create(Path::new(&out_dir).join("plugin.bincode"))?;
+    let mut template_file = File::create(Path::new(&out_dir).join("templates.bincode"))?;
+    let mut plugin_file = File::create(Path::new(&out_dir).join("plugin.bincode"))?;
 
-    bincode::serialize_into(plugin_file, &plugin_snapshot)?;
-    bincode::serialize_into(template_file, &template_snapshot)?;
+    bincode::serde::encode_into_std_write(
+        &plugin_snapshot,
+        &mut plugin_file,
+        bincode::config::standard(),
+    )?;
+    bincode::serde::encode_into_std_write(
+        &template_snapshot,
+        &mut template_file,
+        bincode::config::standard(),
+    )?;
 
     println!("cargo:rerun-if-changed=build/windows/rojo-manifest.rc");
     println!("cargo:rerun-if-changed=build/windows/rojo.manifest");

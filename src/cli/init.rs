@@ -229,8 +229,9 @@ impl InitKind {
             Self::Plugin => "plugin",
         };
 
-        let snapshot: VfsSnapshot = bincode::deserialize(TEMPLATE_BINCODE)
-            .expect("Rojo's templates were not properly packed into Rojo's binary");
+        let (snapshot, _): (VfsSnapshot, usize) =
+            bincode::serde::decode_from_slice(TEMPLATE_BINCODE, bincode::config::standard())
+                .expect("Rojo's templates were not properly packed into Rojo's binary");
 
         if let VfsSnapshot::Dir { mut children } = snapshot {
             if let Some(template) = children.remove(template_path) {

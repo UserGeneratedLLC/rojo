@@ -13,11 +13,11 @@ body:
           changedName: ~
           changedProperties:
             Attributes:
-              Attributes:
+              "!Attributes":
                 Rojo_Target_PrimaryPart:
-                  String: model target
+                  "!String": model target
             Scale:
-              Float32: 1
+              "!Float32": 1
           id: id-8
 packetType: messages
 sessionId: id-1

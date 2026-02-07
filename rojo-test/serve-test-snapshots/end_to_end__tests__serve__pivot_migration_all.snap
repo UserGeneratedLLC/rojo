@@ -25,7 +25,7 @@ instances:
     Parent: id-2
     Properties:
       NeedsPivotMigration:
-        Bool: false
+        "!Bool": false
   id-4:
     Children: []
     ClassName: Model
@@ -36,7 +36,7 @@ instances:
     Parent: id-3
     Properties:
       NeedsPivotMigration:
-        Bool: false
+        "!Bool": false
   id-5:
     Children: []
     ClassName: Tool
@@ -47,6 +47,6 @@ instances:
     Parent: id-3
     Properties:
       NeedsPivotMigration:
-        Bool: false
+        "!Bool": false
 messageCursor: 0
 sessionId: id-1

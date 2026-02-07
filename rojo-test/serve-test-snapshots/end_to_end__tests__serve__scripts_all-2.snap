@@ -24,9 +24,9 @@ instances:
     Parent: id-2
     Properties:
       RunContext:
-        Enum: 1
+        "!Enum": 1
       Source:
-        String: "-- Hello, from bar!"
+        "!String": "-- Hello, from bar!"
   id-4:
     Children: []
     ClassName: ModuleScript
@@ -37,6 +37,6 @@ instances:
     Parent: id-2
     Properties:
       Source:
-        String: Updated foo!
+        "!String": Updated foo!
 messageCursor: 1
 sessionId: id-1

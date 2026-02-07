@@ -16,7 +16,7 @@ body:
           Parent: id-2
           Properties:
             NeedsPivotMigration:
-              Bool: false
+              "!Bool": false
       removed: []
       updated: []
 packetType: messages

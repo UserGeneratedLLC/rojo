@@ -25,7 +25,7 @@ instances:
     Parent: id-2
     Properties:
       NeedsPivotMigration:
-        Bool: false
+        "!Bool": false
   id-4:
     Children: []
     ClassName: ObjectValue
@@ -36,9 +36,9 @@ instances:
     Parent: id-3
     Properties:
       Attributes:
-        Attributes: {}
+        "!Attributes": {}
       Value:
-        Ref: id-5
+        "!Ref": 9893f640faccb9150197026b0ca91712
   id-5:
     Children: []
     ClassName: MeshPart
@@ -49,8 +49,8 @@ instances:
     Parent: id-3
     Properties:
       MeshId:
-        ContentId: "rbxasset://fonts/sword.mesh"
+        "!ContentId": "rbxasset://fonts/sword.mesh"
       TextureID:
-        ContentId: "rbxasset://textures/SwordTexture.png"
+        "!ContentId": "rbxasset://textures/SwordTexture.png"
 messageCursor: 0
 sessionId: id-1

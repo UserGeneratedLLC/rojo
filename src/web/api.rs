@@ -9,8 +9,10 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use bytes::Bytes;
 use futures::{sink::SinkExt, stream::StreamExt};
-use hyper::{body, Body, Method, Request, Response, StatusCode};
+use http_body_util::{BodyExt, Full};
+use hyper::{body::Incoming, Method, Request, Response, StatusCode};
 use hyper_tungstenite::{is_upgrade_request, tungstenite::Message, upgrade, HyperWebsocket};
 use opener::OpenError;
 use rbx_dom_weak::{
@@ -116,7 +118,10 @@ fn variant_to_json(variant: &Variant) -> Option<serde_json::Value> {
     }
 }
 
-pub async fn call(serve_session: Arc<ServeSession>, mut request: Request<Body>) -> Response<Body> {
+pub async fn call(
+    serve_session: Arc<ServeSession>,
+    mut request: Request<Incoming>,
+) -> Response<Full<Bytes>> {
     let service = ApiService::new(serve_session);
 
     match (request.method(), request.uri().path()) {
@@ -253,7 +258,7 @@ impl ApiService {
     }
 
     /// Get a summary of information about the server
-    async fn handle_api_rojo(&self) -> Response<Body> {
+    async fn handle_api_rojo(&self) -> Response<Full<Bytes>> {
         let tree = self.serve_session.tree();
         let root_instance_id = tree.get_root_id();
 
@@ -281,7 +286,7 @@ impl ApiService {
     }
 
     /// Handle WebSocket upgrade for real-time message streaming
-    async fn handle_api_socket(&self, request: &mut Request<Body>) -> Response<Body> {
+    async fn handle_api_socket(&self, request: &mut Request<Incoming>) -> Response<Full<Bytes>> {
         let argument = &request.uri().path()["/api/socket/".len()..];
         let input_cursor: u32 = match argument.parse() {
             Ok(v) => v,
@@ -318,11 +323,11 @@ impl ApiService {
         response
     }
 
-    async fn handle_api_write(&self, request: Request<Body>) -> Response<Body> {
+    async fn handle_api_write(&self, request: Request<Incoming>) -> Response<Full<Bytes>> {
         let session_id = self.serve_session.session_id();
         let tree_mutation_sender = self.serve_session.tree_mutation_sender();
 
-        let body = body::to_bytes(request.into_body()).await.unwrap();
+        let body = request.into_body().collect().await.unwrap().to_bytes();
 
         let request: WriteRequest = match deserialize_msgpack(&body) {
             Ok(request) => request,
@@ -2411,7 +2416,7 @@ impl ApiService {
         }
     }
 
-    async fn handle_api_read(&self, request: Request<Body>) -> Response<Body> {
+    async fn handle_api_read(&self, request: Request<Incoming>) -> Response<Full<Bytes>> {
         let argument = &request.uri().path()["/api/read/".len()..];
         let requested_ids: Result<Vec<Ref>, _> = argument.split(',').map(Ref::from_str).collect();
 
@@ -2496,7 +2501,7 @@ impl ApiService {
     /// The returned model is a folder that contains ObjectValues with names
     /// that correspond to the requested Instances. These values have their
     /// `Value` property set to point to the requested Instance.
-    async fn handle_api_serialize(&self, request: Request<Body>) -> Response<Body> {
+    async fn handle_api_serialize(&self, request: Request<Incoming>) -> Response<Full<Bytes>> {
         let argument = &request.uri().path()["/api/serialize/".len()..];
         let requested_ids: Result<Vec<Ref>, _> = argument.split(',').map(Ref::from_str).collect();
 
@@ -2558,7 +2563,7 @@ impl ApiService {
     /// provided IDs. Used because the plugin does not store a RojoTree,
     /// and referent properties need to be updated after the serialize
     /// endpoint is used.
-    async fn handle_api_ref_patch(&self, request: Request<Body>) -> Response<Body> {
+    async fn handle_api_ref_patch(&self, request: Request<Incoming>) -> Response<Full<Bytes>> {
         let argument = &request.uri().path()["/api/ref-patch/".len()..];
         let requested_ids: Result<Vec<Ref>, _> = argument.split(',').map(Ref::from_str).collect();
 
@@ -2613,7 +2618,7 @@ impl ApiService {
     }
 
     /// Open a script with the given ID in the user's default text editor.
-    async fn handle_api_open(&self, request: Request<Body>) -> Response<Body> {
+    async fn handle_api_open(&self, request: Request<Incoming>) -> Response<Full<Bytes>> {
         let argument = &request.uri().path()["/api/open/".len()..];
         let requested_id = match Ref::from_str(argument) {
             Ok(id) => id,
@@ -2786,7 +2791,7 @@ async fn handle_websocket_subscription(
 
                             log::debug!("Sending batch of messages over WebSocket subscription");
 
-                            if websocket.send(Message::Binary(msgpack_message)).await.is_err() {
+                            if websocket.send(Message::Binary(msgpack_message.into())).await.is_err() {
                                 // Client disconnected
                                 log::debug!("WebSocket subscription closed by client");
                                 break;

@@ -16,11 +16,11 @@ body:
           Parent: id-7
           Properties:
             Attributes:
-              Attributes: {}
+              "!Attributes": {}
             NeedsPivotMigration:
-              Bool: false
+              "!Bool": false
             PrimaryPart:
-              Ref: id-9
+              "!Ref": a014b12bf90014847f564374c73a5f38
       removed: []
       updated:
         - changedClassName: ~
@@ -29,18 +29,18 @@ body:
           changedName: ~
           changedProperties:
             Attributes:
-              Attributes:
+              "!Attributes":
                 Rojo_Id:
-                  String: model target 2
+                  "!String": model target 2
           id: id-7
         - changedClassName: ~
           changedMetadata: ~
           changedName: ~
           changedProperties:
             Attributes:
-              Attributes:
+              "!Attributes":
                 Rojo_Target_PrimaryPart:
-                  String: model target 2
+                  "!String": model target 2
             PrimaryPart: ~
           id: id-8
 packetType: messages

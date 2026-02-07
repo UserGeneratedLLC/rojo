@@ -27,9 +27,9 @@ instances:
     Parent: id-2
     Properties:
       RunContext:
-        Enum: 1
+        "!Enum": 1
       Source:
-        String: "-- Hello, from bar (a Script)!"
+        "!String": "-- Hello, from bar (a Script)!"
   id-4:
     Children: []
     ClassName: Script
@@ -40,9 +40,9 @@ instances:
     Parent: id-2
     Properties:
       RunContext:
-        Enum: 2
+        "!Enum": 2
       Source:
-        String: "-- Hello, from baz (a LocalScript)!"
+        "!String": "-- Hello, from baz (a LocalScript)!"
   id-5:
     Children: []
     ClassName: StringValue
@@ -53,7 +53,7 @@ instances:
     Parent: id-2
     Properties:
       Value:
-        String: "Hello, from cat (a StringValue)!"
+        "!String": "Hello, from cat (a StringValue)!"
   id-6:
     Children: []
     ClassName: ModuleScript
@@ -64,7 +64,7 @@ instances:
     Parent: id-2
     Properties:
       Source:
-        String: "-- Hello, from foo (a ModuleScript)!"
+        "!String": "-- Hello, from foo (a ModuleScript)!"
   id-7:
     Children: []
     ClassName: StringValue
@@ -75,6 +75,6 @@ instances:
     Parent: id-2
     Properties:
       Value:
-        String: "Hello, from qux (a .rojo file that's turned into a StringValue)!"
+        "!String": "Hello, from qux (a .rojo file that's turned into a StringValue)!"
 messageCursor: 0
 sessionId: id-1

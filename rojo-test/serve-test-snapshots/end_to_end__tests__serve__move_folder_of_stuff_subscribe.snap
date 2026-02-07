@@ -16,7 +16,7 @@ body:
           Parent: id-3
           Properties:
             Value:
-              String: "File #6"
+              "!String": "File #6"
         id-11:
           Children: []
           ClassName: StringValue
@@ -27,7 +27,7 @@ body:
           Parent: id-3
           Properties:
             Value:
-              String: "File #7"
+              "!String": "File #7"
         id-12:
           Children: []
           ClassName: StringValue
@@ -38,7 +38,7 @@ body:
           Parent: id-3
           Properties:
             Value:
-              String: "File #8"
+              "!String": "File #8"
         id-13:
           Children: []
           ClassName: StringValue
@@ -49,7 +49,7 @@ body:
           Parent: id-3
           Properties:
             Value:
-              String: "File #9"
+              "!String": "File #9"
         id-3:
           Children:
             - id-4
@@ -79,7 +79,7 @@ body:
           Parent: id-3
           Properties:
             Value:
-              String: "File #0"
+              "!String": "File #0"
         id-5:
           Children: []
           ClassName: StringValue
@@ -90,7 +90,7 @@ body:
           Parent: id-3
           Properties:
             Value:
-              String: "File #1"
+              "!String": "File #1"
         id-6:
           Children: []
           ClassName: StringValue
@@ -101,7 +101,7 @@ body:
           Parent: id-3
           Properties:
             Value:
-              String: "File #2"
+              "!String": "File #2"
         id-7:
           Children: []
           ClassName: StringValue
@@ -112,7 +112,7 @@ body:
           Parent: id-3
           Properties:
             Value:
-              String: "File #3"
+              "!String": "File #3"
         id-8:
           Children: []
           ClassName: StringValue
@@ -123,7 +123,7 @@ body:
           Parent: id-3
           Properties:
             Value:
-              String: "File #4"
+              "!String": "File #4"
         id-9:
           Children: []
           ClassName: StringValue
@@ -134,7 +134,7 @@ body:
           Parent: id-3
           Properties:
             Value:
-              String: "File #5"
+              "!String": "File #5"
       removed: []
       updated: []
 packetType: messages

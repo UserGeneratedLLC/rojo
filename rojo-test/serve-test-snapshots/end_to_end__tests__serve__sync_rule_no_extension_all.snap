@@ -1,6 +1,5 @@
 ---
 source: tests/tests/serve.rs
-assertion_line: 303
 expression: "read_response.intern_and_redact(&mut redactions, root_id)"
 ---
 instances:
@@ -24,7 +23,6 @@ instances:
     Parent: id-2
     Properties:
       Source:
-        String: "return {\"This file has no extension but should be a ModuleScript named `no_extension`\"}"
+        "!String": "return {\"This file has no extension but should be a ModuleScript named `no_extension`\"}"
 messageCursor: 0
 sessionId: id-1
-

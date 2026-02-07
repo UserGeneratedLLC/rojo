@@ -1,6 +1,5 @@
 ---
 source: tests/tests/serve.rs
-assertion_line: 389
 expression: "read_response.intern_and_redact(&mut redactions, root_id)"
 ---
 instances:
@@ -15,7 +14,7 @@ instances:
     Parent: "00000000000000000000000000000000"
     Properties:
       Value:
-        String: "This should be named `sync_rule_no_name_project` and have a child at `src/not_a_project`"
+        "!String": "This should be named `sync_rule_no_name_project` and have a child at `src/not_a_project`"
   id-3:
     Children:
       - id-4
@@ -36,6 +35,6 @@ instances:
     Parent: id-3
     Properties:
       Value:
-        String: "If this isn't named `not_a_project`, something has gone wrong!"
+        "!String": "If this isn't named `not_a_project`, something has gone wrong!"
 messageCursor: 0
 sessionId: id-1

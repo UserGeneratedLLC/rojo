@@ -23,8 +23,8 @@ instances:
     Parent: id-2
     Properties:
       Attributes:
-        Attributes: {}
+        "!Attributes": {}
       Value:
-        Ref: id-4
+        "!Ref": ca113df936e8659c00936176b40b02ae
 messageCursor: 1
 sessionId: id-1

@@ -16,7 +16,7 @@ body:
           Parent: id-3
           Properties:
             NeedsPivotMigration:
-              Bool: false
+              "!Bool": false
       removed: []
       updated:
         - changedClassName: ~

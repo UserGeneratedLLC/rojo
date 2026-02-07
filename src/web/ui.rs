@@ -6,7 +6,9 @@
 
 use std::{borrow::Cow, sync::Arc, time::Duration};
 
-use hyper::{header, Body, Method, Request, Response, StatusCode};
+use bytes::Bytes;
+use http_body_util::Full;
+use hyper::{body::Incoming, header, Method, Request, Response, StatusCode};
 use rbx_dom_weak::types::{Ref, Variant};
 use ritz::{html, Fragment, HtmlContent, HtmlSelfClosingTag};
 
@@ -20,7 +22,10 @@ use crate::{
     },
 };
 
-pub async fn call(serve_session: Arc<ServeSession>, request: Request<Body>) -> Response<Body> {
+pub async fn call(
+    serve_session: Arc<ServeSession>,
+    request: Request<Incoming>,
+) -> Response<Full<Bytes>> {
     let service = UiService::new(serve_session);
 
     match (request.method(), request.uri().path()) {
@@ -44,21 +49,21 @@ impl UiService {
         UiService { serve_session }
     }
 
-    fn handle_logo(&self) -> Response<Body> {
+    fn handle_logo(&self) -> Response<Full<Bytes>> {
         Response::builder()
             .header(header::CONTENT_TYPE, "image/png")
-            .body(Body::from(assets::logo()))
+            .body(Full::new(Bytes::from(assets::logo())))
             .unwrap()
     }
 
-    fn handle_icon(&self) -> Response<Body> {
+    fn handle_icon(&self) -> Response<Full<Bytes>> {
         Response::builder()
             .header(header::CONTENT_TYPE, "image/png")
-            .body(Body::from(assets::icon()))
+            .body(Full::new(Bytes::from(assets::icon())))
             .unwrap()
     }
 
-    fn handle_home(&self) -> Response<Body> {
+    fn handle_home(&self) -> Response<Full<Bytes>> {
         let page = self.normal_page(html! {
             <div class="button-list">
                 { Self::button("Rojo Documentation", "https://rojo.space/docs") }
@@ -68,11 +73,11 @@ impl UiService {
 
         Response::builder()
             .header(header::CONTENT_TYPE, "text/html")
-            .body(Body::from(format!("<!DOCTYPE html>{}", page)))
+            .body(Full::new(Bytes::from(format!("<!DOCTYPE html>{}", page))))
             .unwrap()
     }
 
-    fn handle_show_instances(&self) -> Response<Body> {
+    fn handle_show_instances(&self) -> Response<Full<Bytes>> {
         let tree = self.serve_session.tree();
         let root_id = tree.get_root_id();
 
@@ -82,7 +87,7 @@ impl UiService {
 
         Response::builder()
             .header(header::CONTENT_TYPE, "text/html")
-            .body(Body::from(format!("<!DOCTYPE html>{}", page)))
+            .body(Full::new(Bytes::from(format!("<!DOCTYPE html>{}", page))))
             .unwrap()
     }
 
