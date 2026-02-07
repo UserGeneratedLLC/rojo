@@ -18,8 +18,13 @@ homepage = "https://github.com/rojo-rbx/rojo/tree/master/memofs"
 crossbeam-channel = "0.5.15"
 fs-err = "3"
 log = "0.4"
-notify = "8.2"
 notify-debouncer-full = "0.7"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+notify = { version = "8.2", features = ["macos_kqueue"] }
+
+[target.'cfg(not(target_os = "macos"))'.dependencies]
+notify = "8.2"
 serde = { version = "1.0.228", features = ["derive"] }
 
 [dev-dependencies]
