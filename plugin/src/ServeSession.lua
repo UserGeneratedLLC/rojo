@@ -278,6 +278,12 @@ function ServeSession:__onWebSocketMessage(messagesPacket)
 		self.__confirmingPatch = nil
 		self.__isConfirming = false
 
+		-- If the session was disconnected during the confirmation yield
+		-- (e.g., WebSocket error, server crash), bail out immediately.
+		if self.__status == Status.Disconnected then
+			return
+		end
+
 		-- Resume ChangeBatcher after confirmation
 		self.__changeBatcher:resume()
 
@@ -655,6 +661,13 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 		-- Clear confirmation state flags
 		self.__confirmingPatch = nil
 		self.__isConfirming = false
+
+		-- If the session was disconnected during the confirmation yield
+		-- (e.g., WebSocket error, server crash), bail out immediately.
+		-- Don't resume batcher or apply patches on a dead session.
+		if self.__status == Status.Disconnected then
+			return Promise.reject("Session disconnected during confirmation")
+		end
 
 		-- Resume ChangeBatcher after confirmation
 		self.__changeBatcher:resume()

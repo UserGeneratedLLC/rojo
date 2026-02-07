@@ -663,15 +663,38 @@ function App:startSession()
 			self:setRunningConnectionInfo(baseUrl)
 
 			local address = ("%s:%s"):format(host, port)
-			self:setState({
-				appStatus = AppStatus.Connected,
-				projectName = details,
-				address = address,
-				toolbarIcon = Assets.Images.PluginButtonConnected,
-			})
-			self:addNotification({
-				text = string.format("Connected to session '%s' at %s.", details, address),
-			})
+
+			if Settings:get("oneShotSync") then
+				-- One-shot mode: Don't show Connected page since we're about to disconnect.
+				-- Show a loading state while the patch applies and writes complete.
+				self:setState({
+					appStatus = AppStatus.Connecting,
+					connectingText = "Completing sync...",
+					toolbarIcon = Assets.Images.PluginButton,
+				})
+				self:addNotification({
+					text = string.format("Synced with '%s'. Completing...", details),
+				})
+				-- Safety: if endSession hasn't fired within 30s, force disconnect.
+				-- This catches cases where the promise chain silently breaks
+				-- (e.g., write request hangs, promise never resolves).
+				task.delay(30, function()
+					if self.serveSession ~= nil and Settings:get("oneShotSync") then
+						Log.warn("One-shot sync safety timeout: forcing disconnect")
+						self:endSession()
+					end
+				end)
+			else
+				self:setState({
+					appStatus = AppStatus.Connected,
+					projectName = details,
+					address = address,
+					toolbarIcon = Assets.Images.PluginButtonConnected,
+				})
+				self:addNotification({
+					text = string.format("Connected to session '%s' at %s.", details, address),
+				})
+			end
 		elseif status == ServeSession.Status.Disconnected then
 			self.serveSession = nil
 			-- Only release lock if we claimed it (not in one-shot mode)
@@ -863,6 +886,19 @@ end
 
 function App:endSession()
 	if self.serveSession == nil then
+		-- Safety: if the session reference was cleared (e.g., by a Disconnected handler)
+		-- but the UI is still stuck on Connected/Connecting, force reset to NotConnected.
+		-- This handles race conditions where onStatusChanged(Connected) fires after
+		-- onStatusChanged(Disconnected) due to a coroutine resuming on a dead session.
+		if self.state.appStatus ~= AppStatus.NotConnected
+			and self.state.appStatus ~= AppStatus.Error
+			and self.state.appStatus ~= AppStatus.Settings
+		then
+			self:setState({
+				appStatus = AppStatus.NotConnected,
+				toolbarIcon = Assets.Images.PluginButton,
+			})
+		end
 		return
 	end
 
