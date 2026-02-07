@@ -5,6 +5,7 @@ use std::process::Command;
 use anyhow::Context;
 use clap::Parser;
 use memofs::Vfs;
+use reqwest::header::COOKIE;
 use serde::Deserialize;
 
 use crate::project::Project;
@@ -66,12 +67,19 @@ impl StudioCommand {
 }
 
 fn get_universe_id(place_id: u64) -> anyhow::Result<u64> {
+    let cookie_header = rbx_cookie::get_value().map(|c| format!(".ROBLOSECURITY={}", c));
+
     let url = format!(
         "https://apis.roblox.com/universes/v1/places/{}/universe",
         place_id
     );
 
-    let response: UniverseResponse = reqwest::blocking::get(&url)
+    let mut req = reqwest::blocking::Client::new().get(&url);
+    if let Some(cookie) = &cookie_header {
+        req = req.header(COOKIE, cookie);
+    }
+    let response: UniverseResponse = req
+        .send()
         .context("Failed to fetch universe ID from Roblox API")?
         .json()
         .context("Failed to parse universe ID response")?;

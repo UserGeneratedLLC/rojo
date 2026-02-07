@@ -4,6 +4,7 @@ use std::process::{Command, Stdio};
 use anyhow::{bail, Context};
 use clap::Parser;
 use reqwest::blocking::Client;
+use reqwest::header::COOKIE;
 use serde::Deserialize;
 
 use super::init::{InitCommand, InitKind};
@@ -131,12 +132,17 @@ struct GameData {
 
 /// Resolves a place ID to its experience name via the Roblox API.
 fn fetch_experience_name(place_id: u64) -> anyhow::Result<String> {
+    let cookie_header = rbx_cookie::get_value().map(|c| format!(".ROBLOSECURITY={}", c));
+
     let client = Client::new();
 
     // Place ID -> Universe ID
     let universe_url = format!("https://apis.roblox.com/universes/v1/places/{place_id}/universe");
-    let universe: UniverseResponse = client
-        .get(&universe_url)
+    let mut req = client.get(&universe_url);
+    if let Some(cookie) = &cookie_header {
+        req = req.header(COOKIE, cookie);
+    }
+    let universe: UniverseResponse = req
         .send()
         .context("Failed to reach Roblox universe API")?
         .json()
@@ -147,8 +153,11 @@ fn fetch_experience_name(place_id: u64) -> anyhow::Result<String> {
         "https://games.roblox.com/v1/games?universeIds={}",
         universe.universe_id
     );
-    let games: GamesResponse = client
-        .get(&games_url)
+    let mut req = client.get(&games_url);
+    if let Some(cookie) = &cookie_header {
+        req = req.header(COOKIE, cookie);
+    }
+    let games: GamesResponse = req
         .send()
         .context("Failed to reach Roblox games API")?
         .json()
