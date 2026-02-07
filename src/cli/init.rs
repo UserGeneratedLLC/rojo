@@ -181,8 +181,7 @@ impl InitCommand {
         }
 
         if did_git_init {
-            log::debug!("Committing initial project...");
-
+            log::info!("Staging initial project...");
             let _ = Command::new("git")
                 .args(["add", "."])
                 .current_dir(&base_path)
@@ -191,6 +190,7 @@ impl InitCommand {
                 .stderr(Stdio::null())
                 .status();
 
+            log::info!("Committing initial project...");
             let _ = Command::new("git")
                 .args(["commit", "--no-verify", "-m", "Initial commit"])
                 .current_dir(&base_path)

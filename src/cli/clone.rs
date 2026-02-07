@@ -90,6 +90,7 @@ impl CloneCommand {
 
         // Commit syncback result
         if !skip_git {
+            log::info!("Staging syncback changes...");
             let _ = Command::new("git")
                 .args(["add", "."])
                 .current_dir(&path)
@@ -98,6 +99,7 @@ impl CloneCommand {
                 .stderr(Stdio::null())
                 .status();
 
+            log::info!("Committing syncback changes...");
             let _ = Command::new("git")
                 .args(["commit", "--no-verify", "-m", "syncback"])
                 .current_dir(&path)
