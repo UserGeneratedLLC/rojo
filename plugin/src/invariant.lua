@@ -19,7 +19,7 @@ else
 			"Atlas detected an invariant violation within itself:\n"
 				.. "%s\n\n"
 				.. "This is a bug in Atlas. Please file an issue:\n"
-				.. "https://github.com/rojo-rbx/rojo/issues",
+				.. "https://github.com/UserGeneratedLLC/rojo/issues",
 			message
 		)
 

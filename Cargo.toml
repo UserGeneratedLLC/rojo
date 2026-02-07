@@ -1,6 +1,6 @@
 [package]
 name = "atlas"
-version = "7.7.0-rc.2"
+version = "8.0.0"
 rust-version = "1.88"
 authors = [
     "Lucien Greathouse <me@lpghatguy.com>",
@@ -11,7 +11,7 @@ description = "Enables professional-grade development tools for Roblox developer
 license = "MPL-2.0"
 homepage = "https://rojo.space"
 documentation = "https://rojo.space/docs"
-repository = "https://github.com/rojo-rbx/rojo"
+repository = "https://github.com/UserGeneratedLLC/rojo"
 readme = "README.md"
 edition = "2021"
 build = "build.rs"
