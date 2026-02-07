@@ -1,6 +1,7 @@
 //! Defines Rojo's CLI through clap types.
 
 mod build;
+mod clone;
 mod cursor;
 mod doc;
 mod fmt_project;
@@ -18,6 +19,7 @@ use clap::Parser;
 use thiserror::Error;
 
 pub use self::build::BuildCommand;
+pub use self::clone::CloneCommand;
 pub use self::cursor::CursorCommand;
 pub use self::doc::DocCommand;
 pub use self::fmt_project::FmtProjectCommand;
@@ -44,6 +46,7 @@ pub struct Options {
 impl Options {
     pub fn run(self) -> anyhow::Result<()> {
         match self.subcommand {
+            Subcommand::Clone(subcommand) => subcommand.run(self.global),
             Subcommand::Init(subcommand) => subcommand.run(),
             Subcommand::Serve(subcommand) => subcommand.run(),
             Subcommand::Build(subcommand) => subcommand.run(),
@@ -54,7 +57,9 @@ impl Options {
             Subcommand::Doc(subcommand) => subcommand.run(),
             Subcommand::Plugin(subcommand) => subcommand.run(),
             Subcommand::Studio(subcommand) => subcommand.run(),
-            Subcommand::Syncback(subcommand) => subcommand.run(self.global),
+            Subcommand::Syncback(subcommand) | Subcommand::Pull(subcommand) => {
+                subcommand.run(self.global)
+            }
         }
     }
 }
@@ -120,6 +125,7 @@ pub struct ColorChoiceParseError {
 
 #[derive(Debug, Parser)]
 pub enum Subcommand {
+    Clone(CloneCommand),
     Init(InitCommand),
     Serve(ServeCommand),
     Build(BuildCommand),
@@ -131,6 +137,9 @@ pub enum Subcommand {
     Plugin(PluginCommand),
     Studio(StudioCommand),
     Syncback(SyncbackCommand),
+    /// Alias for `syncback`.
+    #[clap(hide = true)]
+    Pull(SyncbackCommand),
 }
 
 pub(super) fn resolve_path(path: &Path) -> Cow<'_, Path> {
