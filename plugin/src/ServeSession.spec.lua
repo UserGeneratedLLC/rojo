@@ -165,10 +165,10 @@ return function()
 
 				local applyPatchCalled = false
 				local originalApplyPatch = session.__applyPatch
-			function session:__applyPatch(_patch)
-				applyPatchCalled = true
-				-- Don't actually apply
-			end
+				function session:__applyPatch(_patch)
+					applyPatchCalled = true
+					-- Don't actually apply
+				end
 
 				session:setConfirmCallback(function()
 					return "Skip"

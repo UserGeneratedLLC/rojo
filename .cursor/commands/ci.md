@@ -1,10 +1,14 @@
 # /ci - Complete CI Pipeline
 
-Run the complete CI pipeline: auto-fix all formatting, run all linters, build everything, and run ALL tests.
+Run the complete CI pipeline: auto-fix all formatting, run all linters, build everything, and run ALL tests — for both Rojo and rbx-dom.
 
 ## Instructions
 
 Execute ALL of the following steps in order. Fix issues automatically where possible.
+
+---
+
+## Rojo
 
 ### 1. Auto-fix Lua Formatting (Stylua)
 ```powershell
@@ -56,12 +60,74 @@ cargo test --locked --all-targets --all-features
 .\scripts\unit-test-plugin.ps1
 ```
 
+---
+
+## rbx-dom (submodule)
+
+All rbx-dom steps run inside the `rbx-dom/` directory.
+
+### 8. Auto-fix Lua Formatting (Stylua) for rbx_dom_lua
+```powershell
+cd rbx-dom
+stylua rbx_dom_lua/src
+cd ..
+```
+
+### 9. Auto-fix Rust Formatting
+```powershell
+cd rbx-dom
+cargo fmt
+cd ..
+```
+
+### 10. Lua Static Analysis (Selene) for rbx_dom_lua - MUST PASS WITH ZERO ISSUES
+```powershell
+cd rbx-dom
+selene rbx_dom_lua/src
+cd ..
+```
+
+Same rules as step 3: exit code 0 required, fix all errors and warnings before proceeding.
+
+### 11. Rust Linting (Clippy) - Auto-fix where possible
+```powershell
+cd rbx-dom
+cargo clippy --fix --allow-dirty --allow-staged
+```
+Then verify with:
+```powershell
+cd rbx-dom
+cargo clippy --all-targets --all-features -- -D warnings
+cd ..
+```
+If there are remaining warnings/errors, fix them before proceeding.
+
+### 12. Build rbx-dom
+```powershell
+cd rbx-dom
+cargo build --verbose
+cargo build --all-features --verbose
+cd ..
+```
+
+### 13. Run ALL rbx-dom Rust Tests
+```powershell
+cd rbx-dom
+cargo test --verbose
+cargo test --all-features --verbose
+cd ..
+```
+
+---
+
 ## Reporting
 
 After ALL steps complete, provide a summary:
 
 ```
 === CI COMPLETE ===
+
+--- Rojo ---
 
 Formatting:
   - Stylua: [fixed X files / no changes needed]
@@ -77,10 +143,27 @@ Tests:
   - Rust: X passed, Y failed
   - Plugin: X passed, Y failed, Z skipped
 
-Overall: PASS / FAIL
+--- rbx-dom ---
+
+Formatting:
+  - Stylua (rbx_dom_lua): [fixed X files / no changes needed]
+  - Rustfmt: [fixed X files / no changes needed]
+
+Linting:
+  - Selene (rbx_dom_lua): PASS (0 errors, 0 warnings) / FAIL (X errors, Y warnings)
+  - Clippy: PASS / FAIL (X warnings)
+
+Build: PASS / FAIL
+Build (all features): PASS / FAIL
+
+Tests:
+  - Rust: X passed, Y failed
+  - Rust (all features): X passed, Y failed
+
+--- Overall: PASS / FAIL ---
 ```
 
 **IMPORTANT:** 
 - Selene PASS requires exit code 0 (0 errors AND 0 warnings). Any warnings = FAIL.
 - If any step fails, continue running the remaining steps to get a complete picture, then report all failures at the end.
-- Do not report "Overall: PASS" unless ALL linters pass with zero issues.
+- Do not report "Overall: PASS" unless ALL linters pass with zero issues across both Rojo and rbx-dom.
