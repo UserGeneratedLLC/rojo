@@ -15,7 +15,7 @@ instances:
       Attributes:
         "!Attributes": {}
       Value:
-        "!Ref": a2c2197b7d6e19e64b8991926744f3a6
+        "!Ref": id-9
   id-2:
     Children:
       - id-3
@@ -53,7 +53,7 @@ instances:
       Attributes:
         "!Attributes": {}
       Value:
-        "!Ref": 75d2ce9353a6c62f29130f18c35c89ce
+        "!Ref": id-5
   id-5:
     Children:
       - id-6
@@ -76,7 +76,7 @@ instances:
       Attributes:
         "!Attributes": {}
       Value:
-        "!Ref": 75d2ce9353a6c62f29130f18c35c89ce
+        "!Ref": id-5
   id-7:
     Children:
       - id-8
@@ -101,7 +101,7 @@ instances:
       NeedsPivotMigration:
         "!Bool": false
       PrimaryPart:
-        "!Ref": 103b2053eb8c4ea0a65500d5c20bd84f
+        "!Ref": id-7
       Scale:
         "!Float32": 1
   id-9:

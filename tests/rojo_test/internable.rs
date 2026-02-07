@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use rbx_dom_weak::types::Ref;
+use rbx_dom_weak::types::{Ref, Variant};
 use serde::Serialize;
 
 use librojo::web_api::{
@@ -38,6 +38,7 @@ impl Internable<Ref> for ReadResponse<'_> {
         redactions.intern(root_id);
 
         let root_instance = self.instances.get(&root_id).unwrap();
+        intern_variant_refs(redactions, root_instance.properties.values().map(|v| v.as_ref()));
 
         for &child_id in root_instance.children.iter() {
             self.intern(redactions, child_id);
@@ -48,6 +49,8 @@ impl Internable<Ref> for ReadResponse<'_> {
 impl<'a> Internable<&'a HashMap<Ref, Instance<'_>>> for Instance<'a> {
     fn intern(&self, redactions: &mut RedactionMap, other_instances: &HashMap<Ref, Instance<'_>>) {
         redactions.intern(self.id);
+
+        intern_variant_refs(redactions, self.properties.values().map(|v| v.as_ref()));
 
         for child_id in self.children.iter() {
             let child = &other_instances[child_id];
@@ -77,6 +80,13 @@ impl Internable<()> for MessagesPacket<'_> {
 fn intern_instance_updates(redactions: &mut RedactionMap, updates: &[InstanceUpdate]) {
     for update in updates {
         redactions.intern(update.id);
+        intern_variant_refs(
+            redactions,
+            update
+                .changed_properties
+                .values()
+                .filter_map(|v| v.as_ref()),
+        );
     }
 }
 
@@ -107,5 +117,20 @@ fn intern_instance_additions(
 
     for (root_id, _redacted_id) in added_roots {
         additions[root_id].intern(redactions, additions);
+    }
+}
+
+/// Scan property values for Ref variants and intern them so they get redacted
+/// to deterministic `id-N` values in snapshots.
+fn intern_variant_refs<'a>(
+    redactions: &mut RedactionMap,
+    properties: impl Iterator<Item = &'a Variant>,
+) {
+    for variant in properties {
+        if let Variant::Ref(r) = variant {
+            if !r.is_none() {
+                redactions.intern(*r);
+            }
+        }
     }
 }

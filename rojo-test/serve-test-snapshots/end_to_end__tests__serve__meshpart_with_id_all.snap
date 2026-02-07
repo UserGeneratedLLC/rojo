@@ -38,7 +38,7 @@ instances:
       Attributes:
         "!Attributes": {}
       Value:
-        "!Ref": 9893f640faccb9150197026b0ca91712
+        "!Ref": id-5
   id-5:
     Children: []
     ClassName: MeshPart

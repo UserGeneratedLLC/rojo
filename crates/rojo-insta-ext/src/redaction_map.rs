@@ -79,6 +79,9 @@ impl RedactionMap {
 
                 *mapping = new_map;
             }
+            Value::Tagged(tagged) => {
+                self.redact(&mut tagged.value);
+            }
             _ => {}
         }
     }

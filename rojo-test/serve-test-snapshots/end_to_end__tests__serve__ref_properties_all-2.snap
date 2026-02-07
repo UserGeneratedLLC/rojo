@@ -15,7 +15,7 @@ instances:
       Attributes:
         "!Attributes": {}
       Value:
-        "!Ref": a014b12bf90014847f564374c73a5f38
+        "!Ref": id-9
   id-11:
     Children: []
     ClassName: Model
@@ -30,7 +30,7 @@ instances:
       NeedsPivotMigration:
         "!Bool": false
       PrimaryPart:
-        "!Ref": a014b12bf90014847f564374c73a5f38
+        "!Ref": id-9
   id-2:
     Children:
       - id-3
@@ -68,7 +68,7 @@ instances:
       Attributes:
         "!Attributes": {}
       Value:
-        "!Ref": 4d3455270f6618409e7d40dbcad9e25b
+        "!Ref": id-5
   id-5:
     Children:
       - id-6
@@ -91,7 +91,7 @@ instances:
       Attributes:
         "!Attributes": {}
       Value:
-        "!Ref": 4d3455270f6618409e7d40dbcad9e25b
+        "!Ref": id-5
   id-7:
     Children:
       - id-8
@@ -119,7 +119,7 @@ instances:
       NeedsPivotMigration:
         "!Bool": false
       PrimaryPart:
-        "!Ref": 4536e7ddde75409951458987be6ccfb5
+        "!Ref": id-7
   id-9:
     Children:
       - id-10

@@ -25,6 +25,6 @@ instances:
       Attributes:
         "!Attributes": {}
       Value:
-        "!Ref": ca113df936e8659c00936176b40b02ae
+        "!Ref": id-4
 messageCursor: 1
 sessionId: id-1

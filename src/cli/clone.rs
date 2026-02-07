@@ -124,9 +124,7 @@ fn fetch_experience_name(place_id: u64) -> anyhow::Result<String> {
     let client = Client::new();
 
     // Place ID -> Universe ID
-    let universe_url = format!(
-        "https://apis.roblox.com/universes/v1/places/{place_id}/universe"
-    );
+    let universe_url = format!("https://apis.roblox.com/universes/v1/places/{place_id}/universe");
     let universe: UniverseResponse = client
         .get(&universe_url)
         .send()
@@ -203,18 +201,12 @@ mod tests {
 
     #[test]
     fn sanitize_brackets_and_parens() {
-        assert_eq!(
-            sanitize_name("My Game (UPDATE) [v2.0]"),
-            "my-game"
-        );
+        assert_eq!(sanitize_name("My Game (UPDATE) [v2.0]"), "my-game");
     }
 
     #[test]
     fn sanitize_emojis() {
-        assert_eq!(
-            sanitize_name("Cool Game 🌊🏃⚡"),
-            "cool-game"
-        );
+        assert_eq!(sanitize_name("Cool Game 🌊🏃⚡"), "cool-game");
     }
 
     #[test]
