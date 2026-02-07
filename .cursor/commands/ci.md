@@ -1,10 +1,13 @@
 # /ci - Complete CI Pipeline
 
-Run the complete CI pipeline: auto-fix all formatting, run all linters, build everything, and run ALL tests — for both Rojo and rbx-dom.
+Run the complete CI pipeline: auto-fix all formatting, run all linters, build everything, and run ALL tests.
 
 ## Instructions
 
-Execute ALL of the following steps in order. Fix issues automatically where possible.
+- If the user's message contains **"rbx-dom"**, run **both** the Rojo and rbx-dom sections below.
+- Otherwise, **skip the entire rbx-dom section** (steps 8–13) to save time.
+
+Execute ALL applicable steps in order. Fix issues automatically where possible.
 
 ---
 
@@ -143,7 +146,7 @@ Tests:
   - Rust: X passed, Y failed
   - Plugin: X passed, Y failed, Z skipped
 
---- rbx-dom ---
+--- rbx-dom (only if included) ---
 
 Formatting:
   - Stylua (rbx_dom_lua): [fixed X files / no changes needed]
@@ -166,4 +169,5 @@ Tests:
 **IMPORTANT:** 
 - Selene PASS requires exit code 0 (0 errors AND 0 warnings). Any warnings = FAIL.
 - If any step fails, continue running the remaining steps to get a complete picture, then report all failures at the end.
-- Do not report "Overall: PASS" unless ALL linters pass with zero issues across both Rojo and rbx-dom.
+- Do not report "Overall: PASS" unless ALL linters pass with zero issues across all sections that were run.
+- If rbx-dom was skipped, omit its section from the report entirely.

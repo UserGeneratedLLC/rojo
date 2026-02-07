@@ -403,6 +403,7 @@ fn refresh_git_index(project_dir: &Path) {
         match Command::new("git")
             .args(["update-index", "--refresh", "-q"])
             .current_dir(project_dir)
+            .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()

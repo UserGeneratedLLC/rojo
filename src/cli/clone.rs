@@ -93,13 +93,15 @@ impl CloneCommand {
             let _ = Command::new("git")
                 .args(["add", "."])
                 .current_dir(&path)
+                .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status();
 
             let _ = Command::new("git")
-                .args(["commit", "-m", "syncback"])
+                .args(["commit", "--no-verify", "-m", "syncback"])
                 .current_dir(&path)
+                .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status();

@@ -186,13 +186,15 @@ impl InitCommand {
             let _ = Command::new("git")
                 .args(["add", "."])
                 .current_dir(&base_path)
+                .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status();
 
             let _ = Command::new("git")
-                .args(["commit", "-m", "Initial commit"])
+                .args(["commit", "--no-verify", "-m", "Initial commit"])
                 .current_dir(&base_path)
+                .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status();
