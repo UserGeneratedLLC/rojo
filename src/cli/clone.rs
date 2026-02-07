@@ -168,8 +168,9 @@ fn fetch_experience_name(place_id: u64) -> anyhow::Result<String> {
 /// Sanitize a Roblox experience name into a valid folder name.
 ///
 /// 1. Strip `[...]` and `(...)` sections
-/// 2. Keep only ASCII alphanumeric and spaces
-/// 3. Collapse whitespace, lowercase, join with hyphens
+/// 2. Remove noise words (e.g. "testing")
+/// 3. Keep only ASCII alphanumeric and spaces
+/// 4. Collapse whitespace, lowercase, join with hyphens
 fn sanitize_name(name: &str) -> String {
     // Remove [...] and (...) sections (handles nesting)
     let mut cleaned = String::with_capacity(name.len());
@@ -192,6 +193,7 @@ fn sanitize_name(name: &str) -> String {
         .split(|c: char| !(c.is_ascii_alphanumeric() || c == ' '))
         .collect::<String>()
         .split_whitespace()
+        .filter(|w| !w.eq_ignore_ascii_case("testing"))
         .collect::<Vec<_>>()
         .join("-")
         .to_lowercase()
@@ -230,5 +232,12 @@ mod tests {
     #[test]
     fn sanitize_only_special_chars() {
         assert_eq!(sanitize_name("🎮🌊⚡"), "");
+    }
+
+    #[test]
+    fn sanitize_removes_testing() {
+        assert_eq!(sanitize_name("My Game Testing"), "my-game");
+        assert_eq!(sanitize_name("TESTING My Game"), "my-game");
+        assert_eq!(sanitize_name("My testing Game"), "my-game");
     }
 }
