@@ -274,4 +274,268 @@ return function()
 		expect(size(patch.added)).to.equal(1)
 		expect(patch.added["CHILD"]).to.equal(virtualInstances["CHILD"])
 	end)
+
+	describe("duplicate-named siblings", function()
+		it("should skip real DOM children with duplicate names", function()
+			local knownInstances = InstanceMap.new()
+			local virtualInstances = {
+				ROOT = {
+					ClassName = "Folder",
+					Name = "Root",
+					Properties = {},
+					Children = {},
+				},
+			}
+
+			local rootInstance = Instance.new("Folder")
+			rootInstance.Name = "Root"
+
+			-- Two children with the same name
+			local child1 = Instance.new("Folder")
+			child1.Name = "Duplicate"
+			child1.Parent = rootInstance
+
+			local child2 = Instance.new("Folder")
+			child2.Name = "Duplicate"
+			child2.Parent = rootInstance
+
+			knownInstances:insert("ROOT", rootInstance)
+
+			local ok, patch = diff(knownInstances, virtualInstances, "ROOT")
+
+			assert(ok, tostring(patch))
+
+			-- Duplicate-named children should be skipped (not removed)
+			assert(isEmpty(patch.removed))
+		end)
+
+		it("should skip virtual children with duplicate names among siblings", function()
+			local knownInstances = InstanceMap.new()
+			local virtualInstances = {
+				ROOT = {
+					ClassName = "Folder",
+					Name = "Root",
+					Properties = {},
+					Children = { "CHILD_A", "CHILD_B" },
+				},
+				CHILD_A = {
+					ClassName = "Folder",
+					Name = "Duplicate", -- Same name as CHILD_B
+					Properties = {},
+					Children = {},
+				},
+				CHILD_B = {
+					ClassName = "Folder",
+					Name = "Duplicate", -- Same name as CHILD_A
+					Properties = {},
+					Children = {},
+				},
+			}
+
+			local rootInstance = Instance.new("Folder")
+			rootInstance.Name = "Root"
+			knownInstances:insert("ROOT", rootInstance)
+
+			local ok, patch = diff(knownInstances, virtualInstances, "ROOT")
+
+			assert(ok, tostring(patch))
+
+			-- Duplicate-named virtual children should not be added
+			assert(isEmpty(patch.added))
+		end)
+	end)
+
+	describe("Archivable instances", function()
+		it("should not remove non-Archivable children", function()
+			local knownInstances = InstanceMap.new()
+			local virtualInstances = {
+				ROOT = {
+					ClassName = "Folder",
+					Name = "Root",
+					Properties = {},
+					Children = {},
+				},
+			}
+
+			local rootInstance = Instance.new("Folder")
+			rootInstance.Name = "Root"
+
+			local nonArchivable = Instance.new("Folder")
+			nonArchivable.Name = "SessionLock"
+			nonArchivable.Archivable = false
+			nonArchivable.Parent = rootInstance
+
+			knownInstances:insert("ROOT", rootInstance)
+
+			local ok, patch = diff(knownInstances, virtualInstances, "ROOT")
+
+			assert(ok, tostring(patch))
+
+			-- Non-archivable instance should NOT be in removed list
+			assert(isEmpty(patch.removed))
+		end)
+
+		it("should still remove archivable unknown children", function()
+			local knownInstances = InstanceMap.new()
+			local virtualInstances = {
+				ROOT = {
+					ClassName = "Folder",
+					Name = "Root",
+					Properties = {},
+					Children = {},
+				},
+			}
+
+			local rootInstance = Instance.new("Folder")
+			rootInstance.Name = "Root"
+
+			local archivable = Instance.new("Folder")
+			archivable.Name = "ToRemove"
+			archivable.Archivable = true
+			archivable.Parent = rootInstance
+
+			knownInstances:insert("ROOT", rootInstance)
+
+			local ok, patch = diff(knownInstances, virtualInstances, "ROOT")
+
+			assert(ok, tostring(patch))
+
+			expect(#patch.removed).to.equal(1)
+		end)
+	end)
+
+	describe("ScrollingFrame CanvasPosition", function()
+		it("should ignore CanvasPosition changes on ScrollingFrame", function()
+			local knownInstances = InstanceMap.new()
+			local virtualInstances = {
+				ROOT = {
+					ClassName = "ScrollingFrame",
+					Name = "Scroller",
+					Properties = {
+						CanvasPosition = {
+							Vector2 = { 100, 200 },
+						},
+					},
+					Children = {},
+				},
+			}
+
+			local rootInstance = Instance.new("ScrollingFrame")
+			rootInstance.Name = "Scroller"
+			rootInstance.CanvasPosition = Vector2.new(0, 0)
+			knownInstances:insert("ROOT", rootInstance)
+
+			local ok, patch = diff(knownInstances, virtualInstances, "ROOT")
+
+			assert(ok, tostring(patch))
+
+			-- CanvasPosition should be ignored
+			assert(isEmpty(patch.updated))
+		end)
+	end)
+
+	describe("property comparison edge cases", function()
+		it("should treat equal StringValues as unchanged", function()
+			local knownInstances = InstanceMap.new()
+			local virtualInstances = {
+				ROOT = {
+					ClassName = "StringValue",
+					Name = "Test",
+					Properties = {
+						Value = { String = "Same" },
+					},
+					Children = {},
+				},
+			}
+
+			local rootInstance = Instance.new("StringValue")
+			rootInstance.Name = "Test"
+			rootInstance.Value = "Same"
+			knownInstances:insert("ROOT", rootInstance)
+
+			local ok, patch = diff(knownInstances, virtualInstances, "ROOT")
+
+			assert(ok, tostring(patch))
+			assert(PatchSet.isEmpty(patch), "expected empty patch for unchanged value")
+		end)
+
+		it("should detect changed className", function()
+			local knownInstances = InstanceMap.new()
+			local virtualInstances = {
+				ROOT = {
+					ClassName = "Model",
+					Name = "Root",
+					Properties = {},
+					Children = {},
+				},
+			}
+
+			local rootInstance = Instance.new("Folder")
+			rootInstance.Name = "Root"
+			knownInstances:insert("ROOT", rootInstance)
+
+			local ok, patch = diff(knownInstances, virtualInstances, "ROOT")
+
+			assert(ok, tostring(patch))
+
+			expect(#patch.updated).to.equal(1)
+			expect(patch.updated[1].changedClassName).to.equal("Model")
+		end)
+
+		it("should handle multiple property changes on same instance", function()
+			local knownInstances = InstanceMap.new()
+			local virtualInstances = {
+				ROOT = {
+					ClassName = "StringValue",
+					Name = "NewName",
+					Properties = {
+						Value = { String = "NewValue" },
+					},
+					Children = {},
+				},
+			}
+
+			local rootInstance = Instance.new("StringValue")
+			rootInstance.Name = "OldName"
+			rootInstance.Value = "OldValue"
+			knownInstances:insert("ROOT", rootInstance)
+
+			local ok, patch = diff(knownInstances, virtualInstances, "ROOT")
+
+			assert(ok, tostring(patch))
+
+			expect(#patch.updated).to.equal(1)
+			expect(patch.updated[1].changedName).to.equal("NewName")
+			expect(size(patch.updated[1].changedProperties)).to.equal(1)
+		end)
+	end)
+
+	describe("ignored class names", function()
+		it("should not remove Camera instances", function()
+			local knownInstances = InstanceMap.new()
+			local virtualInstances = {
+				ROOT = {
+					ClassName = "Folder",
+					Name = "Root",
+					Properties = {},
+					Children = {},
+				},
+			}
+
+			local rootInstance = Instance.new("Folder")
+			rootInstance.Name = "Root"
+
+			local camera = Instance.new("Camera")
+			camera.Parent = rootInstance
+
+			knownInstances:insert("ROOT", rootInstance)
+
+			local ok, patch = diff(knownInstances, virtualInstances, "ROOT")
+
+			assert(ok, tostring(patch))
+
+			-- Camera is in Config.ignoredClassNames, should not be removed
+			assert(isEmpty(patch.removed))
+		end)
+	end)
 end

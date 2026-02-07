@@ -714,12 +714,25 @@ function App:startSession()
 		end
 	end)
 
+	local initialSyncConfirmed = false
+
 	serveSession:setConfirmCallback(function(instanceMap, patch, serverInfo)
 		-- Filter out the DataModel name change from the patch
 		-- The project name (DataModel.Name) is managed by Studio independently
 		PatchSet.removeDataModelName(patch, instanceMap)
 
 		local isOneShotMode = Settings:get("oneShotSync")
+
+		-- ONE-SHOT MODE: After the initial sync is confirmed, skip any
+		-- subsequent patches entirely. These are server echoes from processing
+		-- our pull request (e.g. VFS re-snapshots after file deletions).
+		-- The session is about to disconnect — applying them is pointless,
+		-- and without this guard the echo triggers a second confirmation
+		-- dialog that races with endSession() and gets stuck.
+		if isOneShotMode and initialSyncConfirmed then
+			Log.info("One-shot mode: skipping post-initial-sync echo patch")
+			return "Skip"
+		end
 
 		-- ONE-SHOT MODE: Never auto-accept, always require explicit confirmation
 		-- This ensures nothing can "sneak through" without user review
@@ -796,6 +809,7 @@ function App:startSession()
 		-- The actual disconnect is handled by setInitialSyncCompleteCallback
 		-- to ensure any pending writes complete first
 		if Settings:get("oneShotSync") then
+			initialSyncConfirmed = true
 			return result
 		end
 

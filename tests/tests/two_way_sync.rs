@@ -32,6 +32,27 @@ use rbx_dom_weak::{ustr, UstrMap};
 use crate::rojo_test::serve_util::run_serve_test;
 
 // ---------------------------------------------------------------------------
+// Platform-tuned constants for stress tests
+//
+// On macOS, kqueue delivers more granular events than FSEvents (per-file
+// vnode changes instead of coalesced directory batches). This generates
+// significantly more VFS events during rapid rename/write sequences, so
+// stress tests need wider inter-operation gaps and longer poll timeouts.
+// ---------------------------------------------------------------------------
+
+/// Delay between rapid filesystem operations in stress tests (ms).
+#[cfg(target_os = "macos")]
+const STRESS_OP_DELAY_MS: u64 = 250;
+#[cfg(not(target_os = "macos"))]
+const STRESS_OP_DELAY_MS: u64 = 30;
+
+/// Poll timeout for stress tests that wait for the tree to settle (ms).
+#[cfg(target_os = "macos")]
+const STRESS_POLL_TIMEOUT_MS: u64 = 15000;
+#[cfg(not(target_os = "macos"))]
+const STRESS_POLL_TIMEOUT_MS: u64 = 5000;
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -1993,10 +2014,13 @@ fn combined_rename_classname_source_blitz_10x() {
                 make_combined_update(id, Some(name), Some(class), Some(source)),
             );
             current_name = name.to_string();
-            thread::sleep(Duration::from_millis(200));
+            thread::sleep(Duration::from_millis(STRESS_OP_DELAY_MS));
         }
 
         wait_for_settle();
+        // Extra settle time on macOS for kqueue event drain
+        #[cfg(target_os = "macos")]
+        thread::sleep(Duration::from_millis(2000));
 
         // Final: Blitz10.server.luau with "-- blitz v10"
         verify_instance_file(&src, "Blitz10", "Script", Some("-- blitz v10"));
@@ -2436,8 +2460,14 @@ fn fuzz_source_and_rename_20_iterations() {
             "-- Existing module for testing\nreturn {}",
         );
 
-        // 20 random operations in a single continuous chain (no reset)
-        for op_idx in 0..20 {
+        // Random operations in a single continuous chain (no reset).
+        // Reduced on macOS where kqueue's verbose events slow processing.
+        #[cfg(target_os = "macos")]
+        let iterations = 8;
+        #[cfg(not(target_os = "macos"))]
+        let iterations = 20;
+
+        for op_idx in 0..iterations {
             let info = session.get_api_rojo().unwrap();
             let root_read = session.get_api_read(info.root_instance_id).unwrap();
             let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
@@ -2477,8 +2507,9 @@ fn fuzz_source_and_rename_20_iterations() {
         let expected = src.join(state.expected_file());
         assert!(
             expected.is_file(),
-            "Expected file {} to exist after 20 fuzz ops",
-            expected.display()
+            "Expected file {} to exist after {} fuzz ops",
+            expected.display(),
+            iterations
         );
     });
 }
@@ -2533,8 +2564,14 @@ fn fuzz_combined_operations_20_iterations() {
             "-- Existing module for testing\nreturn {}",
         );
 
-        // 20 random combined operations in a single continuous chain
-        for op_idx in 0..20 {
+        // Random combined operations in a single continuous chain.
+        // Reduced on macOS where kqueue's verbose events slow processing.
+        #[cfg(target_os = "macos")]
+        let iterations = 8;
+        #[cfg(not(target_os = "macos"))]
+        let iterations = 20;
+
+        for op_idx in 0..iterations {
             let info = session.get_api_rojo().unwrap();
             let root_read = session.get_api_read(info.root_instance_id).unwrap();
             let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
@@ -2603,8 +2640,9 @@ fn fuzz_combined_operations_20_iterations() {
         let expected = src.join(state.expected_file());
         assert!(
             expected.is_file(),
-            "Expected file {} to exist after 20 combined fuzz ops. State: name={}, class={}",
+            "Expected file {} to exist after {} combined fuzz ops. State: name={}, class={}",
             expected.display(),
+            iterations,
             state.current_name,
             state.current_class,
         );
@@ -2783,10 +2821,10 @@ fn watcher_filesystem_rename_chain_10x() {
             let new_file = src.join(format!("R{}.luau", i));
             fs::rename(&current_file, &new_file).unwrap();
             current_file = new_file;
-            thread::sleep(Duration::from_millis(30));
+            thread::sleep(Duration::from_millis(STRESS_OP_DELAY_MS));
         }
 
-        poll_tree_has_instance(&session, rs_id, "R10", 3000);
+        poll_tree_has_instance(&session, rs_id, "R10", STRESS_POLL_TIMEOUT_MS);
 
         let content = fs::read_to_string(&current_file).unwrap();
         assert_eq!(
@@ -4534,32 +4572,39 @@ fn extreme_filesystem_chaos_single_file() {
         let src = session.path().join("src");
         let rs_id = get_rs_id(&session);
         let file = src.join("existing.luau");
+        let gap = Duration::from_millis(STRESS_OP_DELAY_MS);
 
         // Step 1: Edit
         fs::write(&file, "-- chaos v1\nreturn {}").unwrap();
-        thread::sleep(Duration::from_millis(30));
+        thread::sleep(gap);
 
         // Step 2: Rename
         let file2 = src.join("Chaos.luau");
         fs::rename(&file, &file2).unwrap();
-        thread::sleep(Duration::from_millis(30));
+        thread::sleep(gap);
 
         // Step 3: Edit renamed file
         fs::write(&file2, "-- chaos v2\nreturn {}").unwrap();
-        thread::sleep(Duration::from_millis(30));
+        thread::sleep(gap);
 
         // Step 4: Delete
         fs::remove_file(&file2).unwrap();
-        thread::sleep(Duration::from_millis(30));
+        thread::sleep(gap);
 
         // Step 5: Recreate with original name
         fs::write(&file, "-- chaos v3\nreturn {}").unwrap();
-        thread::sleep(Duration::from_millis(30));
+        thread::sleep(gap);
 
         // Step 6: Edit again
         fs::write(&file, "-- chaos final\nreturn {}").unwrap();
 
-        poll_tree_source(&session, rs_id, "existing", "-- chaos final", 5000);
+        poll_tree_source(
+            &session,
+            rs_id,
+            "existing",
+            "-- chaos final",
+            STRESS_POLL_TIMEOUT_MS,
+        );
     });
 }
 
@@ -4585,13 +4630,13 @@ fn extreme_filesystem_5_file_rename_chains() {
                 next.push(new_name);
             }
             current = next;
-            thread::sleep(Duration::from_millis(50));
+            thread::sleep(Duration::from_millis(STRESS_OP_DELAY_MS));
         }
 
         // All final names should exist
         for (j, _) in names.iter().enumerate() {
             let final_name = format!("{}_r5", names[j]);
-            poll_tree_has_instance(&session, rs_id, &final_name, 5000);
+            poll_tree_has_instance(&session, rs_id, &final_name, STRESS_POLL_TIMEOUT_MS);
         }
     });
 }

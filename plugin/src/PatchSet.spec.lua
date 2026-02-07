@@ -338,4 +338,357 @@ return function()
 			expect(PatchSet.isEqual(patchA, patchB)).to.equal(false)
 		end)
 	end)
+
+	describe("hasRemoves", function()
+		it("should return false for empty patch", function()
+			expect(PatchSet.hasRemoves(PatchSet.newEmpty())).to.equal(false)
+		end)
+
+		it("should return true when patch has removals", function()
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.removed, "some-id")
+			expect(PatchSet.hasRemoves(patch)).to.equal(true)
+		end)
+	end)
+
+	describe("hasAdditions", function()
+		it("should return false for empty patch", function()
+			expect(PatchSet.hasAdditions(PatchSet.newEmpty())).to.equal(false)
+		end)
+
+		it("should return true when patch has additions", function()
+			local patch = PatchSet.newEmpty()
+			patch.added["A"] = { Id = "A", ClassName = "Folder", Name = "A" }
+			expect(PatchSet.hasAdditions(patch)).to.equal(true)
+		end)
+	end)
+
+	describe("hasUpdates", function()
+		it("should return false for empty patch", function()
+			expect(PatchSet.hasUpdates(PatchSet.newEmpty())).to.equal(false)
+		end)
+
+		it("should return true when patch has updates", function()
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.updated, { id = "A", changedProperties = {} })
+			expect(PatchSet.hasUpdates(patch)).to.equal(true)
+		end)
+	end)
+
+	describe("containsId", function()
+		it("should find id in additions", function()
+			local instanceMap = InstanceMap.new()
+			local patch = PatchSet.newEmpty()
+			patch.added["TARGET"] = { Id = "TARGET", ClassName = "Folder", Name = "T" }
+
+			expect(PatchSet.containsId(patch, instanceMap, "TARGET")).to.equal(true)
+
+			instanceMap:stop()
+		end)
+
+		it("should find id in removals", function()
+			local instanceMap = InstanceMap.new()
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.removed, "TARGET")
+
+			expect(PatchSet.containsId(patch, instanceMap, "TARGET")).to.equal(true)
+
+			instanceMap:stop()
+		end)
+
+		it("should find id in updates", function()
+			local instanceMap = InstanceMap.new()
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.updated, { id = "TARGET", changedProperties = {} })
+
+			expect(PatchSet.containsId(patch, instanceMap, "TARGET")).to.equal(true)
+
+			instanceMap:stop()
+		end)
+
+		it("should return false for non-existent id", function()
+			local instanceMap = InstanceMap.new()
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.updated, { id = "OTHER", changedProperties = {} })
+
+			expect(PatchSet.containsId(patch, instanceMap, "TARGET")).to.equal(false)
+
+			instanceMap:stop()
+		end)
+
+		it("should find instance-based removal by resolving to id", function()
+			local instanceMap = InstanceMap.new()
+			local instance = Instance.new("Folder")
+			instanceMap:insert("TARGET", instance)
+
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.removed, instance)
+
+			expect(PatchSet.containsId(patch, instanceMap, "TARGET")).to.equal(true)
+
+			instance:Destroy()
+			instanceMap:stop()
+		end)
+	end)
+
+	describe("containsInstance", function()
+		it("should find instance in patch via instanceMap", function()
+			local instanceMap = InstanceMap.new()
+			local instance = Instance.new("Folder")
+			instanceMap:insert("INST", instance)
+
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.updated, { id = "INST", changedProperties = {} })
+
+			expect(PatchSet.containsInstance(patch, instanceMap, instance)).to.equal(true)
+
+			instance:Destroy()
+			instanceMap:stop()
+		end)
+
+		it("should return false for instance not in instanceMap", function()
+			local instanceMap = InstanceMap.new()
+			local instance = Instance.new("Folder")
+
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.updated, { id = "INST", changedProperties = {} })
+
+			expect(PatchSet.containsInstance(patch, instanceMap, instance)).to.equal(false)
+
+			instance:Destroy()
+			instanceMap:stop()
+		end)
+	end)
+
+	describe("containsOnlyId", function()
+		it("should return true when patch only affects the given id", function()
+			local instanceMap = InstanceMap.new()
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.updated, { id = "TARGET", changedProperties = {} })
+
+			expect(PatchSet.containsOnlyId(patch, instanceMap, "TARGET")).to.equal(true)
+
+			instanceMap:stop()
+		end)
+
+		it("should return false when patch affects other ids too", function()
+			local instanceMap = InstanceMap.new()
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.updated, { id = "TARGET", changedProperties = {} })
+			table.insert(patch.updated, { id = "OTHER", changedProperties = {} })
+
+			expect(PatchSet.containsOnlyId(patch, instanceMap, "TARGET")).to.equal(false)
+
+			instanceMap:stop()
+		end)
+
+		it("should return false when id is not in patch at all", function()
+			local instanceMap = InstanceMap.new()
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.updated, { id = "OTHER", changedProperties = {} })
+
+			expect(PatchSet.containsOnlyId(patch, instanceMap, "TARGET")).to.equal(false)
+
+			instanceMap:stop()
+		end)
+	end)
+
+	describe("getUpdateForId", function()
+		it("should return the update for a given id", function()
+			local patch = PatchSet.newEmpty()
+			local update = { id = "TARGET", changedName = "NewName", changedProperties = {} }
+			table.insert(patch.updated, update)
+
+			expect(PatchSet.getUpdateForId(patch, "TARGET")).to.equal(update)
+		end)
+
+		it("should return nil for non-existent id", function()
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.updated, { id = "OTHER", changedProperties = {} })
+
+			expect(PatchSet.getUpdateForId(patch, "TARGET")).to.equal(nil)
+		end)
+	end)
+
+	describe("getUpdateForInstance", function()
+		it("should return the update for a given instance", function()
+			local instanceMap = InstanceMap.new()
+			local instance = Instance.new("Folder")
+			instanceMap:insert("INST", instance)
+
+			local patch = PatchSet.newEmpty()
+			local update = { id = "INST", changedName = "New", changedProperties = {} }
+			table.insert(patch.updated, update)
+
+			expect(PatchSet.getUpdateForInstance(patch, instanceMap, instance)).to.equal(update)
+
+			instance:Destroy()
+			instanceMap:stop()
+		end)
+
+		it("should return nil for instance not in map", function()
+			local instanceMap = InstanceMap.new()
+			local instance = Instance.new("Folder")
+
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.updated, { id = "INST", changedProperties = {} })
+
+			expect(PatchSet.getUpdateForInstance(patch, instanceMap, instance)).to.equal(nil)
+
+			instance:Destroy()
+			instanceMap:stop()
+		end)
+	end)
+
+	describe("addedIdList", function()
+		it("should return list of added IDs", function()
+			local patch = PatchSet.newEmpty()
+			patch.added["A"] = { Id = "A", ClassName = "Folder", Name = "A" }
+			patch.added["B"] = { Id = "B", ClassName = "Folder", Name = "B" }
+
+			local ids = PatchSet.addedIdList(patch)
+
+			expect(#ids).to.equal(2)
+			-- IDs should contain A and B (order may vary due to pairs iteration)
+			local idSet = {}
+			for _, id in ids do
+				idSet[id] = true
+			end
+			expect(idSet["A"]).to.equal(true)
+			expect(idSet["B"]).to.equal(true)
+		end)
+
+		it("should return empty list for patch with no additions", function()
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.removed, "some-id")
+
+			local ids = PatchSet.addedIdList(patch)
+			expect(#ids).to.equal(0)
+		end)
+	end)
+
+	describe("updatedIdList", function()
+		it("should return list of updated IDs", function()
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.updated, { id = "X", changedProperties = {} })
+			table.insert(patch.updated, { id = "Y", changedProperties = {} })
+
+			local ids = PatchSet.updatedIdList(patch)
+
+			expect(#ids).to.equal(2)
+			expect(ids[1]).to.equal("X")
+			expect(ids[2]).to.equal("Y")
+		end)
+
+		it("should return empty list for patch with no updates", function()
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.removed, "some-id")
+
+			local ids = PatchSet.updatedIdList(patch)
+			expect(#ids).to.equal(0)
+		end)
+	end)
+
+	describe("removeDataModelName", function()
+		it("should remove changedName from DataModel update", function()
+			local instanceMap = InstanceMap.new()
+			instanceMap:insert("DM_ID", game)
+
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.updated, {
+				id = "DM_ID",
+				changedName = "SomeProjectName",
+				changedClassName = "DataModel",
+				changedProperties = {},
+			})
+
+			PatchSet.removeDataModelName(patch, instanceMap)
+
+			expect(#patch.updated).to.equal(1)
+			expect(patch.updated[1].changedName).to.equal(nil)
+
+			instanceMap:stop()
+		end)
+
+		it("should remove entire update if only Name was changed", function()
+			local instanceMap = InstanceMap.new()
+			instanceMap:insert("DM_ID", game)
+
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.updated, {
+				id = "DM_ID",
+				changedName = "SomeProjectName",
+				changedProperties = {},
+			})
+
+			PatchSet.removeDataModelName(patch, instanceMap)
+
+			expect(#patch.updated).to.equal(0)
+
+			instanceMap:stop()
+		end)
+
+		it("should do nothing if DataModel is not in instanceMap", function()
+			local instanceMap = InstanceMap.new()
+
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.updated, {
+				id = "SOME_ID",
+				changedName = "Test",
+				changedProperties = {},
+			})
+
+			PatchSet.removeDataModelName(patch, instanceMap)
+
+			expect(#patch.updated).to.equal(1)
+			expect(patch.updated[1].changedName).to.equal("Test")
+
+			instanceMap:stop()
+		end)
+
+		it("should not affect non-DataModel updates", function()
+			local instanceMap = InstanceMap.new()
+			instanceMap:insert("DM_ID", game)
+
+			local otherInstance = Instance.new("Folder")
+			instanceMap:insert("OTHER", otherInstance)
+
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.updated, {
+				id = "OTHER",
+				changedName = "NewName",
+				changedProperties = {},
+			})
+
+			PatchSet.removeDataModelName(patch, instanceMap)
+
+			expect(#patch.updated).to.equal(1)
+			expect(patch.updated[1].changedName).to.equal("NewName")
+
+			otherInstance:Destroy()
+			instanceMap:stop()
+		end)
+	end)
+
+	describe("validate", function()
+		it("should validate a well-formed patch", function()
+			local patch = PatchSet.newEmpty()
+			table.insert(patch.updated, { id = "A", changedProperties = {} })
+			patch.added["B"] = {
+				Id = "B",
+				ClassName = "Folder",
+				Name = "B",
+				Parent = "A",
+				Properties = {},
+				Children = {},
+			}
+			table.insert(patch.removed, "C")
+
+			expect(PatchSet.validate(patch)).to.equal(true)
+		end)
+
+		it("should validate an empty patch", function()
+			expect(PatchSet.validate(PatchSet.newEmpty())).to.equal(true)
+		end)
+	end)
 end

@@ -230,7 +230,7 @@ function ServeSession:__onWebSocketMessage(messagesPacket)
 	-- If we're already waiting for confirmation, merge into the patch being confirmed
 	-- Changes flow into the dialogue even in one-shot mode so user can see them
 	if self.__confirmingPatch ~= nil then
-		Log.trace("Already confirming, merging into current patch")
+		Log.info("Already confirming, merging into current patch")
 
 		-- Collect IDs of items that are being changed (for unselecting in UI)
 		local changedIds = {}
@@ -291,7 +291,10 @@ function ServeSession:__onWebSocketMessage(messagesPacket)
 			-- that arrived while we were waiting for confirmation
 			self:__applyPatch(combinedPatch)
 		end
-		-- Note: "Reject" is not handled for ongoing patches, only for initial sync
+		-- Note: Table-type responses ({ type = "Confirm", selections = ... }) from
+		-- the selection-based UI are not yet handled here. Ongoing WebSocket patches
+		-- with per-item selections would need the same logic as
+		-- __confirmAndApplyInitialPatch to properly respect push/pull/ignore choices.
 	end)
 
 	self.__apiContext:setMessageCursor(messagesPacket.messageCursor)
