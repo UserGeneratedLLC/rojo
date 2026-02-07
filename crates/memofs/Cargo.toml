@@ -19,13 +19,13 @@ crossbeam-channel = "0.5.15"
 fs-err = "3"
 log = "0.4"
 notify-debouncer-full = "0.7"
+serde = { version = "1.0.228", features = ["derive"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 notify = { version = "8.2", features = ["macos_kqueue"] }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 notify = "8.2"
-serde = { version = "1.0.228", features = ["derive"] }
 
 [dev-dependencies]
 tempfile = "3.24.0"
