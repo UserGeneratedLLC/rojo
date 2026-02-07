@@ -64,11 +64,29 @@ pub struct StdBackend {
 }
 
 impl StdBackend {
-    /// Creates a new StdBackend with default error handling (logs and exits on critical errors).
+    /// Creates a new StdBackend with default error handling.
+    ///
+    /// `RescanRequired` is treated as recoverable (the debouncer will re-walk
+    /// the directory tree). All other critical errors terminate the process
+    /// because file watching cannot continue.
     pub fn new() -> StdBackend {
         Self::new_with_error_handler(Box::new(|err| {
-            log::error!("{}. File watching is no longer reliable.", err);
-            std::process::exit(1);
+            match &err {
+                WatcherCriticalError::RescanRequired => {
+                    // Recoverable: the debouncer lost some events due to rapid
+                    // changes and will rescan the watched directories. Log a
+                    // warning but keep the watcher thread alive.
+                    log::warn!(
+                        "File watcher requested rescan due to rapid changes. \
+                         Some file events may have been missed."
+                    );
+                    false // keep watcher running
+                }
+                _ => {
+                    log::error!("{}. File watching is no longer reliable.", err);
+                    std::process::exit(1);
+                }
+            }
         }))
     }
 
