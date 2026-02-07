@@ -74,14 +74,28 @@ pub struct SyncbackCommand {
     /// project layout that exactly matches the input file, removing any orphaned files.
     #[clap(long, short = 'n')]
     pub incremental: bool,
+
+    /// Base directory for resolving relative paths (project, input).
+    /// Defaults to the current working directory.
+    #[clap(long, hide = true, default_value = ".")]
+    pub working_dir: PathBuf,
 }
 
 impl SyncbackCommand {
     pub fn run(&self, global: GlobalOptions) -> anyhow::Result<()> {
-        let path_old = resolve_path(&self.project);
+        let base = resolve_path(&self.working_dir);
+        let path_old = if self.project.is_absolute() {
+            self.project.clone()
+        } else {
+            base.join(&self.project)
+        };
 
         // Determine if we need to download the input file
-        let resolved_input = resolve_path(&self.input);
+        let resolved_input = if self.input.is_absolute() {
+            self.input.clone()
+        } else {
+            base.join(&self.input)
+        };
         let _temp_file: Option<NamedTempFile>;
         // Track if we should delete the input file after successful syncback
         // (when using default Project.rbxl and file exists locally)
@@ -111,11 +125,11 @@ impl SyncbackCommand {
                 _temp_file = None;
                 // If using default input path, mark for deletion after success
                 delete_input_after_syncback = if self.input.as_os_str() == "Project.rbxl" {
-                    Some(resolved_input.clone().into_owned())
+                    Some(resolved_input.clone())
                 } else {
                     None
                 };
-                resolved_input.into_owned()
+                resolved_input
             }
             None => {
                 // No --download flag, input file doesn't exist: auto-download

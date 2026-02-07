@@ -38,7 +38,10 @@ impl Internable<Ref> for ReadResponse<'_> {
         redactions.intern(root_id);
 
         let root_instance = self.instances.get(&root_id).unwrap();
-        intern_variant_refs(redactions, root_instance.properties.values().map(|v| v.as_ref()));
+        intern_variant_refs(
+            redactions,
+            root_instance.properties.values().map(|v| v.as_ref()),
+        );
 
         for &child_id in root_instance.children.iter() {
             self.intern(redactions, child_id);

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context};
@@ -51,6 +51,13 @@ impl CloneCommand {
                         name
                     );
                 }
+                if Path::new(&folder).exists() {
+                    bail!(
+                        "Directory '{}' already exists. \
+                         Remove it or use --path to specify a different location.",
+                        folder
+                    );
+                }
                 println!("Using folder: {folder}");
                 PathBuf::from(folder)
             }
@@ -68,21 +75,20 @@ impl CloneCommand {
 
         init.run()?;
 
-        let project_path = path.join("default.project.json5");
-
         let syncback = SyncbackCommand {
-            project: project_path,
+            project: PathBuf::from("default.project.json5"),
             input: PathBuf::from("Project.rbxl"),
             download: Some(self.placeid),
             list: false,
             dry_run: false,
             interactive: false,
             incremental: false,
+            working_dir: path.clone(),
         };
 
         syncback.run(global)?;
 
-        // Commit the full project (init + syncback) in one shot
+        // Commit syncback result
         if !skip_git {
             let _ = Command::new("git")
                 .args(["add", "."])
@@ -92,7 +98,7 @@ impl CloneCommand {
                 .status();
 
             let _ = Command::new("git")
-                .args(["commit", "-m", "init"])
+                .args(["commit", "-m", "syncback"])
                 .current_dir(&path)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
