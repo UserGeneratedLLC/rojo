@@ -58,9 +58,14 @@ cargo build --locked --all-targets --all-features
 cargo test --locked --all-targets --all-features
 ```
 
-### 7. Run Roblox Plugin Tests (requires Roblox Studio)
+### 7. Run Roblox Plugin Tests
+On Windows:
 ```powershell
 .\scripts\unit-test-plugin.ps1
+```
+Otherwise:
+```bash
+bash scripts/unit-test-plugin.sh
 ```
 
 ---
@@ -144,7 +149,7 @@ Build: PASS / FAIL
 
 Tests:
   - Rust: X passed, Y failed
-  - Plugin: X passed, Y failed, Z skipped
+  - Plugin: X passed, Y failed
 
 --- rbx-dom (only if included) ---
 
