@@ -63,7 +63,7 @@ function App:init()
 	self.notifId = 0
 
 	self.waypointConnection = ChangeHistoryService.OnUndo:Connect(function(action: string)
-		if not string.find(action, "^Rojo: Patch") then
+		if not string.find(action, "^Atlas: Patch") then
 			return
 		end
 
@@ -318,7 +318,7 @@ function App:isSyncLockAvailable()
 		return true
 	end
 
-	local lock = ServerStorage:FindFirstChild("__Rojo_SessionLock")
+	local lock = ServerStorage:FindFirstChild("__Atlas_SessionLock")
 	if not lock then
 		-- No lock is made yet, so it is available
 		return true
@@ -345,10 +345,10 @@ function App:claimSyncLock()
 		return false, priorOwner
 	end
 
-	local lock = ServerStorage:FindFirstChild("__Rojo_SessionLock")
+	local lock = ServerStorage:FindFirstChild("__Atlas_SessionLock")
 	if not lock then
 		lock = Instance.new("ObjectValue")
-		lock.Name = "__Rojo_SessionLock"
+		lock.Name = "__Atlas_SessionLock"
 		lock.Archivable = false
 		lock.Value = Players.LocalPlayer
 		lock.Parent = ServerStorage
@@ -362,7 +362,7 @@ function App:claimSyncLock()
 end
 
 function App:releaseSyncLock()
-	local lock = ServerStorage:FindFirstChild("__Rojo_SessionLock")
+	local lock = ServerStorage:FindFirstChild("__Atlas_SessionLock")
 	if not lock then
 		Log.trace("No sync lock found, assumed released")
 		return
@@ -450,7 +450,7 @@ function App:checkSyncReminder()
 
 				local timeSinceSync = timeUtil.elapsedToText(os.time() - priorSyncInfo.timestamp)
 				self:sendSyncReminder(
-					`You synced project '{priorSyncInfo.projectName}' to this place {timeSinceSync}.\nDid you mean to run 'rojo serve' and then connect?`
+					`You synced project '{priorSyncInfo.projectName}' to this place {timeSinceSync}.\nDid you mean to run 'atlas serve' and then connect?`
 				)
 			end
 		end)
@@ -531,7 +531,7 @@ function App:isAutoConnectPlaytestServerAvailable()
 		and RunService:IsStudio()
 		and RunService:IsServer()
 		and Settings:get("autoConnectPlaytestServer")
-		and workspace:GetAttribute("__Rojo_ConnectionUrl")
+		and workspace:GetAttribute("__Atlas_ConnectionUrl")
 end
 
 function App:isAutoConnectPlaytestServerWriteable()
@@ -544,7 +544,7 @@ function App:setRunningConnectionInfo(baseUrl: string)
 	end
 
 	Log.trace("Setting connection info for play solo auto-connect")
-	workspace:SetAttribute("__Rojo_ConnectionUrl", baseUrl)
+	workspace:SetAttribute("__Atlas_ConnectionUrl", baseUrl)
 end
 
 function App:clearRunningConnectionInfo()
@@ -554,11 +554,11 @@ function App:clearRunningConnectionInfo()
 	end
 
 	Log.trace("Clearing connection info for play solo auto-connect")
-	workspace:SetAttribute("__Rojo_ConnectionUrl", nil)
+	workspace:SetAttribute("__Atlas_ConnectionUrl", nil)
 end
 
 function App:useRunningConnectionInfo()
-	local connectionInfo = workspace:GetAttribute("__Rojo_ConnectionUrl")
+	local connectionInfo = workspace:GetAttribute("__Atlas_ConnectionUrl")
 	if not connectionInfo then
 		return
 	end
@@ -890,7 +890,8 @@ function App:endSession()
 		-- but the UI is still stuck on Connected/Connecting, force reset to NotConnected.
 		-- This handles race conditions where onStatusChanged(Connected) fires after
 		-- onStatusChanged(Disconnected) due to a coroutine resuming on a dead session.
-		if self.state.appStatus ~= AppStatus.NotConnected
+		if
+			self.state.appStatus ~= AppStatus.NotConnected
 			and self.state.appStatus ~= AppStatus.Error
 			and self.state.appStatus ~= AppStatus.Settings
 		then

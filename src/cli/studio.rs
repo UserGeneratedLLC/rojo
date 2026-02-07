@@ -32,7 +32,7 @@ impl StudioCommand {
 
         let base_path = resolve_path(&self.project);
         let project = Project::load_fuzzy(&vfs, &base_path)?
-            .context("A project file is required to run 'rojo studio'")?;
+            .context("A project file is required to run 'atlas studio'")?;
 
         let serve_place_ids = project
             .serve_place_ids

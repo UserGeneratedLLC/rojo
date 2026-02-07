@@ -27,8 +27,8 @@ return strict("Config", {
 	codename = "Epiphany",
 	version = realVersion,
 	expectedServerVersionString = ("%d.%d or newer"):format(realVersion[1], realVersion[2]),
-	protocolVersion = 5,
+	protocolVersion = 6,
 	defaultHost = "localhost",
-	defaultPort = "34872",
+	defaultPort = "34873",
 	ignoredClassNames = IgnoredClassNames,
 })

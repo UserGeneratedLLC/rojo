@@ -33,7 +33,7 @@ pub use self::upload::UploadCommand;
 
 /// Command line options that Rojo accepts, defined using the clap crate.
 #[derive(Debug, Parser)]
-#[clap(name = "Rojo", version, about)]
+#[clap(name = "Atlas", version, about)]
 pub struct Options {
     #[clap(flatten)]
     pub global: GlobalOptions,

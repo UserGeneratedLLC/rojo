@@ -23,7 +23,7 @@ impl FmtProjectCommand {
 
         let base_path = resolve_path(&self.project);
         let project = Project::load_fuzzy(&vfs, &base_path)?
-            .context("A project file is required to run 'rojo fmt-project'")?;
+            .context("A project file is required to run 'atlas fmt-project'")?;
 
         let serialized = String::from_utf8(
             crate::json::to_vec_pretty_sorted(&project)

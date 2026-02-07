@@ -12,7 +12,7 @@ use crate::{serve_session::ServeSession, web::LiveServer};
 use super::resolve_path;
 
 const DEFAULT_BIND_ADDRESS: Ipv4Addr = Ipv4Addr::new(127, 0, 0, 1);
-const DEFAULT_PORT: u16 = 34872;
+const DEFAULT_PORT: u16 = 34873;
 
 /// Expose a Rojo project to the Rojo Studio plugin.
 #[derive(Debug, Parser)]
@@ -25,7 +25,7 @@ pub struct ServeCommand {
     #[clap(long)]
     pub address: Option<IpAddr>,
 
-    /// The port to listen on. Defaults to the project's preference, or `34872` if
+    /// The port to listen on. Defaults to the project's preference, or `34873` if
     /// it has none.
     #[clap(long)]
     pub port: Option<u16>,

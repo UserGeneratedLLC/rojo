@@ -245,7 +245,7 @@ function ConfirmingPage:render()
 			}),
 
 			StringDiff = e(StudioPluginGui, {
-				id = "Rojo_ConfirmingStringDiff",
+				id = "Atlas_ConfirmingStringDiff",
 				title = "String diff",
 				active = self.state.showingStringDiff,
 				isEphemeral = true,
@@ -283,7 +283,7 @@ function ConfirmingPage:render()
 			}),
 
 			TableDiff = e(StudioPluginGui, {
-				id = "Rojo_ConfirmingTableDiff",
+				id = "Atlas_ConfirmingTableDiff",
 				title = "Table diff",
 				active = self.state.showingTableDiff,
 				isEphemeral = true,
@@ -322,7 +322,7 @@ function ConfirmingPage:render()
 
 			-- Accept confirmation popup for unselected items
 			AcceptConfirm = e(StudioPluginGui, {
-				id = "Rojo_AcceptConfirm",
+				id = "Atlas_AcceptConfirm",
 				title = "Unreviewed Items",
 				active = self.state.showingAcceptConfirm,
 				isEphemeral = true,
@@ -400,7 +400,7 @@ function ConfirmingPage:render()
 
 		if self.props.createPopup then
 			return e(StudioPluginGui, {
-				id = "Rojo_DiffSync",
+				id = "Atlas_DiffSync",
 				title = string.format(
 					"Confirm sync for project '%s':",
 					self.props.confirmData.serverInfo.projectName or "UNKNOWN"

@@ -237,7 +237,6 @@ function StudioProvider:updateTheme()
 			Edit = Color3.fromRGB(255, 0, 255),
 
 			Row = studioTheme:GetColor(Enum.StudioStyleGuideColor.BrightText),
-			SubtreeHighlight = if isDark then Color3.fromRGB(255, 255, 255) else Color3.fromRGB(0, 0, 0),
 			Warning = studioTheme:GetColor(Enum.StudioStyleGuideColor.WarningText),
 			WhitespaceOnly = if isDark then Color3.fromRGB(140, 140, 140) else Color3.fromRGB(110, 110, 110),
 			Changes = if isDark then Color3.fromRGB(100, 140, 220) else Color3.fromRGB(40, 100, 180),

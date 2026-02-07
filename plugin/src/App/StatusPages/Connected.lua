@@ -481,7 +481,7 @@ function ConnectedPage:render()
 			}),
 
 			ChangesViewer = e(StudioPluginGui, {
-				id = "Rojo_ChangesViewer",
+				id = "Atlas_ChangesViewer",
 				title = "View changes",
 				active = self.state.renderChanges,
 				isEphemeral = true,
@@ -536,7 +536,7 @@ function ConnectedPage:render()
 			}),
 
 			StringDiff = e(StudioPluginGui, {
-				id = "Rojo_ConnectedStringDiff",
+				id = "Atlas_ConnectedStringDiff",
 				title = "String diff",
 				active = self.state.showingStringDiff,
 				isEphemeral = true,
@@ -574,7 +574,7 @@ function ConnectedPage:render()
 			}),
 
 			TableDiff = e(StudioPluginGui, {
-				id = "Rojo_ConnectedTableDiff",
+				id = "Atlas_ConnectedTableDiff",
 				title = "Table diff",
 				active = self.state.showingTableDiff,
 				isEphemeral = true,

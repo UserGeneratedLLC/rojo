@@ -5,7 +5,7 @@ Run the complete CI pipeline: auto-fix all formatting, run all linters, build ev
 ## Instructions
 
 - If the user's message contains **"rbx-dom"**, run **both** the Rojo and rbx-dom sections below.
-- Otherwise, **skip the entire rbx-dom section** (steps 8–13) to save time.
+- Otherwise, **skip the entire rbx-dom section** (steps 9–14) to save time.
 
 Execute ALL applicable steps in order. Fix issues automatically where possible.
 
@@ -23,7 +23,14 @@ stylua plugin/src
 cargo fmt
 ```
 
-### 3. Lua Static Analysis (Selene) - MUST PASS WITH ZERO ISSUES
+### 3. Auto-fix TypeScript Formatting (Prettier) for vscode-rojo
+```powershell
+cd vscode-rojo
+npx prettier --write "src/**/*.ts"
+cd ..
+```
+
+### 4. Lua Static Analysis (Selene) - MUST PASS WITH ZERO ISSUES
 ```powershell
 selene plugin/src
 ```
@@ -38,7 +45,7 @@ If Selene reports ANY errors or warnings:
 3. Re-run Selene after fixes to confirm exit code 0
 4. Only proceed once Selene shows: `Results: 0 errors, 0 warnings, 0 parse errors`
 
-### 4. Rust Linting (Clippy) - Auto-fix where possible
+### 5. Rust Linting (Clippy) - Auto-fix where possible
 ```powershell
 cargo clippy --fix --allow-dirty --allow-staged
 ```
@@ -48,24 +55,23 @@ cargo clippy --all-targets --all-features
 ```
 If there are remaining warnings/errors, fix them before proceeding.
 
-### 5. Build Everything
+### 6. Build Everything
 ```powershell
 cargo build --locked --all-targets --all-features
 ```
 
-### 6. Run ALL Rust Tests
+### 7. Run ALL Rust Tests
 ```powershell
 cargo test --locked --all-targets --all-features
 ```
 
-### 7. Run Roblox Plugin Tests
-On Windows:
+### 8. Run Roblox Plugin Tests
+
+**Do NOT use the scripts (`unit-test-plugin.ps1` / `unit-test-plugin.sh`).** They reference a system-installed binary which may not exist. Always use the freshly built binary from step 6.
+
 ```powershell
-.\scripts\unit-test-plugin.ps1
-```
-Otherwise:
-```bash
-bash scripts/unit-test-plugin.sh
+.\target\debug\atlas.exe build plugin/test-place.project.json -o TestPlace.rbxl
+run-in-roblox --script plugin/run-tests.server.lua --place TestPlace.rbxl
 ```
 
 ---
@@ -74,30 +80,30 @@ bash scripts/unit-test-plugin.sh
 
 All rbx-dom steps run inside the `rbx-dom/` directory.
 
-### 8. Auto-fix Lua Formatting (Stylua) for rbx_dom_lua
+### 9. Auto-fix Lua Formatting (Stylua) for rbx_dom_lua
 ```powershell
 cd rbx-dom
 stylua rbx_dom_lua/src
 cd ..
 ```
 
-### 9. Auto-fix Rust Formatting
+### 10. Auto-fix Rust Formatting
 ```powershell
 cd rbx-dom
 cargo fmt
 cd ..
 ```
 
-### 10. Lua Static Analysis (Selene) for rbx_dom_lua - MUST PASS WITH ZERO ISSUES
+### 11. Lua Static Analysis (Selene) for rbx_dom_lua - MUST PASS WITH ZERO ISSUES
 ```powershell
 cd rbx-dom
 selene rbx_dom_lua/src
 cd ..
 ```
 
-Same rules as step 3: exit code 0 required, fix all errors and warnings before proceeding.
+Same rules as step 4: exit code 0 required, fix all errors and warnings before proceeding.
 
-### 11. Rust Linting (Clippy) - Auto-fix where possible
+### 12. Rust Linting (Clippy) - Auto-fix where possible
 ```powershell
 cd rbx-dom
 cargo clippy --fix --allow-dirty --allow-staged
@@ -110,7 +116,7 @@ cd ..
 ```
 If there are remaining warnings/errors, fix them before proceeding.
 
-### 12. Build rbx-dom
+### 13. Build rbx-dom
 ```powershell
 cd rbx-dom
 cargo build --verbose
@@ -118,7 +124,7 @@ cargo build --all-features --verbose
 cd ..
 ```
 
-### 13. Run ALL rbx-dom Rust Tests
+### 14. Run ALL rbx-dom Rust Tests
 ```powershell
 cd rbx-dom
 cargo test --verbose
@@ -140,6 +146,7 @@ After ALL steps complete, provide a summary:
 Formatting:
   - Stylua: [fixed X files / no changes needed]
   - Rustfmt: [fixed X files / no changes needed]
+  - Prettier (vscode-rojo): [fixed X files / no changes needed]
 
 Linting:
   - Selene: PASS (0 errors, 0 warnings) / FAIL (X errors, Y warnings)

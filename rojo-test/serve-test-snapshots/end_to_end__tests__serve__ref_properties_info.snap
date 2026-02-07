@@ -4,8 +4,9 @@ expression: redactions.redacted_yaml(info)
 ---
 ignoreHiddenServices: true
 projectName: ref_properties
-protocolVersion: 5
+protocolVersion: 6
 rootInstanceId: id-2
+serverFork: atlas
 serverVersion: "[server-version]"
 sessionId: id-1
 syncSourceOnly: true

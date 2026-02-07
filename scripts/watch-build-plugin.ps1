@@ -4,4 +4,4 @@
 $ErrorActionPreference = "Stop"
 
 Write-Host "Watching for plugin changes... (Ctrl+C to stop)" -ForegroundColor Cyan
-rojo build plugin.project.json --plugin Rojo.rbxm --watch
+atlas build plugin.project.json --plugin Atlas.rbxm --watch

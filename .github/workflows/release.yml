@@ -25,25 +25,26 @@ jobs:
         with:
           submodules: true
 
-      - name: Setup Rokit
-        uses: CompeyDev/setup-rokit@v0.1.2
-        with:
-          version: 'v1.1.0'
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Atlas
+        run: cargo build --release --locked
 
       - name: Build Plugin
-        run: rojo build plugin.project.json --output Rojo.rbxm
+        run: ./target/release/atlas build plugin.project.json --output Atlas.rbxm
 
       - name: Upload Plugin to Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload ${{ github.ref_name }} Rojo.rbxm
+          gh release upload ${{ github.ref_name }} Atlas.rbxm
 
       - name: Upload Plugin to Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Rojo.rbxm
-          path: Rojo.rbxm
+          name: Atlas.rbxm
+          path: Atlas.rbxm
 
   build:
     needs: ["create-release"]
@@ -85,7 +86,7 @@ jobs:
     name: Build (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     env:
-      BIN: rojo
+      BIN: atlas
     steps:
       - uses: actions/checkout@v4
         with:

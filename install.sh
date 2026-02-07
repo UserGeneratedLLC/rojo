@@ -6,7 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 cd "$SCRIPT_DIR"
 cargo build "--$MODE"
-ROJO="./target/$MODE/rojo"
-"$ROJO" build plugin.project.json --plugin Rojo.rbxm
-pkill -f rojo || true
-sudo cp "$ROJO" /usr/local/bin/
+ATLAS="./target/$MODE/atlas"
+"$ATLAS" build plugin.project.json --plugin Atlas.rbxm
+pkill -f atlas || true
+sudo cp "$ATLAS" /usr/local/bin/

@@ -27,17 +27,30 @@ end
 local function rejectWrongProtocolVersion(infoResponseBody)
 	if infoResponseBody.protocolVersion ~= Config.protocolVersion then
 		local message = (
-			"Found a Rojo dev server, but it's using a different protocol version, and is incompatible."
-			.. "\nMake sure you have matching versions of both the Rojo plugin and server!"
+			"Found a server, but it's using a different protocol version, and is incompatible."
+			.. "\nMake sure you have matching versions of both the Atlas plugin and server!"
 			.. "\n\nYour client is version %s, with protocol version %s. It expects server version %s."
 			.. "\nYour server is version %s, with protocol version %s."
-			.. "\n\nGo to https://github.com/rojo-rbx/rojo for more details."
 		):format(
 			Version.display(Config.version),
 			Config.protocolVersion,
 			Config.expectedServerVersionString,
 			infoResponseBody.serverVersion,
 			infoResponseBody.protocolVersion
+		)
+
+		return Promise.reject(message)
+	end
+
+	return Promise.resolve(infoResponseBody)
+end
+
+local function rejectWrongFork(infoResponseBody)
+	if infoResponseBody.serverFork ~= "atlas" then
+		local message = (
+			"Found a Rojo server, but this plugin requires an Atlas server."
+			.. "\nThe stock Rojo server is not compatible with the Atlas plugin."
+			.. "\nMake sure you are running 'atlas serve' instead of 'rojo serve'."
 		)
 
 		return Promise.reject(message)
@@ -147,6 +160,7 @@ function ApiContext:connect()
 		:andThen(rejectFailedRequests)
 		:andThen(Http.Response.msgpack)
 		:andThen(rejectWrongProtocolVersion)
+		:andThen(rejectWrongFork)
 		:andThen(function(body)
 			assert(validateApiInfo(body))
 

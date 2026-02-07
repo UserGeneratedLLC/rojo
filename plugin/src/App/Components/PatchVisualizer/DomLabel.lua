@@ -81,25 +81,65 @@ function SelectionOption:render()
 		local buttonWidth = if props.text == "Studio" then 44 else 36
 
 		-- Transparency logic with hover effect
+		-- Combines real hover state with subtree highlight binding so the matching
+		-- button on child nodes looks hovered when a parent's button is hovered.
 		local bgTransparency, txtTransparency
-		if isParentOnly then
-			-- Parent-only: partially transparent, less so when hovering the button
-			bgTransparency = props.transparency:map(function(t)
-				return if isHovered then 0.2 + (0.8 * t) else 0.5 + (0.5 * t)
-			end)
-			txtTransparency = props.transparency:map(function(t)
-				return if isHovered then 0 + t else 0.3 + (0.7 * t)
-			end)
-		else
-			-- Normal buttons: show hover effect by reducing transparency
-			bgTransparency = props.transparency:map(function(t)
-				if isSelected then
-					return if isHovered then 0 + (1 * t) else 0.1 + (0.9 * t)
+		local subtreeBinding = props.subtreeHighlightBinding
+		local ancestorIds = props.ancestorIds
+
+		if subtreeBinding and ancestorIds then
+			local optionType = props.optionType
+			local joined = Roact.joinBindings({
+				transparency = props.transparency,
+				highlight = subtreeBinding,
+			})
+
+			bgTransparency = joined:map(function(values)
+				local t = values.transparency
+				local info = values.highlight
+				local subtreeHov = info ~= nil and ancestorIds[info.nodeId] == true and info.optionType == optionType
+				local hov = isHovered or subtreeHov
+
+				if isParentOnly then
+					return if hov then 0.2 + (0.8 * t) else 0.5 + (0.5 * t)
+				elseif isSelected then
+					return if hov then 0 + (1 * t) else 0.1 + (0.9 * t)
 				else
-					return if isHovered then 0.5 + (0.5 * t) else 0.7 + (0.3 * t)
+					return if hov then 0.5 + (0.5 * t) else 0.7 + (0.3 * t)
 				end
 			end)
-			txtTransparency = props.transparency
+
+			txtTransparency = joined:map(function(values)
+				local t = values.transparency
+				local info = values.highlight
+				local subtreeHov = info ~= nil and ancestorIds[info.nodeId] == true and info.optionType == optionType
+				local hov = isHovered or subtreeHov
+
+				if isParentOnly then
+					return if hov then 0 + t else 0.3 + (0.7 * t)
+				else
+					return t
+				end
+			end)
+		else
+			-- Fallback: no subtree highlight available
+			if isParentOnly then
+				bgTransparency = props.transparency:map(function(t)
+					return if isHovered then 0.2 + (0.8 * t) else 0.5 + (0.5 * t)
+				end)
+				txtTransparency = props.transparency:map(function(t)
+					return if isHovered then 0 + t else 0.3 + (0.7 * t)
+				end)
+			else
+				bgTransparency = props.transparency:map(function(t)
+					if isSelected then
+						return if isHovered then 0 + (1 * t) else 0.1 + (0.9 * t)
+					else
+						return if isHovered then 0.5 + (0.5 * t) else 0.7 + (0.3 * t)
+					end
+				end)
+				txtTransparency = props.transparency
+			end
 		end
 
 		return e("TextButton", {
@@ -118,7 +158,7 @@ function SelectionOption:render()
 				self:setState({ isHovered = true })
 				-- Trigger subtree highlight when this button would apply to children
 				if (isParentOnly or (isSelected and hasChildren)) and props.onSubtreeHoverStart then
-					props.onSubtreeHoverStart()
+					props.onSubtreeHoverStart(props.optionType)
 				end
 			end,
 			[Roact.Event.MouseLeave] = function()
@@ -180,6 +220,8 @@ local function SelectionRadio(props)
 			layoutOrder = 1,
 			hasChildren = hasChildren,
 			isParentOnly = isParentOnly,
+			subtreeHighlightBinding = props.subtreeHighlightBinding,
+			ancestorIds = props.ancestorIds,
 			onSubtreeHoverStart = props.onSubtreeHoverStart,
 			onSubtreeHoverEnd = props.onSubtreeHoverEnd,
 			onClick = function()
@@ -201,6 +243,8 @@ local function SelectionRadio(props)
 			layoutOrder = 2,
 			hasChildren = hasChildren,
 			isParentOnly = isParentOnly,
+			subtreeHighlightBinding = props.subtreeHighlightBinding,
+			ancestorIds = props.ancestorIds,
 			onSubtreeHoverStart = props.onSubtreeHoverStart,
 			onSubtreeHoverEnd = props.onSubtreeHoverEnd,
 			onClick = function()
@@ -222,6 +266,8 @@ local function SelectionRadio(props)
 			layoutOrder = 3,
 			hasChildren = hasChildren,
 			isParentOnly = isParentOnly,
+			subtreeHighlightBinding = props.subtreeHighlightBinding,
+			ancestorIds = props.ancestorIds,
 			onSubtreeHoverStart = props.onSubtreeHoverStart,
 			onSubtreeHoverEnd = props.onSubtreeHoverEnd,
 			onClick = function()
@@ -336,17 +382,6 @@ end
 function DomLabel:render()
 	local props = self.props
 	local depth = props.depth or 1
-
-	-- Derive subtree highlight state from binding (no re-renders needed)
-	local ancestorIds = props.ancestorIds
-	local isSubtreeHighlighted = if props.subtreeHighlightNodeId
-		then props.subtreeHighlightNodeId:map(function(highlightId)
-			if highlightId == nil then
-				return false
-			end
-			return ancestorIds[highlightId] == true
-		end)
-		else nil
 
 	return Theme.with(function(theme)
 		local color = if props.isWarning
@@ -544,17 +579,6 @@ function DomLabel:render()
 					})
 					else nil,
 			}),
-			SubtreeHighlight = if isSubtreeHighlighted
-				then e("Frame", {
-					Size = UDim2.fromScale(1, 1),
-					BackgroundColor3 = theme.Diff.SubtreeHighlight,
-					BackgroundTransparency = isSubtreeHighlighted:map(function(highlighted)
-						return if highlighted then 0.92 else 1
-					end),
-					BorderSizePixel = 0,
-					ZIndex = 0,
-				})
-				else nil,
 			SelectionRadio = e(SelectionRadio, {
 				-- Visible for nodes with patchType, or for parent-only nodes on hover
 				visible = (props.patchType ~= nil and props.onSelectionChange ~= nil)
@@ -572,9 +596,12 @@ function DomLabel:render()
 				isParentOnly = props.patchType == nil,
 				onSelectionChange = props.onSelectionChange,
 				onSubtreeSelectionChange = props.onSubtreeSelectionChange,
-				onSubtreeHoverStart = function()
+				-- Subtree hover highlight: pass binding and ancestors to child buttons
+				subtreeHighlightBinding = props.subtreeHighlightNodeId,
+				ancestorIds = props.ancestorIds,
+				onSubtreeHoverStart = function(optionType)
 					if props.setSubtreeHighlightNodeId then
-						props.setSubtreeHighlightNodeId(props.nodeId)
+						props.setSubtreeHighlightNodeId({ nodeId = props.nodeId, optionType = optionType })
 					end
 				end,
 				onSubtreeHoverEnd = function()

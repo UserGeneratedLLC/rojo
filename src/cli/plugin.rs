@@ -10,7 +10,7 @@ use roblox_install::RobloxStudio;
 use crate::serve_session::ServeSession;
 
 static PLUGIN_BINCODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/plugin.bincode"));
-static PLUGIN_FILE_NAME: &str = "RojoManagedPlugin.rbxm";
+static PLUGIN_FILE_NAME: &str = "AtlasManagedPlugin.rbxm";
 
 /// Install Rojo's plugin.
 #[derive(Debug, Parser)]

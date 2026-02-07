@@ -2,7 +2,7 @@
 
 param([string]$Mode = "release")
 
-$InstallDir = "C:\Program Files\Rojo"
+$InstallDir = "C:\Program Files\Atlas"
 
 Set-Location $PSScriptRoot
 if ($Mode -eq "release") {
@@ -10,14 +10,14 @@ if ($Mode -eq "release") {
 } else {
   cargo build "--$Mode"
 }
-$Rojo = ".\target\$Mode\rojo.exe"
-& "$Rojo" build plugin.project.json --plugin Rojo.rbxm
+$Atlas = ".\target\$Mode\atlas.exe"
+& "$Atlas" build plugin.project.json --plugin Atlas.rbxm
 if ($LASTEXITCODE -ne 0) { throw "Plugin build failed" }
 
-gsudo Stop-Process -Name "rojo" -Force -ErrorAction SilentlyContinue
+gsudo Stop-Process -Name "atlas" -Force -ErrorAction SilentlyContinue
 gsudo New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-gsudo Copy-Item "$Rojo" "$InstallDir\"
-gsudo Copy-Item ".\target\$Mode\rojo.pdb" "$InstallDir\"
+gsudo Copy-Item "$Atlas" "$InstallDir\"
+gsudo Copy-Item ".\target\$Mode\atlas.pdb" "$InstallDir\"
 
 $MachinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
 if ($MachinePath -notlike "*$InstallDir*") {

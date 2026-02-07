@@ -203,7 +203,7 @@ impl InitCommand {
         println!("Created project successfully.");
 
         if self.placeid.is_some() {
-            println!("Run 'rojo syncback' to sync your place.");
+            println!("Run 'atlas syncback' to sync your place.");
         }
 
         Ok(())

@@ -272,6 +272,7 @@ impl ApiService {
         msgpack_ok(&ServerInfoResponse {
             server_version: SERVER_VERSION.to_owned(),
             protocol_version: PROTOCOL_VERSION,
+            server_fork: "atlas".to_owned(),
             session_id: self.serve_session.session_id(),
             project_name: self.serve_session.project_name().to_owned(),
             expected_place_ids: self.serve_session.serve_place_ids().cloned(),

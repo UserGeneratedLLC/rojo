@@ -1,1 +1,1 @@
-rojo build plugin.project.json --plugin Rojo.rbxm --watch
+atlas build plugin.project.json --plugin Atlas.rbxm --watch

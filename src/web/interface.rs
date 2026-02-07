@@ -25,7 +25,7 @@ use crate::{
 pub(crate) const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Current protocol version, which is required to match.
-pub const PROTOCOL_VERSION: u64 = 5;
+pub const PROTOCOL_VERSION: u64 = 6;
 
 /// Message returned by Rojo API when a change has occurred.
 #[derive(Debug, Serialize, Deserialize)]
@@ -159,6 +159,7 @@ pub struct ServerInfoResponse {
     pub session_id: SessionId,
     pub server_version: String,
     pub protocol_version: u64,
+    pub server_fork: String,
     pub project_name: String,
     #[serde(
         serialize_with = "serialize_place_ids",

@@ -38,11 +38,11 @@ Settings._bindings = {}
 
 if plugin then
 	for name, defaultValue in pairs(Settings._values) do
-		local savedValue = plugin:GetSetting("Rojo_" .. name)
+		local savedValue = plugin:GetSetting("Atlas_" .. name)
 
 		if savedValue == nil then
 			-- plugin:SetSetting hits disc instead of memory, so it can be slow. Spawn so we don't hang.
-			task.spawn(plugin.SetSetting, plugin, "Rojo_" .. name, defaultValue)
+			task.spawn(plugin.SetSetting, plugin, "Atlas_" .. name, defaultValue)
 			Settings._values[name] = defaultValue
 		else
 			Settings._values[name] = savedValue
@@ -67,7 +67,7 @@ function Settings:set(name, value)
 
 	if plugin then
 		-- plugin:SetSetting hits disc instead of memory, so it can be slow. Spawn so we don't hang.
-		task.spawn(plugin.SetSetting, plugin, "Rojo_" .. name, value)
+		task.spawn(plugin.SetSetting, plugin, "Atlas_" .. name, value)
 	end
 
 	if self._updateListeners[name] then
