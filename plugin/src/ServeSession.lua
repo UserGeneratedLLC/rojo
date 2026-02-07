@@ -290,7 +290,7 @@ function ServeSession:__onWebSocketMessage(messagesPacket)
 		Log.trace("WebSocket patch decision: {}", userDecision)
 
 		if userDecision == "Abort" then
-			self:__stopInternal("Aborted Rojo sync operation")
+			self:__stopInternal("Aborted Atlas sync operation")
 			return
 		elseif userDecision == "Accept" then
 			-- combinedPatch may have been updated with additional changes
