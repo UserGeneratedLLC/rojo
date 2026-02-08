@@ -61,25 +61,15 @@ function PatchVisualizer:init()
 	-- causing expanded rows to visually glitch when unrelated props change.
 	self.nodeHeightBindings = {}
 
-	self:setState({
-		subtreeHighlightInfo = nil,
-	})
-
-	-- Callback for subtree hover preview: stores { nodeId, optionType } or nil
-	self.onSubtreeHighlightChange = function(info)
-		self:setState({ subtreeHighlightInfo = info })
-	end
+	-- Binding for subtree hover preview: stores the nodeId whose children should highlight
+	self.subtreeHighlightNodeId, self.setSubtreeHighlightNodeId = Roact.createBinding(nil)
 end
 
 function PatchVisualizer:willUnmount()
 	self.updateEvent:Destroy()
 end
 
-function PatchVisualizer:shouldUpdate(nextProps, nextState)
-	if self.state.subtreeHighlightInfo ~= nextState.subtreeHighlightInfo then
-		return true
-	end
-
+function PatchVisualizer:shouldUpdate(nextProps)
 	if self.props.patchTree ~= nextProps.patchTree then
 		return true
 	end
@@ -230,8 +220,8 @@ function PatchVisualizer:render()
 				onSubtreeSelectionChange = self.props.onSubtreeSelectionChange,
 				-- Subtree hover highlight props
 				ancestorIds = ancestorIds,
-				subtreeHighlightInfo = self.state.subtreeHighlightInfo,
-				onSubtreeHighlightChange = self.onSubtreeHighlightChange,
+				subtreeHighlightNodeId = self.subtreeHighlightNodeId,
+				setSubtreeHighlightNodeId = self.setSubtreeHighlightNodeId,
 			})
 
 			if isFinalChild then
