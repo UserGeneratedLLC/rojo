@@ -36,9 +36,10 @@ Replace the old version with the new version in each of these files:
 |---|---|
 | `Cargo.toml` | `version = "X.Y.Z"` (line 3) |
 | `plugin/Version.txt` | Entire file content — must match `Cargo.toml` exactly (enforced by `build.rs`) |
-| `rokit.toml` | `atlas = "UserGeneratedLLC/rojo@X.Y.Z"` |
 
 **Do NOT manually edit `Cargo.lock`.** It is auto-updated in the next step.
+
+**Note:** `rokit.toml` does NOT contain atlas — the tool builds from source and should never self-reference a version that may not be released yet.
 
 After editing the three files above, run:
 
@@ -109,7 +110,7 @@ After the bullet points, add a collapsible section with the raw commit log so re
 Run these sequentially:
 
 ```powershell
-git add Cargo.toml Cargo.lock plugin/Version.txt rokit.toml CHANGELOG.md
+git add Cargo.toml Cargo.lock plugin/Version.txt CHANGELOG.md
 ```
 
 ```powershell
@@ -139,5 +140,4 @@ The tag push triggers `.github/workflows/release.yml` which creates a draft GitH
 | `Cargo.toml` | Crate version (source of truth) | Manual edit |
 | `Cargo.lock` | Lockfile version | `cargo check` (automatic) |
 | `plugin/Version.txt` | Plugin version, validated at build time | Manual edit |
-| `rokit.toml` | Toolchain manager reference | Manual edit |
 | `CHANGELOG.md` | Release notes | Manual edit |
