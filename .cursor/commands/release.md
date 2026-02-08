@@ -114,8 +114,20 @@ git add Cargo.toml Cargo.lock plugin/Version.txt CHANGELOG.md
 ```
 
 ```powershell
-git commit -m "Bump version to X.Y.Z"
+git commit -m "$(cat <<'EOF'
+X.Y.Z
+
+- Key change 1
+- Key change 2
+- ...
+EOF
+)"
 ```
+
+**Commit message guidelines:**
+- First line: just the version number
+- Body: concise bullet list of the most important changes since the last tag (derived from the changelog entries written in step 3)
+- Distill to the highlights — not a copy of the full changelog
 
 ```powershell
 git push
