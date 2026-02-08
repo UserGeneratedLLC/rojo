@@ -545,3 +545,119 @@ fn clean_handles_special_character_names() {
         ],
     );
 }
+
+// =============================================================================
+// GITKEEP CLEANUP TESTS
+// =============================================================================
+
+/// Clean mode removes a stale .gitkeep from a non-empty directory.
+///
+/// When a directory gains children, Rojo no longer emits a .gitkeep for it.
+/// Clean mode must detect and remove the leftover .gitkeep on disk.
+#[test]
+fn clean_removes_stale_gitkeep_in_non_empty_dir() {
+    clean_equals_fresh(
+        "deep_nesting",
+        &[Mutation::AddOrphanFile {
+            // src/level-1/ has children, so .gitkeep is stale
+            relative_path: "src/level-1/.gitkeep",
+            content: "",
+        }],
+    );
+}
+
+/// Clean mode removes stale .gitkeep from the root $path directory.
+#[test]
+fn clean_removes_stale_gitkeep_in_root_path_dir() {
+    clean_equals_fresh(
+        "deep_nesting",
+        &[Mutation::AddOrphanFile {
+            // src/ has children (level-1/), so .gitkeep is stale
+            relative_path: "src/.gitkeep",
+            content: "",
+        }],
+    );
+}
+
+/// Clean mode removes stale .gitkeep files at multiple nesting levels.
+#[test]
+fn clean_removes_stale_gitkeep_at_multiple_levels() {
+    clean_equals_fresh(
+        "deep_nesting",
+        &[
+            Mutation::AddOrphanFile {
+                relative_path: "src/.gitkeep",
+                content: "",
+            },
+            Mutation::AddOrphanFile {
+                relative_path: "src/level-1/.gitkeep",
+                content: "",
+            },
+            Mutation::AddOrphanFile {
+                relative_path: "src/level-1/level-2/.gitkeep",
+                content: "",
+            },
+        ],
+    );
+}
+
+/// Clean mode removes stale .gitkeep alongside other orphan files.
+#[test]
+fn clean_removes_stale_gitkeep_with_other_orphans() {
+    clean_equals_fresh(
+        "deep_nesting",
+        &[
+            Mutation::AddOrphanFile {
+                relative_path: "src/level-1/.gitkeep",
+                content: "",
+            },
+            Mutation::AddOrphanFile {
+                relative_path: "src/orphan.luau",
+                content: "-- orphan",
+            },
+            Mutation::AddOrphanFile {
+                relative_path: "src/level-1/stray.txt",
+                content: "stray",
+            },
+        ],
+    );
+}
+
+/// Clean mode preserves .gitkeep in a legitimately empty directory.
+///
+/// The deep_nesting fixture has src/level-1/level-2/level-3/ with only a .gitkeep.
+/// After syncback, that directory remains empty so the .gitkeep should stay.
+/// This test verifies we don't over-remove by adding unrelated mutations elsewhere.
+#[test]
+fn clean_preserves_legitimate_gitkeep_in_empty_dir() {
+    clean_equals_fresh(
+        "deep_nesting",
+        &[
+            // Add stale .gitkeep in non-empty dir (should be removed)
+            Mutation::AddOrphanFile {
+                relative_path: "src/level-1/.gitkeep",
+                content: "",
+            },
+            // Add unrelated orphan (should be removed)
+            Mutation::AddOrphanFile {
+                relative_path: "src/unrelated_orphan.luau",
+                content: "-- orphan",
+            },
+            // Note: src/level-1/level-2/level-3/.gitkeep is legitimate
+            // and should survive clean mode (verified by assert_dirs_equal)
+        ],
+    );
+}
+
+/// Clean mode handles .gitkeep in init-style projects with children.
+#[test]
+fn clean_removes_stale_gitkeep_in_init_project() {
+    clean_equals_fresh(
+        "init_with_children",
+        &[Mutation::AddOrphanFile {
+            // src/ has init.luau and other.luau, so .gitkeep is stale
+            relative_path: "src/.gitkeep",
+            content: "",
+        }],
+    );
+}

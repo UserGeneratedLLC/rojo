@@ -381,9 +381,11 @@ pub fn syncback_loop_with_stats(
                     continue;
                 }
 
-                // Skip hidden files/directories (starting with .)
+                // Skip hidden files/directories (starting with .), except
+                // .gitkeep which is managed by Rojo and must be tracked for
+                // cleanup when directories are no longer empty.
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.starts_with('.') {
+                    if name.starts_with('.') && name != ".gitkeep" {
                         log::trace!("Skipping {} (hidden)", path.display());
                         continue;
                     }
