@@ -112,5 +112,5 @@ instances:
     Name: ProjectTarget
     Parent: id-3
     Properties: {}
-messageCursor: 0
+messageCursor: "[message-cursor]"
 sessionId: id-1

@@ -14,5 +14,5 @@ instances:
     Properties:
       Source:
         "!String": "-- Original contents"
-messageCursor: 0
+messageCursor: "[message-cursor]"
 sessionId: id-1

@@ -22,5 +22,5 @@ instances:
     Name: my-new-folder
     Parent: id-2
     Properties: {}
-messageCursor: 1
+messageCursor: "[message-cursor]"
 sessionId: id-1

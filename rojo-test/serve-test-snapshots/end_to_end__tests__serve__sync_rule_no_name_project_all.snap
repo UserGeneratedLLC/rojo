@@ -36,5 +36,5 @@ instances:
     Properties:
       Value:
         "!String": "If this isn't named `not_a_project`, something has gone wrong!"
-messageCursor: 0
+messageCursor: "[message-cursor]"
 sessionId: id-1

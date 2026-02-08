@@ -38,5 +38,5 @@ instances:
     Properties:
       Source:
         "!String": Updated foo!
-messageCursor: 1
+messageCursor: "[message-cursor]"
 sessionId: id-1

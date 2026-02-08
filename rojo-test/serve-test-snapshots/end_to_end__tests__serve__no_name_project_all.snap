@@ -34,5 +34,5 @@ instances:
     Properties:
       Value:
         "!Bool": true
-messageCursor: 0
+messageCursor: "[message-cursor]"
 sessionId: id-1

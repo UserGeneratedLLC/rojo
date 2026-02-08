@@ -24,5 +24,5 @@ instances:
     Properties:
       Source:
         "!String": "return {\"This file has no extension but should be a ModuleScript named `no_extension`\"}"
-messageCursor: 0
+messageCursor: "[message-cursor]"
 sessionId: id-1

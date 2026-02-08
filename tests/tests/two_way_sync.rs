@@ -47,8 +47,11 @@ const STRESS_OP_DELAY_MS: u64 = 250;
 const STRESS_OP_DELAY_MS: u64 = 30;
 
 /// Poll timeout for stress tests that wait for the tree to settle (ms).
+/// macOS kqueue generates per-file vnode events for every rename, and each
+/// event triggers a re-snapshot of the parent directory. Under heavy CI load
+/// (e.g., 5-file simultaneous rename chains), 15s can be insufficient.
 #[cfg(target_os = "macos")]
-const STRESS_POLL_TIMEOUT_MS: u64 = 15000;
+const STRESS_POLL_TIMEOUT_MS: u64 = 30000;
 #[cfg(not(target_os = "macos"))]
 const STRESS_POLL_TIMEOUT_MS: u64 = 5000;
 

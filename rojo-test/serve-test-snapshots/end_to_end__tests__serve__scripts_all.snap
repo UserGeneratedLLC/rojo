@@ -38,5 +38,5 @@ instances:
     Properties:
       Source:
         "!String": "-- Hello, from foo!"
-messageCursor: 0
+messageCursor: "[message-cursor]"
 sessionId: id-1

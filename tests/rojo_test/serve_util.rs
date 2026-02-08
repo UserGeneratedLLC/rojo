@@ -51,6 +51,10 @@ pub fn run_serve_test(test_name: &str, callback: impl FnOnce(TestServeSession, R
     settings.set_snapshot_path(snapshot_path);
     settings.set_sort_maps(true);
     settings.add_redaction(".serverVersion", "[server-version]");
+    // messageCursor is non-deterministic: on macOS kqueue delivers extra
+    // per-file vnode events that can bump the cursor beyond what the test
+    // expects. The exact cursor value is irrelevant to snapshot correctness.
+    settings.add_redaction(".messageCursor", "[message-cursor]");
     settings.bind(move || callback(session, redactions));
 }
 

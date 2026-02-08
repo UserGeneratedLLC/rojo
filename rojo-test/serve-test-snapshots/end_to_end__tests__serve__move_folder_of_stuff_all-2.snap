@@ -142,5 +142,5 @@ instances:
     Properties:
       Value:
         "!String": "File #5"
-messageCursor: 1
+messageCursor: "[message-cursor]"
 sessionId: id-1

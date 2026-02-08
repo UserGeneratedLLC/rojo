@@ -60,5 +60,5 @@ instances:
     Properties:
       NeedsPivotMigration:
         "!Bool": false
-messageCursor: 1
+messageCursor: "[message-cursor]"
 sessionId: id-1

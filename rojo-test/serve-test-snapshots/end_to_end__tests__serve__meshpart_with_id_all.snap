@@ -52,5 +52,5 @@ instances:
         "!ContentId": "rbxasset://fonts/sword.mesh"
       TextureID:
         "!ContentId": "rbxasset://textures/SwordTexture.png"
-messageCursor: 0
+messageCursor: "[message-cursor]"
 sessionId: id-1

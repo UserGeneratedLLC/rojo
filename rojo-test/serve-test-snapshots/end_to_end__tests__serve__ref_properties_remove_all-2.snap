@@ -26,5 +26,5 @@ instances:
         "!Attributes": {}
       Value:
         "!Ref": id-4
-messageCursor: 1
+messageCursor: "[message-cursor]"
 sessionId: id-1
