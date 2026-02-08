@@ -24,3 +24,7 @@ if ($MachinePath -notlike "*$InstallDir*") {
   gsudo [Environment]::SetEnvironmentVariable "Path" "$MachinePath;$InstallDir" "Machine"
   Write-Host "Added '$InstallDir' to system PATH"
 }
+
+Push-Location "$PSScriptRoot\vscode-rojo"
+& "$PSScriptRoot\vscode-rojo\install.ps1"
+Pop-Location

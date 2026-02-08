@@ -10,3 +10,5 @@ ATLAS="./target/$MODE/atlas"
 "$ATLAS" build plugin.project.json --plugin Atlas.rbxm
 pkill -f atlas || true
 sudo cp "$ATLAS" /usr/local/bin/
+
+(cd "$SCRIPT_DIR/vscode-rojo" && bash "$SCRIPT_DIR/vscode-rojo/install.sh")
