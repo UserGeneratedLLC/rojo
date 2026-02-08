@@ -31,6 +31,18 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+## [8.0.1] (February 8th, 2026)
+
+* Root install scripts now also build and install the VS Code/Cursor extension.
+* Syncback now manages `.gitkeep` files to preserve empty directories during filesystem writes.
+* Added Git-style change metadata and diff utilities to the plugin for richer patch visualization.
+* Refactored subtree highlight handling in PatchVisualizer and DomLabel components.
+* Improved two-way sync test reliability with polling helpers and macOS compatibility checks.
+* Fixed internal reference in ServeSession to reflect Atlas sync operation.
+* Standardized messageCursor redaction in snapshot test files.
+
+[8.0.1]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.0.1
+
 ## [8.0.0] (February 7th, 2026)
 
 * Improved syncback performance by parallelizing filesystem writes using rayon. File writes and removals now run concurrently, while directory operations remain sequential to preserve ordering constraints.
