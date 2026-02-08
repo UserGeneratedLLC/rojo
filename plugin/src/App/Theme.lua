@@ -230,11 +230,11 @@ function StudioProvider:updateTheme()
 			BackgroundColor = studioTheme:GetColor(Enum.StudioStyleGuideColor.InputFieldBackground),
 		},
 		Diff = {
-			-- Very bright different colors in case some places were not updated to use
-			-- the new background diff colors.
-			Add = Color3.fromRGB(255, 0, 255),
-			Remove = Color3.fromRGB(255, 0, 255),
-			Edit = Color3.fromRGB(255, 0, 255),
+			-- Tag colors for git-style change indicators
+			Add = if isDark then Color3.fromRGB(143, 227, 154) else Color3.fromRGB(41, 164, 45),
+			Remove = if isDark then Color3.fromRGB(242, 125, 125) else Color3.fromRGB(150, 29, 29),
+			Property = if isDark then Color3.fromRGB(255, 198, 1) else Color3.fromRGB(179, 138, 0),
+			Edit = if isDark then Color3.fromRGB(120, 154, 248) else Color3.fromRGB(0, 70, 160), -- Legacy alias
 
 			Row = studioTheme:GetColor(Enum.StudioStyleGuideColor.BrightText),
 			Warning = studioTheme:GetColor(Enum.StudioStyleGuideColor.WarningText),

@@ -511,11 +511,16 @@ function ConnectedPage:render()
 							patchData = self.props.patchData,
 							patchTree = self.props.patchTree,
 							serveSession = self.props.serveSession,
-							showStringDiff = function(currentString: string, incomingString: string)
+							showStringDiff = function(
+								currentString: string,
+								incomingString: string,
+								instancePath: string?
+							)
 								self:setState({
 									showingStringDiff = true,
 									currentString = currentString,
 									incomingString = incomingString,
+									stringDiffTitle = instancePath or "String diff",
 								})
 							end,
 							showTableDiff = function(oldTable: { [any]: any? }, newTable: { [any]: any? })
@@ -537,13 +542,13 @@ function ConnectedPage:render()
 
 			StringDiff = e(StudioPluginGui, {
 				id = "Atlas_ConnectedStringDiff",
-				title = "String diff",
+				title = self.state.stringDiffTitle or "String diff",
 				active = self.state.showingStringDiff,
 				isEphemeral = true,
 
 				initDockState = Enum.InitialDockState.Float,
 				overridePreviousState = false,
-				floatingSize = Vector2.new(500, 350),
+				floatingSize = Vector2.new(1500, 1050),
 				minimumSize = Vector2.new(400, 250),
 
 				zIndexBehavior = Enum.ZIndexBehavior.Sibling,
@@ -581,7 +586,7 @@ function ConnectedPage:render()
 
 				initDockState = Enum.InitialDockState.Float,
 				overridePreviousState = false,
-				floatingSize = Vector2.new(500, 350),
+				floatingSize = Vector2.new(1500, 1050),
 				minimumSize = Vector2.new(400, 250),
 
 				zIndexBehavior = Enum.ZIndexBehavior.Sibling,

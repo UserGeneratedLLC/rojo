@@ -16,7 +16,18 @@ local e = Roact.createElement
 local ChangeList = require(script.Parent.ChangeList)
 local ClassIcon = require(Plugin.App.Components.ClassIcon)
 
-local function ChangeTag(props)
+local ChangeTag = Roact.Component:extend("ChangeTag")
+
+function ChangeTag:init()
+	self:setState({
+		isHovered = false,
+	})
+end
+
+function ChangeTag:render()
+	local props = self.props
+	local isHovered = self.state.isHovered
+
 	return Theme.with(function(theme)
 		local tagColor = props.color or theme.SubTextColor
 		return e("Frame", {
@@ -27,6 +38,13 @@ local function ChangeTag(props)
 				return 0.85 + (0.15 * t)
 			end),
 			LayoutOrder = props.layoutOrder or 1,
+			Active = true,
+			[Roact.Event.MouseEnter] = function()
+				self:setState({ isHovered = true })
+			end,
+			[Roact.Event.MouseLeave] = function()
+				self:setState({ isHovered = false })
+			end,
 		}, {
 			Corner = e("UICorner", {
 				CornerRadius = UDim.new(0, 3),
@@ -46,7 +64,92 @@ local function ChangeTag(props)
 				Size = UDim2.new(0, 0, 1, 0),
 				AutomaticSize = Enum.AutomaticSize.X,
 			}),
+			Tooltip = if props.tooltipText and isHovered
+				then e("TextLabel", {
+					Text = props.tooltipText,
+					BackgroundColor3 = theme.BorderedContainer.BackgroundColor,
+					BackgroundTransparency = 0.05,
+					TextColor3 = theme.TextColor,
+					FontFace = theme.Font.Main,
+					TextSize = theme.TextSize.Small,
+					Size = UDim2.new(0, 0, 0, 20),
+					AutomaticSize = Enum.AutomaticSize.X,
+					Position = UDim2.new(0.5, 0, 0, -22),
+					AnchorPoint = Vector2.new(0.5, 0),
+					ZIndex = 100,
+				}, {
+					Corner = e("UICorner", {
+						CornerRadius = UDim.new(0, 3),
+					}),
+					Padding = e("UIPadding", {
+						PaddingLeft = UDim.new(0, 6),
+						PaddingRight = UDim.new(0, 6),
+					}),
+				})
+				else nil,
 		})
+	end)
+end
+
+-- Proportional diff bar showing the ratio of removals/additions/property changes
+local function DiffBar(props)
+	local removed = props.removed or 0
+	local added = props.added or 0
+	local propChanges = props.propChanges or 0
+	local total = removed + added + propChanges
+	if total == 0 then
+		return nil
+	end
+
+	return Theme.with(function(theme)
+		local children = {
+			Layout = e("UIListLayout", {
+				FillDirection = Enum.FillDirection.Horizontal,
+				SortOrder = Enum.SortOrder.LayoutOrder,
+			}),
+			Corner = e("UICorner", {
+				CornerRadius = UDim.new(0, 2),
+			}),
+		}
+
+		if removed > 0 then
+			local color = if props.isWhitespaceOnly then theme.Diff.WhitespaceOnly else theme.Diff.Remove
+			children.SegRemove = e("Frame", {
+				Size = UDim2.fromScale(removed / total, 1),
+				BackgroundColor3 = color,
+				BackgroundTransparency = props.transparency,
+				BorderSizePixel = 0,
+				LayoutOrder = 1,
+			})
+		end
+
+		if added > 0 then
+			local color = if props.isWhitespaceOnly then theme.Diff.WhitespaceOnly else theme.Diff.Add
+			children.SegAdd = e("Frame", {
+				Size = UDim2.fromScale(added / total, 1),
+				BackgroundColor3 = color,
+				BackgroundTransparency = props.transparency,
+				BorderSizePixel = 0,
+				LayoutOrder = 2,
+			})
+		end
+
+		if propChanges > 0 then
+			children.SegProp = e("Frame", {
+				Size = UDim2.fromScale(propChanges / total, 1),
+				BackgroundColor3 = theme.Diff.Property,
+				BackgroundTransparency = props.transparency,
+				BorderSizePixel = 0,
+				LayoutOrder = 3,
+			})
+		end
+
+		return e("Frame", {
+			Size = UDim2.new(0, 40, 0, 8),
+			BackgroundTransparency = 1,
+			ClipsDescendants = true,
+			LayoutOrder = props.layoutOrder or 10,
+		}, children)
 	end)
 end
 
@@ -255,7 +358,11 @@ function Expansion:render()
 		ChangeList = e(ChangeList, {
 			changes = props.changeList,
 			transparency = props.transparency,
-			showStringDiff = props.showStringDiff,
+			showStringDiff = if props.showStringDiff
+				then function(current: string, incoming: string)
+					props.showStringDiff(current, incoming, props.instancePath)
+				end
+				else nil,
 			showTableDiff = props.showTableDiff,
 		}),
 	})
@@ -447,14 +554,56 @@ function DomLabel:render()
 							end
 
 							-- Use self.props to get current props, not stale closure
-							if self.props.changeList then
-								self.expanded = not self.expanded
-								local goalHeight = 24
-									+ (if self.expanded then math.clamp(#self.props.changeList * 24, 24, 24 * 6) else 0)
-								self.motor:setGoal(Flipper.Spring.new(goalHeight, {
-									frequency = 5,
-									dampingRatio = 1,
-								}))
+							local p = self.props
+
+							-- Removed script: show diff of old source vs empty
+							if
+								p.patchType == "Remove"
+								and p.instance
+								and p.changeInfo
+								and p.changeInfo.linesRemoved
+								and p.showStringDiff
+							then
+								local ok, source = pcall(function()
+									return (p.instance :: any).Source
+								end)
+								if ok and type(source) == "string" then
+									p.showStringDiff(source, "", p.instancePath)
+									return
+								end
+							end
+
+							-- Added script: find Source in changeList and show diff of empty vs new source
+							if
+								p.patchType == "Add"
+								and p.changeList
+								and p.changeInfo
+								and p.changeInfo.linesAdded
+								and p.showStringDiff
+							then
+								for _, entry in p.changeList do
+									if entry[1] == "Source" and type(entry[3]) == "string" then
+										p.showStringDiff("", tostring(entry[3]), p.instancePath)
+										return
+									end
+								end
+							end
+
+							if p.changeList then
+								-- If the only change is Source, open the diff viewer directly
+								-- changeList[1] is the header, changeList[2+] are entries
+								local cl = p.changeList
+								if #cl == 2 and cl[2][1] == "Source" and p.showStringDiff then
+									p.showStringDiff(tostring(cl[2][2]), tostring(cl[2][3]), p.instancePath)
+								else
+									self.expanded = not self.expanded
+									local goalHeight = 24
+										+ (if self.expanded then math.clamp(#p.changeList * 24, 24, 24 * 6) else 0)
+									self.motor:setGoal(Flipper.Spring.new(goalHeight, {
+										frequency = 5,
+										dampingRatio = 1,
+									}))
+								end
 							end
 						end)
 					end
@@ -516,31 +665,82 @@ function DomLabel:render()
 					SortOrder = Enum.SortOrder.LayoutOrder,
 					Padding = UDim.new(0, 4),
 				}),
-				LinesTag = if props.changeInfo and props.changeInfo.lineChanges
+
+				-- Git-style line change tags: -M (red) then +N (green)
+				-- Always show both when any line change data exists (even -0 or +0).
+				-- Grayed when whitespace-only. Always exact counts.
+				RemovedTag = if props.changeInfo
+						and (props.changeInfo.linesRemoved ~= nil or props.changeInfo.linesAdded ~= nil)
 					then e(ChangeTag, {
-						text = (if props.changeInfo.isWhitespaceOnly then "Whitespace " else "Lines ")
-							.. (if props.changeInfo.lineChanges >= 10000 then "100+" else props.changeInfo.lineChanges),
+						text = "-" .. (props.changeInfo.linesRemoved or 0),
 						color = if props.changeInfo.isWhitespaceOnly
+								or (props.changeInfo.linesRemoved or 0) == 0
 							then theme.Diff.WhitespaceOnly
-							else theme.Diff.Changes,
+							else theme.Diff.Remove,
 						transparency = props.transparency,
 						layoutOrder = 1,
+						tooltipText = (props.changeInfo.linesRemoved or 0)
+							.. (if (props.changeInfo.linesRemoved or 0) == 1 then " line removed" else " lines removed")
+							.. (if props.changeInfo.isWhitespaceOnly then " (whitespace only)" else ""),
 					})
 					else nil,
-				PropsTag = if props.changeInfo and props.changeInfo.propChanges
+
+				AddedTag = if props.changeInfo
+						and (props.changeInfo.linesRemoved ~= nil or props.changeInfo.linesAdded ~= nil)
 					then e(ChangeTag, {
-						text = "Props " .. props.changeInfo.propChanges,
-						color = theme.Diff.Changes or theme.Diff.Background.Edit,
+						text = "+" .. (props.changeInfo.linesAdded or 0),
+						color = if props.changeInfo.isWhitespaceOnly
+								or (props.changeInfo.linesAdded or 0) == 0
+							then theme.Diff.WhitespaceOnly
+							else theme.Diff.Add,
 						transparency = props.transparency,
 						layoutOrder = 2,
+						tooltipText = (props.changeInfo.linesAdded or 0)
+							.. (if (props.changeInfo.linesAdded or 0) == 1 then " line added" else " lines added")
+							.. (if props.changeInfo.isWhitespaceOnly then " (whitespace only)" else ""),
 					})
 					else nil,
+
+				-- Property changes: compact "NP" format in yellow
+				PropsTag = if props.changeInfo and props.changeInfo.propChanges
+					then e(ChangeTag, {
+						text = props.changeInfo.propChanges .. "P",
+						color = theme.Diff.Property,
+						transparency = props.transparency,
+						layoutOrder = 3,
+						tooltipText = props.changeInfo.propChanges .. (if props.changeInfo.propChanges == 1
+							then " property change"
+							else " property changes") .. " (excluding Source)",
+					})
+					else nil,
+
+				-- Proportional diff bar
+				Bar = if props.changeInfo
+						and (
+							(props.changeInfo.linesRemoved and props.changeInfo.linesRemoved > 0)
+							or (props.changeInfo.linesAdded and props.changeInfo.linesAdded > 0)
+							or (props.changeInfo.propChanges and props.changeInfo.propChanges > 0)
+						)
+					then e(DiffBar, {
+						removed = props.changeInfo.linesRemoved or 0,
+						added = props.changeInfo.linesAdded or 0,
+						propChanges = props.changeInfo.propChanges or 0,
+						isWhitespaceOnly = props.changeInfo.isWhitespaceOnly,
+						transparency = props.transparency,
+						layoutOrder = 4,
+					})
+					else nil,
+
+				-- Failed changes
 				Failed = if props.changeInfo and props.changeInfo.failed
 					then e(ChangeTag, {
 						text = "Failed " .. props.changeInfo.failed,
 						color = theme.Diff.Warning,
 						transparency = props.transparency,
-						layoutOrder = 3,
+						layoutOrder = 5,
+						tooltipText = props.changeInfo.failed .. (if props.changeInfo.failed == 1
+							then " change failed to apply"
+							else " changes failed to apply"),
 					})
 					else nil,
 			}),

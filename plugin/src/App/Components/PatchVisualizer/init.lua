@@ -210,6 +210,7 @@ function PatchVisualizer:render()
 				className = node.className,
 				isWarning = node.isWarning,
 				instance = node.instance,
+				instancePath = if node.instance then node.instance:GetFullName() else node.name,
 				name = node.name,
 				changeInfo = node.changeInfo,
 				changeList = node.changeList,

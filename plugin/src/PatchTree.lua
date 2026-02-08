@@ -11,10 +11,10 @@ local Packages = Rojo.Packages
 
 local Log = require(Packages.Log)
 
+local ChangeMetadata = require(Plugin.ChangeMetadata)
 local Config = require(Plugin.Config)
 local Timer = require(Plugin.Timer)
 local Types = require(Plugin.Types)
-local WhitespaceUtil = require(Plugin.WhitespaceUtil)
 local decodeValue = require(Plugin.Reconciler.decodeValue)
 local getProperty = require(Plugin.Reconciler.getProperty)
 
@@ -251,9 +251,6 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 
 		-- Gather detail text
 		local changeList, changeInfo = nil, nil
-		local totalLineChanges = 0
-		local whitespaceLineChanges = 0
-		local hasSourceChange = false
 		if next(change.changedProperties) or change.changedName then
 			changeList = {}
 
@@ -290,13 +287,6 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 					end
 				end
 
-				-- Check if this is a Source property - count line differences
-				if prop == "Source" and currentSuccess and incomingSuccess then
-					hasSourceChange = true
-					totalLineChanges, whitespaceLineChanges =
-						WhitespaceUtil.CountLineDifferences(currentValue, incomingValue)
-				end
-
 				addProp(
 					prop,
 					if currentSuccess then currentValue else "[Error]",
@@ -304,18 +294,8 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 				)
 			end
 
-			-- Count non-Source property changes
-			local propCount = changeIndex - (if hasSourceChange then 1 else 0)
-
-			changeInfo = {
-				-- Line changes for Source (nil if no Source change)
-				lineChanges = if hasSourceChange and totalLineChanges > 0 then totalLineChanges else nil,
-				isWhitespaceOnly = hasSourceChange
-					and totalLineChanges > 0
-					and totalLineChanges == whitespaceLineChanges,
-				-- Property changes (non-Source: Name, Attributes, etc.)
-				propChanges = if propCount > 0 then propCount else nil,
-			}
+			-- Compute structured change metadata via ChangeMetadata module
+			changeInfo = ChangeMetadata.compute(changeList)
 
 			-- Sort changes and add header
 			table.sort(changeList, function(a, b)
@@ -377,6 +357,9 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 
 		tree:buildAncestryNodes(previousId, ancestryIds, patch, instanceMap)
 
+		-- Compute line count metadata for removed scripts
+		local changeInfo = ChangeMetadata.computeForRemoval(instance)
+
 		-- Add this node to tree
 		-- Default to nil (unselected) - user must explicitly choose Push/Pull/Skip
 		local nodeId = instanceMap.fromInstances[instance] or HttpService:GenerateGUID(false)
@@ -387,6 +370,7 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 			className = instance.ClassName,
 			name = instance.Name,
 			instance = instance,
+			changeInfo = changeInfo,
 			defaultSelection = nil,
 		})
 	end
@@ -444,9 +428,8 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 				addProp(prop, if success then incomingValue else select(2, next(incoming)))
 			end
 
-			changeInfo = {
-				edits = changeIndex,
-			}
+			-- Compute structured change metadata via ChangeMetadata module
+			changeInfo = ChangeMetadata.computeForAddition(changeList)
 
 			-- Sort changes and add header
 			table.sort(changeList, function(a, b)
@@ -570,10 +553,10 @@ function PatchTree.updateMetadata(tree, patch, instanceMap, unappliedPatch)
 			Log.trace("  Marked property as warning: {}.{}", node.name, property)
 		end
 
-		node.changeInfo = {
-			edits = (node.changeInfo.edits or (#node.changeList - 1)) - warnings,
-			failed = if warnings > 0 then warnings else nil,
-		}
+		-- Preserve existing metadata fields (linesAdded, etc.) and add failure tracking
+		node.changeInfo = table.clone(node.changeInfo)
+		node.changeInfo.edits = (node.changeInfo.edits or (#node.changeList - 1)) - warnings
+		node.changeInfo.failed = if warnings > 0 then warnings else nil
 	end
 	for failedAdditionId in unappliedPatch.added do
 		local node = tree:getNode(failedAdditionId)
@@ -598,9 +581,11 @@ function PatchTree.updateMetadata(tree, patch, instanceMap, unappliedPatch)
 			Log.trace("  Marked property as warning: {}.{}", node.name, change[1])
 		end
 
-		node.changeInfo = {
-			failed = node.changeInfo.edits or (#node.changeList - 1),
-		}
+		-- Preserve existing metadata fields and mark all edits as failed
+		local totalEdits = node.changeInfo.edits or (#node.changeList - 1)
+		node.changeInfo = table.clone(node.changeInfo)
+		node.changeInfo.failed = totalEdits
+		node.changeInfo.edits = nil
 	end
 	for _, failedRemovalIdOrInstance in unappliedPatch.removed do
 		local failedRemovalId = if Types.RbxId(failedRemovalIdOrInstance)

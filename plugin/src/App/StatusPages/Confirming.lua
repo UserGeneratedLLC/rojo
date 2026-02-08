@@ -63,16 +63,42 @@ function ConfirmingPage:init()
 
 		self:setState(function(state)
 			local newSelections = table.clone(state.selections)
-			-- Set this node if it has a patchType
-			if node.patchType then
-				newSelections[nodeId] = selection
+
+			-- Check if all selectable nodes in this subtree already have this selection
+			local allMatch = true
+			if node.patchType and newSelections[nodeId] ~= selection then
+				allMatch = false
 			end
-			-- Set all descendants
-			self.props.patchTree:forEach(function(childNode)
-				if childNode.patchType then
-					newSelections[childNode.id] = selection
+			if allMatch then
+				self.props.patchTree:forEach(function(childNode)
+					if childNode.patchType and newSelections[childNode.id] ~= selection then
+						allMatch = false
+					end
+				end, node)
+			end
+
+			if allMatch then
+				-- All already match: un-select (toggle off)
+				if node.patchType then
+					newSelections[nodeId] = nil
 				end
-			end, node)
+				self.props.patchTree:forEach(function(childNode)
+					if childNode.patchType then
+						newSelections[childNode.id] = nil
+					end
+				end, node)
+			else
+				-- Not all match: set them all to the selection
+				if node.patchType then
+					newSelections[nodeId] = selection
+				end
+				self.props.patchTree:forEach(function(childNode)
+					if childNode.patchType then
+						newSelections[childNode.id] = selection
+					end
+				end, node)
+			end
+
 			return { selections = newSelections }
 		end)
 	end
@@ -165,11 +191,12 @@ function ConfirmingPage:render()
 				onSelectionChange = self.onSelectionChange,
 				onSubtreeSelectionChange = self.onSubtreeSelectionChange,
 
-				showStringDiff = function(currentString: string, incomingString: string)
+				showStringDiff = function(currentString: string, incomingString: string, instancePath: string?)
 					self:setState({
 						showingStringDiff = true,
 						currentString = currentString,
 						incomingString = incomingString,
+						stringDiffTitle = instancePath or "String diff",
 					})
 				end,
 				showTableDiff = function(oldTable: { [any]: any? }, newTable: { [any]: any? })
@@ -246,13 +273,13 @@ function ConfirmingPage:render()
 
 			StringDiff = e(StudioPluginGui, {
 				id = "Atlas_ConfirmingStringDiff",
-				title = "String diff",
+				title = self.state.stringDiffTitle or "String diff",
 				active = self.state.showingStringDiff,
 				isEphemeral = true,
 
 				initDockState = Enum.InitialDockState.Float,
 				overridePreviousState = true,
-				floatingSize = Vector2.new(500, 350),
+				floatingSize = Vector2.new(1500, 1050),
 				minimumSize = Vector2.new(400, 250),
 
 				zIndexBehavior = Enum.ZIndexBehavior.Sibling,
@@ -290,7 +317,7 @@ function ConfirmingPage:render()
 
 				initDockState = Enum.InitialDockState.Float,
 				overridePreviousState = true,
-				floatingSize = Vector2.new(500, 350),
+				floatingSize = Vector2.new(1500, 1050),
 				minimumSize = Vector2.new(400, 250),
 
 				zIndexBehavior = Enum.ZIndexBehavior.Sibling,
@@ -410,7 +437,7 @@ function ConfirmingPage:render()
 
 				initDockState = Enum.InitialDockState.Float,
 				overridePreviousState = false,
-				floatingSize = Vector2.new(500, 350),
+				floatingSize = Vector2.new(1500, 1050),
 				minimumSize = Vector2.new(400, 250),
 
 				zIndexBehavior = Enum.ZIndexBehavior.Sibling,

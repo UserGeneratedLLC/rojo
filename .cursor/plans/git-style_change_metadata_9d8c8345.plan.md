@@ -4,31 +4,31 @@ overview: Extract ad-hoc change calculation from PatchTree into a dedicated Chan
 todos:
   - id: create-diff-util
     content: Replace WhitespaceUtil with DiffUtil -- Myers diff algorithm (line-level), returns { added, removed, isWhitespaceOnly, overflow }
-    status: pending
+    status: completed
   - id: diff-util-spec
     content: Create DiffUtil.spec.lua with comprehensive tests (empty, identical, pure add/remove, mixed, whitespace-only, overflow, edge cases)
-    status: pending
+    status: completed
   - id: create-change-metadata
     content: Create plugin/src/ChangeMetadata.lua module with compute() function that takes changeList and returns metadata struct
-    status: pending
+    status: completed
   - id: update-patch-tree
     content: Refactor PatchTree.build() and updateMetadata() to use ChangeMetadata.compute() instead of inline calculation
-    status: pending
+    status: completed
   - id: update-dom-label
     content: Update DomLabel to display git-style -M/+N tags (red/green), grayed when whitespace-only
-    status: pending
+    status: completed
   - id: diff-bar
     content: Add GitHub-style mini diff bar (5 colored segments) next to the line change tags in DomLabel
-    status: pending
+    status: completed
   - id: tooltips
     content: Add hover tooltips to change tags with human-readable detail text
-    status: pending
+    status: completed
   - id: restyle-props
     content: Restyle the Props tag to be visually consistent with the new git-style tags
-    status: pending
+    status: completed
   - id: update-theme
     content: Update Theme.lua Diff colors to use the new hardcoded values (#F21717,
-    status: pending
+    status: completed
 isProject: false
 ---
 
