@@ -6,3 +6,4 @@ Writing src/ChildWithoutDuplicates/Child/.gitkeep
 Writing src/ChildWithDuplicates
 Writing src/ChildWithoutDuplicates
 Writing src/ChildWithoutDuplicates/Child
+Removing src/ChildWithDuplicates/.gitkeep

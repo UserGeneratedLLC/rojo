@@ -4,3 +4,4 @@ expression: normalized_stdout
 ---
 Writing src/pointer.model.json5
 Writing src/target.txt
+Removing src/.gitkeep

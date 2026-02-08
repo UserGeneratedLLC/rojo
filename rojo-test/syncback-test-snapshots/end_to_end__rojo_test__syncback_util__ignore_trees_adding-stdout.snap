@@ -4,3 +4,4 @@ expression: normalized_stdout
 ---
 Writing src/IncludeMe/.gitkeep
 Writing src/IncludeMe
+Removing src/.gitkeep

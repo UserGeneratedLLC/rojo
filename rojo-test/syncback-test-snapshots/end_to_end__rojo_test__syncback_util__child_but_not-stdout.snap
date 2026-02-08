@@ -4,3 +4,5 @@ expression: normalized_stdout
 ---
 Writing OnlyOneCopy/child_of_one.luau
 Writing ReplicatedStorage/child_replicated_storage.luau
+Removing OnlyOneCopy/.gitkeep
+Removing ReplicatedStorage/.gitkeep

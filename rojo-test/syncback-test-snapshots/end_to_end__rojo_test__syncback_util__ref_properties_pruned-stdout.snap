@@ -5,3 +5,4 @@ expression: normalized_stdout
 Writing src/Pointer1.model.json5
 Writing src/Pointer2.model.json5
 Writing src/Pointer3.model.json5
+Removing src/.gitkeep
