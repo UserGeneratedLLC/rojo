@@ -140,6 +140,80 @@ fn assert_not_exists(path: &Path, msg: &str) {
     );
 }
 
+/// Poll timeout for assertions on filesystem changes driven by the
+/// ChangeProcessor (runs on a separate thread from the API handler).
+const API_POLL_TIMEOUT_MS: u64 = 5000;
+
+/// Poll until a file exists on disk. Use after `send_update` for operations
+/// processed asynchronously by the ChangeProcessor (Source writes, renames,
+/// ClassName changes). Panics after `API_POLL_TIMEOUT_MS`.
+fn poll_file_exists(path: &Path, msg: &str) {
+    let start = Instant::now();
+    loop {
+        if path.exists() && path.is_file() {
+            return;
+        }
+        if start.elapsed() > Duration::from_millis(API_POLL_TIMEOUT_MS) {
+            panic!(
+                "{}: expected file at {} (timed out after {}ms)",
+                msg,
+                path.display(),
+                API_POLL_TIMEOUT_MS
+            );
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Poll until a path no longer exists on disk. Use after `send_update` for
+/// operations processed asynchronously by the ChangeProcessor.
+/// Panics after `API_POLL_TIMEOUT_MS`.
+fn poll_not_exists(path: &Path, msg: &str) {
+    let start = Instant::now();
+    loop {
+        if !path.exists() {
+            return;
+        }
+        if start.elapsed() > Duration::from_millis(API_POLL_TIMEOUT_MS) {
+            panic!(
+                "{}: should NOT exist: {} (timed out after {}ms)",
+                msg,
+                path.display(),
+                API_POLL_TIMEOUT_MS
+            );
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Poll until a file exists and its contents contain the expected substring.
+/// Use after `send_update` for Source property writes processed asynchronously
+/// by the ChangeProcessor. Panics after `API_POLL_TIMEOUT_MS`.
+fn poll_file_contains(path: &Path, expected: &str, msg: &str) {
+    let start = Instant::now();
+    loop {
+        if path.exists() && path.is_file() {
+            if let Ok(content) = fs::read_to_string(path) {
+                if content.contains(expected) {
+                    return;
+                }
+            }
+        }
+        if start.elapsed() > Duration::from_millis(API_POLL_TIMEOUT_MS) {
+            let content = fs::read_to_string(path).unwrap_or_else(|_| "<file not found>".into());
+            panic!(
+                "{}: file at {} should contain '{}', got: {} (timed out after {}ms)",
+                msg,
+                path.display(),
+                expected,
+                content,
+                API_POLL_TIMEOUT_MS
+            );
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
 /// Get ReplicatedStorage ID and the ID of the "existing" ModuleScript.
 fn get_rs_and_existing(
     session: &crate::rojo_test::serve_util::TestServeSession,
@@ -186,11 +260,10 @@ fn update_source_writes_to_disk() {
             },
         );
 
-        let updated = fs::read_to_string(&file_path).unwrap();
-        assert!(
-            updated.contains("Updated via two-way sync"),
-            "File should contain new Source, got: {}",
-            updated
+        poll_file_contains(
+            &file_path,
+            "Updated via two-way sync",
+            "File should contain new Source",
         );
     });
 }
@@ -308,8 +381,8 @@ fn rename_standalone_script() {
             },
         );
 
-        assert_not_exists(&old_path, "Old file after rename");
-        assert_file_exists(&new_path, "New file after rename");
+        poll_not_exists(&old_path, "Old file after rename");
+        poll_file_exists(&new_path, "New file after rename");
 
         let new_content = fs::read_to_string(&new_path).unwrap();
         assert_eq!(
@@ -366,13 +439,13 @@ fn rename_preserves_adjacent_meta_file() {
         let new_script = session.path().join("src").join("renamed_meta.luau");
         let new_meta = session.path().join("src").join("renamed_meta.meta.json5");
 
-        assert_not_exists(
+        poll_not_exists(
             &session.path().join("src").join("existing.luau"),
             "Old script gone",
         );
-        assert_not_exists(&old_meta, "Old meta gone");
-        assert_file_exists(&new_script, "Renamed script exists");
-        assert_file_exists(&new_meta, "Renamed meta exists");
+        poll_not_exists(&old_meta, "Old meta gone");
+        poll_file_exists(&new_script, "Renamed script exists");
+        poll_file_exists(&new_meta, "Renamed meta exists");
     });
 }
 
@@ -400,8 +473,8 @@ fn classname_change_module_to_script() {
             },
         );
 
-        assert_not_exists(&module_path, "Module file after class change");
-        assert_file_exists(&script_path, "Script file after class change");
+        poll_not_exists(&module_path, "Module file after class change");
+        poll_file_exists(&script_path, "Script file after class change");
     });
 }
 
@@ -428,8 +501,8 @@ fn classname_change_module_to_localscript() {
             },
         );
 
-        assert_not_exists(&module_path, "Module file after class change");
-        assert_file_exists(&local_path, "LocalScript file after class change");
+        poll_not_exists(&module_path, "Module file after class change");
+        poll_file_exists(&local_path, "LocalScript file after class change");
     });
 }
 
@@ -519,8 +592,7 @@ fn round_trip_modify_rename_remove() {
         );
 
         let file = src.join("existing.luau");
-        let content = fs::read_to_string(&file).unwrap();
-        assert!(content.contains("Round trip v1"), "Step 1: Source updated");
+        poll_file_contains(&file, "Round trip v1", "Step 1: Source updated");
 
         // Re-read to get current ID
         let (session_id, _rs_id, existing_id) = get_rs_and_existing(&session);
@@ -538,9 +610,9 @@ fn round_trip_modify_rename_remove() {
             },
         );
 
-        assert_not_exists(&file, "Step 2: old file gone");
+        poll_not_exists(&file, "Step 2: old file gone");
         let new_file = src.join("GameService.luau");
-        assert_file_exists(&new_file, "Step 2: renamed file exists");
+        poll_file_exists(&new_file, "Step 2: renamed file exists");
         let content = fs::read_to_string(&new_file).unwrap();
         assert!(
             content.contains("Round trip v1"),
@@ -702,16 +774,23 @@ fn rename_directory_format_script() {
             },
         );
 
-        assert!(
-            !old_dir.exists(),
-            "Old directory should be gone after rename: {}",
-            old_dir.display()
-        );
-        assert!(
-            new_dir.is_dir(),
-            "New directory should exist after rename: {}",
-            new_dir.display()
-        );
+        poll_not_exists(&old_dir, "Old directory should be gone after rename");
+
+        // Poll for the new directory to appear
+        let start = Instant::now();
+        loop {
+            if new_dir.is_dir() {
+                break;
+            }
+            if start.elapsed() > Duration::from_millis(API_POLL_TIMEOUT_MS) {
+                panic!(
+                    "New directory should exist after rename: {} (timed out after {}ms)",
+                    new_dir.display(),
+                    API_POLL_TIMEOUT_MS
+                );
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
 
         // init.luau should be inside the renamed directory
         let init_file = new_dir.join("init.luau");
@@ -750,8 +829,8 @@ fn classname_change_directory_module_to_script() {
             },
         );
 
-        assert_not_exists(&old_init, "init.luau after class change to Script");
-        assert_file_exists(&new_init, "init.server.luau after class change to Script");
+        poll_not_exists(&old_init, "init.luau after class change to Script");
+        poll_file_exists(&new_init, "init.server.luau after class change to Script");
 
         // Children should be unaffected
         let child_a = dir.join("ChildA.luau");
@@ -790,8 +869,8 @@ fn classname_change_script_to_module() {
             },
         );
 
-        assert_not_exists(&old_path, "Script file after class change to ModuleScript");
-        assert_file_exists(&new_path, "ModuleScript file after class change");
+        poll_not_exists(&old_path, "Script file after class change to ModuleScript");
+        poll_file_exists(&new_path, "ModuleScript file after class change");
     });
 }
 
@@ -825,8 +904,8 @@ fn classname_change_script_to_localscript() {
             },
         );
 
-        assert_not_exists(&old_path, "Script file after class change to LocalScript");
-        assert_file_exists(&new_path, "LocalScript file after class change");
+        poll_not_exists(&old_path, "Script file after class change to LocalScript");
+        poll_file_exists(&new_path, "LocalScript file after class change");
     });
 }
 
@@ -861,8 +940,8 @@ fn classname_change_localscript_to_script() {
             },
         );
 
-        assert_not_exists(&old_path, "LocalScript file after class change to Script");
-        assert_file_exists(&new_path, "Script file after class change");
+        poll_not_exists(&old_path, "LocalScript file after class change to Script");
+        poll_file_exists(&new_path, "Script file after class change");
     });
 }
 
@@ -900,14 +979,11 @@ fn combined_rename_and_source_update() {
             },
         );
 
-        assert_not_exists(&old_path, "Old file after combined rename+source");
-        assert_file_exists(&new_path, "Renamed file after combined rename+source");
-
-        let content = fs::read_to_string(&new_path).unwrap();
-        assert!(
-            content.contains("Written after rename"),
-            "Source should be written to the NEW file location, got: {}",
-            content
+        poll_not_exists(&old_path, "Old file after combined rename+source");
+        poll_file_contains(
+            &new_path,
+            "Written after rename",
+            "Source should be written to the NEW file location",
         );
     });
 }
@@ -941,14 +1017,11 @@ fn combined_classname_and_source_update() {
             },
         );
 
-        assert_not_exists(&old_path, "ModuleScript file after ClassName+Source");
-        assert_file_exists(&new_path, "Script file after ClassName+Source");
-
-        let content = fs::read_to_string(&new_path).unwrap();
-        assert!(
-            content.contains("Source after class change"),
-            "Source should be in the new file, got: {}",
-            content
+        poll_not_exists(&old_path, "ModuleScript file after ClassName+Source");
+        poll_file_contains(
+            &new_path,
+            "Source after class change",
+            "Source should be in the new file",
         );
     });
 }
@@ -991,22 +1064,16 @@ fn combined_rename_and_classname_change() {
             },
         );
 
-        assert_not_exists(&old_path, "Original file after combined rename+classname");
-        assert_not_exists(
+        poll_not_exists(&old_path, "Original file after combined rename+classname");
+        poll_not_exists(
             &renamed_only,
             "Renamed.luau should not exist — ClassName handler should have \
              applied the .server extension",
         );
-        assert_file_exists(
+        poll_file_contains(
             &final_path,
-            "Renamed.server.luau should exist after combined rename+classname",
-        );
-
-        let content = fs::read_to_string(&final_path).unwrap();
-        assert!(
-            content.contains("After rename + class change"),
-            "Source should be in the final file, got: {}",
-            content
+            "After rename + class change",
+            "Renamed.server.luau should exist with correct Source",
         );
     });
 }
