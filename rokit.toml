@@ -1,5 +1,5 @@
 [tools]
-atlas = "UserGeneratedLLC/rojo@8.0.0"
+atlas = "UserGeneratedLLC/rojo@8.0.1"
 selene = "Kampfkarren/selene@0.29.0"
 stylua = "JohnnyMorganz/stylua@2.1.0"
 run-in-roblox = "rojo-rbx/run-in-roblox@0.3.0"

@@ -172,7 +172,7 @@ dependencies = [
 
 [[package]]
 name = "atlas"
-version = "8.0.0"
+version = "8.0.1"
 dependencies = [
  "anyhow",
  "backtrace",
