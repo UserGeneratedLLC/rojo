@@ -31,6 +31,26 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+## [8.0.2] (February 9th, 2026)
+
+* Update vscode-rojo extension submodule.
+* Bump dependencies: fs-err 3.3.0, json5 1.3.1, ryu 1.0.23, unicode-ident 1.0.23, zmij 1.0.20.
+* Remove self-referencing atlas entry from rokit.toml.
+
+<details>
+<summary>Full commit log</summary>
+
+- `d210dca9` Update subproject commit reference for vscode-rojo
+- `164d82a9` Update subproject commit reference for vscode-rojo
+- `5bd098f0` Bump dependencies in Cargo.lock and Cargo.toml
+- `d3c684e6` Bump version to X.Y.Z
+- `61c21bc1` Remove atlas reference from rokit.toml
+- `82e48071` Update CHANGELOG for version 8.0.1 and add release command documentation
+
+</details>
+
+[8.0.2]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.0.2
+
 ## [8.0.1] (February 8th, 2026)
 
 * Root install scripts now also build and install the VS Code/Cursor extension.
