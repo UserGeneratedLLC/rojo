@@ -20,7 +20,10 @@ use crate::{
         PathIgnoreRule, SyncRule,
     },
     snapshot_middleware::Middleware,
-    syncback::{filter_properties, inst_path, FsSnapshot, SyncbackReturn, SyncbackSnapshot},
+    syncback::{
+        filter_properties, inst_path, name_needs_slugify, slugify_name, FsSnapshot, SyncbackReturn,
+        SyncbackSnapshot,
+    },
     variant_eq::variant_eq,
     RojoRef,
 };
@@ -654,6 +657,27 @@ pub fn syncback_project<'sync>(
             std::path::PathBuf,
             std::collections::HashSet<String>,
         > = std::collections::HashMap::new();
+
+        // Pre-seed taken_names from old children's slugified instance names
+        // so that new-only children correctly dedup against existing siblings
+        // (e.g., new "utils" won't collide with existing "Utils.luau").
+        // Only in incremental mode: in clean mode, old_ref is forced to None
+        // for all children, so every child is treated as new and pre-seeding
+        // would cause false collisions (spurious ~1 suffixes).
+        if snapshot.data.is_incremental() {
+            if let Some(parent_path) = ref_to_path_map.get(&new_inst.referent()) {
+                let taken = taken_names_per_dir.entry(parent_path.clone()).or_default();
+                for old_child in old_child_map.values() {
+                    let name = old_child.name();
+                    let slug = if name_needs_slugify(name) {
+                        slugify_name(name).to_lowercase()
+                    } else {
+                        name.to_lowercase()
+                    };
+                    taken.insert(slug);
+                }
+            }
+        }
 
         for (name, new_child) in new_child_map.drain() {
             // Skip instances of ignored classes

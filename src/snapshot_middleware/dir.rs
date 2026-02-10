@@ -186,19 +186,22 @@ pub fn syncback_dir_no_meta<'sync>(
             old_child_map.insert(inst.name(), inst);
         }
 
-        // Pre-seed taken_names from old children's slugified instance names.
-        // This ensures new-only children that happen to slugify to the same
-        // bare slug as an existing sibling will be deduplicated (e.g., new
-        // "A/B" → slug "A_B" won't collide with existing "A_B").
-        // Matches the approach used in api.rs (lines 902-920).
-        for (_, inst) in &old_child_map {
-            let name = inst.name();
-            let slug = if name_needs_slugify(name) {
-                slugify_name(name).to_lowercase()
-            } else {
-                name.to_lowercase()
-            };
-            taken_names.insert(slug);
+        // Pre-seed taken_names from old children's slugified instance names
+        // so that new-only children correctly dedup against existing siblings
+        // (e.g., new "A/B" → slug "A_B" won't collide with existing "A_B").
+        // Only in incremental mode: in clean mode, old_ref is forced to None
+        // for all children, so every child is treated as new and pre-seeding
+        // would cause false collisions (spurious ~1 suffixes).
+        if snapshot.data.is_incremental() {
+            for inst in old_child_map.values() {
+                let name = inst.name();
+                let slug = if name_needs_slugify(name) {
+                    slugify_name(name).to_lowercase()
+                } else {
+                    name.to_lowercase()
+                };
+                taken_names.insert(slug);
+            }
         }
 
         for new_child_ref in new_inst.children() {

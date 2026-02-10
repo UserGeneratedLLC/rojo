@@ -296,11 +296,7 @@ impl JobThreadContext {
             match crate::json::to_vec_pretty_sorted(&serde_json::Value::Object(obj)) {
                 Ok(content) => {
                     if let Err(err) = fs::write(meta_path, &content) {
-                        log::error!(
-                            "Failed to write meta file {}: {}",
-                            meta_path.display(),
-                            err
-                        );
+                        log::error!("Failed to write meta file {}: {}", meta_path.display(), err);
                     }
                 }
                 Err(err) => {
@@ -773,8 +769,8 @@ impl JobThreadContext {
                                                                 self.unsuppress_path(&new_meta);
                                                             }
                                                         }
-                                                        let init_meta = new_dir_path
-                                                            .join("init.meta.json5");
+                                                        let init_meta =
+                                                            new_dir_path.join("init.meta.json5");
                                                         if slugified_new_name != *new_name {
                                                             // New name needs slugification — write name field
                                                             self.upsert_meta_name_field(

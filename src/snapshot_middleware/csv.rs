@@ -109,11 +109,20 @@ pub fn syncback_csv<'sync>(
 
         if !meta.is_empty() {
             let parent = snapshot.path.parent_err()?;
-            let instance_name = &new_inst.name;
-            let meta_name = if name_needs_slugify(instance_name) {
-                slugify_name(instance_name)
+            let meta_name = snapshot
+                .path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            let meta_name = if meta_name.is_empty() {
+                let instance_name = &new_inst.name;
+                if name_needs_slugify(instance_name) {
+                    slugify_name(instance_name)
+                } else {
+                    instance_name.clone()
+                }
             } else {
-                instance_name.clone()
+                meta_name.to_string()
             };
             fs_snapshot.add_file(
                 parent.join(format!("{}.meta.json5", meta_name)),
