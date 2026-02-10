@@ -243,6 +243,13 @@ pub fn slugify_name(name: &str) -> String {
         }
     }
 
+    // Strip trailing spaces and dots (invalid on Windows) BEFORE the
+    // reserved-name check so that inputs like "CON." or "CON " are
+    // reduced to "CON" and then correctly caught below.
+    while result.ends_with(' ') || result.ends_with('.') {
+        result.pop();
+    }
+
     // Handle Windows reserved names by appending an underscore
     let result_lower = result.to_lowercase();
     for forbidden in INVALID_WINDOWS_NAMES {
@@ -250,11 +257,6 @@ pub fn slugify_name(name: &str) -> String {
             result.push('_');
             break;
         }
-    }
-
-    // Strip trailing spaces and dots (invalid on Windows)
-    while result.ends_with(' ') || result.ends_with('.') {
-        result.pop();
     }
 
     // If the result is empty or all underscores, use a fallback
@@ -379,6 +381,21 @@ mod tests {
         assert_eq!(slugify_name("con"), "con_");
         assert_eq!(slugify_name("Con"), "Con_");
         assert_eq!(slugify_name("nul"), "nul_");
+    }
+
+    #[test]
+    fn slugify_windows_reserved_with_trailing_dots_and_spaces() {
+        // Trailing dots/spaces must be stripped BEFORE the reserved name
+        // check, otherwise "CON." bypasses the check and becomes "CON".
+        assert_eq!(slugify_name("CON."), "CON_");
+        assert_eq!(slugify_name("CON "), "CON_");
+        assert_eq!(slugify_name("CON.."), "CON_");
+        assert_eq!(slugify_name("CON. "), "CON_");
+        assert_eq!(slugify_name("PRN."), "PRN_");
+        assert_eq!(slugify_name("AUX "), "AUX_");
+        assert_eq!(slugify_name("nul."), "nul_");
+        assert_eq!(slugify_name("com1."), "com1_");
+        assert_eq!(slugify_name("LPT1 "), "LPT1_");
     }
 
     #[test]

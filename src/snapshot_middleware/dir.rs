@@ -8,7 +8,10 @@ use memofs::{DirEntry, Vfs};
 
 use crate::{
     snapshot::{InstanceContext, InstanceMetadata, InstanceSnapshot, InstigatingSource},
-    syncback::{hash_instance, FsSnapshot, SyncbackReturn, SyncbackSnapshot},
+    syncback::{
+        hash_instance, name_needs_slugify, slugify_name, FsSnapshot, SyncbackReturn,
+        SyncbackSnapshot,
+    },
 };
 
 use super::{meta_file::DirectoryMetadata, snapshot_from_vfs};
@@ -139,10 +142,9 @@ pub fn syncback_dir_no_meta<'sync>(
     let mut removed_children = Vec::new();
 
     // taken_names tracks claimed bare slugs (without extensions) for dedup.
-    // It is NOT seeded from disk filenames — those contain extensions that
-    // would cause mismatches with bare-slug comparisons. Instead, old
-    // children's dedup_keys are accumulated as they are processed in the
-    // loop below (via name_for_inst's third return value).
+    // Pre-seeded from old tree children's slugified instance names so that
+    // new-only children correctly dedup against existing siblings, regardless
+    // of iteration order (see plan: fix_stem-level_dedup §2).
     let mut taken_names: HashSet<String> = HashSet::new();
 
     // Detect duplicate child names (case-insensitive for file system safety).
@@ -182,6 +184,21 @@ pub fn syncback_dir_no_meta<'sync>(
         for child in old_inst.children() {
             let inst = snapshot.get_old_instance(*child).unwrap();
             old_child_map.insert(inst.name(), inst);
+        }
+
+        // Pre-seed taken_names from old children's slugified instance names.
+        // This ensures new-only children that happen to slugify to the same
+        // bare slug as an existing sibling will be deduplicated (e.g., new
+        // "A/B" → slug "A_B" won't collide with existing "A_B").
+        // Matches the approach used in api.rs (lines 902-920).
+        for (_, inst) in &old_child_map {
+            let name = inst.name();
+            let slug = if name_needs_slugify(name) {
+                slugify_name(name).to_lowercase()
+            } else {
+                name.to_lowercase()
+            };
+            taken_names.insert(slug);
         }
 
         for new_child_ref in new_inst.children() {
