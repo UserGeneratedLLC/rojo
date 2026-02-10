@@ -31,6 +31,21 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+## [8.0.3] (February 9th, 2026)
+
+* Bump toolchain dependencies in rokit.toml: selene 0.30.0, stylua 2.3.1.
+* Add luau and luau-lsp to rokit.toml toolchain.
+
+<details>
+<summary>Full commit log</summary>
+
+- `63447c7b` Enable luau and luau-lsp dependencies in rokit.toml
+- `93c360f5` Bump dependencies in rokit.toml
+
+</details>
+
+[8.0.3]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.0.3
+
 ## [8.0.2] (February 9th, 2026)
 
 * Update vscode-rojo extension submodule.
