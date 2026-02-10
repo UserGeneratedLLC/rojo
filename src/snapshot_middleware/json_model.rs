@@ -77,6 +77,11 @@ pub fn syncback_json_model<'sync>(
         // could have a performance cost.
         model.schema = old_inst.metadata().schema.clone();
         model.name = old_inst.metadata().specified_name.clone();
+    } else if snapshot.needs_meta_name {
+        // New instance whose filesystem name differs from the instance name
+        // (due to slugification or deduplication). Store the real name so it
+        // survives a round-trip through the filesystem.
+        model.name = Some(snapshot.new_inst().name.clone());
     }
 
     let serialized = match crate::json::to_vec_pretty_sorted(&model) {

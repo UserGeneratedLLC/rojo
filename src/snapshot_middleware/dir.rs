@@ -138,24 +138,12 @@ pub fn syncback_dir_no_meta<'sync>(
     let mut children = Vec::new();
     let mut removed_children = Vec::new();
 
-    // Seed taken_names with existing files on disk so new children don't
-    // collide with files already present in the directory.
-    let mut taken_names: HashSet<String> = snapshot
-        .vfs()
-        .read_dir(&snapshot.path)
-        .ok()
-        .map(|entries| {
-            entries
-                .filter_map(|e| e.ok())
-                .filter_map(|e| {
-                    e.path()
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|n| n.to_lowercase())
-                })
-                .collect()
-        })
-        .unwrap_or_default();
+    // taken_names tracks claimed bare slugs (without extensions) for dedup.
+    // It is NOT seeded from disk filenames — those contain extensions that
+    // would cause mismatches with bare-slug comparisons. Instead, old
+    // children's dedup_keys are accumulated as they are processed in the
+    // loop below (via name_for_inst's third return value).
+    let mut taken_names: HashSet<String> = HashSet::new();
 
     // Detect duplicate child names (case-insensitive for file system safety).
     // We skip duplicates instead of failing, tracking them in stats.
@@ -239,22 +227,18 @@ pub fn syncback_dir_no_meta<'sync>(
                     continue;
                 }
                 // This child exists in both doms. Pass it on.
-                let (child_snap, _needs_meta) = snapshot.with_joined_path(
+                let (child_snap, _needs_meta, dedup_key) = snapshot.with_joined_path(
                     *new_child_ref,
                     Some(old_child.id()),
                     &taken_names,
                 )?;
-                if let Some(name) = child_snap.path.file_name().and_then(|n| n.to_str()) {
-                    taken_names.insert(name.to_lowercase());
-                }
+                taken_names.insert(dedup_key.to_lowercase());
                 children.push(child_snap);
             } else {
                 // The child only exists in the the new dom
-                let (child_snap, _needs_meta) =
+                let (child_snap, _needs_meta, dedup_key) =
                     snapshot.with_joined_path(*new_child_ref, None, &taken_names)?;
-                if let Some(name) = child_snap.path.file_name().and_then(|n| n.to_str()) {
-                    taken_names.insert(name.to_lowercase());
-                }
+                taken_names.insert(dedup_key.to_lowercase());
                 children.push(child_snap);
             }
         }
@@ -299,11 +283,9 @@ pub fn syncback_dir_no_meta<'sync>(
             if snapshot.should_ignore_tree(*new_child_ref) {
                 continue;
             }
-            let (child_snap, _needs_meta) =
+            let (child_snap, _needs_meta, dedup_key) =
                 snapshot.with_joined_path(*new_child_ref, None, &taken_names)?;
-            if let Some(name) = child_snap.path.file_name().and_then(|n| n.to_str()) {
-                taken_names.insert(name.to_lowercase());
-            }
+            taken_names.insert(dedup_key.to_lowercase());
             children.push(child_snap);
         }
     }

@@ -899,8 +899,28 @@ impl ApiService {
             }
         };
 
+        // Seed sibling slugs from the tree's existing children of the parent.
+        // This gives us bare instance-name-level slugs (no extensions) for
+        // accurate dedup against existing siblings.
+        let sibling_slugs: HashSet<String> = {
+            use crate::syncback::name_needs_slugify;
+            parent_instance
+                .children()
+                .iter()
+                .filter_map(|r| tree.get_instance(*r))
+                .map(|inst| {
+                    let name = inst.name();
+                    if name_needs_slugify(name) {
+                        slugify_name(name).to_lowercase()
+                    } else {
+                        name.to_lowercase()
+                    }
+                })
+                .collect()
+        };
+
         // Create the instance at the resolved path
-        self.syncback_instance_to_path_with_stats(added, &parent_dir, stats)
+        self.syncback_instance_to_path_with_stats(added, &parent_dir, stats, &sibling_slugs)
     }
 
     /// Update an existing instance in place instead of creating new files.
@@ -1056,8 +1076,9 @@ impl ApiService {
 
                     // Process children using normal syncback path
                     // This will use detect_existing_script_format to check existing files
+                    let child_slugs = Self::compute_sibling_slugs(&unique_children);
                     for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(child, &children_dir, stats)?;
+                        self.syncback_instance_to_path_with_stats(child, &children_dir, stats, &child_slugs)?;
                     }
                 }
             }
@@ -1081,8 +1102,9 @@ impl ApiService {
                         let unique_children =
                             self.filter_duplicate_children(&added.children, &inst_path, stats);
 
+                        let child_slugs = Self::compute_sibling_slugs(&unique_children);
                         for child in &unique_children {
-                            self.syncback_instance_to_path_with_stats(child, existing_path, stats)?;
+                            self.syncback_instance_to_path_with_stats(child, existing_path, stats, &child_slugs)?;
                         }
                     }
                 } else {
@@ -1584,17 +1606,42 @@ impl ApiService {
     ) -> anyhow::Result<()> {
         // Use a default stats tracker for backwards compatibility
         let stats = crate::syncback::SyncbackStats::new();
-        self.syncback_instance_to_path_with_stats(added, parent_dir, &stats)
+        let sibling_slugs = HashSet::new();
+        self.syncback_instance_to_path_with_stats(added, parent_dir, &stats, &sibling_slugs)
+    }
+
+    /// Computes slugified sibling names from a slice of `AddedInstance` references.
+    /// Returns a `HashSet` of lowercased bare slugs suitable for `deduplicate_name`.
+    fn compute_sibling_slugs(
+        children: &[&crate::web::interface::AddedInstance],
+    ) -> HashSet<String> {
+        use crate::syncback::name_needs_slugify;
+        children
+            .iter()
+            .map(|c| {
+                if name_needs_slugify(&c.name) {
+                    slugify_name(&c.name).to_lowercase()
+                } else {
+                    c.name.to_lowercase()
+                }
+            })
+            .collect()
     }
 
     /// Recursively syncback an instance and its children to the filesystem.
     /// This is the internal implementation that handles the actual file creation.
     /// Uses the provided stats tracker for recording issues.
+    ///
+    /// `sibling_slugs` contains the slugified names of all siblings in the
+    /// parent directory (bare slugs, lowercased). This is used by
+    /// `deduplicate_name` to avoid collisions. Callers compute this from
+    /// tree children or `AddedInstance` siblings — never from disk filenames.
     fn syncback_instance_to_path_with_stats(
         &self,
         added: &crate::web::interface::AddedInstance,
         parent_dir: &std::path::Path,
         stats: &crate::syncback::SyncbackStats,
+        sibling_slugs: &HashSet<String>,
     ) -> anyhow::Result<()> {
         use crate::syncback::{deduplicate_name, name_needs_slugify};
         use anyhow::Context;
@@ -1608,24 +1655,10 @@ impl ApiService {
             added.name.clone()
         };
 
-        // Deduplicate against existing files in the parent directory to prevent
-        // collisions (e.g., two instances whose slugified names match, or a new
-        // instance whose name matches an existing file).
-        let taken_names: HashSet<String> = if parent_dir.is_dir() {
-            fs::read_dir(parent_dir)
-                .ok()
-                .map(|entries| {
-                    entries
-                        .filter_map(|e| e.ok())
-                        .filter_map(|e| e.file_name().into_string().ok())
-                        .map(|n| n.to_lowercase())
-                        .collect()
-                })
-                .unwrap_or_default()
-        } else {
-            HashSet::new()
-        };
-        let encoded_name = deduplicate_name(&base_name, &taken_names);
+        // Deduplicate against sibling slugs (bare instance-name-level slugs,
+        // not filenames with extensions). This ensures file-format instances
+        // are correctly detected as collisions.
+        let encoded_name = deduplicate_name(&base_name, sibling_slugs);
         let needs_meta_name = needs_slug || encoded_name != base_name;
         let meta_name_field: Option<&str> = if needs_meta_name {
             Some(&added.name)
@@ -1639,6 +1672,9 @@ impl ApiService {
         // Filter out children with duplicate names (cannot reliably sync)
         let unique_children = self.filter_duplicate_children(&added.children, &inst_path, stats);
         let has_children = !unique_children.is_empty();
+
+        // Pre-compute sibling slugs for children's dedup (bare slugs, no extensions).
+        let child_slugs = Self::compute_sibling_slugs(&unique_children);
 
         // Determine the appropriate middleware/file format based on class name.
         // This matches the logic in src/syncback/mod.rs::get_best_middleware.
@@ -1699,7 +1735,7 @@ impl ApiService {
                     self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated ModuleScript at {}", init_path.display());
                     for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
+                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats, &child_slugs)?;
                     }
                 } else {
                     let file_path = parent_dir.join(format!("{}.luau", encoded_name));
@@ -1756,7 +1792,7 @@ impl ApiService {
                     self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated Script at {}", init_path.display());
                     for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
+                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats, &child_slugs)?;
                     }
                 } else {
                     let file_path =
@@ -1813,7 +1849,7 @@ impl ApiService {
                     self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated LocalScript at {}", init_path.display());
                     for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
+                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats, &child_slugs)?;
                     }
                 } else {
                     let file_path = parent_dir.join(format!("{}.local.luau", encoded_name));
@@ -1864,7 +1900,7 @@ impl ApiService {
 
                 // Recursively process children
                 for child in &unique_children {
-                    self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
+                    self.syncback_instance_to_path_with_stats(child, &dir_path, stats, &child_slugs)?;
                 }
             }
 
@@ -1883,7 +1919,7 @@ impl ApiService {
                         dir_path.display()
                     );
                     for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
+                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats, &child_slugs)?;
                     }
                 } else {
                     let value = added
@@ -1925,7 +1961,7 @@ impl ApiService {
                         dir_path.display()
                     );
                     for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
+                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats, &child_slugs)?;
                     }
                 } else {
                     let file_path = parent_dir.join(format!("{}.csv", encoded_name));
@@ -1979,7 +2015,7 @@ impl ApiService {
 
                     // Recursively process children
                     for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
+                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats, &child_slugs)?;
                     }
                 } else {
                     let content = self.serialize_instance_to_model_json(added)?;
@@ -6208,50 +6244,25 @@ mod tests {
         // ── File-format behavior documentation ───────────────────────
 
         #[test]
-        fn file_format_bare_slug_vs_full_filename_limitation() {
-            // DOCUMENTS KNOWN BEHAVIOR: deduplicate_name checks bare slug
-            // "Foo" against taken entries. When taken comes from fs::read_dir,
-            // entries have extensions ("foo.luau"). "foo" ≠ "foo.luau" so no
-            // collision is detected. This is by design — duplicate-named
-            // file instances are filtered by the plugin before reaching the API.
-            let temp = tempdir().expect("Failed to create temp dir");
-            File::create(temp.path().join("Foo.luau"))
-                .unwrap()
-                .write_all(b"existing")
-                .unwrap();
-
-            let taken: HashSet<String> = fs::read_dir(temp.path())
-                .unwrap()
-                .filter_map(|e| e.ok())
-                .filter_map(|e| e.file_name().into_string().ok())
-                .map(|n| n.to_lowercase())
-                .collect();
-
-            assert!(taken.contains("foo.luau"));
-            assert!(!taken.contains("foo"));
-            // Bare slug doesn't match full filename
+        fn file_format_dedup_with_bare_slugs() {
+            // Production code now seeds taken_names from tree siblings'
+            // slugified instance names (bare slugs, no extensions).
+            // This means file-format dedup works correctly.
+            let taken: HashSet<String> = ["foo".to_string()].into_iter().collect();
+            // Bare slug "Foo" matches "foo" in taken
             let deduped = deduplicate_name("Foo", &taken);
-            assert_eq!(deduped, "Foo", "bare slug doesn't match 'foo.luau'");
+            assert_eq!(deduped, "Foo~1", "bare slug collides with existing sibling");
         }
 
         #[test]
-        fn file_format_slugify_still_works() {
-            // Even though dedup doesn't catch cross-file collisions,
-            // slugification itself always works correctly.
-            let temp = tempdir().expect("Failed to create temp dir");
-            let taken = HashSet::new();
+        fn file_format_slugify_and_dedup_combined() {
+            // Slugify + dedup pipeline works end-to-end for file format
+            let taken: HashSet<String> = ["hey_bro".to_string()].into_iter().collect();
 
             let slug = slugify_name("Hey/Bro");
             assert_eq!(slug, "Hey_Bro");
             let deduped = deduplicate_name(&slug, &taken);
-            assert_eq!(deduped, "Hey_Bro");
-
-            let file_path = temp.path().join("Hey_Bro.luau");
-            File::create(&file_path)
-                .unwrap()
-                .write_all(b"content")
-                .unwrap();
-            assert!(file_path.exists());
+            assert_eq!(deduped, "Hey_Bro~1", "slug collision correctly detected");
         }
 
         // ── Rename → re-add cycle (the critical slug safety test) ────

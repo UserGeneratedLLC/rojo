@@ -451,6 +451,7 @@ pub fn syncback_loop_with_stats(
         new: new_tree.root_ref(),
         path: project.file_location.clone(),
         middleware: Some(Middleware::Project),
+        needs_meta_name: false,
     }];
 
     let mut fs_snapshot = FsSnapshot::new();

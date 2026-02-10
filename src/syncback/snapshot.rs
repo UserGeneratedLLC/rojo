@@ -47,6 +47,10 @@ pub struct SyncbackSnapshot<'sync> {
     pub new: Ref,
     pub path: PathBuf,
     pub middleware: Option<Middleware>,
+    /// When `true`, the filesystem name differs from the instance name
+    /// (due to slugification or deduplication) and a `name` field must be
+    /// written in the metadata file to preserve the real instance name.
+    pub needs_meta_name: bool,
 }
 
 impl<'sync> SyncbackSnapshot<'sync> {
@@ -62,7 +66,7 @@ impl<'sync> SyncbackSnapshot<'sync> {
         new_ref: Ref,
         old_ref: Option<Ref>,
         taken_names: &HashSet<String>,
-    ) -> anyhow::Result<(Self, bool)> {
+    ) -> anyhow::Result<(Self, bool, String)> {
         // In clean mode, ignore old_ref to ensure fresh structure
         let effective_old_ref = if self.data.incremental { old_ref } else { None };
         let mut snapshot = Self {
@@ -71,17 +75,19 @@ impl<'sync> SyncbackSnapshot<'sync> {
             new: new_ref,
             path: PathBuf::new(),
             middleware: None,
+            needs_meta_name: false,
         };
         let middleware = get_best_middleware(&snapshot);
-        let (name, needs_meta_name) = name_for_inst(
+        let (name, needs_meta_name, dedup_key) = name_for_inst(
             middleware,
             snapshot.new_inst(),
             snapshot.old_inst(),
             taken_names,
         )?;
         snapshot.path = self.path.join(&*name);
+        snapshot.needs_meta_name = needs_meta_name;
 
-        Ok((snapshot, needs_meta_name))
+        Ok((snapshot, needs_meta_name, dedup_key))
     }
 
     /// Constructs a SyncbackSnapshot from the provided refs and a base path,
@@ -99,7 +105,7 @@ impl<'sync> SyncbackSnapshot<'sync> {
         new_ref: Ref,
         old_ref: Option<Ref>,
         taken_names: &HashSet<String>,
-    ) -> anyhow::Result<(Self, bool)> {
+    ) -> anyhow::Result<(Self, bool, String)> {
         // In clean mode, ignore old_ref to ensure fresh structure
         let effective_old_ref = if self.data.incremental { old_ref } else { None };
         let mut snapshot = Self {
@@ -108,17 +114,19 @@ impl<'sync> SyncbackSnapshot<'sync> {
             new: new_ref,
             path: PathBuf::new(),
             middleware: None,
+            needs_meta_name: false,
         };
         let middleware = get_best_middleware(&snapshot);
-        let (name, needs_meta_name) = name_for_inst(
+        let (name, needs_meta_name, dedup_key) = name_for_inst(
             middleware,
             snapshot.new_inst(),
             snapshot.old_inst(),
             taken_names,
         )?;
         snapshot.path = base_path.join(&*name);
+        snapshot.needs_meta_name = needs_meta_name;
 
-        Ok((snapshot, needs_meta_name))
+        Ok((snapshot, needs_meta_name, dedup_key))
     }
 
     /// Constructs a SyncbackSnapshot with the provided path and refs while
@@ -131,6 +139,7 @@ impl<'sync> SyncbackSnapshot<'sync> {
             new: new_ref,
             path,
             middleware: None,
+            needs_meta_name: false,
         }
     }
 

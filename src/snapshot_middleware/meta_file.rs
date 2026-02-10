@@ -13,7 +13,7 @@ use crate::{
     json,
     resolution::UnresolvedValue,
     snapshot::InstanceSnapshot,
-    syncback::{name_needs_slugify, SyncbackSnapshot},
+    syncback::SyncbackSnapshot,
     RojoRef,
 };
 
@@ -165,15 +165,11 @@ impl AdjacentMetadata {
             .old_inst()
             .and_then(|inst| inst.metadata().specified_name.clone())
             .or_else(|| {
-                // If this is a new instance and its name is invalid for the filesystem,
-                // we need to specify the name in meta.json so it can be preserved
-                if snapshot.old_inst().is_none() {
-                    let instance_name = &snapshot.new_inst().name;
-                    if name_needs_slugify(instance_name) {
-                        Some(instance_name.clone())
-                    } else {
-                        None
-                    }
+                // If this is a new instance and its filesystem name differs from
+                // the instance name (due to slugification or deduplication), we
+                // need to specify the name in meta.json so it can be preserved.
+                if snapshot.old_inst().is_none() && snapshot.needs_meta_name {
+                    Some(snapshot.new_inst().name.clone())
                 } else {
                     None
                 }
@@ -431,15 +427,11 @@ impl DirectoryMetadata {
             .old_inst()
             .and_then(|inst| inst.metadata().specified_name.clone())
             .or_else(|| {
-                // If this is a new instance and its name is invalid for the filesystem,
-                // we need to specify the name in meta.json so it can be preserved
-                if snapshot.old_inst().is_none() {
-                    let instance_name = &snapshot.new_inst().name;
-                    if name_needs_slugify(instance_name) {
-                        Some(instance_name.clone())
-                    } else {
-                        None
-                    }
+                // If this is a new instance and its filesystem name differs from
+                // the instance name (due to slugification or deduplication), we
+                // need to specify the name in meta.json so it can be preserved.
+                if snapshot.old_inst().is_none() && snapshot.needs_meta_name {
+                    Some(snapshot.new_inst().name.clone())
                 } else {
                     None
                 }
