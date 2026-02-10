@@ -11,8 +11,7 @@ metadata:
     - /foo/other.txt
     - /foo/other.meta.json5
     - /foo/default.project.json5
-  context:
-    decode_windows_invalid_chars: true
+  context: {}
   specified_id: ~
   middleware: text
   schema: ~

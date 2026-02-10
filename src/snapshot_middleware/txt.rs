@@ -6,9 +6,8 @@ use rbx_dom_weak::types::Variant;
 use rbx_dom_weak::ustr;
 
 use crate::{
-    path_encoding::encode_path_name,
     snapshot::{InstanceContext, InstanceMetadata, InstanceSnapshot},
-    syncback::{FsSnapshot, SyncbackReturn, SyncbackSnapshot},
+    syncback::{name_needs_slugify, slugify_name, FsSnapshot, SyncbackReturn, SyncbackSnapshot},
 };
 
 use super::{meta_file::AdjacentMetadata, PathExt as _};
@@ -59,10 +58,11 @@ pub fn syncback_txt<'sync>(
 
         if !meta.is_empty() {
             let parent = snapshot.path.parent_err()?;
-            let meta_name = if snapshot.encode_windows_invalid_chars() {
-                encode_path_name(&new_inst.name)
+            let instance_name = &new_inst.name;
+            let meta_name = if name_needs_slugify(instance_name) {
+                slugify_name(instance_name)
             } else {
-                new_inst.name.clone()
+                instance_name.clone()
             };
             fs_snapshot.add_file(
                 parent.join(format!("{}.meta.json5", meta_name)),

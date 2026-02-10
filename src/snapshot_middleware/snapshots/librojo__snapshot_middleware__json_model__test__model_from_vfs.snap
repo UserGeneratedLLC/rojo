@@ -9,8 +9,7 @@ metadata:
     Path: /foo.model.json5
   relevant_paths:
     - /foo.model.json5
-  context:
-    decode_windows_invalid_chars: true
+  context: {}
   specified_id: ~
   middleware: ~
   schema: ~
@@ -24,8 +23,7 @@ children:
     metadata:
       ignore_unknown_instances: false
       relevant_paths: []
-      context:
-        decode_windows_invalid_chars: true
+      context: {}
       specified_id: ~
       middleware: ~
       schema: ~

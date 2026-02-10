@@ -138,6 +138,25 @@ pub fn syncback_dir_no_meta<'sync>(
     let mut children = Vec::new();
     let mut removed_children = Vec::new();
 
+    // Seed taken_names with existing files on disk so new children don't
+    // collide with files already present in the directory.
+    let mut taken_names: HashSet<String> = snapshot
+        .vfs()
+        .read_dir(&snapshot.path)
+        .ok()
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter_map(|e| {
+                    e.path()
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.to_lowercase())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     // Detect duplicate child names (case-insensitive for file system safety).
     // We skip duplicates instead of failing, tracking them in stats.
     let mut child_name_counts: HashMap<String, usize> = HashMap::new();
@@ -220,10 +239,23 @@ pub fn syncback_dir_no_meta<'sync>(
                     continue;
                 }
                 // This child exists in both doms. Pass it on.
-                children.push(snapshot.with_joined_path(*new_child_ref, Some(old_child.id()))?);
+                let (child_snap, _needs_meta) = snapshot.with_joined_path(
+                    *new_child_ref,
+                    Some(old_child.id()),
+                    &taken_names,
+                )?;
+                if let Some(name) = child_snap.path.file_name().and_then(|n| n.to_str()) {
+                    taken_names.insert(name.to_lowercase());
+                }
+                children.push(child_snap);
             } else {
                 // The child only exists in the the new dom
-                children.push(snapshot.with_joined_path(*new_child_ref, None)?);
+                let (child_snap, _needs_meta) =
+                    snapshot.with_joined_path(*new_child_ref, None, &taken_names)?;
+                if let Some(name) = child_snap.path.file_name().and_then(|n| n.to_str()) {
+                    taken_names.insert(name.to_lowercase());
+                }
+                children.push(child_snap);
             }
         }
         // Any children that are in the old dom but not the new one are removed.
@@ -267,7 +299,12 @@ pub fn syncback_dir_no_meta<'sync>(
             if snapshot.should_ignore_tree(*new_child_ref) {
                 continue;
             }
-            children.push(snapshot.with_joined_path(*new_child_ref, None)?);
+            let (child_snap, _needs_meta) =
+                snapshot.with_joined_path(*new_child_ref, None, &taken_names)?;
+            if let Some(name) = child_snap.path.file_name().and_then(|n| n.to_str()) {
+                taken_names.insert(name.to_lowercase());
+            }
+            children.push(child_snap);
         }
     }
     let mut fs_snapshot = FsSnapshot::new();

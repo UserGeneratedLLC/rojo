@@ -9,8 +9,7 @@ metadata:
     - /foo/bar.meta.json
     - /foo/bar.meta.jsonc
     - /foo/bar.meta.json5
-  context:
-    decode_windows_invalid_chars: true
+  context: {}
   specified_id: manually specified
   middleware: ~
   schema: ~

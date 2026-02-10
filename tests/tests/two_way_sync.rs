@@ -1232,28 +1232,31 @@ fn get_encoded_names_instance(
 }
 
 // ---------------------------------------------------------------------------
-// Tests: Encoded name directory conversion (path encoding fix)
+// Tests: Slugified name directory conversion (path encoding fix)
 // ---------------------------------------------------------------------------
 
-/// Test 22: Adding a child to a standalone ModuleScript with Rojo-encoded
-/// characters (e.g., `What%QUESTION%Module.luau`) creates the directory using
-/// the filesystem-encoded name (`What%QUESTION%Module/`), NOT the decoded
+/// Test 22: Adding a child to a standalone ModuleScript with slugified
+/// characters (e.g., `What_Module.luau`) creates the directory using
+/// the slugified filesystem name (`What_Module/`), NOT the decoded
 /// instance name (`What?Module/`).
 ///
-/// This is the core regression test for the path encoding fix in
+/// This is the core regression test for the slugified name fix in
 /// `convert_standalone_script_to_directory`.
 #[test]
 fn add_child_to_encoded_module_creates_encoded_directory() {
     run_serve_test("syncback_encoded_names", |session, _redactions| {
         let (session_id, encoded_module_id) = get_encoded_names_instance(&session, "What?Module");
 
-        let standalone_file = session.path().join("src").join("What%QUESTION%Module.luau");
-        // The CORRECT directory name uses the encoded filesystem name
-        let encoded_dir = session.path().join("src").join("What%QUESTION%Module");
+        let standalone_file = session.path().join("src").join("What_Module.luau");
+        // The CORRECT directory name uses the slugified filesystem name
+        let encoded_dir = session.path().join("src").join("What_Module");
         // The WRONG directory name would use the decoded instance name
         let decoded_dir = session.path().join("src").join("What?Module");
 
-        assert_file_exists(&standalone_file, "Encoded standalone file before child add");
+        assert_file_exists(
+            &standalone_file,
+            "Slugified standalone file before child add",
+        );
 
         // Add a child to trigger standalone → directory conversion
         let mut properties = HashMap::new();
@@ -1285,10 +1288,10 @@ fn add_child_to_encoded_module_creates_encoded_directory() {
             "Standalone file after directory conversion",
         );
 
-        // Directory should use ENCODED name (the fix)
+        // Directory should use SLUGIFIED name (the fix)
         assert!(
             encoded_dir.is_dir(),
-            "Directory should use encoded name (What%QUESTION%Module/): {}",
+            "Directory should use slugified name (What_Module/): {}",
             encoded_dir.display()
         );
 
@@ -1299,38 +1302,35 @@ fn add_child_to_encoded_module_creates_encoded_directory() {
             decoded_dir.display()
         );
 
-        // init.luau should exist inside the encoded directory
+        // init.luau should exist inside the slugified directory
         let init_file = encoded_dir.join("init.luau");
-        assert_file_exists(&init_file, "init.luau inside encoded directory");
+        assert_file_exists(&init_file, "init.luau inside slugified directory");
 
-        // Child should be created inside the encoded directory
+        // Child should be created inside the slugified directory
         let child_file = encoded_dir.join("EncodedChild.luau");
-        assert_file_exists(&child_file, "Child inside encoded directory");
+        assert_file_exists(&child_file, "Child inside slugified directory");
     });
 }
 
-/// Test 23: Adding a child to a standalone Script with Rojo-encoded characters
-/// AND a script suffix (e.g., `Key%COLON%Script.server.luau`) strips the suffix
+/// Test 23: Adding a child to a standalone Script with slugified characters
+/// AND a script suffix (e.g., `Key_Script.server.luau`) strips the suffix
 /// correctly when creating the directory name.
 ///
-/// The directory should be `Key%COLON%Script/`, not `Key%COLON%Script.server/`
+/// The directory should be `Key_Script/`, not `Key_Script.server/`
 /// or `Key:Script/`.
 #[test]
 fn add_child_to_encoded_script_strips_suffix_correctly() {
     run_serve_test("syncback_encoded_names", |session, _redactions| {
         let (session_id, encoded_script_id) = get_encoded_names_instance(&session, "Key:Script");
 
-        let standalone_file = session
-            .path()
-            .join("src")
-            .join("Key%COLON%Script.server.luau");
-        let encoded_dir = session.path().join("src").join("Key%COLON%Script");
+        let standalone_file = session.path().join("src").join("Key_Script.server.luau");
+        let encoded_dir = session.path().join("src").join("Key_Script");
         // Wrong: decoded name
         let decoded_dir = session.path().join("src").join("Key:Script");
         // Wrong: suffix not stripped
-        let unsuffixed_dir = session.path().join("src").join("Key%COLON%Script.server");
+        let unsuffixed_dir = session.path().join("src").join("Key_Script.server");
 
-        assert_file_exists(&standalone_file, "Encoded script before child add");
+        assert_file_exists(&standalone_file, "Slugified script before child add");
 
         let mut properties = HashMap::new();
         properties.insert(
@@ -1359,7 +1359,7 @@ fn add_child_to_encoded_script_strips_suffix_correctly() {
 
         assert!(
             encoded_dir.is_dir(),
-            "Directory should be Key%COLON%Script/ (suffix stripped, encoded): {}",
+            "Directory should be Key_Script/ (suffix stripped, slugified): {}",
             encoded_dir.display()
         );
         assert!(
@@ -1375,16 +1375,16 @@ fn add_child_to_encoded_script_strips_suffix_correctly() {
 
         // Script → init.server.luau (preserves class)
         let init_file = encoded_dir.join("init.server.luau");
-        assert_file_exists(&init_file, "init.server.luau inside encoded directory");
+        assert_file_exists(&init_file, "init.server.luau inside slugified directory");
 
         let child_file = encoded_dir.join("ScriptChild.luau");
-        assert_file_exists(&child_file, "Child inside encoded script directory");
+        assert_file_exists(&child_file, "Child inside slugified script directory");
     });
 }
 
-/// Test 24: Adding a child to a non-script standalone instance with Rojo-encoded
-/// characters (e.g., `What%QUESTION%Model.model.json5`) creates the directory
-/// using the encoded name with the compound extension stripped.
+/// Test 24: Adding a child to a non-script standalone instance with slugified
+/// characters (e.g., `What_Model.model.json5`) creates the directory
+/// using the slugified name with the compound extension stripped.
 ///
 /// This exercises `convert_standalone_instance_to_directory`.
 #[test]
@@ -1392,14 +1392,11 @@ fn add_child_to_encoded_model_creates_encoded_directory() {
     run_serve_test("syncback_encoded_names", |session, _redactions| {
         let (session_id, encoded_model_id) = get_encoded_names_instance(&session, "What?Model");
 
-        let standalone_file = session
-            .path()
-            .join("src")
-            .join("What%QUESTION%Model.model.json5");
-        let encoded_dir = session.path().join("src").join("What%QUESTION%Model");
+        let standalone_file = session.path().join("src").join("What_Model.model.json5");
+        let encoded_dir = session.path().join("src").join("What_Model");
         let decoded_dir = session.path().join("src").join("What?Model");
 
-        assert_file_exists(&standalone_file, "Encoded model file before child add");
+        assert_file_exists(&standalone_file, "Slugified model file before child add");
 
         let mut properties = HashMap::new();
         properties.insert(
@@ -1428,7 +1425,7 @@ fn add_child_to_encoded_model_creates_encoded_directory() {
 
         assert!(
             encoded_dir.is_dir(),
-            "Directory should use encoded name (What%QUESTION%Model/): {}",
+            "Directory should use slugified name (What_Model/): {}",
             encoded_dir.display()
         );
         assert!(
@@ -1439,32 +1436,32 @@ fn add_child_to_encoded_model_creates_encoded_directory() {
 
         // init.meta.json5 should exist inside the directory (converted from .model.json5)
         let init_meta = encoded_dir.join("init.meta.json5");
-        assert_file_exists(&init_meta, "init.meta.json5 inside encoded model directory");
+        assert_file_exists(
+            &init_meta,
+            "init.meta.json5 inside slugified model directory",
+        );
 
         let child_file = encoded_dir.join("ModelChild.luau");
-        assert_file_exists(&child_file, "Child inside encoded model directory");
+        assert_file_exists(&child_file, "Child inside slugified model directory");
     });
 }
 
-/// Test 25: Non-Source property update on a standalone script with Rojo-encoded
-/// name creates the adjacent meta file using the encoded filesystem name,
+/// Test 25: Non-Source property update on a standalone script with slugified
+/// name creates the adjacent meta file using the slugified filesystem name,
 /// not the decoded instance name.
 ///
-/// e.g., `What%QUESTION%Module.meta.json5` NOT `What?Module.meta.json5`
+/// e.g., `What_Module.meta.json5` NOT `What?Module.meta.json5`
 #[test]
 fn property_update_on_encoded_script_uses_encoded_meta_path() {
     run_serve_test("syncback_encoded_names", |session, _redactions| {
         let (session_id, encoded_module_id) = get_encoded_names_instance(&session, "What?Module");
 
-        let script_file = session.path().join("src").join("What%QUESTION%Module.luau");
-        let encoded_meta = session
-            .path()
-            .join("src")
-            .join("What%QUESTION%Module.meta.json5");
+        let script_file = session.path().join("src").join("What_Module.luau");
+        let encoded_meta = session.path().join("src").join("What_Module.meta.json5");
         let decoded_meta = session.path().join("src").join("What?Module.meta.json5");
 
-        assert_file_exists(&script_file, "Encoded script file before property update");
-        assert_not_exists(&encoded_meta, "Meta file before property update");
+        assert_file_exists(&script_file, "Slugified script file before property update");
+        assert_file_exists(&encoded_meta, "Meta file exists from fixture (name field)");
 
         let mut attrs = rbx_dom_weak::types::Attributes::new();
         attrs.insert("EncodedAttr".to_string(), Variant::Float64(99.0));
@@ -1483,10 +1480,10 @@ fn property_update_on_encoded_script_uses_encoded_meta_path() {
             },
         );
 
-        // Meta file should use encoded name
+        // Meta file should use slugified name
         assert_file_exists(
             &encoded_meta,
-            "Meta file should use encoded name (What%QUESTION%Module.meta.json5)",
+            "Meta file should use slugified name (What_Module.meta.json5)",
         );
         assert!(
             !decoded_meta.exists(),
@@ -2453,15 +2450,12 @@ fn encoded_name_rapid_rename_chain() {
 
         wait_for_settle();
 
-        // Final file should use encoded name: Done%QUESTION%Now.luau
-        let final_file = src.join("Done%QUESTION%Now.luau");
+        // Final file should use slugified name: Done_Now.luau
+        let final_file = src.join("Done_Now.luau");
         assert_file_exists(&final_file, "Final encoded file");
 
         // Original should be gone
-        assert_not_exists(
-            &src.join("What%QUESTION%Module.luau"),
-            "Original encoded file",
-        );
+        assert_not_exists(&src.join("What_Module.luau"), "Original encoded file");
     });
 }
 
@@ -4151,8 +4145,8 @@ fn encoded_rename_and_source_rapid() {
         }
 
         wait_for_settle();
-        // Final: Final:Encoded -> Final%COLON%Encoded.luau
-        let final_file = src.join("Final%COLON%Encoded.luau");
+        // Final: Final:Encoded -> Final_Encoded.luau
+        let final_file = src.join("Final_Encoded.luau");
         assert_file_exists(&final_file, "Final encoded file");
         let content = fs::read_to_string(&final_file).unwrap();
         assert!(
@@ -4193,8 +4187,8 @@ fn encoded_rename_and_classchange_rapid() {
         }
 
         wait_for_settle();
-        // Final: Enc:Final as Script -> Enc%COLON%Final.server.luau
-        let final_file = src.join("Enc%COLON%Final.server.luau");
+        // Final: Enc:Final as Script -> Enc_Final.server.luau
+        let final_file = src.join("Enc_Final.server.luau");
         assert_file_exists(&final_file, "Final encoded+class file");
     });
 }
@@ -4229,8 +4223,8 @@ fn encoded_all_three_combined_rapid() {
         }
 
         wait_for_settle();
-        // Final: End?Now as LocalScript -> End%QUESTION%Now.local.luau
-        let final_file = src.join("End%QUESTION%Now.local.luau");
+        // Final: End?Now as LocalScript -> End_Now.local.luau
+        let final_file = src.join("End_Now.local.luau");
         assert_file_exists(&final_file, "Final all-three encoded file");
         let content = fs::read_to_string(&final_file).unwrap();
         assert!(

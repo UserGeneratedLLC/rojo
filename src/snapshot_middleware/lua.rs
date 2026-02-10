@@ -8,9 +8,8 @@ use rbx_dom_weak::{
 };
 
 use crate::{
-    path_encoding::encode_path_name,
     snapshot::{InstanceContext, InstanceMetadata, InstanceSnapshot},
-    syncback::{FsSnapshot, SyncbackReturn, SyncbackSnapshot},
+    syncback::{name_needs_slugify, slugify_name, FsSnapshot, SyncbackReturn, SyncbackSnapshot},
 };
 
 use super::{
@@ -165,10 +164,11 @@ pub fn syncback_lua<'sync>(
                 .or_else(|| file_stem.strip_suffix(".legacy"))
                 .unwrap_or(file_stem);
             let meta_name = if meta_name.is_empty() {
-                if snapshot.encode_windows_invalid_chars() {
-                    encode_path_name(&new_inst.name)
+                let instance_name = &new_inst.name;
+                if name_needs_slugify(instance_name) {
+                    slugify_name(instance_name)
                 } else {
-                    new_inst.name.clone()
+                    instance_name.clone()
                 }
             } else {
                 meta_name.to_string()

@@ -30,7 +30,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     glob::Glob,
-    path_encoding::decode_path_name,
     project::DEFAULT_PROJECT_NAMES,
     syncback::{SyncbackReturn, SyncbackSnapshot},
 };
@@ -72,19 +71,17 @@ pub fn snapshot_from_vfs(
 
     if meta.is_dir() {
         let (middleware, dir_name, init_path) = get_dir_middleware(vfs, path)?;
-        // Decode directory name if the flag is set
-        let decoded_name = if context.decode_windows_invalid_chars {
-            decode_path_name(dir_name)
-        } else {
-            dir_name.to_string()
-        };
+        // The directory name is used as-is from the filesystem.
+        // If a different instance name is desired, it comes from the
+        // `name` field in init.meta.json / init.meta.json5 (applied later
+        // by DirectoryMetadata::apply_name).
         // TODO: Support user defined init paths
         // If and when we do, make sure to go support it in
         // `Project::set_file_name`, as right now it special-cases
         // `default.project.json5` as an `init` path.
         match middleware {
-            Middleware::Dir => middleware.snapshot(context, vfs, path, &decoded_name),
-            _ => middleware.snapshot(context, vfs, &init_path, &decoded_name),
+            Middleware::Dir => middleware.snapshot(context, vfs, path, dir_name),
+            _ => middleware.snapshot(context, vfs, &init_path, dir_name),
         }
     } else {
         let file_name = path
@@ -166,23 +163,17 @@ fn snapshot_from_path(
     vfs: &Vfs,
     path: &Path,
 ) -> anyhow::Result<Option<InstanceSnapshot>> {
-    // Helper to decode name if the flag is set
-    let decode_name = |name: &str| -> String {
-        if context.decode_windows_invalid_chars {
-            decode_path_name(name)
-        } else {
-            name.to_string()
-        }
-    };
-
+    // File names are used as-is from the filesystem. If a different instance
+    // name is needed (e.g. for names with special chars), it comes from the
+    // `name` field in adjacent .meta.json / .model.json files.
     if let Some(rule) = context.get_user_sync_rule(path) {
-        let name = decode_name(rule.file_name_for_path(path)?);
-        return rule.middleware.snapshot(context, vfs, path, &name);
+        let name = rule.file_name_for_path(path)?;
+        return rule.middleware.snapshot(context, vfs, path, name);
     } else {
         for rule in default_sync_rules() {
             if rule.matches(path) {
-                let name = decode_name(rule.file_name_for_path(path)?);
-                return rule.middleware.snapshot(context, vfs, path, &name);
+                let name = rule.file_name_for_path(path)?;
+                return rule.middleware.snapshot(context, vfs, path, name);
             }
         }
     }

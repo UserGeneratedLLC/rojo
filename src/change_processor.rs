@@ -11,11 +11,11 @@ use std::{
 
 use crate::{
     message_queue::MessageQueue,
-    path_encoding::encode_path_name,
     snapshot::{
         apply_patch_set, compute_patch_set, AppliedPatchSet, InstigatingSource, PatchSet, RojoTree,
     },
     snapshot_middleware::{snapshot_from_vfs, snapshot_project_node},
+    syncback::{name_needs_slugify, slugify_name},
 };
 
 /// Processes file change events, updates the DOM, and sends those updates
@@ -222,6 +222,42 @@ impl JobThreadContext {
             counts.1 = counts.1.saturating_sub(1);
             if counts.0 == 0 && counts.1 == 0 {
                 suppressed.remove(&key);
+            }
+        }
+    }
+
+    /// Upsert the `name` field in a `.meta.json5` file. If the file exists,
+    /// parse it and add/update the `name` key. If it doesn't exist, create it
+    /// with just the `name` key.
+    fn upsert_meta_name_field(&self, meta_path: &Path, real_name: &str) {
+        self.suppress_path(meta_path);
+        let mut obj = if meta_path.exists() {
+            match fs::read(meta_path) {
+                Ok(bytes) => match crate::json::from_slice::<serde_json::Value>(&bytes) {
+                    Ok(serde_json::Value::Object(map)) => map,
+                    _ => serde_json::Map::new(),
+                },
+                Err(_) => serde_json::Map::new(),
+            }
+        } else {
+            serde_json::Map::new()
+        };
+        obj.insert(
+            "name".to_string(),
+            serde_json::Value::String(real_name.to_string()),
+        );
+        match crate::json::to_vec_pretty_sorted(&serde_json::Value::Object(obj)) {
+            Ok(content) => {
+                if let Err(err) = fs::write(meta_path, &content) {
+                    log::error!(
+                        "Failed to write name to meta file {}: {}",
+                        meta_path.display(),
+                        err
+                    );
+                }
+            }
+            Err(err) => {
+                log::error!("Failed to serialize meta for name field: {}", err);
             }
         }
     }
@@ -561,47 +597,27 @@ impl JobThreadContext {
         let applied_patch = {
             let mut tree = self.tree.lock().unwrap();
 
+            // NOTE: We do NOT delete files from disk here. The API handler
+            // (handle_api_write → syncback_removed_instance) already deleted
+            // the files before sending this PatchSet. Re-deleting would
+            // destroy any new file created at the same path — e.g., when an
+            // instance is renamed from "joe_test" to "joe/test", the new slug
+            // is also "joe_test", so the API creates a new file at the same
+            // path that the removal just deleted. If we deleted again here,
+            // the new file would be destroyed.
+            //
+            // The PatchSet removal only needs to update the DOM tree (handled
+            // by apply_patch_set below).
             for &id in &patch_set.removed_instances {
                 if let Some(instance) = tree.get_instance(id) {
                     if let Some(instigating_source) = &instance.metadata().instigating_source {
                         match instigating_source {
                             InstigatingSource::Path(path) => {
-                                // Guard: file may already be deleted by the API's
-                                // syncback_removed_instance before this PatchSet arrives.
-                                if path.exists() {
-                                    if path.is_dir() {
-                                        log::info!(
-                                            "Two-way sync: Removing directory {}",
-                                            path.display()
-                                        );
-                                        if let Err(err) = fs::remove_dir_all(path) {
-                                            log::error!(
-                                                "Failed to remove directory {:?} for instance {:?}: {}",
-                                                path,
-                                                id,
-                                                err
-                                            );
-                                        }
-                                    } else {
-                                        log::info!(
-                                            "Two-way sync: Removing file {}",
-                                            path.display()
-                                        );
-                                        if let Err(err) = fs::remove_file(path) {
-                                            log::error!(
-                                                "Failed to remove file {:?} for instance {:?}: {}",
-                                                path,
-                                                id,
-                                                err
-                                            );
-                                        }
-                                    }
-                                } else {
-                                    log::info!(
-                                        "Two-way sync: File already removed: {}",
-                                        path.display()
-                                    );
-                                }
+                                log::info!(
+                                    "Two-way sync: Removing instance {:?} from tree (path: {})",
+                                    id,
+                                    path.display()
+                                );
                             }
                             InstigatingSource::ProjectNode { .. } => {
                                 log::warn!(
@@ -653,17 +669,19 @@ impl JobThreadContext {
                                         if is_init_file {
                                             let dir_path = path.parent().unwrap();
                                             if let Some(grandparent) = dir_path.parent() {
-                                                // Use the encoded dir name from the filesystem
-                                                // for the old meta lookup, and encode the new
-                                                // name for the new path. Using instance.name()
-                                                // (decoded) would fail for encoded names.
                                                 let dir_name = dir_path
                                                     .file_name()
                                                     .and_then(|f| f.to_str())
                                                     .unwrap_or("");
-                                                let encoded_new_name = encode_path_name(new_name);
+                                                // Slugify the new name for filesystem safety
+                                                let slugified_new_name =
+                                                    if name_needs_slugify(new_name) {
+                                                        slugify_name(new_name)
+                                                    } else {
+                                                        new_name.to_string()
+                                                    };
                                                 let new_dir_path =
-                                                    grandparent.join(&encoded_new_name);
+                                                    grandparent.join(&slugified_new_name);
 
                                                 if new_dir_path != dir_path {
                                                     log::info!(
@@ -696,7 +714,7 @@ impl JobThreadContext {
                                                             let new_meta =
                                                                 grandparent.join(format!(
                                                                     "{}.meta.json5",
-                                                                    encoded_new_name
+                                                                    slugified_new_name
                                                                 ));
                                                             self.suppress_path_any(&old_meta);
                                                             self.suppress_path(&new_meta);
@@ -707,14 +725,22 @@ impl JobThreadContext {
                                                                 self.unsuppress_path(&new_meta);
                                                             }
                                                         }
+                                                        // Write name to init.meta.json5 if slug differs
+                                                        if slugified_new_name != *new_name {
+                                                            let init_meta = new_dir_path
+                                                                .join("init.meta.json5");
+                                                            self.upsert_meta_name_field(
+                                                                &init_meta, new_name,
+                                                            );
+                                                        }
                                                     }
                                                 }
                                             }
                                         } else if let Some(parent) = path.parent() {
                                             // Derive the suffix from the existing filename
-                                            // rather than using replacen with the decoded
-                                            // instance name, which fails for encoded names
-                                            // (e.g., What%QUESTION%.server.luau).
+                                            // rather than using replacen with the instance
+                                            // name, which may differ from the filesystem
+                                            // name (e.g., slugified names).
                                             let extension = path
                                                 .extension()
                                                 .and_then(|e| e.to_str())
@@ -738,13 +764,18 @@ impl JobThreadContext {
                                                 &stem[..stem.len() - script_suffix.len()]
                                             };
 
-                                            let encoded_new_name = encode_path_name(new_name);
+                                            let slugified_new_name = if name_needs_slugify(new_name)
+                                            {
+                                                slugify_name(new_name)
+                                            } else {
+                                                new_name.to_string()
+                                            };
                                             let new_file_name = if extension.is_empty() {
-                                                format!("{}{}", encoded_new_name, script_suffix)
+                                                format!("{}{}", slugified_new_name, script_suffix)
                                             } else {
                                                 format!(
                                                     "{}{}.{}",
-                                                    encoded_new_name, script_suffix, extension
+                                                    slugified_new_name, script_suffix, extension
                                                 )
                                             };
                                             let new_path = parent.join(&new_file_name);
@@ -770,11 +801,11 @@ impl JobThreadContext {
                                                     overridden_source_path = Some(new_path.clone());
                                                     let old_meta = parent
                                                         .join(format!("{}.meta.json5", old_base));
+                                                    let new_meta = parent.join(format!(
+                                                        "{}.meta.json5",
+                                                        slugified_new_name
+                                                    ));
                                                     if old_meta.exists() {
-                                                        let new_meta = parent.join(format!(
-                                                            "{}.meta.json5",
-                                                            encoded_new_name
-                                                        ));
                                                         self.suppress_path_any(&old_meta);
                                                         self.suppress_path(&new_meta);
                                                         if fs::rename(&old_meta, &new_meta).is_err()
@@ -782,6 +813,12 @@ impl JobThreadContext {
                                                             self.unsuppress_path_any(&old_meta);
                                                             self.unsuppress_path(&new_meta);
                                                         }
+                                                    }
+                                                    // Write name to adjacent meta if slug differs
+                                                    if slugified_new_name != *new_name {
+                                                        self.upsert_meta_name_field(
+                                                            &new_meta, new_name,
+                                                        );
                                                     }
                                                 }
                                             }
@@ -861,10 +898,9 @@ impl JobThreadContext {
                                                     format!("init{}.luau", new_suffix)
                                                 }
                                             } else {
-                                                // Derive the encoded base name from the
-                                                // filesystem path, not instance.name()
-                                                // (which is decoded). This preserves
-                                                // encoding like What%QUESTION% on disk.
+                                                // Derive the base name from the filesystem
+                                                // path, not instance.name() (which may
+                                                // differ from the slugified filename).
                                                 let stem = actual_file
                                                     .file_stem()
                                                     .and_then(|s| s.to_str())

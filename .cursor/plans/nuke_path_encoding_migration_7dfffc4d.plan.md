@@ -4,25 +4,25 @@ overview: "Remove the `%NAME%` path encoding system entirely and replace it with
 todos:
   - id: phase1-infrastructure
     content: "Manual port of PR #1187 infrastructure: specified_name on InstanceMetadata, slugify_name(), deduplicate_name(), name field on meta file structs, apply_name() methods, json_model name field support"
-    status: pending
+    status: completed
   - id: phase2-replace-encode-decode
     content: Replace all encode_path_name/decode_path_name callsites with slugify + dedup + name property approach in snapshot middleware, syncback/file_names.rs, syncback/snapshot.rs
-    status: pending
+    status: completed
   - id: phase3-two-way-sync
     content: "Replace encoding in two-way sync: change_processor.rs renames and web/api.rs added instances, with dedup checks"
-    status: pending
+    status: completed
   - id: phase4-remove-config
     content: Remove decode_windows_invalid_chars from InstanceContext, encode_windows_invalid_chars from SyncbackRules, serve_session propagation, JSON schema
-    status: pending
+    status: completed
   - id: phase5-delete-module
     content: Delete src/path_encoding.rs and remove pub mod declaration from lib.rs
-    status: pending
+    status: completed
   - id: phase6-hardcore-tests
     content: "Hardcore test suite: unit tests for slugify/dedup, integration tests for build/syncback/two-way-sync roundtrips, collision tests, edge case tests; update existing encoded pattern tests; regenerate snapshots"
-    status: pending
+    status: completed
   - id: phase7-update-docs
     content: Update cursor rules (.cursor/rules/rojo.mdc, src.mdc) to reflect new approach
-    status: pending
+    status: completed
 isProject: false
 ---
 

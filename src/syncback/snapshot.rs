@@ -1,5 +1,6 @@
 use indexmap::IndexMap;
 use memofs::Vfs;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::{
@@ -56,7 +57,12 @@ impl<'sync> SyncbackSnapshot<'sync> {
     /// In clean mode (incremental=false), old_ref is ignored and set to None,
     /// ensuring fresh filenames and middleware choices for all children.
     #[inline]
-    pub fn with_joined_path(&self, new_ref: Ref, old_ref: Option<Ref>) -> anyhow::Result<Self> {
+    pub fn with_joined_path(
+        &self,
+        new_ref: Ref,
+        old_ref: Option<Ref>,
+        taken_names: &HashSet<String>,
+    ) -> anyhow::Result<(Self, bool)> {
         // In clean mode, ignore old_ref to ensure fresh structure
         let effective_old_ref = if self.data.incremental { old_ref } else { None };
         let mut snapshot = Self {
@@ -67,16 +73,15 @@ impl<'sync> SyncbackSnapshot<'sync> {
             middleware: None,
         };
         let middleware = get_best_middleware(&snapshot);
-        let encode_invalid_chars = self.encode_windows_invalid_chars();
-        let name = name_for_inst(
+        let (name, needs_meta_name) = name_for_inst(
             middleware,
             snapshot.new_inst(),
             snapshot.old_inst(),
-            encode_invalid_chars,
+            taken_names,
         )?;
-        snapshot.path = self.path.join(name.as_ref());
+        snapshot.path = self.path.join(&*name);
 
-        Ok(snapshot)
+        Ok((snapshot, needs_meta_name))
     }
 
     /// Constructs a SyncbackSnapshot from the provided refs and a base path,
@@ -93,7 +98,8 @@ impl<'sync> SyncbackSnapshot<'sync> {
         base_path: &Path,
         new_ref: Ref,
         old_ref: Option<Ref>,
-    ) -> anyhow::Result<Self> {
+        taken_names: &HashSet<String>,
+    ) -> anyhow::Result<(Self, bool)> {
         // In clean mode, ignore old_ref to ensure fresh structure
         let effective_old_ref = if self.data.incremental { old_ref } else { None };
         let mut snapshot = Self {
@@ -104,16 +110,15 @@ impl<'sync> SyncbackSnapshot<'sync> {
             middleware: None,
         };
         let middleware = get_best_middleware(&snapshot);
-        let encode_invalid_chars = self.encode_windows_invalid_chars();
-        let name = name_for_inst(
+        let (name, needs_meta_name) = name_for_inst(
             middleware,
             snapshot.new_inst(),
             snapshot.old_inst(),
-            encode_invalid_chars,
+            taken_names,
         )?;
-        snapshot.path = base_path.join(name.as_ref());
+        snapshot.path = base_path.join(&*name);
 
-        Ok(snapshot)
+        Ok((snapshot, needs_meta_name))
     }
 
     /// Constructs a SyncbackSnapshot with the provided path and refs while
@@ -317,18 +322,6 @@ impl<'sync> SyncbackSnapshot<'sync> {
             .as_ref()
             .and_then(|rules| rules.compile_tree_globs().ok())
             .unwrap_or_default()
-    }
-
-    /// Returns whether Windows-invalid characters should be encoded in file
-    /// names during syncback. Defaults to `true`.
-    #[inline]
-    pub fn encode_windows_invalid_chars(&self) -> bool {
-        self.data
-            .project
-            .syncback_rules
-            .as_ref()
-            .map(|rules| rules.encode_windows_invalid_chars())
-            .unwrap_or(true)
     }
 
     /// Returns whether to emit warnings when duplicate child names are

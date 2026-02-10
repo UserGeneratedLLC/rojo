@@ -647,6 +647,14 @@ pub fn syncback_project<'sync>(
 
         // All of the children in this loop are by their nature not in the
         // project, so we just need to run syncback on them.
+        //
+        // Track taken names per parent directory so siblings under the same
+        // parent deduplicate against each other (and against existing files).
+        let mut taken_names_per_dir: std::collections::HashMap<
+            std::path::PathBuf,
+            std::collections::HashSet<String>,
+        > = std::collections::HashMap::new();
+
         for (name, new_child) in new_child_map.drain() {
             // Skip instances of ignored classes
             if snapshot.should_ignore_class(&new_child.class) {
@@ -680,11 +688,38 @@ pub fn syncback_project<'sync>(
                 // concern with directories because they're singular things,
                 // files that contain their own children.
                 if parent_middleware != Middleware::Project {
-                    descendant_snapshots.push(snapshot.with_base_path(
+                    let taken_names = taken_names_per_dir
+                        .entry(parent_path.clone())
+                        .or_insert_with(|| {
+                            // Seed with existing files on disk so new children
+                            // don't collide with files already present.
+                            vfs.read_dir(&parent_path)
+                                .ok()
+                                .map(|entries| {
+                                    entries
+                                        .filter_map(|e| e.ok())
+                                        .filter_map(|e| {
+                                            e.path()
+                                                .file_name()
+                                                .and_then(|n| n.to_str())
+                                                .map(|n| n.to_lowercase())
+                                        })
+                                        .collect()
+                                })
+                                .unwrap_or_default()
+                        });
+                    let (child_snap, _needs_meta) = snapshot.with_base_path(
                         &parent_path,
                         new_child.referent(),
                         None,
-                    )?);
+                        taken_names,
+                    )?;
+                    if let Some(file_name) =
+                        child_snap.path.file_name().and_then(|n| n.to_str())
+                    {
+                        taken_names.insert(file_name.to_lowercase());
+                    }
+                    descendant_snapshots.push(child_snap);
                 }
             }
         }

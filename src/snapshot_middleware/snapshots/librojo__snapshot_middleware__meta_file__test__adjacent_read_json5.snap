@@ -7,8 +7,7 @@ metadata:
   ignore_unknown_instances: false
   relevant_paths:
     - /foo/bar.meta.json5
-  context:
-    decode_windows_invalid_chars: true
+  context: {}
   specified_id: manually specified
   middleware: ~
   schema: ~

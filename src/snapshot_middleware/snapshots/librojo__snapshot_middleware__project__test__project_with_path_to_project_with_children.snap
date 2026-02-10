@@ -10,8 +10,7 @@ metadata:
   relevant_paths:
     - /foo/other.project.json5
     - /foo/default.project.json5
-  context:
-    decode_windows_invalid_chars: true
+  context: {}
   specified_id: ~
   middleware: project
   schema: ~
@@ -30,8 +29,7 @@ children:
             $className: Model
           parent_class: Folder
       relevant_paths: []
-      context:
-        decode_windows_invalid_chars: true
+      context: {}
       specified_id: ~
       middleware: ~
       schema: ~

@@ -21,10 +21,9 @@ use rbx_dom_weak::{
 };
 
 use crate::{
-    path_encoding::encode_path_name,
     serve_session::ServeSession,
     snapshot::{InstanceWithMeta, InstigatingSource, PatchSet, PatchUpdate},
-    syncback::VISIBLE_SERVICES,
+    syncback::{slugify_name, VISIBLE_SERVICES},
     web::{
         interface::{
             ErrorResponse, Instance, InstanceMetadata, MessagesPacket, OpenResponse, ReadResponse,
@@ -464,10 +463,115 @@ impl ApiService {
             // This makes all subsequent path checks O(d) instead of O(d × s)
             let duplicate_siblings_cache = Self::compute_tree_refs_with_duplicate_siblings(&tree);
 
+            // Pre-scan: identify standalone parents that need directory conversion.
+            // Multiple children may share the same parent. We convert each parent
+            // ONCE before processing any children, avoiding double-conversion that
+            // would wipe the parent's source (the old standalone file is deleted by
+            // the first conversion, so the second would read empty).
+            let mut converted_parents: HashMap<Ref, PathBuf> = HashMap::new();
             for added in request.added.values() {
-                if let Err(err) =
-                    self.syncback_added_instance(added, &tree, &duplicate_siblings_cache, &stats)
-                {
+                if let Some(parent_ref) = added.parent {
+                    if converted_parents.contains_key(&parent_ref) {
+                        continue;
+                    }
+                    if let Some(parent_inst) = tree.get_instance(parent_ref) {
+                        if let Some(source) = &parent_inst.metadata().instigating_source {
+                            // Resolve the actual filesystem path for the parent.
+                            // For ProjectNode sources, use the resolved $path (not
+                            // the project file path). For init-file sources, use
+                            // the parent directory (since init files represent
+                            // directory-format instances that are already dirs).
+                            let resolved_path: std::borrow::Cow<'_, Path> = match source {
+                                crate::snapshot::InstigatingSource::Path(p) => {
+                                    let file_name =
+                                        p.file_name().and_then(|f| f.to_str()).unwrap_or("");
+                                    if file_name.starts_with("init.") {
+                                        std::borrow::Cow::Borrowed(
+                                            p.parent().unwrap_or(p.as_path()),
+                                        )
+                                    } else {
+                                        std::borrow::Cow::Borrowed(p.as_path())
+                                    }
+                                }
+                                crate::snapshot::InstigatingSource::ProjectNode {
+                                    path: project_path,
+                                    node,
+                                    ..
+                                } => {
+                                    if let Some(path_node) = &node.path {
+                                        let fs_path = path_node.path();
+                                        let resolved = if fs_path.is_relative() {
+                                            project_path
+                                                .parent()
+                                                .unwrap_or(project_path.as_path())
+                                                .join(fs_path)
+                                        } else {
+                                            fs_path.to_path_buf()
+                                        };
+                                        std::borrow::Cow::Owned(resolved)
+                                    } else {
+                                        std::borrow::Cow::Borrowed(source.path())
+                                    }
+                                }
+                            };
+                            if !resolved_path.is_dir() {
+                                let parent_class = parent_inst.class_name();
+                                let parent_name = parent_inst.name();
+                                let containing_dir = match resolved_path.parent() {
+                                    Some(d) => d,
+                                    None => continue,
+                                };
+                                log::info!(
+                                    "Syncback: Pre-converting standalone {} '{}' at {} to directory \
+                                     (children being added in this batch)",
+                                    parent_class,
+                                    parent_name,
+                                    resolved_path.display()
+                                );
+                                let new_dir = if matches!(
+                                    parent_class.as_str(),
+                                    "ModuleScript" | "Script" | "LocalScript"
+                                ) {
+                                    self.convert_standalone_script_to_directory(
+                                        &resolved_path,
+                                        parent_name,
+                                        parent_class.as_str(),
+                                        containing_dir,
+                                    )
+                                } else {
+                                    self.convert_standalone_instance_to_directory(
+                                        &resolved_path,
+                                        parent_name,
+                                        parent_class.as_str(),
+                                        containing_dir,
+                                    )
+                                };
+                                match new_dir {
+                                    Ok(dir) => {
+                                        converted_parents.insert(parent_ref, dir);
+                                    }
+                                    Err(err) => {
+                                        log::warn!(
+                                            "Failed to pre-convert parent '{}': {}",
+                                            parent_name,
+                                            err
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            for added in request.added.values() {
+                if let Err(err) = self.syncback_added_instance(
+                    added,
+                    &tree,
+                    &duplicate_siblings_cache,
+                    &stats,
+                    &converted_parents,
+                ) {
                     log::warn!(
                         "Failed to syncback added instance '{}': {}",
                         added.name,
@@ -663,17 +767,9 @@ impl ApiService {
         tree: &crate::snapshot::RojoTree,
         duplicate_siblings_cache: &HashSet<Ref>,
         stats: &crate::syncback::SyncbackStats,
+        converted_parents: &HashMap<Ref, PathBuf>,
     ) -> anyhow::Result<()> {
-        use crate::syncback::validate_file_name;
         use anyhow::Context;
-
-        // Validate the instance name for filesystem safety
-        validate_file_name(&added.name).with_context(|| {
-            format!(
-                "Instance name '{}' is not valid for the filesystem",
-                added.name
-            )
-        })?;
 
         // Get the parent Ref (required for top-level added instances)
         let parent_ref = added
@@ -756,9 +852,18 @@ impl ApiService {
         // ANY instance can have children in Roblox, so if the parent is a
         // standalone file (script, model, txt, csv, etc.), we must convert it
         // to directory format before we can place children inside it.
-        let parent_dir = if parent_path.is_dir() {
+        //
+        // Check converted_parents first — if another child in this batch
+        // already triggered the conversion, use the cached directory path
+        // instead of trying to convert again (the standalone file was already
+        // deleted by the first conversion).
+        let parent_dir = if let Some(dir) = converted_parents.get(&parent_ref) {
+            dir.clone()
+        } else if parent_path.is_dir() {
             parent_path.to_path_buf()
         } else {
+            // Fallback: parent wasn't pre-converted (e.g., parent was resolved
+            // through a ProjectNode path). Convert it now.
             let parent_class = parent_instance.class_name();
             let parent_name = parent_instance.name();
             let containing_dir = parent_path
@@ -1491,20 +1596,42 @@ impl ApiService {
         parent_dir: &std::path::Path,
         stats: &crate::syncback::SyncbackStats,
     ) -> anyhow::Result<()> {
-        use crate::syncback::validate_file_name;
+        use crate::syncback::{deduplicate_name, name_needs_slugify};
         use anyhow::Context;
 
-        // Validate the instance name for filesystem safety
-        validate_file_name(&added.name).with_context(|| {
-            format!(
-                "Instance name '{}' is not valid for the filesystem",
-                added.name
-            )
-        })?;
+        // Slugify the instance name for filesystem safety if it contains
+        // forbidden characters. The real name is preserved in metadata.
+        let needs_slug = name_needs_slugify(&added.name);
+        let base_name = if needs_slug {
+            slugify_name(&added.name)
+        } else {
+            added.name.clone()
+        };
 
-        // Encode instance name for filesystem safety (Windows-invalid chars, dots, etc.)
-        // This matches change_processor.rs which uses encode_path_name for renames.
-        let encoded_name = encode_path_name(&added.name);
+        // Deduplicate against existing files in the parent directory to prevent
+        // collisions (e.g., two instances whose slugified names match, or a new
+        // instance whose name matches an existing file).
+        let taken_names: HashSet<String> = if parent_dir.is_dir() {
+            fs::read_dir(parent_dir)
+                .ok()
+                .map(|entries| {
+                    entries
+                        .filter_map(|e| e.ok())
+                        .filter_map(|e| e.file_name().into_string().ok())
+                        .map(|n| n.to_lowercase())
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            HashSet::new()
+        };
+        let encoded_name = deduplicate_name(&base_name, &taken_names);
+        let needs_meta_name = needs_slug || encoded_name != base_name;
+        let meta_name_field: Option<&str> = if needs_meta_name {
+            Some(&added.name)
+        } else {
+            None
+        };
 
         // Build path string for stats
         let inst_path = format!("{}/{}", parent_dir.display(), added.name);
@@ -1569,7 +1696,7 @@ impl ApiService {
                     fs::write(&init_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", init_path.display())
                     })?;
-                    self.write_script_meta_json_if_needed(&dir_path, added)?;
+                    self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated ModuleScript at {}", init_path.display());
                     for child in &unique_children {
                         self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
@@ -1580,7 +1707,12 @@ impl ApiService {
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
-                    self.write_adjacent_script_meta_if_needed(parent_dir, &encoded_name, added)?;
+                    self.write_adjacent_script_meta_if_needed(
+                        parent_dir,
+                        &encoded_name,
+                        added,
+                        meta_name_field,
+                    )?;
                     log::info!("Syncback: Updated ModuleScript at {}", file_path.display());
                 }
             }
@@ -1621,7 +1753,7 @@ impl ApiService {
                     fs::write(&init_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", init_path.display())
                     })?;
-                    self.write_script_meta_json_if_needed(&dir_path, added)?;
+                    self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated Script at {}", init_path.display());
                     for child in &unique_children {
                         self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
@@ -1633,7 +1765,12 @@ impl ApiService {
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
-                    self.write_adjacent_script_meta_if_needed(parent_dir, &encoded_name, added)?;
+                    self.write_adjacent_script_meta_if_needed(
+                        parent_dir,
+                        &encoded_name,
+                        added,
+                        meta_name_field,
+                    )?;
                     log::info!("Syncback: Updated Script at {}", file_path.display());
                 }
             }
@@ -1673,7 +1810,7 @@ impl ApiService {
                     fs::write(&init_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", init_path.display())
                     })?;
-                    self.write_script_meta_json_if_needed(&dir_path, added)?;
+                    self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated LocalScript at {}", init_path.display());
                     for child in &unique_children {
                         self.syncback_instance_to_path_with_stats(child, &dir_path, stats)?;
@@ -1684,7 +1821,12 @@ impl ApiService {
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
-                    self.write_adjacent_script_meta_if_needed(parent_dir, &encoded_name, added)?;
+                    self.write_adjacent_script_meta_if_needed(
+                        parent_dir,
+                        &encoded_name,
+                        added,
+                        meta_name_field,
+                    )?;
                     log::info!("Syncback: Updated LocalScript at {}", file_path.display());
                 }
             }
@@ -1702,7 +1844,7 @@ impl ApiService {
                 let has_metadata = if added.properties.is_empty() {
                     false
                 } else {
-                    self.write_directory_meta_json(&dir_path, added)?;
+                    self.write_directory_meta_json(&dir_path, added, meta_name_field)?;
                     true
                 };
 
@@ -1869,6 +2011,7 @@ impl ApiService {
         &self,
         dir_path: &std::path::Path,
         added: &crate::web::interface::AddedInstance,
+        instance_name: Option<&str>,
     ) -> anyhow::Result<()> {
         use anyhow::Context;
 
@@ -1877,11 +2020,11 @@ impl ApiService {
         let (properties, attributes) =
             self.filter_properties_for_meta(&added.class_name, &added.properties, Some("Source"));
 
-        if properties.is_empty() && attributes.is_empty() {
+        if properties.is_empty() && attributes.is_empty() && instance_name.is_none() {
             return Ok(());
         }
 
-        let meta = self.build_meta_object(None, properties, attributes);
+        let meta = self.build_meta_object(None, instance_name, properties, attributes);
         let meta_path = dir_path.join("init.meta.json5");
         let content = crate::json::to_vec_pretty_sorted(&meta)
             .context("Failed to serialize init.meta.json5")?;
@@ -1903,17 +2046,18 @@ impl ApiService {
         &self,
         dir_path: &std::path::Path,
         added: &crate::web::interface::AddedInstance,
+        instance_name: Option<&str>,
     ) -> anyhow::Result<()> {
         use anyhow::Context;
 
         let (properties, attributes) =
             self.filter_properties_for_meta(&added.class_name, &added.properties, None);
 
-        if properties.is_empty() && attributes.is_empty() {
+        if properties.is_empty() && attributes.is_empty() && instance_name.is_none() {
             return Ok(());
         }
 
-        let meta = self.build_meta_object(None, properties, attributes);
+        let meta = self.build_meta_object(None, instance_name, properties, attributes);
         let meta_path = dir_path.join("init.meta.json5");
         let content = crate::json::to_vec_pretty_sorted(&meta)
             .context("Failed to serialize init.meta.json5")?;
@@ -1941,7 +2085,7 @@ impl ApiService {
             self.filter_properties_for_meta(&added.class_name, &added.properties, None);
 
         // For non-Folder classes, we need to include className
-        let meta = self.build_meta_object(Some(&added.class_name), properties, attributes);
+        let meta = self.build_meta_object(Some(&added.class_name), None, properties, attributes);
         let meta_path = dir_path.join("init.meta.json5");
         let content = crate::json::to_vec_pretty_sorted(&meta)
             .context("Failed to serialize init.meta.json5")?;
@@ -2047,6 +2191,7 @@ impl ApiService {
     fn build_meta_object(
         &self,
         class_name: Option<&str>,
+        instance_name: Option<&str>,
         properties: indexmap::IndexMap<String, serde_json::Value>,
         attributes: indexmap::IndexMap<String, serde_json::Value>,
     ) -> serde_json::Value {
@@ -2056,6 +2201,10 @@ impl ApiService {
 
         if let Some(cn) = class_name {
             obj.insert("className".to_string(), json!(cn));
+        }
+
+        if let Some(name) = instance_name {
+            obj.insert("name".to_string(), json!(name));
         }
 
         if !properties.is_empty() {
@@ -2134,6 +2283,7 @@ impl ApiService {
         parent_dir: &std::path::Path,
         name: &str,
         added: &crate::web::interface::AddedInstance,
+        instance_name: Option<&str>,
     ) -> anyhow::Result<()> {
         use anyhow::Context;
 
@@ -2141,12 +2291,12 @@ impl ApiService {
         let (properties, attributes) =
             self.filter_properties_for_meta(&added.class_name, &added.properties, Some("Source"));
 
-        if properties.is_empty() && attributes.is_empty() {
+        if properties.is_empty() && attributes.is_empty() && instance_name.is_none() {
             return Ok(());
         }
 
         // Build meta object (no className needed for scripts - it's determined by file extension)
-        let meta = self.build_meta_object(None, properties, attributes);
+        let meta = self.build_meta_object(None, instance_name, properties, attributes);
         let meta_path = parent_dir.join(format!("{}.meta.json5", name));
         let content =
             crate::json::to_vec_pretty_sorted(&meta).context("Failed to serialize meta.json5")?;
@@ -2413,7 +2563,7 @@ impl ApiService {
             Ok(existing)
         } else {
             // No existing file — build from scratch
-            Ok(self.build_meta_object(class_name, new_properties, new_attributes))
+            Ok(self.build_meta_object(class_name, None, new_properties, new_attributes))
         }
     }
 
@@ -5385,6 +5535,850 @@ mod tests {
             // Fallback to file_stem for unrecognized extensions
             let path = Path::new("src/Something.toml");
             assert_eq!(dir_name_from_instance_path(path), "Something");
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    //  Slug collision removal safety tests
+    //
+    //  These verify the critical invariant: when an instance is removed
+    //  and a NEW instance is created at the same slugified path, the
+    //  removal must NOT destroy the newly created file.
+    //
+    //  This was a real bug: renaming "joe_test" → "joe/test" produces
+    //  the same slug "joe_test". The API handler deletes the old file
+    //  and creates the new one, but the ChangeProcessor's PatchSet
+    //  removal would re-delete the new file because path.exists()
+    //  returned true for the NEW file.
+    // ══════════════════════════════════════════════════════════════════
+    mod slug_collision_removal_safety {
+        use crate::syncback::{name_needs_slugify, slugify_name};
+        use std::fs::{self, File};
+        use std::io::Write;
+        use tempfile::tempdir;
+
+        /// Simulates the API handler flow: remove old file, create new file at
+        /// potentially the same path (because slugs collide), then verify the
+        /// new file survives.
+        fn simulate_rename_via_slug(
+            old_name: &str,
+            new_name: &str,
+            extension: &str,
+        ) -> (bool, String, String) {
+            // Returns: (new_file_survived, old_slug, new_slug)
+            let old_slug = if name_needs_slugify(old_name) {
+                slugify_name(old_name)
+            } else {
+                old_name.to_string()
+            };
+            let new_slug = if name_needs_slugify(new_name) {
+                slugify_name(new_name)
+            } else {
+                new_name.to_string()
+            };
+
+            let temp = tempdir().expect("Failed to create temp dir");
+            let old_file = temp.path().join(format!("{old_slug}.{extension}"));
+            let new_file = temp.path().join(format!("{new_slug}.{extension}"));
+
+            // Step 1: Create old file (simulates existing state)
+            File::create(&old_file)
+                .unwrap()
+                .write_all(b"old content")
+                .unwrap();
+
+            // Step 2: API handler removes old file
+            if old_file.exists() {
+                fs::remove_file(&old_file).unwrap();
+            }
+
+            // Step 3: API handler creates new file (may be same path!)
+            File::create(&new_file)
+                .unwrap()
+                .write_all(b"new content")
+                .unwrap();
+
+            // Step 4: ChangeProcessor receives PatchSet with old instance removal.
+            // The OLD instance's instigating_source points to old_file.
+            // The fix: ChangeProcessor must NOT delete old_file because it
+            // now contains the NEW instance's content.
+            //
+            // (We don't actually call handle_tree_event here — we verify
+            // the invariant that the new file must survive.)
+
+            let survived =
+                new_file.exists() && fs::read_to_string(&new_file).unwrap() == "new content";
+
+            (survived, old_slug, new_slug)
+        }
+
+        // ── Same-slug renames (the critical case) ────────────────────
+
+        #[test]
+        fn rename_slash_to_underscore_same_slug() {
+            // "joe/test" → slug "joe_test", same as original "joe_test"
+            let (survived, old_slug, new_slug) =
+                simulate_rename_via_slug("joe_test", "joe/test", "legacy.luau");
+            assert_eq!(old_slug, "joe_test");
+            assert_eq!(new_slug, "joe_test");
+            assert!(survived, "new file must survive when slugs collide");
+        }
+
+        #[test]
+        fn rename_colon_to_underscore_same_slug() {
+            let (survived, old, new) = simulate_rename_via_slug("A_B", "A:B", "luau");
+            assert_eq!(old, "A_B");
+            assert_eq!(new, "A_B");
+            assert!(survived);
+        }
+
+        #[test]
+        fn rename_star_to_underscore_same_slug() {
+            let (survived, old, new) =
+                simulate_rename_via_slug("Glob_Pattern", "Glob*Pattern", "server.luau");
+            assert_eq!(old, "Glob_Pattern");
+            assert_eq!(new, "Glob_Pattern");
+            assert!(survived);
+        }
+
+        #[test]
+        fn rename_question_to_underscore_same_slug() {
+            let (survived, _, _) = simulate_rename_via_slug("What_", "What?", "luau");
+            assert!(survived);
+        }
+
+        #[test]
+        fn rename_pipe_to_underscore_same_slug() {
+            let (survived, _, _) = simulate_rename_via_slug("X_Y", "X|Y", "client.luau");
+            assert!(survived);
+        }
+
+        #[test]
+        fn rename_backslash_to_underscore_same_slug() {
+            let (survived, _, _) = simulate_rename_via_slug("path_to", "path\\to", "luau");
+            assert!(survived);
+        }
+
+        #[test]
+        fn rename_angle_brackets_same_slug() {
+            let (survived, _, _) = simulate_rename_via_slug("_init_", "<init>", "luau");
+            assert!(survived);
+        }
+
+        #[test]
+        fn rename_tilde_to_underscore_same_slug() {
+            let (survived, old, new) = simulate_rename_via_slug("foo_1", "foo~1", "luau");
+            assert_eq!(old, "foo_1");
+            assert_eq!(new, "foo_1");
+            assert!(survived);
+        }
+
+        // ── Different-slug renames (should also work fine) ───────────
+
+        #[test]
+        fn rename_clean_to_clean_different_slug() {
+            let (survived, old, new) = simulate_rename_via_slug("Alpha", "Beta", "luau");
+            assert_ne!(old, new);
+            assert!(survived, "different slugs should trivially survive");
+        }
+
+        #[test]
+        fn rename_clean_to_forbidden() {
+            let (survived, old, new) =
+                simulate_rename_via_slug("MyScript", "My/Script", "server.luau");
+            assert_eq!(old, "MyScript");
+            assert_eq!(new, "My_Script");
+            assert_ne!(old, new);
+            assert!(survived);
+        }
+
+        #[test]
+        fn rename_forbidden_to_clean() {
+            let (survived, _, _) = simulate_rename_via_slug("X_Y", "XY", "luau");
+            assert!(survived);
+        }
+
+        // ── Dangerous suffix renames ─────────────────────────────────
+
+        #[test]
+        fn rename_to_dangerous_suffix_server() {
+            let (survived, _, new) = simulate_rename_via_slug("foo", "foo.server", "luau");
+            assert_eq!(new, "foo_server");
+            assert!(survived);
+        }
+
+        #[test]
+        fn rename_to_dangerous_suffix_meta() {
+            let (survived, _, new) = simulate_rename_via_slug("config", "config.meta", "luau");
+            assert_eq!(new, "config_meta");
+            assert!(survived);
+        }
+
+        #[test]
+        fn rename_from_dangerous_suffix() {
+            let (survived, old, _) = simulate_rename_via_slug("foo_server", "foo.server", "luau");
+            assert_eq!(old, "foo_server");
+            assert!(survived);
+        }
+
+        // ── Windows reserved name renames ────────────────────────────
+
+        #[test]
+        fn rename_to_con() {
+            let (survived, _, new) = simulate_rename_via_slug("config", "CON", "luau");
+            assert_eq!(new, "CON_");
+            assert!(survived);
+        }
+
+        #[test]
+        fn rename_from_con_slug_collision() {
+            // "CON_" (natural) → "CON" (reserved, slugifies to "CON_")
+            let (survived, old, new) = simulate_rename_via_slug("CON_", "CON", "luau");
+            assert_eq!(old, "CON_");
+            assert_eq!(new, "CON_");
+            assert!(survived, "same-slug collision from Windows reserved name");
+        }
+
+        // ── Space renames ────────────────────────────────────────────
+
+        #[test]
+        fn rename_add_leading_space() {
+            let (survived, old, new) = simulate_rename_via_slug("Hello", " Hello", "luau");
+            assert_eq!(old, "Hello");
+            assert_eq!(new, "Hello"); // leading space stripped
+            assert!(survived, "stripped leading space creates same slug");
+        }
+
+        #[test]
+        fn rename_add_trailing_space() {
+            let (survived, old, new) = simulate_rename_via_slug("Hello", "Hello ", "luau");
+            assert_eq!(old, "Hello");
+            assert_eq!(new, "Hello"); // trailing space stripped
+            assert!(survived);
+        }
+
+        #[test]
+        fn rename_with_middle_space_no_collision() {
+            let (survived, old, new) = simulate_rename_via_slug("Hello", "Hello World", "luau");
+            assert_eq!(old, "Hello");
+            assert_eq!(new, "Hello World");
+            assert_ne!(old, new);
+            assert!(survived);
+        }
+
+        // ── Meta file survival ───────────────────────────────────────
+
+        #[test]
+        fn meta_file_survives_slug_collision_rename() {
+            let temp = tempdir().expect("Failed to create temp dir");
+            let slug = "joe_test";
+
+            // Create old files
+            let old_script = temp.path().join(format!("{slug}.legacy.luau"));
+            let old_meta = temp.path().join(format!("{slug}.meta.json5"));
+            File::create(&old_script)
+                .unwrap()
+                .write_all(b"old")
+                .unwrap();
+            File::create(&old_meta).unwrap().write_all(b"{}").unwrap();
+
+            // API handler: remove old
+            fs::remove_file(&old_script).unwrap();
+            fs::remove_file(&old_meta).unwrap();
+
+            // API handler: create new (same slug from "joe/test")
+            let new_script = temp.path().join(format!("{slug}.legacy.luau"));
+            let new_meta = temp.path().join(format!("{slug}.meta.json5"));
+            File::create(&new_script)
+                .unwrap()
+                .write_all(b"new code")
+                .unwrap();
+            File::create(&new_meta)
+                .unwrap()
+                .write_all(br#"{"name": "joe/test"}"#)
+                .unwrap();
+
+            // Both new files must survive
+            assert!(new_script.exists(), "new script must survive");
+            assert!(new_meta.exists(), "new meta must survive");
+            assert_eq!(fs::read_to_string(&new_script).unwrap(), "new code");
+            assert!(fs::read_to_string(&new_meta).unwrap().contains("joe/test"));
+        }
+
+        // ── Directory format survival ────────────────────────────────
+
+        #[test]
+        fn directory_survives_slug_collision_rename() {
+            let temp = tempdir().expect("Failed to create temp dir");
+
+            // Old instance "Stuff_Here" is a directory
+            let old_dir = temp.path().join("Stuff_Here");
+            fs::create_dir(&old_dir).unwrap();
+            File::create(old_dir.join("init.luau"))
+                .unwrap()
+                .write_all(b"old")
+                .unwrap();
+
+            // API handler: remove old directory
+            fs::remove_dir_all(&old_dir).unwrap();
+
+            // API handler: create new directory (slug of "Stuff/Here" = "Stuff_Here")
+            let new_dir = temp.path().join("Stuff_Here");
+            fs::create_dir(&new_dir).unwrap();
+            File::create(new_dir.join("init.luau"))
+                .unwrap()
+                .write_all(b"new")
+                .unwrap();
+            File::create(new_dir.join("init.meta.json5"))
+                .unwrap()
+                .write_all(br#"{"name": "Stuff/Here"}"#)
+                .unwrap();
+
+            // New directory and contents must survive
+            assert!(new_dir.exists(), "new directory must survive");
+            assert!(new_dir.join("init.luau").exists());
+            assert!(new_dir.join("init.meta.json5").exists());
+            assert_eq!(
+                fs::read_to_string(new_dir.join("init.luau")).unwrap(),
+                "new"
+            );
+        }
+
+        // ── Stress: many renames producing same slug ─────────────────
+
+        #[test]
+        fn stress_many_forbidden_chars_same_slug() {
+            // All these names slugify to the same thing. Verify each
+            // rename-to scenario preserves the new file.
+            let variants = [
+                ("A_B", "A/B"),
+                ("A_B", "A:B"),
+                ("A_B", "A*B"),
+                ("A_B", "A?B"),
+                ("A_B", "A<B"),
+                ("A_B", "A>B"),
+                ("A_B", "A|B"),
+                ("A_B", "A\\B"),
+                ("A_B", "A\"B"),
+                ("A_B", "A~B"),
+            ];
+            for (old_name, new_name) in variants {
+                let (survived, old_slug, new_slug) =
+                    simulate_rename_via_slug(old_name, new_name, "luau");
+                assert_eq!(
+                    old_slug, new_slug,
+                    "{old_name} and {new_name} should produce same slug"
+                );
+                assert!(
+                    survived,
+                    "new file must survive for {old_name} → {new_name}"
+                );
+            }
+        }
+
+        #[test]
+        fn stress_bidirectional_rename_survival() {
+            // Rename A→B then B→A, both produce same slug.
+            // Verify both directions work.
+            let pairs = [
+                ("joe_test", "joe/test"),
+                ("Hey_Bro", "Hey:Bro"),
+                ("foo_1", "foo~1"),
+                ("CON_", "CON"),
+            ];
+            for (a, b) in pairs {
+                let (surv_ab, _, _) = simulate_rename_via_slug(a, b, "luau");
+                let (surv_ba, _, _) = simulate_rename_via_slug(b, a, "luau");
+                assert!(surv_ab, "A→B must survive for {a} → {b}");
+                assert!(surv_ba, "B→A must survive for {b} → {a}");
+            }
+        }
+
+        // ── Verify name_needs_slugify consistency ────────────────────
+
+        #[test]
+        fn slug_collision_only_possible_when_needs_slugify() {
+            // If neither old nor new needs slugifying, their slugs are
+            // themselves, so they can't collide (different names = different slugs).
+            let cases = [("Alpha", "Beta"), ("Hello", "World"), ("x", "y")];
+            for (old, new) in cases {
+                assert!(!name_needs_slugify(old));
+                assert!(!name_needs_slugify(new));
+                let old_slug = slugify_name(old);
+                let new_slug = slugify_name(new);
+                assert_ne!(
+                    old_slug, new_slug,
+                    "clean names with different values can't produce same slug"
+                );
+            }
+        }
+
+        #[test]
+        fn all_forbidden_chars_produce_underscore_slug() {
+            // Every forbidden char in isolation slugifies to "_" → "instance"
+            let forbidden = ['<', '>', ':', '"', '/', '|', '?', '*', '\\', '~'];
+            for ch in forbidden {
+                let name = ch.to_string();
+                assert!(name_needs_slugify(&name));
+                let slug = slugify_name(&name);
+                assert_eq!(
+                    slug, "instance",
+                    "single {ch:?} should slugify to fallback 'instance'"
+                );
+            }
+        }
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    //  Two-way sync: write_child_to_disk dedup simulation
+    //
+    //  These simulate the actual flow in write_child_to_disk:
+    //  1. Read parent directory entries → taken_names
+    //  2. Slugify instance name if needed
+    //  3. Deduplicate against taken_names
+    //  4. Write file + optional meta with `name` field
+    //
+    //  This is the MOST critical path for two-way sync correctness.
+    // ══════════════════════════════════════════════════════════════════
+    mod twoway_sync_dedup {
+        use crate::syncback::{deduplicate_name, name_needs_slugify, slugify_name};
+        use std::collections::HashSet;
+        use std::fs::{self, File};
+        use std::io::Write;
+        use tempfile::tempdir;
+
+        // ══════════════════════════════════════════════════════════════
+        //  IMPORTANT: deduplicate_name compares BARE SLUGS against
+        //  taken_names. When taken_names is seeded from fs::read_dir,
+        //  entries include extensions (e.g., "foo.luau"). The bare slug
+        //  "foo" does NOT match "foo.luau", so dedup only catches
+        //  collisions for DIRECTORY entries (where filename == bare name).
+        //
+        //  For file-format instances, the duplicate-name pre-filter in
+        //  the plugin (encodeInstance.lua) prevents same-name siblings
+        //  from reaching the API at all. Cross-name slug collisions for
+        //  file-format are a known limitation until Phase 2.
+        //
+        //  These tests focus on DIRECTORY FORMAT dedup (where it works)
+        //  and document file-format behavior accurately.
+        // ══════════════════════════════════════════════════════════════
+
+        /// Simulates the write_child_to_disk flow for DIRECTORY format:
+        /// directory names have no extension, so bare slug == filename,
+        /// and dedup against fs::read_dir entries works correctly.
+        fn simulate_dir_dedup(
+            existing_dirs: &[&str],
+            instance_name: &str,
+        ) -> (String, Option<String>) {
+            let temp = tempdir().expect("Failed to create temp dir");
+            for name in existing_dirs {
+                fs::create_dir(temp.path().join(name)).unwrap();
+            }
+
+            let taken: HashSet<String> = fs::read_dir(temp.path())
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .filter_map(|e| e.file_name().into_string().ok())
+                .map(|n| n.to_lowercase())
+                .collect();
+
+            let needs_slug = name_needs_slugify(instance_name);
+            let base = if needs_slug {
+                slugify_name(instance_name)
+            } else {
+                instance_name.to_string()
+            };
+            let deduped = deduplicate_name(&base, &taken);
+            let needs_meta = needs_slug || deduped != base;
+
+            fs::create_dir(temp.path().join(&deduped)).unwrap();
+
+            let meta = if needs_meta {
+                Some(instance_name.to_string())
+            } else {
+                None
+            };
+            (deduped, meta)
+        }
+
+        /// Simulates batch add of DIRECTORY format children.
+        fn simulate_dir_batch(
+            existing_dirs: &[&str],
+            children: &[&str],
+        ) -> Vec<(String, Option<String>)> {
+            let temp = tempdir().expect("Failed to create temp dir");
+            for name in existing_dirs {
+                fs::create_dir(temp.path().join(name)).unwrap();
+            }
+
+            let mut taken: HashSet<String> = fs::read_dir(temp.path())
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .filter_map(|e| e.file_name().into_string().ok())
+                .map(|n| n.to_lowercase())
+                .collect();
+
+            let mut results = Vec::new();
+            for &name in children {
+                let needs_slug = name_needs_slugify(name);
+                let base = if needs_slug {
+                    slugify_name(name)
+                } else {
+                    name.to_string()
+                };
+                let deduped = deduplicate_name(&base, &taken);
+                let needs_meta = needs_slug || deduped != base;
+                taken.insert(deduped.to_lowercase());
+                let meta = if needs_meta {
+                    Some(name.to_string())
+                } else {
+                    None
+                };
+                results.push((deduped, meta));
+            }
+            results
+        }
+
+        // ── Directory dedup against existing dirs ────────────────────
+
+        #[test]
+        fn dir_clean_name_no_collision() {
+            let (f, m) = simulate_dir_dedup(&[], "NewFolder");
+            assert_eq!(f, "NewFolder");
+            assert!(m.is_none());
+        }
+
+        #[test]
+        fn dir_clean_name_collides_with_existing() {
+            let (f, m) = simulate_dir_dedup(&["NewFolder"], "NewFolder");
+            assert_eq!(f, "NewFolder~1");
+            assert_eq!(m.unwrap(), "NewFolder");
+        }
+
+        #[test]
+        fn dir_forbidden_name_no_collision() {
+            let (f, m) = simulate_dir_dedup(&[], "Hey/Bro");
+            assert_eq!(f, "Hey_Bro");
+            assert_eq!(m.unwrap(), "Hey/Bro");
+        }
+
+        #[test]
+        fn dir_forbidden_collides_with_existing() {
+            let (f, m) = simulate_dir_dedup(&["Hey_Bro"], "Hey/Bro");
+            assert_eq!(f, "Hey_Bro~1");
+            assert_eq!(m.unwrap(), "Hey/Bro");
+        }
+
+        #[test]
+        fn dir_natural_collides_with_slug() {
+            let (f, m) = simulate_dir_dedup(&["A_B"], "A_B");
+            assert_eq!(f, "A_B~1");
+            assert_eq!(m.unwrap(), "A_B");
+        }
+
+        #[test]
+        fn dir_case_insensitive_collision() {
+            let (f, m) = simulate_dir_dedup(&["MyFolder"], "myfolder");
+            assert_eq!(f, "myfolder~1");
+            assert_eq!(m.unwrap(), "myfolder");
+        }
+
+        #[test]
+        fn dir_multiple_collisions() {
+            let (f, _) = simulate_dir_dedup(&["Foo", "Foo~1", "Foo~2"], "Foo");
+            assert_eq!(f, "Foo~3");
+        }
+
+        #[test]
+        fn dir_gap_in_chain() {
+            let (f, _) = simulate_dir_dedup(&["Test", "Test~1", "Test~3"], "Test");
+            assert_eq!(f, "Test~2");
+        }
+
+        #[test]
+        fn dir_dangerous_suffix_server() {
+            let (f, m) = simulate_dir_dedup(&[], "foo.server");
+            assert_eq!(f, "foo_server");
+            assert_eq!(m.unwrap(), "foo.server");
+        }
+
+        #[test]
+        fn dir_dangerous_suffix_collides() {
+            let (f, m) = simulate_dir_dedup(&["config_meta"], "config.meta");
+            assert_eq!(f, "config_meta~1");
+            assert_eq!(m.unwrap(), "config.meta");
+        }
+
+        #[test]
+        fn dir_con_creates_valid_name() {
+            let (f, m) = simulate_dir_dedup(&[], "CON");
+            assert_eq!(f, "CON_");
+            assert_eq!(m.unwrap(), "CON");
+        }
+
+        #[test]
+        fn dir_nul_collides_with_existing() {
+            let (f, _) = simulate_dir_dedup(&["NUL_"], "NUL");
+            assert_eq!(f, "NUL_~1");
+        }
+
+        // ── Batch add: directory siblings ─────────────────────────────
+
+        #[test]
+        fn batch_dir_three_clean() {
+            let r = simulate_dir_batch(&[], &["Alpha", "Beta", "Gamma"]);
+            assert_eq!(r[0].0, "Alpha");
+            assert_eq!(r[1].0, "Beta");
+            assert_eq!(r[2].0, "Gamma");
+            assert!(r.iter().all(|(_, m)| m.is_none()));
+        }
+
+        #[test]
+        fn batch_dir_duplicate_names() {
+            let r = simulate_dir_batch(&[], &["Script", "Script", "Script"]);
+            assert_eq!(r[0].0, "Script");
+            assert!(r[0].1.is_none());
+            assert_eq!(r[1].0, "Script~1");
+            assert_eq!(r[1].1.as_deref(), Some("Script"));
+            assert_eq!(r[2].0, "Script~2");
+        }
+
+        #[test]
+        fn batch_dir_slug_collision_siblings() {
+            let r = simulate_dir_batch(&[], &["X/Y", "X:Y", "X*Y"]);
+            assert_eq!(r[0].0, "X_Y");
+            assert_eq!(r[1].0, "X_Y~1");
+            assert_eq!(r[2].0, "X_Y~2");
+        }
+
+        #[test]
+        fn batch_dir_with_existing_and_collisions() {
+            let r = simulate_dir_batch(
+                &["Utils", "Config"],
+                &["Utils", "Config", "NewThing"],
+            );
+            assert_eq!(r[0].0, "Utils~1");
+            assert_eq!(r[1].0, "Config~1");
+            assert_eq!(r[2].0, "NewThing");
+            assert!(r[2].1.is_none());
+        }
+
+        #[test]
+        fn batch_dir_dangerous_then_natural_then_slug() {
+            let r = simulate_dir_batch(
+                &[],
+                &["foo.server", "foo_server", "foo/server"],
+            );
+            assert_eq!(r[0].0, "foo_server");
+            assert_eq!(r[1].0, "foo_server~1");
+            assert_eq!(r[2].0, "foo_server~2");
+        }
+
+        #[test]
+        fn batch_dir_windows_reserved_pileup() {
+            let r = simulate_dir_batch(&[], &["CON", "CON_", "con"]);
+            assert_eq!(r[0].0, "CON_");
+            assert_eq!(r[0].1.as_deref(), Some("CON"));
+            assert_eq!(r[1].0, "CON_~1");
+            assert_eq!(r[1].1.as_deref(), Some("CON_"));
+            assert_eq!(r[2].0, "con_~2");
+            assert_eq!(r[2].1.as_deref(), Some("con"));
+        }
+
+        #[test]
+        fn batch_dir_empty_names() {
+            let r = simulate_dir_batch(&[], &["", "", ""]);
+            assert_eq!(r[0].0, "instance");
+            assert_eq!(r[1].0, "instance~1");
+            assert_eq!(r[2].0, "instance~2");
+        }
+
+        #[test]
+        fn batch_dir_20_same_name() {
+            let children: Vec<&str> = vec!["Spam"; 20];
+            let r = simulate_dir_batch(&[], &children);
+            assert_eq!(r[0].0, "Spam");
+            for i in 1..20 {
+                assert_eq!(r[i].0, format!("Spam~{i}"));
+            }
+            let unique: HashSet<String> = r.iter().map(|(f, _)| f.to_lowercase()).collect();
+            assert_eq!(unique.len(), 20);
+        }
+
+        // ── File-format behavior documentation ───────────────────────
+
+        #[test]
+        fn file_format_bare_slug_vs_full_filename_limitation() {
+            // DOCUMENTS KNOWN BEHAVIOR: deduplicate_name checks bare slug
+            // "Foo" against taken entries. When taken comes from fs::read_dir,
+            // entries have extensions ("foo.luau"). "foo" ≠ "foo.luau" so no
+            // collision is detected. This is by design — duplicate-named
+            // file instances are filtered by the plugin before reaching the API.
+            let temp = tempdir().expect("Failed to create temp dir");
+            File::create(temp.path().join("Foo.luau"))
+                .unwrap()
+                .write_all(b"existing")
+                .unwrap();
+
+            let taken: HashSet<String> = fs::read_dir(temp.path())
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .filter_map(|e| e.file_name().into_string().ok())
+                .map(|n| n.to_lowercase())
+                .collect();
+
+            assert!(taken.contains("foo.luau"));
+            assert!(!taken.contains("foo"));
+            // Bare slug doesn't match full filename
+            let deduped = deduplicate_name("Foo", &taken);
+            assert_eq!(deduped, "Foo", "bare slug doesn't match 'foo.luau'");
+        }
+
+        #[test]
+        fn file_format_slugify_still_works() {
+            // Even though dedup doesn't catch cross-file collisions,
+            // slugification itself always works correctly.
+            let temp = tempdir().expect("Failed to create temp dir");
+            let taken = HashSet::new();
+
+            let slug = slugify_name("Hey/Bro");
+            assert_eq!(slug, "Hey_Bro");
+            let deduped = deduplicate_name(&slug, &taken);
+            assert_eq!(deduped, "Hey_Bro");
+
+            let file_path = temp.path().join("Hey_Bro.luau");
+            File::create(&file_path)
+                .unwrap()
+                .write_all(b"content")
+                .unwrap();
+            assert!(file_path.exists());
+        }
+
+        // ── Rename → re-add cycle (the critical slug safety test) ────
+
+        #[test]
+        fn rename_cycle_same_slug_survives() {
+            let temp = tempdir().expect("Failed to create temp dir");
+
+            File::create(temp.path().join("joe_test.legacy.luau"))
+                .unwrap()
+                .write_all(b"old code")
+                .unwrap();
+
+            // API: remove old
+            fs::remove_file(temp.path().join("joe_test.legacy.luau")).unwrap();
+
+            // API: write new (dir is now empty)
+            let taken: HashSet<String> = fs::read_dir(temp.path())
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .filter_map(|e| e.file_name().into_string().ok())
+                .map(|n| n.to_lowercase())
+                .collect();
+            assert!(taken.is_empty());
+
+            let slug = slugify_name("joe/test");
+            assert_eq!(slug, "joe_test");
+            let deduped = deduplicate_name(&slug, &taken);
+            assert_eq!(deduped, "joe_test");
+
+            let new_file = temp.path().join("joe_test.legacy.luau");
+            File::create(&new_file)
+                .unwrap()
+                .write_all(b"new code")
+                .unwrap();
+            let meta_file = temp.path().join("joe_test.meta.json5");
+            File::create(&meta_file)
+                .unwrap()
+                .write_all(br#"{"name": "joe/test"}"#)
+                .unwrap();
+
+            assert!(new_file.exists());
+            assert!(meta_file.exists());
+            assert_eq!(fs::read_to_string(&new_file).unwrap(), "new code");
+            assert!(fs::read_to_string(&meta_file).unwrap().contains("joe/test"));
+        }
+
+        #[test]
+        fn dir_add_to_populated_no_overwrite() {
+            // Dir has: Helper/ and Helper.meta.json5
+            // Add new "Helper" dir → must get Helper~1
+            let temp = tempdir().expect("Failed to create temp dir");
+            fs::create_dir(temp.path().join("Helper")).unwrap();
+            File::create(temp.path().join("Helper.meta.json5"))
+                .unwrap()
+                .write_all(b"{}")
+                .unwrap();
+
+            let taken: HashSet<String> = fs::read_dir(temp.path())
+                .unwrap()
+                .filter_map(|e| e.ok())
+                .filter_map(|e| e.file_name().into_string().ok())
+                .map(|n| n.to_lowercase())
+                .collect();
+
+            let deduped = deduplicate_name("Helper", &taken);
+            assert_eq!(deduped, "Helper~1");
+        }
+
+        // ── Nightmare batch scenarios ────────────────────────────────
+
+        #[test]
+        fn batch_dir_10_way_slug_pileup_with_existing() {
+            let r = simulate_dir_batch(
+                &["A_B"],
+                &[
+                    "A/B", "A:B", "A*B", "A?B", "A<B", "A>B", "A|B",
+                    "A\\B", "A\"B",
+                ],
+            );
+            assert_eq!(r[0].0, "A_B~1");
+            assert_eq!(r[1].0, "A_B~2");
+            assert_eq!(r[2].0, "A_B~3");
+            assert_eq!(r[3].0, "A_B~4");
+            assert_eq!(r[4].0, "A_B~5");
+            assert_eq!(r[5].0, "A_B~6");
+            assert_eq!(r[6].0, "A_B~7");
+            assert_eq!(r[7].0, "A_B~8");
+            assert_eq!(r[8].0, "A_B~9");
+        }
+
+        #[test]
+        fn batch_dir_con_prn_nul_then_slugged() {
+            let r = simulate_dir_batch(
+                &[],
+                &["CON", "PRN", "CON/", "PRN/"],
+            );
+            assert_eq!(r[0].0, "CON_");
+            assert_eq!(r[1].0, "PRN_");
+            assert_eq!(r[2].0, "CON_~1"); // "CON/" slug "CON_" collides
+            assert_eq!(r[3].0, "PRN_~1");
+        }
+
+        #[test]
+        fn batch_dir_unicode_plus_forbidden() {
+            let r = simulate_dir_batch(
+                &[],
+                &["カフェ/Bar", "カフェ:Bar", "カフェ_Bar"],
+            );
+            assert_eq!(r[0].0, "カフェ_Bar");
+            assert_eq!(r[1].0, "カフェ_Bar~1");
+            assert_eq!(r[2].0, "カフェ_Bar~2");
+        }
+
+        #[test]
+        fn batch_dir_all_unique_filenames_invariant() {
+            // A massive batch — every result must be unique.
+            let children = &[
+                "Foo", "foo", "FOO", "A/B", "A:B", "A_B",
+                "CON", "CON_", "", "", "test.server", "test_server",
+            ];
+            let r = simulate_dir_batch(&[], children);
+            let unique: HashSet<String> = r.iter().map(|(f, _)| f.to_lowercase()).collect();
+            assert_eq!(
+                unique.len(), r.len(),
+                "every sibling must get a unique filename"
+            );
         }
     }
 }

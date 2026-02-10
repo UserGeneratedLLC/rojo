@@ -10,8 +10,7 @@ metadata:
   relevant_paths:
     - /foo.toml
     - /foo.meta.json5
-  context:
-    decode_windows_invalid_chars: true
+  context: {}
   specified_id: ~
   middleware: ~
   schema: ~

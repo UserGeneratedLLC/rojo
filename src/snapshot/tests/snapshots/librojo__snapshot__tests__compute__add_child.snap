@@ -10,8 +10,7 @@ added_instances:
       metadata:
         ignore_unknown_instances: false
         relevant_paths: []
-        context:
-          decode_windows_invalid_chars: true
+        context: {}
         specified_id: ~
         middleware: ~
         schema: ~
