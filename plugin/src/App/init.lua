@@ -571,6 +571,15 @@ function App:useRunningConnectionInfo()
 end
 
 function App:startSession()
+	-- If a session is already in progress, tear it down first.
+	-- In one-shot mode the sync lock is skipped, so this is the only guard
+	-- against overlapping sessions (e.g., auto-reconnect racing with a
+	-- manual connect).
+	if self.serveSession ~= nil then
+		Log.trace("Ending existing session before starting a new one")
+		self:endSession()
+	end
+
 	-- Skip session lock in one-shot mode since it's a quick sync-and-disconnect
 	if not Settings:get("oneShotSync") then
 		local claimedLock, priorOwner = self:claimSyncLock()
@@ -678,8 +687,11 @@ function App:startSession()
 				-- Safety: if endSession hasn't fired within 30s, force disconnect.
 				-- This catches cases where the promise chain silently breaks
 				-- (e.g., write request hangs, promise never resolves).
+				-- Capture the current session so we only kill THIS session, not a
+				-- different one that may have replaced it (e.g., auto-reconnect race).
+				local timeoutSession = serveSession
 				task.delay(30, function()
-					if self.serveSession ~= nil and Settings:get("oneShotSync") then
+					if self.serveSession ~= nil and self.serveSession == timeoutSession and Settings:get("oneShotSync") then
 						Log.warn("One-shot sync safety timeout: forcing disconnect")
 						self:endSession()
 					end
