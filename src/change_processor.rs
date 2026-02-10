@@ -262,6 +262,54 @@ impl JobThreadContext {
         }
     }
 
+    /// Remove the `name` field from a `.meta.json5` file if present.
+    /// If the file becomes an empty object after removal, delete it entirely.
+    /// This is called when renaming from a slugified name to a clean name,
+    /// to clear the stale `name` field that no longer applies.
+    fn remove_meta_name_field(&self, meta_path: &Path) {
+        if !meta_path.exists() {
+            return;
+        }
+        let bytes = match fs::read(meta_path) {
+            Ok(b) => b,
+            Err(_) => return,
+        };
+        let mut obj = match crate::json::from_slice::<serde_json::Value>(&bytes) {
+            Ok(serde_json::Value::Object(map)) => map,
+            _ => return,
+        };
+        if obj.remove("name").is_none() {
+            return; // no name field, nothing to do
+        }
+        if obj.is_empty() {
+            // Meta file only had the name field; delete it entirely
+            self.suppress_path_any(meta_path);
+            if let Err(err) = fs::remove_file(meta_path) {
+                log::error!(
+                    "Failed to remove empty meta file {}: {}",
+                    meta_path.display(),
+                    err
+                );
+            }
+        } else {
+            self.suppress_path(meta_path);
+            match crate::json::to_vec_pretty_sorted(&serde_json::Value::Object(obj)) {
+                Ok(content) => {
+                    if let Err(err) = fs::write(meta_path, &content) {
+                        log::error!(
+                            "Failed to write meta file {}: {}",
+                            meta_path.display(),
+                            err
+                        );
+                    }
+                }
+                Err(err) => {
+                    log::error!("Failed to serialize meta: {}", err);
+                }
+            }
+        }
+    }
+
     /// Computes and applies patches to the DOM for a given file path.
     ///
     /// This function finds the nearest ancestor to the given path that has associated instances
@@ -725,13 +773,16 @@ impl JobThreadContext {
                                                                 self.unsuppress_path(&new_meta);
                                                             }
                                                         }
-                                                        // Write name to init.meta.json5 if slug differs
+                                                        let init_meta = new_dir_path
+                                                            .join("init.meta.json5");
                                                         if slugified_new_name != *new_name {
-                                                            let init_meta = new_dir_path
-                                                                .join("init.meta.json5");
+                                                            // New name needs slugification — write name field
                                                             self.upsert_meta_name_field(
                                                                 &init_meta, new_name,
                                                             );
+                                                        } else {
+                                                            // Clean name — clear stale name field
+                                                            self.remove_meta_name_field(&init_meta);
                                                         }
                                                     }
                                                 }
@@ -814,11 +865,14 @@ impl JobThreadContext {
                                                             self.unsuppress_path(&new_meta);
                                                         }
                                                     }
-                                                    // Write name to adjacent meta if slug differs
                                                     if slugified_new_name != *new_name {
+                                                        // New name needs slugification — write name field
                                                         self.upsert_meta_name_field(
                                                             &new_meta, new_name,
                                                         );
+                                                    } else {
+                                                        // Clean name — clear stale name field
+                                                        self.remove_meta_name_field(&new_meta);
                                                     }
                                                 }
                                             }
