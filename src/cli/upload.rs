@@ -8,7 +8,7 @@ use reqwest::{
     StatusCode,
 };
 
-use crate::{auth_cookie::get_auth_cookie, serve_session::ServeSession};
+use crate::serve_session::ServeSession;
 
 use super::resolve_path;
 
@@ -67,9 +67,11 @@ impl UploadCommand {
                     );
                 }
 
-                let cookie = cookie.or_else(get_auth_cookie).context(
-                    "Rojo could not find your Roblox auth cookie. Please pass one via --cookie.",
-                )?;
+                let cookie = cookie
+                    .or_else(rbx_cookie::get_value)
+                    .context(
+                        "Rojo could not find your Roblox auth cookie. Please log into Roblox Studio or pass one via --cookie.",
+                    )?;
                 do_upload(buffer, self.asset_id, &cookie)
             }
 
