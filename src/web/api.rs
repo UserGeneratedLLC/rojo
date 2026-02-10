@@ -921,6 +921,7 @@ impl ApiService {
 
         // Create the instance at the resolved path
         self.syncback_instance_to_path_with_stats(added, &parent_dir, stats, &sibling_slugs)
+            .map(|_| ())
     }
 
     /// Update an existing instance in place instead of creating new files.
@@ -1076,15 +1077,7 @@ impl ApiService {
 
                     // Process children using normal syncback path
                     // This will use detect_existing_script_format to check existing files
-                    let child_slugs = Self::compute_sibling_slugs(&unique_children);
-                    for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(
-                            child,
-                            &children_dir,
-                            stats,
-                            &child_slugs,
-                        )?;
-                    }
+                    self.process_children_incremental(&unique_children, &children_dir, stats)?;
                 }
             }
 
@@ -1107,15 +1100,7 @@ impl ApiService {
                         let unique_children =
                             self.filter_duplicate_children(&added.children, &inst_path, stats);
 
-                        let child_slugs = Self::compute_sibling_slugs(&unique_children);
-                        for child in &unique_children {
-                            self.syncback_instance_to_path_with_stats(
-                                child,
-                                existing_path,
-                                stats,
-                                &child_slugs,
-                            )?;
-                        }
+                        self.process_children_incremental(&unique_children, existing_path, stats)?;
                     }
                 } else {
                     // It's a standalone file (e.g., .model.json5)
@@ -1618,41 +1603,24 @@ impl ApiService {
         let stats = crate::syncback::SyncbackStats::new();
         let sibling_slugs = HashSet::new();
         self.syncback_instance_to_path_with_stats(added, parent_dir, &stats, &sibling_slugs)
-    }
-
-    /// Computes slugified sibling names from a slice of `AddedInstance` references.
-    /// Returns a `HashSet` of lowercased bare slugs suitable for `deduplicate_name`.
-    fn compute_sibling_slugs(
-        children: &[&crate::web::interface::AddedInstance],
-    ) -> HashSet<String> {
-        use crate::syncback::name_needs_slugify;
-        children
-            .iter()
-            .map(|c| {
-                if name_needs_slugify(&c.name) {
-                    slugify_name(&c.name).to_lowercase()
-                } else {
-                    c.name.to_lowercase()
-                }
-            })
-            .collect()
+            .map(|_| ())
     }
 
     /// Recursively syncback an instance and its children to the filesystem.
     /// This is the internal implementation that handles the actual file creation.
     /// Uses the provided stats tracker for recording issues.
     ///
-    /// `sibling_slugs` contains the slugified names of all siblings in the
-    /// parent directory (bare slugs, lowercased). This is used by
-    /// `deduplicate_name` to avoid collisions. Callers compute this from
-    /// tree children or `AddedInstance` siblings — never from disk filenames.
+    /// `sibling_slugs` contains the slugified names of siblings already claimed
+    /// in the parent directory (bare slugs, lowercased). This is used by
+    /// `deduplicate_name` to avoid collisions. Returns the lowercased slug
+    /// that this instance claimed, so callers can accumulate it incrementally.
     fn syncback_instance_to_path_with_stats(
         &self,
         added: &crate::web::interface::AddedInstance,
         parent_dir: &std::path::Path,
         stats: &crate::syncback::SyncbackStats,
         sibling_slugs: &HashSet<String>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<String> {
         use crate::syncback::{deduplicate_name, name_needs_slugify};
         use anyhow::Context;
 
@@ -1682,9 +1650,6 @@ impl ApiService {
         // Filter out children with duplicate names (cannot reliably sync)
         let unique_children = self.filter_duplicate_children(&added.children, &inst_path, stats);
         let has_children = !unique_children.is_empty();
-
-        // Pre-compute sibling slugs for children's dedup (bare slugs, no extensions).
-        let child_slugs = Self::compute_sibling_slugs(&unique_children);
 
         // Determine the appropriate middleware/file format based on class name.
         // This matches the logic in src/syncback/mod.rs::get_best_middleware.
@@ -1744,14 +1709,7 @@ impl ApiService {
                     })?;
                     self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated ModuleScript at {}", init_path.display());
-                    for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(
-                            child,
-                            &dir_path,
-                            stats,
-                            &child_slugs,
-                        )?;
-                    }
+                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
                 } else {
                     let file_path = parent_dir.join(format!("{}.luau", encoded_name));
                     self.suppress_path(&file_path);
@@ -1806,14 +1764,7 @@ impl ApiService {
                     })?;
                     self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated Script at {}", init_path.display());
-                    for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(
-                            child,
-                            &dir_path,
-                            stats,
-                            &child_slugs,
-                        )?;
-                    }
+                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
                 } else {
                     let file_path =
                         parent_dir.join(format!("{}.{}.luau", encoded_name, script_suffix));
@@ -1868,14 +1819,7 @@ impl ApiService {
                     })?;
                     self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated LocalScript at {}", init_path.display());
-                    for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(
-                            child,
-                            &dir_path,
-                            stats,
-                            &child_slugs,
-                        )?;
-                    }
+                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
                 } else {
                     let file_path = parent_dir.join(format!("{}.local.luau", encoded_name));
                     self.suppress_path(&file_path);
@@ -1924,14 +1868,7 @@ impl ApiService {
                 );
 
                 // Recursively process children
-                for child in &unique_children {
-                    self.syncback_instance_to_path_with_stats(
-                        child,
-                        &dir_path,
-                        stats,
-                        &child_slugs,
-                    )?;
-                }
+                self.process_children_incremental(&unique_children, &dir_path, stats)?;
             }
 
             // StringValue: .txt file if no children, directory with init.meta.json5 if has children
@@ -1948,14 +1885,7 @@ impl ApiService {
                         "Syncback: Created StringValue directory at {}",
                         dir_path.display()
                     );
-                    for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(
-                            child,
-                            &dir_path,
-                            stats,
-                            &child_slugs,
-                        )?;
-                    }
+                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
                 } else {
                     let value = added
                         .properties
@@ -1995,14 +1925,7 @@ impl ApiService {
                         "Syncback: Created LocalizationTable directory at {}",
                         dir_path.display()
                     );
-                    for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(
-                            child,
-                            &dir_path,
-                            stats,
-                            &child_slugs,
-                        )?;
-                    }
+                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
                 } else {
                     let file_path = parent_dir.join(format!("{}.csv", encoded_name));
                     self.suppress_path(&file_path);
@@ -2054,14 +1977,7 @@ impl ApiService {
                     );
 
                     // Recursively process children
-                    for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(
-                            child,
-                            &dir_path,
-                            stats,
-                            &child_slugs,
-                        )?;
-                    }
+                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
                 } else {
                     let content = self.serialize_instance_to_model_json(added)?;
                     // Use the detected file path if available (preserves .model.json
@@ -2083,6 +1999,22 @@ impl ApiService {
             }
         }
 
+        Ok(encoded_name.to_lowercase())
+    }
+
+    /// Process children with incremental slug tracking, so each child's
+    /// claimed name is added to the taken set before processing the next.
+    fn process_children_incremental(
+        &self,
+        children: &[&crate::web::interface::AddedInstance],
+        dir_path: &std::path::Path,
+        stats: &crate::syncback::SyncbackStats,
+    ) -> anyhow::Result<()> {
+        let mut taken = HashSet::new();
+        for child in children {
+            let slug = self.syncback_instance_to_path_with_stats(child, dir_path, stats, &taken)?;
+            taken.insert(slug);
+        }
         Ok(())
     }
 

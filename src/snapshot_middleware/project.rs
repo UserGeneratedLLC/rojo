@@ -688,9 +688,7 @@ pub fn syncback_project<'sync>(
                 // concern with directories because they're singular things,
                 // files that contain their own children.
                 if parent_middleware != Middleware::Project {
-                    let taken_names = taken_names_per_dir
-                        .entry(parent_path.clone())
-                        .or_default();
+                    let taken_names = taken_names_per_dir.entry(parent_path.clone()).or_default();
                     let (child_snap, _needs_meta, dedup_key) = snapshot.with_base_path(
                         &parent_path,
                         new_child.referent(),
