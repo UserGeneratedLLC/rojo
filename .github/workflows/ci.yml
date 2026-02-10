@@ -50,6 +50,26 @@ jobs:
           target
         key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
+  build-vscode:
+    name: Build VS Code Extension
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: 20
+
+    - name: Install Dependencies
+      working-directory: vscode-rojo
+      run: npm ci
+
+    - name: Package Extension
+      working-directory: vscode-rojo
+      run: npx --yes @vscode/vsce package --no-dependencies
+
   msrv:
     name: Check MSRV
     runs-on: ubuntu-latest
