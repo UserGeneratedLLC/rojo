@@ -79,6 +79,7 @@ rbx_cookie = "0.1.5"
 reqwest = { version = "0.13", default-features = false, features = [
     "blocking",
     "json",
+    "multipart",
     "rustls",
     "gzip",
     "brotli",

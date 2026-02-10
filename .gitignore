@@ -26,3 +26,6 @@
 
 # JetBrains IDEs
 /.idea/
+
+# Environment secrets
+.env
