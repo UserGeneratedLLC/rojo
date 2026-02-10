@@ -249,6 +249,7 @@ impl JobThreadContext {
         match crate::json::to_vec_pretty_sorted(&serde_json::Value::Object(obj)) {
             Ok(content) => {
                 if let Err(err) = fs::write(meta_path, &content) {
+                    self.unsuppress_path(meta_path);
                     log::error!(
                         "Failed to write name to meta file {}: {}",
                         meta_path.display(),
@@ -257,6 +258,7 @@ impl JobThreadContext {
                 }
             }
             Err(err) => {
+                self.unsuppress_path(meta_path);
                 log::error!("Failed to serialize meta for name field: {}", err);
             }
         }
@@ -285,6 +287,7 @@ impl JobThreadContext {
             // Meta file only had the name field; delete it entirely
             self.suppress_path_any(meta_path);
             if let Err(err) = fs::remove_file(meta_path) {
+                self.unsuppress_path_any(meta_path);
                 log::error!(
                     "Failed to remove empty meta file {}: {}",
                     meta_path.display(),
@@ -296,10 +299,12 @@ impl JobThreadContext {
             match crate::json::to_vec_pretty_sorted(&serde_json::Value::Object(obj)) {
                 Ok(content) => {
                     if let Err(err) = fs::write(meta_path, &content) {
+                        self.unsuppress_path(meta_path);
                         log::error!("Failed to write meta file {}: {}", meta_path.display(), err);
                     }
                 }
                 Err(err) => {
+                    self.unsuppress_path(meta_path);
                     log::error!("Failed to serialize meta: {}", err);
                 }
             }
