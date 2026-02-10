@@ -81,7 +81,7 @@ fn middleware_for_script(inst: &Instance) -> Middleware {
     if let (Some(enums), Some(value)) = (run_context_enums, run_context_value) {
         for (name, &enum_value) in enums {
             if enum_value == value {
-                return match name.as_ref() {
+                return match *name {
                     "Server" => Middleware::ServerScriptDir,
                     "Client" => Middleware::ClientScriptDir,
                     "Plugin" => Middleware::PluginScriptDir,

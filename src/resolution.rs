@@ -203,7 +203,7 @@ impl AmbiguousValue {
 
                 (VariantType::String, AmbiguousValue::String(value)) => Ok(value.into()),
                 (VariantType::Tags, AmbiguousValue::StringArray(value)) => {
-                    Ok(Tags::from(value).into())
+                    Ok(value.iter().map(String::as_str).collect::<Tags>().into())
                 }
                 (VariantType::Content, AmbiguousValue::String(value)) => {
                     Ok(Content::from(value).into())
@@ -304,7 +304,7 @@ fn find_descriptor(
             return Some(descriptor);
         }
 
-        current_class_name = class.superclass.as_deref()?;
+        current_class_name = class.superclass?;
     }
 }
 

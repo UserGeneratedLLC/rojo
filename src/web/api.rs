@@ -2108,7 +2108,7 @@ impl ApiService {
             // Find which RunContext this value corresponds to
             for (name, &enum_value) in enums {
                 if enum_value == value {
-                    return match name.as_ref() {
+                    return match *name {
                         "Client" => "client",
                         "Server" => "server",
                         "Legacy" => "legacy",
@@ -3711,7 +3711,7 @@ mod tests {
             if let (Some(enums), Some(value)) = (run_context_enums, run_context_value) {
                 for (name, &enum_value) in enums {
                     if enum_value == value {
-                        return match name.as_ref() {
+                        return match *name {
                             "Client" => "client",
                             "Server" => "server",
                             "Legacy" => "legacy",

@@ -214,16 +214,15 @@ fn recurse_create_node<'a>(
         Vec::with_capacity(instance.metadata().relevant_paths.len());
 
     // Canonicalize project_dir once to normalize Windows \\?\ prefixes
-    let canonical_project_dir = std::fs::canonicalize(project_dir)
-        .unwrap_or_else(|_| project_dir.to_path_buf());
+    let canonical_project_dir =
+        std::fs::canonicalize(project_dir).unwrap_or_else(|_| project_dir.to_path_buf());
 
     for val in file_paths {
         if use_absolute_paths {
             let abs_path = path::absolute(val).expect(ABSOLUTE_PATH_FAILED_ERR);
             output_file_paths.push(Cow::Owned(abs_path));
         } else {
-            let canonical_val = std::fs::canonicalize(val)
-                .unwrap_or_else(|_| val.to_path_buf());
+            let canonical_val = std::fs::canonicalize(val).unwrap_or_else(|_| val.to_path_buf());
             output_file_paths.push(Cow::Owned(
                 pathdiff::diff_paths(&canonical_val, &canonical_project_dir)
                     .expect("Failed to compute relative path from project dir"),
