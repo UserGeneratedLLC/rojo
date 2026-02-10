@@ -300,8 +300,9 @@ methods:
       JSON. This may cause problems if you want to use the outputted JSON
       elsewhere.
 
-      This method also accepts `Library.buffer|buffers`, which it encodes to
-      base64 (and often compresses) before converting to a JSON object.
+      This method also accepts `Library.buffer|buffers` up to 50 MiB, which it
+      encodes to base64 (and often compresses) before converting to a JSON
+      object.
 
       To reverse the encoding process and decode a JSON object, use the
       `Class.HttpService:JSONDecode()` method.
@@ -429,6 +430,12 @@ methods:
                   <td><code>Enum.HttpCompression</code></td>
                   <td>no</td>
                   <td>An optional compression field that will compress the data in the request. The value can either be <code>Enum.HttpCompression.None</code> or <code>Enum.HttpCompression.Gzip</code>.</td>
+              </tr>
+              <tr>
+                  <td><code>Timeout</code></td>
+                  <td><code>Integer</code></td>
+                  <td>no</td>
+                  <td>An optional timeout value in seconds to make requests time out more quickly. Values must be greater than zero and no greater than the default request timeout. This can be useful when debugging hanging requests.</td>
               </tr>
           </tbody>
       </table>

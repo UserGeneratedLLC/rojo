@@ -3,7 +3,7 @@ title: Rewarded video ads
 description: Immersive ads allow you insert ad units into your experience that programmatically serve ad content.
 ---
 
-<iframe width="800" height="450" src="https://www.youtube-nocookie.com/embed/-HYByqvW2uc" title="YouTube video player" frameborder="0" allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+<iframe width="800" height="450" src="https://www.youtube-nocookie.com/embed/-HYByqvW2uc" title="YouTube video player" frameborder="0" allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen></iframe>
 
 <br /><br />
 
@@ -27,7 +27,7 @@ Before implementing rewarded video ads, consider where inside your experience yo
 
 <br /><br />
 
-<iframe width="800" height="450" src="https://www.youtube-nocookie.com/embed/Jpj0VnA-jmI" title="YouTube video player" frameborder="0" allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowfullscreen></iframe>
+<iframe width="800" height="450" src="https://www.youtube-nocookie.com/embed/Jpj0VnA-jmI" title="YouTube video player" frameborder="0" allow="accelerometer; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen></iframe>
 
 <br /><br />
 
@@ -220,13 +220,13 @@ local adButton = Instance.new("TextButton", screenGui)
 
 -- Register the button with AdService
 local success, err = pcall(function()
--- The second parameter is an optional Placement ID (UUID) parameter generated in the Creator Hub.
--- If you choose not to provide a Placement ID, the ad opportunity is tracked under the default placement.
-  AdService:RegisterAdOpportunityAsync(adButton, "123e4567-e89b-12d3-a456-426614174000")
+	-- The second parameter is an optional Placement ID (Number) parameter generated in the Creator Hub.
+	-- If you choose not to provide a Placement ID, the ad opportunity is tracked under the default placement.
+	AdService:RegisterAdOpportunityAsync(adButton, 1234567891234567)
 end)
 
 if not success then
-  warn("Failed to register ad opportunity:", err)
+	warn("Failed to register ad opportunity:", err)
 end
 ```
 

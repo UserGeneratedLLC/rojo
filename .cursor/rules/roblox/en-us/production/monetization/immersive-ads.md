@@ -18,11 +18,11 @@ The following ad formats can be served in your experience:
 
 <GridContainer numColumns="2">
 <figure>
-    <iframe width="440" height="247" src="https://www.youtube-nocookie.com/embed/4P79zbwU9D8" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+    <iframe width="440" height="247" src="https://www.youtube-nocookie.com/embed/4P79zbwU9D8" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen></iframe>
     <figcaption>Video ad format (autoplaying)</figcaption>
   </figure>
   <figure>
-    <iframe width="440" height="247" src="https://www.youtube-nocookie.com/embed/JVjkzGIgoak" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+    <iframe width="440" height="247" src="https://www.youtube-nocookie.com/embed/JVjkzGIgoak" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen></iframe>
     <figcaption>Video ad format (click-to-play)</figcaption>
   </figure>
   <figure>
@@ -68,7 +68,7 @@ How publishers earn:
 
 - **Portal ads** are static, non-clickable images with a door that teleports users into an advertiser's experience. Advertisers bid on a teleport, so publishers earn for each successful teleport. A teleport is when a user enters the portal and arrives at the advertiser's experience.
 
-To learn more about how advertisers are billed, see [Billing](../promotion/reporting-and-billing.md#billing).
+To learn more about how advertisers are billed, see [Billing](../promotion/ads-manager.md#billing).
 
 Roblox pays out earnings on the 25th of the following month from when you inserted ad units into your experience. For example, if you insert ad units during the month of March, your payout date for the viewable impressions and successful teleports from those ad units is April 25. You can track your collective earnings from ads either through the **My Transactions** or the **Group Transactions** page. You can also analyze their overall performance through metrics graphs on the Creator Dashboard.
 
@@ -107,7 +107,7 @@ Even if your experience is eligible to serve ads, not all users are eligible to 
 
 ## Insert ad units
 
-<iframe width="880" height="495" src="https://www.youtube-nocookie.com/embed/dlItlMLMDCE" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></iframe>
+<iframe width="880" height="495" src="https://www.youtube-nocookie.com/embed/dlItlMLMDCE" title="YouTube video player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen></iframe>
 
 <br /> <br />
 

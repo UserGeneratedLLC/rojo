@@ -10,18 +10,12 @@ This content is for creators who intend to create character heads designated for
 Character models designed to be sold on the Marketplace require a specific set of components and configuration standards to ensure all avatar features work as expected. The following guidance applies to character model heads to ensure universal support for head accessories and facial animations.
 
 <Alert severity = 'warning'>
-For information on character body requirements, see [character specifications](./specifications.md).
+Validation for heads use a specialized process that may require adjustment of your existing head asset. For more information, see [validation process](./head-validation.md).
 </Alert>
 
-To pass Marketplace validation, a dynamic head requires:
-
-1. A configured [head cage](#head-cage), with distinct eye and mouth landmarks.
-2. [FACS controls](#facs-animation) to enable basic facial movements.
-
-Validation verifies that landmarks on the head mesh, denoted by the cage projections, must deform correctly when facial animation is applied for the basic movement tests.
-
-## Auto-setup recommendation
-
+<Alert severity = "info" variant="outlined" color="primary" >
+<AlertTitle>Auto-setup recommendation</AlertTitle>
+<br />
 [Avatar auto-setup](../../avatar-setup/auto-setup.md) is an automated tool that automatically generates components for your avatar character, **including the head cage and facial animation** required for Marketplace character models. You can save time by submitting character models without avatar components into the auto-setup tool and modifying the output.
 
 You can test and refine your auto-setup output by using the Avatar setup tool previews. You can even download your output as a `.gltf` and adjust the FACS or cage data in your DCC tools.
@@ -29,8 +23,13 @@ You can test and refine your auto-setup output by using the Avatar setup tool pr
 You can alternatively manually modify your own cages and FACS animations within your DCC tools, which may require more time or additional iteration in your workflow, such as weight-painting adjustments, to ensure it meets Marketplace policies.
 
 To submit issues or feedback regarding the avatar auto setup tool, submit a [bug report](https://devforum.roblox.com/c/bug-reports/10).
+</Alert>
 
 ## Head cage
+
+<Alert severity = 'warning'>
+The head cage is used to verify animations during validation. see [validation process](./head-validation.md).
+</Alert>
 
 Similar to other avatar body parts, an outer cage is required for the head. [High-quality cages](#caging-quality) ensure accessories and clothing items fit properly over the head. Head cages also serves to establish [facial landmarks](#facial-landmarks) for the eyes and mouth of the face for animation validation.
 
@@ -40,7 +39,7 @@ For details on improving the quality of your head cage, see [Face cage optimizat
 
 ### Facial landmarks
 
-During validation, Roblox projects the cage eye/mouth regions to the base mesh to identify the eyes and mouth regions of your character head. These landmarks on the base mesh are used to track the correct deformations of your head when testing for the [minimum FACS poses](#facs-animation).
+During validation, Roblox projects the cage eye/mouth regions to the base mesh to identify the eyes and mouth regions of your character head. Even for non-humanoid faces that don't include visual eyes or mouths, it's important to ensure that these landmarks still exist and can be projected over your base mesh. For more information on this process, see [validation process](./head-validation.md).
 
 Roblox expects the following 3 distinct landmarks in your cages:
 
@@ -68,7 +67,9 @@ Roblox expects the following 3 distinct landmarks in your cages:
 </GridContainer>
 
 <Alert severity = 'error'>
-Even for non-humanoid faces that don't include visual eyes or mouths, it's important to ensure that these landmarks still exist and can be projected over your base mesh.
+The mouth landmark vertices are on the **second loop** of vertices from the mouth opening. This precision may help prevent issues with [landmark validation](./head-validation.md#landmark-projection).
+
+<center><img src="../../assets/art/avatar/Mouth-Vertices-Warning.png"/></center>
 </Alert>
 
 ## FACS animation
@@ -95,7 +96,7 @@ Roblox supports facial animation on character heads and can support more than 50
 
 While the 17 poses are a minimum requirement, it's recommended to include as many facial poses as possible in your asset to improve expressiveness and facial animation fidelity for facial animation and avatar chat.
 
-To pass validation, the character head must successfully perform the following 5 facial actions. If the head can't deform at the points of the [cage landmarks](#head-cage) for these facial actions, validation fails for the asset.
+To [pass validation](./head-validation.md), the character head must successfully perform the following 5 facial actions. If the head can't deform at the points of the [cage landmarks](#head-cage) for these facial actions, validation fails for the asset.
 
 <table>
 <thead>
