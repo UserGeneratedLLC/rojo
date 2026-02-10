@@ -1,0 +1,4 @@
+[tools]
+atlas = "UserGeneratedLLC/rojo@{rojo_version}"
+selene = "Kampfkarren/selene@0.30.0"
+stylua = "JohnnyMorganz/stylua@2.3.1"

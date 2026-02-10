@@ -180,8 +180,7 @@ fn do_upload_asset(buffer: Vec<u8>, asset_id: u64, api_key: &str) -> anyhow::Res
     let form = multipart::Form::new()
         .part(
             "request",
-            multipart::Part::text(request_json)
-                .mime_str("application/json")?,
+            multipart::Part::text(request_json).mime_str("application/json")?,
         )
         .part(
             "fileContent",
@@ -230,7 +229,10 @@ fn do_upload_asset(buffer: Vec<u8>, asset_id: u64, api_key: &str) -> anyhow::Res
         .strip_prefix("operations/")
         .unwrap_or(operation_path);
 
-    log::info!("Upload accepted, waiting for processing (operation: {})...", operation_id);
+    log::info!(
+        "Upload accepted, waiting for processing (operation: {})...",
+        operation_id
+    );
 
     let mut retry_delay = std::time::Duration::from_secs(1);
 
@@ -238,10 +240,7 @@ fn do_upload_asset(buffer: Vec<u8>, asset_id: u64, api_key: &str) -> anyhow::Res
         std::thread::sleep(retry_delay);
 
         let op_url = format!("{}/operations/{}", ASSETS_API_BASE, operation_id);
-        let op_response = client
-            .get(&op_url)
-            .header("x-api-key", api_key)
-            .send()?;
+        let op_response = client.get(&op_url).header("x-api-key", api_key).send()?;
 
         let op_status = op_response.status();
         let op_body: Value = op_response
