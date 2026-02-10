@@ -85,7 +85,7 @@ reqwest = { version = "0.13", default-features = false, features = [
     "brotli",
     "deflate",
 ] }
-tempfile = "3.24.0"
+tempfile = "3.25.0"
 ritz = "0.1.0"
 roblox_install = "1.0.0"
 serde = { version = "1.0.228", features = ["derive", "rc"] }
@@ -101,6 +101,7 @@ clap = { version = "4", features = ["derive"] }
 profiling = "1.0.17"
 yaml-rust2 = "0.11.0"
 data-encoding = "2.10.0"
+pathdiff = "0.2.3"
 
 blake3 = "1.8.3"
 float-cmp = "0.10.0"
@@ -125,9 +126,10 @@ semver = "1.0.27"
 rojo-insta-ext = { path = "crates/rojo-insta-ext" }
 
 criterion = "0.8"
-insta = { version = "1.46.3", features = ["redactions", "yaml"] }
+insta = { version = "1.46.3", features = ["redactions", "yaml", "json"] }
 paste = "1.0.15"
 pretty_assertions = "1.4.1"
 regex = "1"
 serde_yaml = "0.9"
+tempfile = "3"
 walkdir = "2.5.0"

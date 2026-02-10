@@ -13,7 +13,7 @@ use fs_err::File;
 use memofs::Vfs;
 use rayon::prelude::*;
 use rbx_dom_weak::{types::Ref, Ustr};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tokio::runtime::Runtime;
 
 use crate::{
@@ -26,19 +26,20 @@ use super::resolve_path;
 const ABSOLUTE_PATH_FAILED_ERR: &str = "Failed to turn relative path into absolute path!";
 
 /// Representation of a node in the generated sourcemap tree.
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SourcemapNode<'a> {
     name: &'a str,
     class_name: Ustr,
 
     #[serde(
+        default,
         skip_serializing_if = "Vec::is_empty",
         serialize_with = "crate::path_serializer::serialize_vec_absolute"
     )]
     file_paths: Vec<Cow<'a, Path>>,
 
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     children: Vec<SourcemapNode<'a>>,
 }
 
@@ -92,7 +93,7 @@ impl SourcemapCommand {
         rayon::ThreadPoolBuilder::new()
             .num_threads(num_cpus::get().min(6))
             .build_global()
-            .unwrap();
+            .ok();
 
         write_sourcemap(
             &session,
@@ -212,27 +213,21 @@ fn recurse_create_node<'a>(
     let mut output_file_paths: Vec<Cow<'a, Path>> =
         Vec::with_capacity(instance.metadata().relevant_paths.len());
 
-    // Canonicalize project_dir once for consistent comparison
-    let canonical_project_dir = std::fs::canonicalize(project_dir).ok();
+    // Canonicalize project_dir once to normalize Windows \\?\ prefixes
+    let canonical_project_dir = std::fs::canonicalize(project_dir)
+        .unwrap_or_else(|_| project_dir.to_path_buf());
 
     for val in file_paths {
         if use_absolute_paths {
             let abs_path = path::absolute(val).expect(ABSOLUTE_PATH_FAILED_ERR);
             output_file_paths.push(Cow::Owned(abs_path));
-        } else if let Some(ref proj_dir) = canonical_project_dir {
-            // Canonicalize file path and strip project dir prefix to get relative path
-            if let Ok(canonical_file) = std::fs::canonicalize(val) {
-                if let Ok(relative) = canonical_file.strip_prefix(proj_dir) {
-                    output_file_paths.push(Cow::Owned(relative.to_path_buf()));
-                    continue;
-                }
-            }
-            // Fallback: file is outside project dir
-            let abs_path = path::absolute(val).expect(ABSOLUTE_PATH_FAILED_ERR);
-            output_file_paths.push(Cow::Owned(abs_path));
         } else {
-            let abs_path = path::absolute(val).expect(ABSOLUTE_PATH_FAILED_ERR);
-            output_file_paths.push(Cow::Owned(abs_path));
+            let canonical_val = std::fs::canonicalize(val)
+                .unwrap_or_else(|_| val.to_path_buf());
+            output_file_paths.push(Cow::Owned(
+                pathdiff::diff_paths(&canonical_val, &canonical_project_dir)
+                    .expect("Failed to compute relative path from project dir"),
+            ));
         }
     }
 
@@ -328,4 +323,81 @@ fn write_atomic(target: &Path, data: &[u8]) -> anyhow::Result<()> {
     })?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use crate::cli::sourcemap::SourcemapNode;
+    use crate::cli::SourcemapCommand;
+    use insta::internals::Content;
+    use std::path::Path;
+
+    #[test]
+    fn maps_relative_paths() {
+        let sourcemap_dir = tempfile::tempdir().unwrap();
+        let sourcemap_output = sourcemap_dir.path().join("sourcemap.json");
+        let project_path = fs_err::canonicalize(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("test-projects")
+                .join("relative_paths")
+                .join("project"),
+        )
+        .unwrap();
+        let sourcemap_command = SourcemapCommand {
+            project: project_path,
+            output: Some(sourcemap_output.clone()),
+            include_non_scripts: false,
+            watch: false,
+            absolute: false,
+        };
+        assert!(sourcemap_command.run().is_ok());
+
+        let raw_sourcemap_contents = fs_err::read_to_string(sourcemap_output.as_path()).unwrap();
+        let sourcemap_contents =
+            serde_json::from_str::<SourcemapNode>(&raw_sourcemap_contents).unwrap();
+        insta::assert_json_snapshot!(sourcemap_contents);
+    }
+
+    #[test]
+    fn maps_absolute_paths() {
+        let sourcemap_dir = tempfile::tempdir().unwrap();
+        let sourcemap_output = sourcemap_dir.path().join("sourcemap.json");
+        let project_path = fs_err::canonicalize(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("test-projects")
+                .join("relative_paths")
+                .join("project"),
+        )
+        .unwrap();
+        let sourcemap_command = SourcemapCommand {
+            project: project_path,
+            output: Some(sourcemap_output.clone()),
+            include_non_scripts: false,
+            watch: false,
+            absolute: true,
+        };
+        assert!(sourcemap_command.run().is_ok());
+
+        let raw_sourcemap_contents = fs_err::read_to_string(sourcemap_output.as_path()).unwrap();
+        let sourcemap_contents =
+            serde_json::from_str::<SourcemapNode>(&raw_sourcemap_contents).unwrap();
+        insta::assert_json_snapshot!(sourcemap_contents, {
+            ".**.filePaths" => insta::dynamic_redaction(|mut value, _path| {
+                let mut paths_count = 0;
+
+                match value {
+                    Content::Seq(ref mut vec) => {
+                        for path in vec.iter().map(|i| i.as_str().unwrap()) {
+                            assert!(fs_err::canonicalize(path).is_ok(), "path was not valid");
+                            assert!(Path::new(path).is_absolute(), "path was not absolute");
+
+                            paths_count += 1;
+                        }
+                    }
+                    _ => panic!("Expected filePaths to be a sequence"),
+                }
+                format!("[...{} path{} omitted...]", paths_count, if paths_count != 1 { "s" } else { "" } )
+            })
+        });
+    }
 }

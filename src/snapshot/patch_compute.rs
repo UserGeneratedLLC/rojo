@@ -8,7 +8,9 @@ use rbx_dom_weak::{
     ustr, HashMapExt as _, UstrMap, UstrSet,
 };
 
-use crate::{variant_eq::variant_eq, RojoRef, REF_PATH_ATTRIBUTE_PREFIX, REF_POINTER_ATTRIBUTE_PREFIX};
+use crate::{
+    variant_eq::variant_eq, RojoRef, REF_PATH_ATTRIBUTE_PREFIX, REF_POINTER_ATTRIBUTE_PREFIX,
+};
 
 use super::{
     patch::{PatchAdd, PatchSet, PatchUpdate},

@@ -691,7 +691,11 @@ function App:startSession()
 				-- different one that may have replaced it (e.g., auto-reconnect race).
 				local timeoutSession = serveSession
 				task.delay(30, function()
-					if self.serveSession ~= nil and self.serveSession == timeoutSession and Settings:get("oneShotSync") then
+					if
+						self.serveSession ~= nil
+						and self.serveSession == timeoutSession
+						and Settings:get("oneShotSync")
+					then
 						Log.warn("One-shot sync safety timeout: forcing disconnect")
 						self:endSession()
 					end
