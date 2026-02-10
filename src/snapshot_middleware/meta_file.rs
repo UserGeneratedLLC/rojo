@@ -10,10 +10,7 @@ use rbx_dom_weak::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    json,
-    resolution::UnresolvedValue,
-    snapshot::InstanceSnapshot,
-    syncback::SyncbackSnapshot,
+    json, resolution::UnresolvedValue, snapshot::InstanceSnapshot, syncback::SyncbackSnapshot,
     RojoRef,
 };
 

@@ -1078,7 +1078,12 @@ impl ApiService {
                     // This will use detect_existing_script_format to check existing files
                     let child_slugs = Self::compute_sibling_slugs(&unique_children);
                     for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(child, &children_dir, stats, &child_slugs)?;
+                        self.syncback_instance_to_path_with_stats(
+                            child,
+                            &children_dir,
+                            stats,
+                            &child_slugs,
+                        )?;
                     }
                 }
             }
@@ -1104,7 +1109,12 @@ impl ApiService {
 
                         let child_slugs = Self::compute_sibling_slugs(&unique_children);
                         for child in &unique_children {
-                            self.syncback_instance_to_path_with_stats(child, existing_path, stats, &child_slugs)?;
+                            self.syncback_instance_to_path_with_stats(
+                                child,
+                                existing_path,
+                                stats,
+                                &child_slugs,
+                            )?;
                         }
                     }
                 } else {
@@ -1735,7 +1745,12 @@ impl ApiService {
                     self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated ModuleScript at {}", init_path.display());
                     for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats, &child_slugs)?;
+                        self.syncback_instance_to_path_with_stats(
+                            child,
+                            &dir_path,
+                            stats,
+                            &child_slugs,
+                        )?;
                     }
                 } else {
                     let file_path = parent_dir.join(format!("{}.luau", encoded_name));
@@ -1792,7 +1807,12 @@ impl ApiService {
                     self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated Script at {}", init_path.display());
                     for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats, &child_slugs)?;
+                        self.syncback_instance_to_path_with_stats(
+                            child,
+                            &dir_path,
+                            stats,
+                            &child_slugs,
+                        )?;
                     }
                 } else {
                     let file_path =
@@ -1849,7 +1869,12 @@ impl ApiService {
                     self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated LocalScript at {}", init_path.display());
                     for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats, &child_slugs)?;
+                        self.syncback_instance_to_path_with_stats(
+                            child,
+                            &dir_path,
+                            stats,
+                            &child_slugs,
+                        )?;
                     }
                 } else {
                     let file_path = parent_dir.join(format!("{}.local.luau", encoded_name));
@@ -1900,7 +1925,12 @@ impl ApiService {
 
                 // Recursively process children
                 for child in &unique_children {
-                    self.syncback_instance_to_path_with_stats(child, &dir_path, stats, &child_slugs)?;
+                    self.syncback_instance_to_path_with_stats(
+                        child,
+                        &dir_path,
+                        stats,
+                        &child_slugs,
+                    )?;
                 }
             }
 
@@ -1919,7 +1949,12 @@ impl ApiService {
                         dir_path.display()
                     );
                     for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats, &child_slugs)?;
+                        self.syncback_instance_to_path_with_stats(
+                            child,
+                            &dir_path,
+                            stats,
+                            &child_slugs,
+                        )?;
                     }
                 } else {
                     let value = added
@@ -1961,7 +1996,12 @@ impl ApiService {
                         dir_path.display()
                     );
                     for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats, &child_slugs)?;
+                        self.syncback_instance_to_path_with_stats(
+                            child,
+                            &dir_path,
+                            stats,
+                            &child_slugs,
+                        )?;
                     }
                 } else {
                     let file_path = parent_dir.join(format!("{}.csv", encoded_name));
@@ -2015,7 +2055,12 @@ impl ApiService {
 
                     // Recursively process children
                     for child in &unique_children {
-                        self.syncback_instance_to_path_with_stats(child, &dir_path, stats, &child_slugs)?;
+                        self.syncback_instance_to_path_with_stats(
+                            child,
+                            &dir_path,
+                            stats,
+                            &child_slugs,
+                        )?;
                     }
                 } else {
                     let content = self.serialize_instance_to_model_json(added)?;
@@ -6189,10 +6234,7 @@ mod tests {
 
         #[test]
         fn batch_dir_with_existing_and_collisions() {
-            let r = simulate_dir_batch(
-                &["Utils", "Config"],
-                &["Utils", "Config", "NewThing"],
-            );
+            let r = simulate_dir_batch(&["Utils", "Config"], &["Utils", "Config", "NewThing"]);
             assert_eq!(r[0].0, "Utils~1");
             assert_eq!(r[1].0, "Config~1");
             assert_eq!(r[2].0, "NewThing");
@@ -6201,10 +6243,7 @@ mod tests {
 
         #[test]
         fn batch_dir_dangerous_then_natural_then_slug() {
-            let r = simulate_dir_batch(
-                &[],
-                &["foo.server", "foo_server", "foo/server"],
-            );
+            let r = simulate_dir_batch(&[], &["foo.server", "foo_server", "foo/server"]);
             assert_eq!(r[0].0, "foo_server");
             assert_eq!(r[1].0, "foo_server~1");
             assert_eq!(r[2].0, "foo_server~2");
@@ -6234,8 +6273,8 @@ mod tests {
             let children: Vec<&str> = vec!["Spam"; 20];
             let r = simulate_dir_batch(&[], &children);
             assert_eq!(r[0].0, "Spam");
-            for i in 1..20 {
-                assert_eq!(r[i].0, format!("Spam~{i}"));
+            for (i, entry) in r.iter().enumerate().skip(1) {
+                assert_eq!(entry.0, format!("Spam~{i}"));
             }
             let unique: HashSet<String> = r.iter().map(|(f, _)| f.to_lowercase()).collect();
             assert_eq!(unique.len(), 20);
@@ -6339,8 +6378,7 @@ mod tests {
             let r = simulate_dir_batch(
                 &["A_B"],
                 &[
-                    "A/B", "A:B", "A*B", "A?B", "A<B", "A>B", "A|B",
-                    "A\\B", "A\"B",
+                    "A/B", "A:B", "A*B", "A?B", "A<B", "A>B", "A|B", "A\\B", "A\"B",
                 ],
             );
             assert_eq!(r[0].0, "A_B~1");
@@ -6356,10 +6394,7 @@ mod tests {
 
         #[test]
         fn batch_dir_con_prn_nul_then_slugged() {
-            let r = simulate_dir_batch(
-                &[],
-                &["CON", "PRN", "CON/", "PRN/"],
-            );
+            let r = simulate_dir_batch(&[], &["CON", "PRN", "CON/", "PRN/"]);
             assert_eq!(r[0].0, "CON_");
             assert_eq!(r[1].0, "PRN_");
             assert_eq!(r[2].0, "CON_~1"); // "CON/" slug "CON_" collides
@@ -6368,10 +6403,7 @@ mod tests {
 
         #[test]
         fn batch_dir_unicode_plus_forbidden() {
-            let r = simulate_dir_batch(
-                &[],
-                &["カフェ/Bar", "カフェ:Bar", "カフェ_Bar"],
-            );
+            let r = simulate_dir_batch(&[], &["カフェ/Bar", "カフェ:Bar", "カフェ_Bar"]);
             assert_eq!(r[0].0, "カフェ_Bar");
             assert_eq!(r[1].0, "カフェ_Bar~1");
             assert_eq!(r[2].0, "カフェ_Bar~2");
@@ -6381,13 +6413,24 @@ mod tests {
         fn batch_dir_all_unique_filenames_invariant() {
             // A massive batch — every result must be unique.
             let children = &[
-                "Foo", "foo", "FOO", "A/B", "A:B", "A_B",
-                "CON", "CON_", "", "", "test.server", "test_server",
+                "Foo",
+                "foo",
+                "FOO",
+                "A/B",
+                "A:B",
+                "A_B",
+                "CON",
+                "CON_",
+                "",
+                "",
+                "test.server",
+                "test_server",
             ];
             let r = simulate_dir_batch(&[], children);
             let unique: HashSet<String> = r.iter().map(|(f, _)| f.to_lowercase()).collect();
             assert_eq!(
-                unique.len(), r.len(),
+                unique.len(),
+                r.len(),
                 "every sibling must get a unique filename"
             );
         }

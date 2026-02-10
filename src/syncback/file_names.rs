@@ -74,7 +74,11 @@ pub fn name_for_inst<'a>(
                 let deduped = deduplicate_name(&base, taken_names);
                 let needs_meta = needs_slugify || deduped != base;
                 let dedup_key = deduped.clone();
-                Ok((Cow::Owned(format!("{deduped}.{extension}")), needs_meta, dedup_key))
+                Ok((
+                    Cow::Owned(format!("{deduped}.{extension}")),
+                    needs_meta,
+                    dedup_key,
+                ))
             }
         }
     }
@@ -703,7 +707,8 @@ mod tests {
         let child = dom.get_by_ref(child_ref).unwrap();
         let taken = HashSet::new();
 
-        let (filename, needs_meta, _dk) = name_for_inst(Middleware::Dir, child, None, &taken).unwrap();
+        let (filename, needs_meta, _dk) =
+            name_for_inst(Middleware::Dir, child, None, &taken).unwrap();
         assert_eq!(filename.as_ref(), "MyFolder");
         assert!(!needs_meta);
     }
@@ -728,7 +733,8 @@ mod tests {
         let child = dom.get_by_ref(child_ref).unwrap();
         let taken = HashSet::new();
 
-        let (filename, needs_meta, _dk) = name_for_inst(Middleware::Dir, child, None, &taken).unwrap();
+        let (filename, needs_meta, _dk) =
+            name_for_inst(Middleware::Dir, child, None, &taken).unwrap();
         assert_eq!(filename.as_ref(), "Hey_Bro");
         assert!(needs_meta);
     }
@@ -753,7 +759,8 @@ mod tests {
         let child = dom.get_by_ref(child_ref).unwrap();
         let taken: HashSet<String> = ["stuff".to_string()].into_iter().collect();
 
-        let (filename, needs_meta, _dk) = name_for_inst(Middleware::Dir, child, None, &taken).unwrap();
+        let (filename, needs_meta, _dk) =
+            name_for_inst(Middleware::Dir, child, None, &taken).unwrap();
         assert_eq!(filename.as_ref(), "Stuff~1");
         assert!(needs_meta);
     }
@@ -805,7 +812,8 @@ mod tests {
         let child = dom.get_by_ref(child_ref).unwrap();
         let taken = HashSet::new();
 
-        let (filename, needs_meta, _dk) = name_for_inst(Middleware::Text, child, None, &taken).unwrap();
+        let (filename, needs_meta, _dk) =
+            name_for_inst(Middleware::Text, child, None, &taken).unwrap();
         assert_eq!(filename.as_ref(), "Readme.txt");
         assert!(!needs_meta);
     }
@@ -1450,17 +1458,13 @@ mod tests {
         new_children: &[(&str, Middleware)],
     ) -> Vec<(String, String, bool)> {
         // Seed from bare slugs (simulates tree-based seeding)
-        let mut taken: HashSet<String> = disk_entries
-            .iter()
-            .map(|e| e.to_lowercase())
-            .collect();
+        let mut taken: HashSet<String> = disk_entries.iter().map(|e| e.to_lowercase()).collect();
         let mut results = Vec::new();
         for &(name, mw) in new_children {
             let dom = make_inst(name, "ModuleScript");
             let child_ref = dom.root().children()[0];
             let child = dom.get_by_ref(child_ref).unwrap();
-            let (filename, needs_meta, dedup_key) =
-                name_for_inst(mw, child, None, &taken).unwrap();
+            let (filename, needs_meta, dedup_key) = name_for_inst(mw, child, None, &taken).unwrap();
             taken.insert(dedup_key.to_lowercase());
             results.push((name.to_string(), filename.into_owned(), needs_meta));
         }
@@ -1471,10 +1475,7 @@ mod tests {
     fn disk_seed_prevents_overwrite_of_existing_dir() {
         // "Utils" directory exists on disk. New instance "Utils" (dir)
         // must get "Utils~1".
-        let r = process_new_children_with_disk_seed(
-            &["utils"],
-            &[("Utils", Middleware::Dir)],
-        );
+        let r = process_new_children_with_disk_seed(&["utils"], &[("Utils", Middleware::Dir)]);
         assert_eq!(r[0].1, "Utils~1");
         assert!(r[0].2);
     }
@@ -1482,10 +1483,7 @@ mod tests {
     #[test]
     fn disk_seed_prevents_overwrite_of_existing_dir_case_insensitive() {
         // "SCRIPTS" directory on disk, new instance "Scripts" (dir) must dedup.
-        let r = process_new_children_with_disk_seed(
-            &["scripts"],
-            &[("Scripts", Middleware::Dir)],
-        );
+        let r = process_new_children_with_disk_seed(&["scripts"], &[("Scripts", Middleware::Dir)]);
         assert_eq!(r[0].1, "Scripts~1");
         assert!(r[0].2);
     }
@@ -1494,10 +1492,7 @@ mod tests {
     fn disk_seed_slug_collision_with_existing_dir() {
         // "Hey_Bro" directory on disk. New instance "Hey/Bro" slugifies
         // to "Hey_Bro" — must dedup to "Hey_Bro~1".
-        let r = process_new_children_with_disk_seed(
-            &["hey_bro"],
-            &[("Hey/Bro", Middleware::Dir)],
-        );
+        let r = process_new_children_with_disk_seed(&["hey_bro"], &[("Hey/Bro", Middleware::Dir)]);
         assert_eq!(r[0].1, "Hey_Bro~1");
         assert!(r[0].2);
     }
@@ -1553,7 +1548,10 @@ mod tests {
         // child correctly detects the collision and gets ~1.
         let r = process_new_children_with_disk_seed(
             &[],
-            &[("A/B", Middleware::ModuleScript), ("A:B", Middleware::ModuleScript)],
+            &[
+                ("A/B", Middleware::ModuleScript),
+                ("A:B", Middleware::ModuleScript),
+            ],
         );
         assert_eq!(r[0].1, "A_B.luau");
         assert!(r[0].2);
@@ -1596,10 +1594,7 @@ mod tests {
     fn disk_seed_dedup_suffix_dir_already_on_disk() {
         // Pathological: "Foo" AND "Foo~1" directories already on disk.
         // New "Foo" dir must skip both and land on "Foo~2".
-        let r = process_new_children_with_disk_seed(
-            &["foo", "foo~1"],
-            &[("Foo", Middleware::Dir)],
-        );
+        let r = process_new_children_with_disk_seed(&["foo", "foo~1"], &[("Foo", Middleware::Dir)]);
         assert_eq!(r[0].1, "Foo~2");
         assert!(r[0].2);
     }
@@ -1632,17 +1627,13 @@ mod tests {
         disk_entries: &[&str],
         siblings: &[(&str, Middleware)],
     ) -> Vec<(String, String, bool)> {
-        let mut taken: HashSet<String> = disk_entries
-            .iter()
-            .map(|e| e.to_lowercase())
-            .collect();
+        let mut taken: HashSet<String> = disk_entries.iter().map(|e| e.to_lowercase()).collect();
         let mut results = Vec::new();
         for &(name, mw) in siblings {
             let dom = make_inst(name, "ModuleScript");
             let child_ref = dom.root().children()[0];
             let child = dom.get_by_ref(child_ref).unwrap();
-            let (filename, needs_meta, dedup_key) =
-                name_for_inst(mw, child, None, &taken).unwrap();
+            let (filename, needs_meta, dedup_key) = name_for_inst(mw, child, None, &taken).unwrap();
             taken.insert(dedup_key.to_lowercase());
             results.push((name.to_string(), filename.into_owned(), needs_meta));
         }
@@ -1654,10 +1645,8 @@ mod tests {
         // Two new project children: "A/B" and "A:B" both slug to "A_B".
         // Before fix: both got "A_B" path (collision!).
         // After fix: second gets "A_B~1".
-        let r = process_project_siblings(
-            &[],
-            &[("A/B", Middleware::Dir), ("A:B", Middleware::Dir)],
-        );
+        let r =
+            process_project_siblings(&[], &[("A/B", Middleware::Dir), ("A:B", Middleware::Dir)]);
         assert_eq!(r[0].1, "A_B");
         assert!(r[0].2);
         assert_eq!(r[1].1, "A_B~1");
@@ -1670,10 +1659,7 @@ mod tests {
         // Dir middleware: bare slug IS the filename → dedup works.
         let r = process_project_siblings(
             &[],
-            &[
-                ("Hey_Bro", Middleware::Dir),
-                ("Hey/Bro", Middleware::Dir),
-            ],
+            &[("Hey_Bro", Middleware::Dir), ("Hey/Bro", Middleware::Dir)],
         );
         assert_eq!(r[0].1, "Hey_Bro");
         assert!(!r[0].2);
@@ -1704,10 +1690,7 @@ mod tests {
         // Second → "Helper~2" (both disk and first sibling taken).
         let r = process_project_siblings(
             &["helper"],
-            &[
-                ("Helper", Middleware::Dir),
-                ("Helper", Middleware::Dir),
-            ],
+            &[("Helper", Middleware::Dir), ("Helper", Middleware::Dir)],
         );
         assert_eq!(r[0].1, "Helper~1");
         assert!(r[0].2);
@@ -1850,9 +1833,8 @@ mod tests {
         // Every Windows reserved name as a sibling — all get "_" suffix,
         // and they should NOT collide with each other since the base names differ.
         let reserved = [
-            "CON", "PRN", "AUX", "NUL",
-            "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+            "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+            "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
         ];
         let r = process_siblings_dir(&reserved);
         let names: HashSet<String> = r.iter().map(|(_, f, _)| f.to_lowercase()).collect();
@@ -1877,9 +1859,7 @@ mod tests {
             .iter()
             .map(|s| format!("foo{s}"))
             .collect();
-        let r = process_siblings_dir(
-            &siblings.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
-        );
+        let r = process_siblings_dir(&siblings.iter().map(|s| s.as_str()).collect::<Vec<_>>());
         let filenames: HashSet<String> = r.iter().map(|(_, f, _)| f.to_lowercase()).collect();
         assert_eq!(
             filenames.len(),
@@ -2021,9 +2001,9 @@ mod tests {
         let r = process_siblings_dir(&names);
         assert_eq!(r[0].1, "Script");
         assert!(!r[0].2);
-        for i in 1..100 {
-            assert_eq!(r[i].1, format!("Script~{i}"));
-            assert!(r[i].2);
+        for (i, entry) in r.iter().enumerate().skip(1) {
+            assert_eq!(entry.1, format!("Script~{i}"));
+            assert!(entry.2);
         }
         // All filenames must be unique
         let unique: HashSet<String> = r.iter().map(|(_, f, _)| f.to_lowercase()).collect();
@@ -2035,12 +2015,12 @@ mod tests {
         // Interleaved clean and forbidden-char names that produce same slug.
         // Tests that accumulation order doesn't matter.
         let r = process_siblings_dir(&[
-            "A_B",     // clean, claims "A_B"
-            "C_D",     // clean, claims "C_D"
-            "A/B",     // slug "A_B" → collision → "A_B~1"
-            "E_F",     // clean, claims "E_F"
-            "C:D",     // slug "C_D" → collision → "C_D~1"
-            "A:B",     // slug "A_B" → collision with A_B and A_B~1 → "A_B~2"
+            "A_B", // clean, claims "A_B"
+            "C_D", // clean, claims "C_D"
+            "A/B", // slug "A_B" → collision → "A_B~1"
+            "E_F", // clean, claims "E_F"
+            "C:D", // slug "C_D" → collision → "C_D~1"
+            "A:B", // slug "A_B" → collision with A_B and A_B~1 → "A_B~2"
         ]);
         assert_eq!(r[0].1, "A_B");
         assert!(!r[0].2);
@@ -2067,14 +2047,32 @@ mod tests {
         // Process a massive batch of problematic names and verify
         // every resulting filename is unique (case-insensitive).
         let names = [
-            "Foo", "foo", "FOO", "Foo", "Foo",
-            "A/B", "A:B", "A*B", "A_B",
-            "CON", "CON_", "con", "Con",
-            "test.server", "test_server", "test/server",
-            "", "", "",
-            " X", "X", "X ",
-            "Hello\x00", "Hello_",
-            "日本語", "日本語",
+            "Foo",
+            "foo",
+            "FOO",
+            "Foo",
+            "Foo",
+            "A/B",
+            "A:B",
+            "A*B",
+            "A_B",
+            "CON",
+            "CON_",
+            "con",
+            "Con",
+            "test.server",
+            "test_server",
+            "test/server",
+            "",
+            "",
+            "",
+            " X",
+            "X",
+            "X ",
+            "Hello\x00",
+            "Hello_",
+            "日本語",
+            "日本語",
         ];
         let r = process_siblings_dir(&names);
         let lowered: Vec<String> = r.iter().map(|(_, f, _)| f.to_lowercase()).collect();
@@ -2091,13 +2089,32 @@ mod tests {
     fn invariant_every_filename_passes_validation() {
         // Every filename produced by the pipeline must pass validate_file_name.
         let names = [
-            "CON", "PRN", "NUL", "COM1", "LPT9",
-            "foo.server", "bar.meta", "baz.model",
-            "A/B", "C:D", "E*F", "G?H",
-            "<init>", "a|b", "x\\y", "q\"r",
-            "", " ", ".", "..",
-            "hello.", "hello ", " hello",
-            "~1", "~~", "a~b~c",
+            "CON",
+            "PRN",
+            "NUL",
+            "COM1",
+            "LPT9",
+            "foo.server",
+            "bar.meta",
+            "baz.model",
+            "A/B",
+            "C:D",
+            "E*F",
+            "G?H",
+            "<init>",
+            "a|b",
+            "x\\y",
+            "q\"r",
+            "",
+            " ",
+            ".",
+            "..",
+            "hello.",
+            "hello ",
+            " hello",
+            "~1",
+            "~~",
+            "a~b~c",
         ];
         let r = process_siblings_dir(&names);
         for (original, filename, _) in &r {
@@ -2113,9 +2130,17 @@ mod tests {
         // For new instances: needs_meta is true IFF the filesystem name
         // differs from the instance name. This is the contract.
         let cases = [
-            "Clean", "Hello World", "test-123",
-            "A/B", "CON", "foo.server", " X", "X ", "",
-            "Foo~1", "hello.",
+            "Clean",
+            "Hello World",
+            "test-123",
+            "A/B",
+            "CON",
+            "foo.server",
+            " X",
+            "X ",
+            "",
+            "Foo~1",
+            "hello.",
         ];
         for &name in &cases {
             let dom = make_inst(name, "Folder");
@@ -2126,12 +2151,14 @@ mod tests {
                 name_for_inst(Middleware::Dir, child, None, &taken).unwrap();
             if needs_meta {
                 assert_ne!(
-                    filename.as_ref(), name,
+                    filename.as_ref(),
+                    name,
                     "needs_meta=true but filename matches name for {name:?}"
                 );
             } else {
                 assert_eq!(
-                    filename.as_ref(), name,
+                    filename.as_ref(),
+                    name,
                     "needs_meta=false but filename differs from name for {name:?}"
                 );
             }
