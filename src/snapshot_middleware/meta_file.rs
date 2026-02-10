@@ -162,10 +162,10 @@ impl AdjacentMetadata {
             .old_inst()
             .and_then(|inst| inst.metadata().specified_name.clone())
             .or_else(|| {
-                // If this is a new instance and its filesystem name differs from
-                // the instance name (due to slugification or deduplication), we
-                // need to specify the name in meta.json so it can be preserved.
-                if snapshot.old_inst().is_none() && snapshot.needs_meta_name {
+                // Filesystem name differs from the instance name (due to
+                // slugification or deduplication). Store the real name so
+                // it survives a round-trip through the filesystem.
+                if snapshot.needs_meta_name {
                     Some(snapshot.new_inst().name.clone())
                 } else {
                     None
@@ -424,10 +424,10 @@ impl DirectoryMetadata {
             .old_inst()
             .and_then(|inst| inst.metadata().specified_name.clone())
             .or_else(|| {
-                // If this is a new instance and its filesystem name differs from
-                // the instance name (due to slugification or deduplication), we
-                // need to specify the name in meta.json so it can be preserved.
-                if snapshot.old_inst().is_none() && snapshot.needs_meta_name {
+                // Filesystem name differs from the instance name (due to
+                // slugification or deduplication). Store the real name so
+                // it survives a round-trip through the filesystem.
+                if snapshot.needs_meta_name {
                     Some(snapshot.new_inst().name.clone())
                 } else {
                     None

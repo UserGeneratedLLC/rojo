@@ -77,10 +77,12 @@ pub fn syncback_json_model<'sync>(
         // could have a performance cost.
         model.schema = old_inst.metadata().schema.clone();
         model.name = old_inst.metadata().specified_name.clone();
-    } else if snapshot.needs_meta_name {
-        // New instance whose filesystem name differs from the instance name
-        // (due to slugification or deduplication). Store the real name so it
-        // survives a round-trip through the filesystem.
+    }
+    // Filesystem name differs from the instance name (due to slugification
+    // or deduplication). Store the real name so it survives a round-trip.
+    // Checked independently: old_inst may exist but lack a specified_name
+    // (e.g., a previously filesystem-safe name was renamed to need slugification).
+    if model.name.is_none() && snapshot.needs_meta_name {
         model.name = Some(snapshot.new_inst().name.clone());
     }
 
