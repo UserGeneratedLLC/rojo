@@ -5197,7 +5197,8 @@ fn rename_clean_to_slugified() {
 }
 
 /// Renaming a slugified instance back to a clean name should remove the
-/// meta `name` field (or the entire meta file if it had no other fields).
+/// meta `name` field. When the meta file had no other fields, the file
+/// itself must be deleted (the `RemoveNameOutcome::FileDeleted` path).
 #[test]
 fn rename_slugified_to_clean() {
     run_serve_test("syncback_encoded_names", |session, _redactions| {
@@ -5231,15 +5232,360 @@ fn rename_slugified_to_clean() {
             "What_Module.meta.json5 should be gone after rename",
         );
 
-        // The new meta file should either not exist (clean name needs no
-        // name override) or, if it exists, should NOT contain a "name" field.
-        if new_meta.exists() {
-            let meta_content = fs::read_to_string(&new_meta).unwrap();
-            assert!(
-                !meta_content.contains("\"name\""),
-                "CleanName.meta.json5 should not have a \"name\" field, got: {}",
-                meta_content
+        // The meta file had only a "name" field, so it should be deleted
+        // entirely (not just emptied). This validates the FileDeleted path.
+        poll_not_exists(
+            &new_meta,
+            "CleanName.meta.json5 should NOT exist (name-only meta → deleted)",
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Model JSON rename (compound extension preservation)
+// ---------------------------------------------------------------------------
+
+/// Renaming a .model.json5 instance must preserve the `.model` compound
+/// extension and update the `name` field inside the model file (not in
+/// adjacent .meta.json5).
+#[test]
+fn rename_model_json_preserves_compound_extension() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let (session_id, model_id) = get_encoded_names_instance(&session, "What?Model");
+
+        let src = session.path().join("src");
+        let old_path = src.join("What_Model.model.json5");
+        assert_file_exists(&old_path, "What_Model.model.json5 before rename");
+
+        // Rename to another name needing slugification
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: model_id,
+                changed_name: Some("Why?Model".to_string()),
+                changed_class_name: None,
+                changed_properties: UstrMap::default(),
+                changed_metadata: None,
+            },
+        );
+
+        // The .model compound extension MUST be preserved
+        let new_path = src.join("Why_Model.model.json5");
+        poll_file_exists(&new_path, "Why_Model.model.json5 should exist after rename");
+        poll_not_exists(
+            &old_path,
+            "What_Model.model.json5 should be gone after rename",
+        );
+
+        // The WRONG path (lost .model extension) must NOT exist
+        let wrong_path = src.join("Why_Model.json5");
+        assert_not_exists(
+            &wrong_path,
+            "Why_Model.json5 (without .model) must NOT exist",
+        );
+
+        // The name field must be INSIDE the model file, not in adjacent meta.
+        // JSON5 serialization uses unquoted keys, so check for key without
+        // surrounding double-quotes.
+        let model_content = fs::read_to_string(&new_path).unwrap();
+        assert!(
+            model_content.contains("name") && model_content.contains("Why?Model"),
+            "Model file should contain a name field with \"Why?Model\", got: {}",
+            model_content
+        );
+
+        // No adjacent .meta.json5 should be created for model files
+        let wrong_meta = src.join("Why_Model.meta.json5");
+        assert_not_exists(
+            &wrong_meta,
+            "Adjacent .meta.json5 should NOT be created for model files",
+        );
+    });
+}
+
+/// Renaming a .model.json5 instance to a clean name should remove the
+/// `name` field from inside the model file.
+#[test]
+fn rename_model_json_to_clean_name() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let (session_id, model_id) = get_encoded_names_instance(&session, "What?Model");
+
+        let src = session.path().join("src");
+        let old_path = src.join("What_Model.model.json5");
+        assert_file_exists(&old_path, "What_Model.model.json5 before rename");
+
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: model_id,
+                changed_name: Some("CleanModel".to_string()),
+                changed_class_name: None,
+                changed_properties: UstrMap::default(),
+                changed_metadata: None,
+            },
+        );
+
+        let new_path = src.join("CleanModel.model.json5");
+        poll_file_exists(
+            &new_path,
+            "CleanModel.model.json5 should exist after rename",
+        );
+        poll_not_exists(&old_path, "What_Model.model.json5 should be gone");
+
+        // The model file should NOT have a "name" key when the
+        // filesystem name matches the instance name.
+        // JSON5 uses unquoted keys (`name:` not `"name":`), so we
+        // check for the key pattern at line start.
+        let model_content = fs::read_to_string(&new_path).unwrap();
+        let has_name_key = model_content
+            .lines()
+            .any(|l| l.trim().starts_with("name:") || l.trim().starts_with("\"name\":"));
+        assert!(
+            !has_name_key,
+            "CleanModel.model.json5 should not have a name key, got: {}",
+            model_content
+        );
+        let has_classname = model_content
+            .lines()
+            .any(|l| l.trim().starts_with("className:") || l.trim().starts_with("\"className\":"));
+        assert!(
+            has_classname,
+            "Model file should still have className, got: {}",
+            model_content
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests: 3+ instance collision deduplication
+// ---------------------------------------------------------------------------
+
+/// Adding 3 instances that all slug to the same name (X/Y, X:Y, X|Y → X_Y)
+/// should produce X_Y.luau, X_Y~1.luau, X_Y~2.luau with correct meta files.
+#[test]
+fn add_three_colliding_instances_deduplicates() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let info = session.get_api_rojo().unwrap();
+        let root_read = session.get_api_read(info.root_instance_id).unwrap();
+        let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+
+        let names = ["X/Y", "X:Y", "X|Y"];
+        let mut added_map = HashMap::new();
+        for (i, name) in names.iter().enumerate() {
+            let mut props = HashMap::new();
+            props.insert(
+                "Source".to_string(),
+                Variant::String(format!("-- instance {}", i + 1)),
+            );
+            added_map.insert(
+                Ref::new(),
+                AddedInstance {
+                    parent: Some(rs_id),
+                    name: name.to_string(),
+                    class_name: "ModuleScript".to_string(),
+                    properties: props,
+                    children: vec![],
+                },
             );
         }
+        let write_request = WriteRequest {
+            session_id: info.session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![],
+        };
+        session.post_api_write(&write_request).unwrap();
+        thread::sleep(Duration::from_millis(500));
+
+        let src = session.path().join("src");
+        let base = src.join("X_Y.luau");
+        let dedup1 = src.join("X_Y~1.luau");
+        let dedup2 = src.join("X_Y~2.luau");
+
+        assert!(
+            base.exists() && dedup1.exists() && dedup2.exists(),
+            "All three slugified files should exist.\n\
+             X_Y.luau: {}, X_Y~1.luau: {}, X_Y~2.luau: {}",
+            base.exists(),
+            dedup1.exists(),
+            dedup2.exists()
+        );
+
+        // All three should have meta files with the original names
+        let base_meta = src.join("X_Y.meta.json5");
+        let dedup1_meta = src.join("X_Y~1.meta.json5");
+        let dedup2_meta = src.join("X_Y~2.meta.json5");
+        assert_file_exists(&base_meta, "Meta for base slug");
+        assert_file_exists(&dedup1_meta, "Meta for ~1 dedup");
+        assert_file_exists(&dedup2_meta, "Meta for ~2 dedup");
+
+        // Each meta should contain one of the original names
+        let all_metas = [
+            fs::read_to_string(&base_meta).unwrap(),
+            fs::read_to_string(&dedup1_meta).unwrap(),
+            fs::read_to_string(&dedup2_meta).unwrap(),
+        ];
+        for meta in &all_metas {
+            let has_name =
+                meta.contains("\"X/Y\"") || meta.contains("\"X:Y\"") || meta.contains("\"X|Y\"");
+            assert!(
+                has_name,
+                "Meta should contain one of X/Y, X:Y, X|Y, got: {}",
+                meta
+            );
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Directory rename with forbidden chars
+// ---------------------------------------------------------------------------
+
+/// Renaming a directory-format script to a name with forbidden chars should
+/// rename the directory using the slugified name and write a meta file with
+/// the real name.
+#[test]
+fn rename_directory_format_to_slugified_name() {
+    run_serve_test("syncback_format_transitions", |session, _redactions| {
+        let (session_id, dir_module_id) =
+            get_format_transitions_instance(&session, "DirModuleWithChildren");
+
+        let src = session.path().join("src");
+        let old_dir = src.join("DirModuleWithChildren");
+        assert!(old_dir.is_dir(), "Old directory should exist before rename");
+
+        // Rename to a name with forbidden chars
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: dir_module_id,
+                changed_name: Some("Dir/With:Chars".to_string()),
+                changed_class_name: None,
+                changed_properties: UstrMap::default(),
+                changed_metadata: None,
+            },
+        );
+
+        let new_dir = src.join("Dir_With_Chars");
+        poll_not_exists(&old_dir, "Old directory should be gone after rename");
+
+        // Poll for the new directory
+        let start = Instant::now();
+        loop {
+            if new_dir.is_dir() {
+                break;
+            }
+            if start.elapsed() > Duration::from_millis(API_POLL_TIMEOUT_MS) {
+                panic!(
+                    "New directory Dir_With_Chars should exist after rename (timed out after {}ms)",
+                    API_POLL_TIMEOUT_MS
+                );
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+
+        // init.luau should be inside the renamed directory
+        let init_file = new_dir.join("init.luau");
+        assert_file_exists(&init_file, "init.luau inside renamed directory");
+
+        // Children should be present in the renamed directory
+        let child_a = new_dir.join("ChildA.luau");
+        assert_file_exists(&child_a, "ChildA.luau inside renamed directory");
+
+        // For init-file directories, the name is stored inside the
+        // directory in init.meta.json5, not adjacent to it.
+        let init_meta = new_dir.join("init.meta.json5");
+        poll_file_exists(
+            &init_meta,
+            "init.meta.json5 inside Dir_With_Chars should exist with name override",
+        );
+        let meta_content = fs::read_to_string(&init_meta).unwrap();
+        assert!(
+            meta_content.contains("Dir/With:Chars"),
+            "init.meta.json5 should contain real name \"Dir/With:Chars\", got: {}",
+            meta_content
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Case-insensitive collision
+// ---------------------------------------------------------------------------
+
+/// Adding two instances whose names differ only in case (Foo and foo) should
+/// be deduplicated, since they slug to the same lowercase key.
+#[test]
+fn add_case_insensitive_colliding_instances() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let info = session.get_api_rojo().unwrap();
+        let root_read = session.get_api_read(info.root_instance_id).unwrap();
+        let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+
+        let mut added_map = HashMap::new();
+        let mut props1 = HashMap::new();
+        props1.insert(
+            "Source".to_string(),
+            Variant::String("-- upper".to_string()),
+        );
+        added_map.insert(
+            Ref::new(),
+            AddedInstance {
+                parent: Some(rs_id),
+                name: "CaseTest".to_string(),
+                class_name: "ModuleScript".to_string(),
+                properties: props1,
+                children: vec![],
+            },
+        );
+        let mut props2 = HashMap::new();
+        props2.insert(
+            "Source".to_string(),
+            Variant::String("-- lower".to_string()),
+        );
+        added_map.insert(
+            Ref::new(),
+            AddedInstance {
+                parent: Some(rs_id),
+                name: "casetest".to_string(),
+                class_name: "ModuleScript".to_string(),
+                properties: props2,
+                children: vec![],
+            },
+        );
+
+        let write_request = WriteRequest {
+            session_id: info.session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![],
+        };
+        session.post_api_write(&write_request).unwrap();
+        thread::sleep(Duration::from_millis(500));
+
+        let src = session.path().join("src");
+
+        // One should get the base name, the other should get ~1
+        // The exact casing depends on processing order, but both files
+        // must exist with distinct names.
+        let base = src.join("CaseTest.luau");
+        let base_lower = src.join("casetest.luau");
+        let dedup = src.join("CaseTest~1.luau");
+        let dedup_lower = src.join("casetest~1.luau");
+
+        let base_exists = base.exists() || base_lower.exists();
+        let dedup_exists = dedup.exists() || dedup_lower.exists();
+
+        assert!(
+            base_exists && dedup_exists,
+            "Both case-insensitive colliding instances should exist as separate files.\n\
+             CaseTest.luau: {}, casetest.luau: {}, CaseTest~1.luau: {}, casetest~1.luau: {}",
+            base.exists(),
+            base_lower.exists(),
+            dedup.exists(),
+            dedup_lower.exists()
+        );
     });
 }

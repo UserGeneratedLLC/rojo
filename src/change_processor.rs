@@ -247,6 +247,49 @@ impl JobThreadContext {
         }
     }
 
+    /// Upsert the `name` field inside a `.model.json5` / `.model.json` file,
+    /// suppressing filesystem events.
+    fn upsert_model_name_field(&self, model_path: &Path, real_name: &str) {
+        self.suppress_path(model_path);
+        if let Err(err) = crate::syncback::meta::upsert_model_name(model_path, real_name) {
+            self.unsuppress_path(model_path);
+            log::error!(
+                "Failed to upsert name in model file {}: {}",
+                model_path.display(),
+                err
+            );
+        }
+    }
+
+    /// Remove the `name` field from a `.model.json5` / `.model.json` file,
+    /// suppressing filesystem events.
+    fn remove_model_name_field(&self, model_path: &Path) {
+        use crate::syncback::meta::RemoveNameOutcome;
+        self.suppress_path(model_path);
+        match crate::syncback::meta::remove_model_name(model_path) {
+            Ok(RemoveNameOutcome::NoOp) => {
+                self.unsuppress_path(model_path);
+            }
+            Ok(RemoveNameOutcome::FieldRemoved) => {
+                // File was rewritten — suppress_path already covers it.
+            }
+            Ok(RemoveNameOutcome::FileDeleted) => {
+                // Model files shouldn't be deleted (they have className etc),
+                // but handle for completeness.
+                self.unsuppress_path(model_path);
+                self.suppress_path_remove(model_path);
+            }
+            Err(err) => {
+                self.unsuppress_path(model_path);
+                log::error!(
+                    "Failed to remove name from model file {}: {}",
+                    model_path.display(),
+                    err
+                );
+            }
+        }
+    }
+
     /// Remove the `name` field from a `.meta.json5` file, suppressing filesystem
     /// events. If the file becomes empty after removal, deletes it entirely.
     fn remove_meta_name_field(&self, meta_path: &Path) {
@@ -785,7 +828,7 @@ impl JobThreadContext {
                                                 .unwrap_or("");
                                             let known_suffixes = [
                                                 ".server", ".client", ".plugin", ".local",
-                                                ".legacy",
+                                                ".legacy", ".model",
                                             ];
                                             let script_suffix = known_suffixes
                                                 .iter()
@@ -912,22 +955,39 @@ impl JobThreadContext {
                                                 effective_meta_base = old_base;
                                             }
 
-                                            // Always update the meta name field when the
+                                            // Always update the name field when the
                                             // instance name changed, even if the path didn't
                                             // change (e.g. "Foo/Bar" → "Foo|Bar" both slugify
                                             // to "Foo_Bar"). Use deduped_new_name because
                                             // dedup may have appended ~N.
-                                            let current_meta = parent.join(format!(
-                                                "{}.meta.json5",
-                                                effective_meta_base
-                                            ));
-                                            if deduped_new_name != *new_name {
-                                                self.upsert_meta_name_field(
-                                                    &current_meta,
-                                                    new_name,
-                                                );
+                                            //
+                                            // For .model.json5/.model.json files, the name
+                                            // field lives INSIDE the model file, not in
+                                            // adjacent .meta.json5.
+                                            if script_suffix == ".model" {
+                                                let model_file = overridden_source_path
+                                                    .as_deref()
+                                                    .unwrap_or(path.as_path());
+                                                if deduped_new_name != *new_name {
+                                                    self.upsert_model_name_field(
+                                                        model_file, new_name,
+                                                    );
+                                                } else {
+                                                    self.remove_model_name_field(model_file);
+                                                }
                                             } else {
-                                                self.remove_meta_name_field(&current_meta);
+                                                let current_meta = parent.join(format!(
+                                                    "{}.meta.json5",
+                                                    effective_meta_base
+                                                ));
+                                                if deduped_new_name != *new_name {
+                                                    self.upsert_meta_name_field(
+                                                        &current_meta,
+                                                        new_name,
+                                                    );
+                                                } else {
+                                                    self.remove_meta_name_field(&current_meta);
+                                                }
                                             }
                                         }
                                     }

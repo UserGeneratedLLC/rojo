@@ -323,7 +323,9 @@ pub fn validate_file_name<S: AsRef<str>>(name: S) -> anyhow::Result<()> {
 
 /// Known script suffixes that appear between the base name and file extension.
 /// For example, in `MyScript.server.luau`, `.server` is the suffix.
-const KNOWN_SCRIPT_SUFFIXES: &[&str] = &[".server", ".client", ".plugin", ".local", ".legacy"];
+const KNOWN_SCRIPT_SUFFIXES: &[&str] = &[
+    ".server", ".client", ".plugin", ".local", ".legacy", ".model",
+];
 
 /// Strips a known script suffix from a file stem.
 ///

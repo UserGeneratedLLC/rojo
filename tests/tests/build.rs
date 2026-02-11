@@ -69,6 +69,7 @@ gen_build_tests! {
     model_json_name_override,
     dedup_suffix_with_meta,
     init_meta_name_override,
+    reserved_name_override,
 }
 
 fn run_build_test(test_name: &str) {

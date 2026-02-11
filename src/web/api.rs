@@ -1072,7 +1072,18 @@ impl ApiService {
                 if existing_path.is_dir() {
                     // Update init.meta.json5 if needed
                     if !added.properties.is_empty() {
-                        self.write_init_meta_json(existing_path, added, None)?;
+                        // Preserve the name field if the directory slug differs
+                        // from the instance name (due to slugification/dedup).
+                        let dir_name = existing_path
+                            .file_name()
+                            .and_then(|f| f.to_str())
+                            .unwrap_or("");
+                        let instance_name = if dir_name != added.name {
+                            Some(added.name.as_str())
+                        } else {
+                            None
+                        };
+                        self.write_init_meta_json(existing_path, added, instance_name)?;
                         log::info!(
                             "Syncback: Updated existing {} at {}/init.meta.json5",
                             class_name,
@@ -1090,7 +1101,19 @@ impl ApiService {
                     }
                 } else {
                     // It's a standalone file (e.g., .model.json5)
-                    let content = self.serialize_instance_to_model_json(added, None)?;
+                    // Preserve the name field if the filesystem slug differs
+                    // from the instance name (due to slugification/dedup).
+                    let stem = existing_path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("");
+                    let base = crate::syncback::strip_script_suffix(stem);
+                    let instance_name = if base != added.name {
+                        Some(added.name.as_str())
+                    } else {
+                        None
+                    };
+                    let content = self.serialize_instance_to_model_json(added, instance_name)?;
                     self.suppress_path(existing_path);
                     fs::write(existing_path, &content).with_context(|| {
                         format!("Failed to write file: {}", existing_path.display())
@@ -1393,6 +1416,26 @@ impl ApiService {
                 return false;
             }
             log::info!("Syncback: Removed directory at {}", path.display());
+
+            // Also remove adjacent dir-level meta in the parent if it
+            // exists (e.g. parent/DirName.meta.json5), matching the
+            // init-file case below.
+            if let Some(parent) = path.parent() {
+                if let Some(dir_name) = path.file_name().and_then(|f| f.to_str()) {
+                    let dir_meta = parent.join(format!("{}.meta.json5", dir_name));
+                    if dir_meta.exists() {
+                        self.suppress_path_remove(&dir_meta);
+                        if let Err(err) = fs::remove_file(&dir_meta) {
+                            log::warn!(
+                                "Failed to remove dir-level meta file {}: {}",
+                                dir_meta.display(),
+                                err
+                            );
+                        }
+                    }
+                }
+            }
+
             return true;
         }
 
