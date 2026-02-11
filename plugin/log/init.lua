@@ -13,12 +13,12 @@ local function getLogLevel()
 end
 
 local function addTags(tag, message)
-	return tag .. message:gsub("\n", "\n" .. tag)
+	return tag .. message
 end
 
-local TRACE_TAG = (" "):rep(15) .. "[Rojo-Trace] "
-local INFO_TAG = (" "):rep(15) .. "[Rojo-Info] "
-local DEBUG_TAG = (" "):rep(15) .. "[Rojo-Debug] "
+local TRACE_TAG = "[Rojo-Trace] "
+local INFO_TAG = "[Rojo-Info] "
+local DEBUG_TAG = "[Rojo-Debug] "
 local WARN_TAG = "[Rojo-Warn] "
 
 local Log = {}

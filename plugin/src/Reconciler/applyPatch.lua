@@ -27,13 +27,12 @@ local function applyPatch(instanceMap, patch)
 	-- to ensure that referents can be mapped to instances correctly.
 	local deferredRefs = {}
 
-	-- Log summary of patch being applied (debug level for summary)
 	local addCount = 0
 	for _ in pairs(patch.added) do
 		addCount += 1
 	end
 	if #patch.removed > 0 or addCount > 0 or #patch.updated > 0 then
-		Log.debug(
+		Log.info(
 			"Applying patch to Studio: {} removals, {} additions, {} updates",
 			#patch.removed,
 			addCount,
@@ -124,7 +123,6 @@ local function applyPatch(instanceMap, patch)
 			continue
 		end
 
-		-- Log the update (debug level for property details to reduce verbosity)
 		local instancePath = instance:GetFullName()
 		local propList = {}
 		if update.changedName then
@@ -138,7 +136,7 @@ local function applyPatch(instanceMap, patch)
 				table.insert(propList, propName)
 			end
 		end
-		Log.debug("[Studio] Update: {} - {}", instancePath, table.concat(propList, ", "))
+		Log.info("[Studio] Update: {} - {}", instancePath, table.concat(propList, ", "))
 
 		-- Pause updates on this instance to avoid picking up our changes when
 		-- two-way sync is enabled.

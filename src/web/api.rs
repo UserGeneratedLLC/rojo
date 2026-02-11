@@ -3063,6 +3063,14 @@ async fn handle_websocket_subscription(
         session_id
     );
 
+    // Validate the in-memory tree against the real filesystem on every
+    // plugin connect. This corrects any drift caused by missed VFS watcher
+    // events so the plugin always sees the true state.
+    let corrections = serve_session.validate_tree();
+    if !corrections.is_empty() {
+        message_queue.push_messages(&corrections);
+    }
+
     // Now continuously listen for new messages using select to handle both incoming messages
     // and WebSocket control messages concurrently
     let mut cursor = input_cursor;

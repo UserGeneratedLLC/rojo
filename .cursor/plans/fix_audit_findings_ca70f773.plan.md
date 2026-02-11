@@ -229,22 +229,26 @@ All in [tests/tests/two_way_sync.rs](tests/tests/two_way_sync.rs) and [tests/tes
 
 ### Files created
 
-| File | Purpose |
-|------|---------|
-| `src/syncback/meta.rs` | Shared `upsert_meta_name()` and `remove_meta_name()` -- pure JSON operations without filesystem event suppression. Returns `RemoveNameOutcome` enum so callers handle suppression themselves. |
-| `rojo-test/build-tests/tilde_no_meta/` | Build fixture: `Foo~1.luau` with no meta file. Verifies forward sync produces instance name `Foo~1`. |
+
+| File                                   | Purpose                                                                                                                                                                                       |
+| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/syncback/meta.rs`                 | Shared `upsert_meta_name()` and `remove_meta_name()` -- pure JSON operations without filesystem event suppression. Returns `RemoveNameOutcome` enum so callers handle suppression themselves. |
+| `rojo-test/build-tests/tilde_no_meta/` | Build fixture: `Foo~1.luau` with no meta file. Verifies forward sync produces instance name `Foo~1`.                                                                                          |
+
 
 ### Files modified
 
-| File | What changed |
-|------|-------------|
-| `src/syncback/file_names.rs` | Added `KNOWN_SCRIPT_SUFFIXES`, `strip_script_suffix()`, `adjacent_meta_path()`. Added 19 new unit tests (suffix stripping, meta path derivation, tilde collision, stress, idempotency). |
-| `src/syncback/mod.rs` | Added `pub mod meta;`. Exported `adjacent_meta_path`. Removed `deny_unknown_fields` from `SyncbackRules`. |
-| `src/change_processor.rs` | Rewrote `upsert_meta_name_field` / `remove_meta_name_field` to delegate to shared `syncback::meta` module. **C1 fix**: moved meta name update logic OUTSIDE `if new_path != *path` for both init-file and regular-file rename paths. Introduced `effective_dir_path` / `effective_meta_base` tracking variables. |
-| `src/web/api.rs` | **C2 fix**: `syncback_removed_instance` now uses `adjacent_meta_path()` instead of `instance_name` for meta cleanup. **CC2 fix**: init files trigger `remove_dir_all` on the parent directory + grandparent dir-level meta cleanup. Removed unused `instance_name` variable. Fixed misleading comment. |
-| `src/snapshot_middleware/project.rs` | **CC1 fix**: collected `new_child_map.drain()` into sorted `Vec` before processing, ensuring deterministic dedup ordering. |
-| `tests/tests/build.rs` | Added `tilde_no_meta` to `gen_build_tests!` macro. |
-| `tests/tests/two_way_sync.rs` | Added 2 integration tests: `add_instance_with_forbidden_chars_creates_slug_and_meta`, `add_two_colliding_instances_deduplicates`. |
+
+| File                                 | What changed                                                                                                                                                                                                                                                                                                     |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/syncback/file_names.rs`         | Added `KNOWN_SCRIPT_SUFFIXES`, `strip_script_suffix()`, `adjacent_meta_path()`. Added 19 new unit tests (suffix stripping, meta path derivation, tilde collision, stress, idempotency).                                                                                                                          |
+| `src/syncback/mod.rs`                | Added `pub mod meta;`. Exported `adjacent_meta_path`. Removed `deny_unknown_fields` from `SyncbackRules`.                                                                                                                                                                                                        |
+| `src/change_processor.rs`            | Rewrote `upsert_meta_name_field` / `remove_meta_name_field` to delegate to shared `syncback::meta` module. **C1 fix**: moved meta name update logic OUTSIDE `if new_path != *path` for both init-file and regular-file rename paths. Introduced `effective_dir_path` / `effective_meta_base` tracking variables. |
+| `src/web/api.rs`                     | **C2 fix**: `syncback_removed_instance` now uses `adjacent_meta_path()` instead of `instance_name` for meta cleanup. **CC2 fix**: init files trigger `remove_dir_all` on the parent directory + grandparent dir-level meta cleanup. Removed unused `instance_name` variable. Fixed misleading comment.           |
+| `src/snapshot_middleware/project.rs` | **CC1 fix**: collected `new_child_map.drain()` into sorted `Vec` before processing, ensuring deterministic dedup ordering.                                                                                                                                                                                       |
+| `tests/tests/build.rs`               | Added `tilde_no_meta` to `gen_build_tests!` macro.                                                                                                                                                                                                                                                               |
+| `tests/tests/two_way_sync.rs`        | Added 2 integration tests: `add_instance_with_forbidden_chars_creates_slug_and_meta`, `add_two_colliding_instances_deduplicates`.                                                                                                                                                                                |
+
 
 ### Test results
 
@@ -255,10 +259,8 @@ All in [tests/tests/two_way_sync.rs](tests/tests/two_way_sync.rs) and [tests/tes
 
 ### Key design decisions
 
-1. **`meta.rs` returns outcomes, doesn't suppress** -- The shared `upsert_meta_name` / `remove_meta_name` functions are pure I/O (read JSON, modify, write/delete). Filesystem event suppression stays in the caller (`change_processor.rs`) because it depends on the `JobThreadContext` API. This keeps the shared module framework-agnostic.
-
-2. **`effective_dir_path` / `effective_meta_base` pattern** -- For the C1 fix, rather than duplicating the meta update logic in both branches of the path-change condition, we track which path ended up being used (original or renamed) and run the meta update once afterward. This avoids the "nested inside conditional" bug class entirely.
-
-3. **`adjacent_meta_path` derives from filesystem name** -- The helper strips the file extension and script suffix from the actual filesystem path, never from the instance name. This ensures the meta path always matches the script file regardless of slugification.
-
+1. `**meta.rs` returns outcomes, doesn't suppress** -- The shared `upsert_meta_name` / `remove_meta_name` functions are pure I/O (read JSON, modify, write/delete). Filesystem event suppression stays in the caller (`change_processor.rs`) because it depends on the `JobThreadContext` API. This keeps the shared module framework-agnostic.
+2. `**effective_dir_path` / `effective_meta_base` pattern** -- For the C1 fix, rather than duplicating the meta update logic in both branches of the path-change condition, we track which path ended up being used (original or renamed) and run the meta update once afterward. This avoids the "nested inside conditional" bug class entirely.
+3. `**adjacent_meta_path` derives from filesystem name** -- The helper strips the file extension and script suffix from the actual filesystem path, never from the instance name. This ensures the meta path always matches the script file regardless of slugification.
 4. **Alphabetical sort for project.rs determinism** -- Chose alphabetical sort over referent-ID sort because it's human-predictable and matches what a developer would expect when looking at the filesystem.
+
