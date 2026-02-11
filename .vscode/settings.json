@@ -1,4 +1,39 @@
 {
+  "editor.tabSize": 2,
+  "editor.insertSpaces": true,
+  "editor.rulers": [
+    80
+  ],
+
+  "files.eol": "\n",
+  "files.encoding": "utf8",
+  "files.autoGuessEncoding": false,
+
   "luau-lsp.sourcemap.rojoProjectFile": "plugin.project.json",
-  "luau-lsp.sourcemap.autogenerate": true
+  "luau-lsp.plugin.maximumRequestBodySize": "500mb",
+  "luau-lsp.plugin.enabled": true,
+  "luau-lsp.completion.autocompleteEnd": true,
+  "luau-lsp.completion.imports.enabled": true,
+  "luau-lsp.completion.imports.separateGroupsWithLine": true,
+  "luau-lsp.hover.multilineFunctionDefinitions": true,
+  "luau-lsp.hover.showTableKinds": true,
+  "luau-lsp.inlayHints.makeInsertable": false,
+  "luau-lsp.inlayHints.hideHintsForMatchingParameterNames": false,
+  "luau-lsp.sourcemap.autogenerate": true,
+  "luau-lsp.sourcemap.includeNonScripts": true,
+  "luau-lsp.diagnostics.strictDatamodelTypes": true,
+  "luau-lsp.completion.imports.requireStyle": "alwaysAbsolute",
+  "luau-lsp.completion.fillCallArguments": false,
+  "luau-lsp.completion.showDeprecatedItems": false,
+  "luau-lsp.sourcemap.generatorCommand": "atlas",
+  "luau-lsp.fflags.enableNewSolver": false,
+  "luau-lsp.index.maxFiles": 100000,
+  "luau-lsp.plugin.port": 3668,
+
+  "stylua.targetReleaseVersion": "latest",
+  "[luau]": {
+    "editor.defaultFormatter": "JohnnyMorganz.stylua"
+  },
+
+  "git.ignoreLimitWarning": true
 }

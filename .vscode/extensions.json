@@ -1,5 +1,6 @@
 {
   "recommendations": [
+    "BlueGlassBlock.better-json5",
     "JohnnyMorganz.luau-lsp",
     "JohnnyMorganz.stylua",
     "Kampfkarren.selene-vscode",
