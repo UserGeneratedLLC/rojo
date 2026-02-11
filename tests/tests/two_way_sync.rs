@@ -5018,3 +5018,141 @@ fn failed_directory_rename_then_successful_rename() {
         );
     });
 }
+
+// ---------------------------------------------------------------------------
+// Tests: Adding instances with forbidden chars (audit finding coverage)
+// ---------------------------------------------------------------------------
+
+/// Adding a new sibling instance whose name contains forbidden chars should
+/// produce a slugified filename + adjacent meta with the `name` field.
+#[test]
+fn add_instance_with_forbidden_chars_creates_slug_and_meta() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let info = session.get_api_rojo().unwrap();
+        let root_read = session.get_api_read(info.root_instance_id).unwrap();
+        let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+
+        let mut properties = HashMap::new();
+        properties.insert(
+            "Source".to_string(),
+            Variant::String("-- new forbidden".to_string()),
+        );
+        let added = AddedInstance {
+            parent: Some(rs_id),
+            name: "Hey/Bro".to_string(),
+            class_name: "ModuleScript".to_string(),
+            properties,
+            children: vec![],
+        };
+        let mut added_map = HashMap::new();
+        added_map.insert(Ref::new(), added);
+        let write_request = WriteRequest {
+            session_id: info.session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![],
+        };
+        session.post_api_write(&write_request).unwrap();
+        thread::sleep(Duration::from_millis(500));
+
+        let src = session.path().join("src");
+        let script_path = src.join("Hey_Bro.luau");
+        let meta_path = src.join("Hey_Bro.meta.json5");
+
+        assert_file_exists(&script_path, "Slugified script file for Hey/Bro");
+        assert_file_exists(&meta_path, "Meta file for Hey/Bro with name field");
+
+        let meta_content = fs::read_to_string(&meta_path).unwrap();
+        assert!(
+            meta_content.contains("\"Hey/Bro\""),
+            "Meta should contain the real instance name \"Hey/Bro\", got: {}",
+            meta_content
+        );
+    });
+}
+
+/// Adding two instances whose names slugify to the same string should produce
+/// dedup suffixes (~1) and both should have correct meta `name` fields.
+#[test]
+fn add_two_colliding_instances_deduplicates() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let info = session.get_api_rojo().unwrap();
+        let root_read = session.get_api_read(info.root_instance_id).unwrap();
+        let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+
+        // Add "X/Y" (slugs to "X_Y")
+        let mut props1 = HashMap::new();
+        props1.insert(
+            "Source".to_string(),
+            Variant::String("-- first".to_string()),
+        );
+        let added1 = AddedInstance {
+            parent: Some(rs_id),
+            name: "X/Y".to_string(),
+            class_name: "ModuleScript".to_string(),
+            properties: props1,
+            children: vec![],
+        };
+
+        // Add "X:Y" (also slugs to "X_Y" — collision)
+        let mut props2 = HashMap::new();
+        props2.insert(
+            "Source".to_string(),
+            Variant::String("-- second".to_string()),
+        );
+        let added2 = AddedInstance {
+            parent: Some(rs_id),
+            name: "X:Y".to_string(),
+            class_name: "ModuleScript".to_string(),
+            properties: props2,
+            children: vec![],
+        };
+
+        let mut added_map = HashMap::new();
+        added_map.insert(Ref::new(), added1);
+        added_map.insert(Ref::new(), added2);
+        let write_request = WriteRequest {
+            session_id: info.session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![],
+        };
+        session.post_api_write(&write_request).unwrap();
+        thread::sleep(Duration::from_millis(500));
+
+        let src = session.path().join("src");
+        let base = src.join("X_Y.luau");
+        let deduped = src.join("X_Y~1.luau");
+
+        // One should get X_Y.luau, the other X_Y~1.luau
+        assert!(
+            base.exists() && deduped.exists(),
+            "Both X_Y.luau and X_Y~1.luau should exist. \
+             base exists: {}, deduped exists: {}",
+            base.exists(),
+            deduped.exists()
+        );
+
+        // Both should have meta files with correct names
+        let base_meta = src.join("X_Y.meta.json5");
+        let deduped_meta = src.join("X_Y~1.meta.json5");
+        assert_file_exists(&base_meta, "Meta for base slug instance");
+        assert_file_exists(&deduped_meta, "Meta for deduped ~1 instance");
+
+        // Read both meta files and verify they contain the correct names
+        let meta1 = fs::read_to_string(&base_meta).unwrap();
+        let meta2 = fs::read_to_string(&deduped_meta).unwrap();
+        let has_xy = meta1.contains("\"X/Y\"") || meta1.contains("\"X:Y\"");
+        let has_xy2 = meta2.contains("\"X/Y\"") || meta2.contains("\"X:Y\"");
+        assert!(
+            has_xy,
+            "Base meta should contain X/Y or X:Y, got: {}",
+            meta1
+        );
+        assert!(
+            has_xy2,
+            "Deduped meta should contain X/Y or X:Y, got: {}",
+            meta2
+        );
+    });
+}

@@ -1,6 +1,7 @@
 mod file_names;
 mod fs_snapshot;
 mod hash;
+pub mod meta;
 mod property_filter;
 mod ref_properties;
 mod snapshot;
@@ -30,8 +31,8 @@ use crate::{
 };
 
 pub use file_names::{
-    deduplicate_name, extension_for_middleware, name_for_inst, name_needs_slugify, slugify_name,
-    strip_middleware_extension, validate_file_name,
+    adjacent_meta_path, deduplicate_name, extension_for_middleware, name_for_inst,
+    name_needs_slugify, slugify_name, strip_middleware_extension, validate_file_name,
 };
 pub use fs_snapshot::FsSnapshot;
 pub use hash::*;
@@ -963,7 +964,7 @@ pub fn get_best_middleware(snapshot: &SyncbackSnapshot) -> Middleware {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct SyncbackRules {
     /// A list of subtrees in a file that will be ignored by Syncback.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

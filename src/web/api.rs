@@ -1438,8 +1438,6 @@ impl ApiService {
             .get_instance(removed_id)
             .context("Instance not found in Rojo tree")?;
 
-        let instance_name = instance.name();
-
         // Get the instigating source and handle each variant appropriately
         let instigating_source = instance
             .metadata()
@@ -1485,16 +1483,60 @@ impl ApiService {
             })?;
             log::info!("Syncback: Removed directory at {}", instance_path.display());
         } else if instance_path.is_file() {
-            self.suppress_path_remove(instance_path);
-            fs::remove_file(instance_path)
-                .with_context(|| format!("Failed to remove file: {}", instance_path.display()))?;
-            log::info!("Syncback: Removed file at {}", instance_path.display());
+            use crate::syncback::adjacent_meta_path;
 
-            // Also remove adjacent meta file if it exists
-            // The meta file is named after the instance name, not the file name
-            // e.g., for "MyScript.server.luau", the meta file is "MyScript.meta.json5"
-            if let Some(parent_dir) = instance_path.parent() {
-                let meta_path = parent_dir.join(format!("{}.meta.json5", instance_name));
+            let file_name = instance_path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or("");
+            let is_init_file = file_name.starts_with("init.");
+
+            if is_init_file {
+                // Directory-format script: the parent directory represents the
+                // instance (e.g. src/MyModule/init.luau → the directory IS MyModule).
+                // Remove the entire directory.
+                let dir_path = instance_path.parent().unwrap();
+                self.suppress_path_remove(dir_path);
+                fs::remove_dir_all(dir_path).with_context(|| {
+                    format!(
+                        "Failed to remove directory for init file: {}",
+                        dir_path.display()
+                    )
+                })?;
+                log::info!(
+                    "Syncback: Removed directory {} (init file: {})",
+                    dir_path.display(),
+                    instance_path.display()
+                );
+
+                // Also remove adjacent dir-level meta in the grandparent if it
+                // exists (e.g. grandparent/MyModule.meta.json5).
+                if let Some(grandparent) = dir_path.parent() {
+                    if let Some(dir_name) = dir_path.file_name().and_then(|f| f.to_str()) {
+                        let dir_meta = grandparent.join(format!("{}.meta.json5", dir_name));
+                        if dir_meta.exists() {
+                            if let Err(err) = fs::remove_file(&dir_meta) {
+                                log::warn!(
+                                    "Failed to remove dir-level meta file {}: {}",
+                                    dir_meta.display(),
+                                    err
+                                );
+                            }
+                        }
+                    }
+                }
+            } else {
+                // Regular file: remove the file itself
+                self.suppress_path_remove(instance_path);
+                fs::remove_file(instance_path).with_context(|| {
+                    format!("Failed to remove file: {}", instance_path.display())
+                })?;
+                log::info!("Syncback: Removed file at {}", instance_path.display());
+
+                // Remove the adjacent meta file if it exists. The meta file is
+                // named after the script file's base stem (the slugified name),
+                // not the raw instance name.
+                let meta_path = adjacent_meta_path(instance_path);
                 if meta_path.exists() {
                     if let Err(err) = fs::remove_file(&meta_path) {
                         log::warn!(

@@ -321,6 +321,36 @@ pub fn validate_file_name<S: AsRef<str>>(name: S) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Known script suffixes that appear between the base name and file extension.
+/// For example, in `MyScript.server.luau`, `.server` is the suffix.
+const KNOWN_SCRIPT_SUFFIXES: &[&str] = &[".server", ".client", ".plugin", ".local", ".legacy"];
+
+/// Strips a known script suffix from a file stem.
+///
+/// For example, `"MyScript.server"` → `"MyScript"`, but `"MyScript"` → `"MyScript"`.
+pub fn strip_script_suffix(stem: &str) -> &str {
+    for suffix in KNOWN_SCRIPT_SUFFIXES {
+        if let Some(base) = stem.strip_suffix(suffix) {
+            return base;
+        }
+    }
+    stem
+}
+
+/// Given a script file path like `parent/Foo_Bar.server.luau`,
+/// returns the adjacent meta path `parent/Foo_Bar.meta.json5`.
+///
+/// Strips the file extension and any known script suffix (`.server`, `.client`,
+/// etc.) to derive the base name, then appends `.meta.json5`.
+pub fn adjacent_meta_path(script_path: &std::path::Path) -> std::path::PathBuf {
+    let stem = script_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let base = strip_script_suffix(stem);
+    script_path.with_file_name(format!("{}.meta.json5", base))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2181,5 +2211,193 @@ mod tests {
                 );
             }
         }
+    }
+
+    // ── strip_script_suffix ──────────────────────────────────────────
+
+    #[test]
+    fn strip_suffix_server() {
+        assert_eq!(strip_script_suffix("MyScript.server"), "MyScript");
+    }
+
+    #[test]
+    fn strip_suffix_client() {
+        assert_eq!(strip_script_suffix("MyScript.client"), "MyScript");
+    }
+
+    #[test]
+    fn strip_suffix_plugin() {
+        assert_eq!(strip_script_suffix("MyScript.plugin"), "MyScript");
+    }
+
+    #[test]
+    fn strip_suffix_local() {
+        assert_eq!(strip_script_suffix("MyScript.local"), "MyScript");
+    }
+
+    #[test]
+    fn strip_suffix_legacy() {
+        assert_eq!(strip_script_suffix("MyScript.legacy"), "MyScript");
+    }
+
+    #[test]
+    fn strip_suffix_none() {
+        assert_eq!(strip_script_suffix("MyModule"), "MyModule");
+    }
+
+    #[test]
+    fn strip_suffix_dots_in_name() {
+        assert_eq!(strip_script_suffix("v1.0.server"), "v1.0");
+    }
+
+    // ── adjacent_meta_path ───────────────────────────────────────────
+
+    #[test]
+    fn adjacent_meta_server_script() {
+        let path = std::path::Path::new("src/Key_Script.server.luau");
+        let meta = adjacent_meta_path(path);
+        assert_eq!(meta, std::path::PathBuf::from("src/Key_Script.meta.json5"));
+    }
+
+    #[test]
+    fn adjacent_meta_module_script() {
+        let path = std::path::Path::new("src/Helper.luau");
+        let meta = adjacent_meta_path(path);
+        assert_eq!(meta, std::path::PathBuf::from("src/Helper.meta.json5"));
+    }
+
+    #[test]
+    fn adjacent_meta_client_script() {
+        let path = std::path::Path::new("src/Gui.client.luau");
+        let meta = adjacent_meta_path(path);
+        assert_eq!(meta, std::path::PathBuf::from("src/Gui.meta.json5"));
+    }
+
+    #[test]
+    fn adjacent_meta_legacy_lua() {
+        let path = std::path::Path::new("src/Old.server.lua");
+        let meta = adjacent_meta_path(path);
+        assert_eq!(meta, std::path::PathBuf::from("src/Old.meta.json5"));
+    }
+
+    // ── tilde dedup end-to-end (unit level) ──────────────────────────
+
+    #[test]
+    fn tilde_dedup_collision_roundtrip() {
+        // Two instances "A/B" and "A_B" both slugify to "A_B".
+        // First gets "A_B", second gets "A_B~1".
+        let mut taken = HashSet::new();
+
+        let dom1 = make_inst("A/B", "ModuleScript");
+        let child1_ref = dom1.root().children()[0];
+        let child1 = dom1.get_by_ref(child1_ref).unwrap();
+        let (name1, meta1, dk1) =
+            name_for_inst(Middleware::ModuleScript, child1, None, &taken).unwrap();
+        taken.insert(dk1.to_lowercase());
+
+        let dom2 = make_inst("A_B", "ModuleScript");
+        let child2_ref = dom2.root().children()[0];
+        let child2 = dom2.get_by_ref(child2_ref).unwrap();
+        let (name2, meta2, dk2) =
+            name_for_inst(Middleware::ModuleScript, child2, None, &taken).unwrap();
+        taken.insert(dk2.to_lowercase());
+
+        assert_eq!(name1.as_ref(), "A_B.luau");
+        assert!(meta1, "A/B was slugified, needs meta name");
+        assert_eq!(name2.as_ref(), "A_B~1.luau");
+        assert!(meta2, "A_B was deduped to ~1, needs meta name");
+    }
+
+    #[test]
+    fn tilde_in_filename_not_parsed_as_dedup_marker() {
+        // A file named "Foo~1" should produce instance name "Foo~1",
+        // NOT be interpreted as "Foo" with dedup suffix ~1.
+        // This is verified by the fact that name_needs_slugify("Foo~1")
+        // returns true (tilde is in SLUGIFY_CHARS), so a file named
+        // "Foo~1.luau" can only exist if it was written by the dedup
+        // system. Forward sync reads the filename as-is.
+        assert!(
+            name_needs_slugify("Foo~1"),
+            "tilde should trigger slugification"
+        );
+    }
+
+    // ── stress: large batch with collisions ──────────────────────────
+
+    #[test]
+    fn stress_100_instances_deterministic() {
+        // Create 100 instances where groups of 5 share the same slug.
+        // Run dedup twice and verify the results are identical.
+        let forbidden_chars = ['/', ':', '?', '|', '<', '>', '"', '*', '\\'];
+        let mut names = Vec::new();
+        for i in 0..100 {
+            let group = i / 5;
+            let variant = i % 5;
+            // Each group of 5 uses a different forbidden char so they all
+            // slugify to "Group_XX" but have different real names.
+            let ch = forbidden_chars[variant % forbidden_chars.len()];
+            names.push(format!("Group{ch}{:02}", group));
+        }
+        // Sort names alphabetically to simulate deterministic processing
+        names.sort();
+
+        let run = |names: &[String]| -> Vec<(String, bool, String)> {
+            let mut taken = HashSet::new();
+            let mut results = Vec::new();
+            for name in names {
+                let dom = make_inst(name, "ModuleScript");
+                let child_ref = dom.root().children()[0];
+                let child = dom.get_by_ref(child_ref).unwrap();
+                let (filename, needs_meta, dk) =
+                    name_for_inst(Middleware::ModuleScript, child, None, &taken).unwrap();
+                taken.insert(dk.to_lowercase());
+                results.push((filename.into_owned(), needs_meta, dk));
+            }
+            results
+        };
+
+        let run1 = run(&names);
+        let run2 = run(&names);
+        assert_eq!(
+            run1, run2,
+            "dedup results must be deterministic across runs"
+        );
+
+        // Verify no duplicate filenames
+        let filenames: HashSet<String> = run1.iter().map(|(f, _, _)| f.to_lowercase()).collect();
+        assert_eq!(
+            filenames.len(),
+            100,
+            "all 100 instances should have unique filenames"
+        );
+    }
+
+    // ── idempotency: second pass produces same results ───────────────
+
+    #[test]
+    fn idempotency_old_inst_preserves_path() {
+        // When an old instance exists with a path, name_for_inst should
+        // return the same path regardless of taken_names.
+        let dom = make_inst("Hey/Bro", "ModuleScript");
+        let child_ref = dom.root().children()[0];
+        let child = dom.get_by_ref(child_ref).unwrap();
+
+        // First pass: new instance
+        let mut taken = HashSet::new();
+        let (name1, meta1, dk1) =
+            name_for_inst(Middleware::ModuleScript, child, None, &taken).unwrap();
+        taken.insert(dk1.to_lowercase());
+
+        assert_eq!(name1.as_ref(), "Hey_Bro.luau");
+        assert!(meta1);
+
+        // On the old-inst path the existing filename is preserved,
+        // so a second syncback (incremental) should not change the name.
+        // We can't easily test the full old-inst path here since it
+        // requires InstanceWithMeta, but we verify the dedup_key is
+        // stable: calling strip_middleware_extension on the result gives
+        // the same dedup_key.
+        let dk_from_filename = strip_middleware_extension(&name1, Middleware::ModuleScript);
+        assert_eq!(dk_from_filename.to_lowercase(), dk1.to_lowercase());
     }
 }

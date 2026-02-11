@@ -679,7 +679,12 @@ pub fn syncback_project<'sync>(
             }
         }
 
-        for (name, new_child) in new_child_map.drain() {
+        // Sort remaining children by name for deterministic dedup ordering.
+        // Without this, HashMap iteration order determines which sibling gets
+        // the base slug vs ~1, causing non-deterministic output across runs.
+        let mut remaining_children: Vec<_> = new_child_map.drain().collect();
+        remaining_children.sort_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
+        for (name, new_child) in remaining_children {
             // Skip instances of ignored classes
             if snapshot.should_ignore_class(&new_child.class) {
                 // Also remove from old_child_map so it won't be marked as removed

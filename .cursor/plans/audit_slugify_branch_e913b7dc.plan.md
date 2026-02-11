@@ -4,40 +4,40 @@ overview: "Production-grade audit of the `slugify` branch. The invariant: filesy
 todos:
   - id: round-trip-invariant
     content: "Verify the core invariant: for every instance in a place, syncback writes files that forward-sync rebuilds into a bit-identical instance tree (name, class, properties, hierarchy)"
-    status: pending
+    status: completed
   - id: forward-sync
     content: "Audit forward sync: all middleware correctly resolves instance names from meta name field or filename stem, no lingering decode_path_name"
-    status: pending
+    status: completed
   - id: reverse-sync
     content: "Audit reverse sync: slugify + dedup + meta emission correct in file_names.rs, snapshot.rs, dir.rs, project.rs"
-    status: pending
+    status: completed
   - id: two-way-sync
     content: "Audit two-way sync: change_processor.rs renames and api.rs adds/removes handle slugify, dedup, meta lifecycle, event suppression"
-    status: pending
+    status: completed
   - id: dedup-consistency
     content: "Verify dedup_key consistency: case sensitivity, cross-format collisions, old-inst vs new-inst paths, all insertion sites"
-    status: pending
+    status: completed
   - id: property-preservation
     content: Verify no property data is lost or mangled through name changes -- Name property, metadata fields, ref properties, attributes all survive round-trips
-    status: pending
+    status: completed
   - id: config-cleanup
     content: Grep for any lingering path_encoding, encode/decode references, %ENCODED% patterns, removed config fields
-    status: pending
+    status: completed
   - id: test-coverage
     content: Catalog existing tests vs missing tests -- especially round-trip tests that assert filesystem→rebuild identity
-    status: pending
+    status: completed
   - id: json-model-name
     content: "Audit json_model name field: read path, write path, legacy compat, json_model_legacy_name snapshot change correctness"
-    status: pending
+    status: completed
   - id: meta-lifecycle
     content: "Audit meta file lifecycle: creation, update, deletion, merge with existing fields, orphaned meta handling"
-    status: pending
+    status: completed
   - id: legacy-cleanup
     content: "Verify legacy %ENCODING% system is fully purged: no references in code/tests/fixtures, old config fields parse without crashing"
-    status: pending
+    status: completed
   - id: write-report
     content: "Produce final report: critical issues, correctness concerns, missing test coverage, cleanup items with file paths and suggested fixes"
-    status: pending
+    status: completed
 isProject: false
 ---
 

@@ -226,87 +226,46 @@ impl JobThreadContext {
         }
     }
 
-    /// Upsert the `name` field in a `.meta.json5` file. If the file exists,
-    /// parse it and add/update the `name` key. If it doesn't exist, create it
-    /// with just the `name` key.
+    /// Upsert the `name` field in a `.meta.json5` file, suppressing filesystem
+    /// events to avoid feedback loops.
     fn upsert_meta_name_field(&self, meta_path: &Path, real_name: &str) {
         self.suppress_path(meta_path);
-        let mut obj = if meta_path.exists() {
-            match fs::read(meta_path) {
-                Ok(bytes) => match crate::json::from_slice::<serde_json::Value>(&bytes) {
-                    Ok(serde_json::Value::Object(map)) => map,
-                    _ => serde_json::Map::new(),
-                },
-                Err(_) => serde_json::Map::new(),
-            }
-        } else {
-            serde_json::Map::new()
-        };
-        obj.insert(
-            "name".to_string(),
-            serde_json::Value::String(real_name.to_string()),
-        );
-        match crate::json::to_vec_pretty_sorted(&serde_json::Value::Object(obj)) {
-            Ok(content) => {
-                if let Err(err) = fs::write(meta_path, &content) {
-                    self.unsuppress_path(meta_path);
-                    log::error!(
-                        "Failed to write name to meta file {}: {}",
-                        meta_path.display(),
-                        err
-                    );
-                }
-            }
-            Err(err) => {
-                self.unsuppress_path(meta_path);
-                log::error!("Failed to serialize meta for name field: {}", err);
-            }
+        if let Err(err) = crate::syncback::meta::upsert_meta_name(meta_path, real_name) {
+            self.unsuppress_path(meta_path);
+            log::error!(
+                "Failed to upsert name in meta file {}: {}",
+                meta_path.display(),
+                err
+            );
         }
     }
 
-    /// Remove the `name` field from a `.meta.json5` file if present.
-    /// If the file becomes an empty object after removal, delete it entirely.
-    /// This is called when renaming from a slugified name to a clean name,
-    /// to clear the stale `name` field that no longer applies.
+    /// Remove the `name` field from a `.meta.json5` file, suppressing filesystem
+    /// events. If the file becomes empty after removal, deletes it entirely.
     fn remove_meta_name_field(&self, meta_path: &Path) {
-        if !meta_path.exists() {
-            return;
-        }
-        let bytes = match fs::read(meta_path) {
-            Ok(b) => b,
-            Err(_) => return,
-        };
-        let mut obj = match crate::json::from_slice::<serde_json::Value>(&bytes) {
-            Ok(serde_json::Value::Object(map)) => map,
-            _ => return,
-        };
-        if obj.remove("name").is_none() {
-            return; // no name field, nothing to do
-        }
-        if obj.is_empty() {
-            // Meta file only had the name field; delete it entirely
-            self.suppress_path_any(meta_path);
-            if let Err(err) = fs::remove_file(meta_path) {
-                self.unsuppress_path_any(meta_path);
+        use crate::syncback::meta::RemoveNameOutcome;
+        // Suppress for the write/delete that may follow
+        self.suppress_path(meta_path);
+        match crate::syncback::meta::remove_meta_name(meta_path) {
+            Ok(RemoveNameOutcome::NoOp) => {
+                self.unsuppress_path(meta_path);
+            }
+            Ok(RemoveNameOutcome::FileDeleted) => {
+                // File was deleted — also suppress the Remove event.
+                // suppress_path already covers Create/Write; we need
+                // suppress_path_any for the Remove event as well.
+                self.suppress_path_any(meta_path);
+            }
+            Ok(RemoveNameOutcome::FieldRemoved) => {
+                // File was rewritten — suppress_path already covers it.
+            }
+            Err(err) => {
+                self.unsuppress_path(meta_path);
                 log::error!(
-                    "Failed to remove empty meta file {}: {}",
+                    "Failed to remove name from meta file {}: {}",
                     meta_path.display(),
                     err
                 );
-            }
-        } else {
-            self.suppress_path(meta_path);
-            match crate::json::to_vec_pretty_sorted(&serde_json::Value::Object(obj)) {
-                Ok(content) => {
-                    if let Err(err) = fs::write(meta_path, &content) {
-                        self.unsuppress_path(meta_path);
-                        log::error!("Failed to write meta file {}: {}", meta_path.display(), err);
-                    }
-                }
-                Err(err) => {
-                    self.unsuppress_path(meta_path);
-                    log::error!("Failed to serialize meta: {}", err);
-                }
             }
         }
     }
@@ -732,6 +691,9 @@ impl JobThreadContext {
                                                 let new_dir_path =
                                                     grandparent.join(&slugified_new_name);
 
+                                                // Track the effective directory path after any rename
+                                                let effective_dir_path;
+
                                                 if new_dir_path != dir_path {
                                                     log::info!(
                                                         "Two-way sync: Renaming directory {} -> {}",
@@ -751,6 +713,7 @@ impl JobThreadContext {
                                                             new_dir_path,
                                                             err
                                                         );
+                                                        effective_dir_path = dir_path.to_path_buf();
                                                     } else {
                                                         // The init file moved with the directory.
                                                         overridden_source_path =
@@ -774,18 +737,24 @@ impl JobThreadContext {
                                                                 self.unsuppress_path(&new_meta);
                                                             }
                                                         }
-                                                        let init_meta =
-                                                            new_dir_path.join("init.meta.json5");
-                                                        if slugified_new_name != *new_name {
-                                                            // New name needs slugification — write name field
-                                                            self.upsert_meta_name_field(
-                                                                &init_meta, new_name,
-                                                            );
-                                                        } else {
-                                                            // Clean name — clear stale name field
-                                                            self.remove_meta_name_field(&init_meta);
-                                                        }
+                                                        effective_dir_path = new_dir_path.clone();
                                                     }
+                                                } else {
+                                                    effective_dir_path = dir_path.to_path_buf();
+                                                }
+
+                                                // Always update the meta name field when the
+                                                // instance name changed, even if the directory
+                                                // path didn't change (e.g. "Foo/Bar" → "Foo|Bar"
+                                                // both slugify to "Foo_Bar").
+                                                let init_meta =
+                                                    effective_dir_path.join("init.meta.json5");
+                                                if slugified_new_name != *new_name {
+                                                    self.upsert_meta_name_field(
+                                                        &init_meta, new_name,
+                                                    );
+                                                } else {
+                                                    self.remove_meta_name_field(&init_meta);
                                                 }
                                             }
                                         } else if let Some(parent) = path.parent() {
@@ -832,6 +801,9 @@ impl JobThreadContext {
                                             };
                                             let new_path = parent.join(&new_file_name);
 
+                                            // Track the effective meta base name after any rename
+                                            let effective_meta_base: &str;
+
                                             if new_path != *path {
                                                 log::info!(
                                                     "Two-way sync: Renaming {} -> {}",
@@ -849,6 +821,7 @@ impl JobThreadContext {
                                                         new_path,
                                                         err
                                                     );
+                                                    effective_meta_base = old_base;
                                                 } else {
                                                     overridden_source_path = Some(new_path.clone());
                                                     let old_meta = parent
@@ -866,16 +839,27 @@ impl JobThreadContext {
                                                             self.unsuppress_path(&new_meta);
                                                         }
                                                     }
-                                                    if slugified_new_name != *new_name {
-                                                        // New name needs slugification — write name field
-                                                        self.upsert_meta_name_field(
-                                                            &new_meta, new_name,
-                                                        );
-                                                    } else {
-                                                        // Clean name — clear stale name field
-                                                        self.remove_meta_name_field(&new_meta);
-                                                    }
+                                                    effective_meta_base = &slugified_new_name;
                                                 }
+                                            } else {
+                                                effective_meta_base = old_base;
+                                            }
+
+                                            // Always update the meta name field when the
+                                            // instance name changed, even if the path didn't
+                                            // change (e.g. "Foo/Bar" → "Foo|Bar" both slugify
+                                            // to "Foo_Bar").
+                                            let current_meta = parent.join(format!(
+                                                "{}.meta.json5",
+                                                effective_meta_base
+                                            ));
+                                            if slugified_new_name != *new_name {
+                                                self.upsert_meta_name_field(
+                                                    &current_meta,
+                                                    new_name,
+                                                );
+                                            } else {
+                                                self.remove_meta_name_field(&current_meta);
                                             }
                                         }
                                     }
