@@ -574,10 +574,7 @@ impl ApiService {
                     adds_by_parent.entry(parent_ref).or_default().push(added);
                 } else {
                     // No parent — process individually (will fail with context)
-                    adds_by_parent
-                        .entry(Ref::none())
-                        .or_default()
-                        .push(added);
+                    adds_by_parent.entry(Ref::none()).or_default().push(added);
                 }
             }
             for (parent_ref, siblings) in &adds_by_parent {
@@ -1954,8 +1951,7 @@ impl ApiService {
                             indexmap::IndexMap::new(),
                             indexmap::IndexMap::new(),
                         );
-                        let meta_path =
-                            parent_dir.join(format!("{}.meta.json5", encoded_name));
+                        let meta_path = parent_dir.join(format!("{}.meta.json5", encoded_name));
                         let content = crate::json::to_vec_pretty_sorted(&meta)
                             .context("Failed to serialize meta")?;
                         self.suppress_path(&meta_path);
@@ -2005,8 +2001,7 @@ impl ApiService {
                             indexmap::IndexMap::new(),
                             indexmap::IndexMap::new(),
                         );
-                        let meta_path =
-                            parent_dir.join(format!("{}.meta.json5", encoded_name));
+                        let meta_path = parent_dir.join(format!("{}.meta.json5", encoded_name));
                         let content = crate::json::to_vec_pretty_sorted(&meta)
                             .context("Failed to serialize meta")?;
                         self.suppress_path(&meta_path);
@@ -2061,8 +2056,7 @@ impl ApiService {
                     // Recursively process children
                     self.process_children_incremental(&unique_children, &dir_path, stats)?;
                 } else {
-                    let content =
-                        self.serialize_instance_to_model_json(added, meta_name_field)?;
+                    let content = self.serialize_instance_to_model_json(added, meta_name_field)?;
                     // Use the detected file path if available (preserves .model.json
                     // vs .model.json5), otherwise default to .model.json5
                     let file_path = match &existing_format {
@@ -2210,8 +2204,12 @@ impl ApiService {
             self.filter_properties_for_meta(&added.class_name, &added.properties, None);
 
         // For non-Folder classes, we need to include className
-        let meta =
-            self.build_meta_object(Some(&added.class_name), instance_name, properties, attributes);
+        let meta = self.build_meta_object(
+            Some(&added.class_name),
+            instance_name,
+            properties,
+            attributes,
+        );
         let meta_path = dir_path.join("init.meta.json5");
         let content = crate::json::to_vec_pretty_sorted(&meta)
             .context("Failed to serialize init.meta.json5")?;
