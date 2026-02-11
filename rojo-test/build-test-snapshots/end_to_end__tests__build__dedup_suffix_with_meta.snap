@@ -1,0 +1,25 @@
+---
+source: tests/tests/build.rs
+expression: contents
+---
+<roblox version="4">
+  <Item class="Folder" referent="0">
+    <Properties>
+      <string name="Name">dedup_suffix_with_meta</string>
+    </Properties>
+    <Item class="ModuleScript" referent="1">
+      <Properties>
+        <string name="Name">A/B</string>
+        <string name="Source"><![CDATA[return "first"
+]]></string>
+      </Properties>
+    </Item>
+    <Item class="ModuleScript" referent="2">
+      <Properties>
+        <string name="Name">A_B</string>
+        <string name="Source"><![CDATA[return "second"
+]]></string>
+      </Properties>
+    </Item>
+  </Item>
+</roblox>

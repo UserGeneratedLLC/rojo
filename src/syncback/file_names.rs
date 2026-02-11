@@ -2400,4 +2400,77 @@ mod tests {
         let dk_from_filename = strip_middleware_extension(&name1, Middleware::ModuleScript);
         assert_eq!(dk_from_filename.to_lowercase(), dk1.to_lowercase());
     }
+
+    #[test]
+    fn syncback_forbidden_chars_produce_slugified_filenames() {
+        // Verify that instances with forbidden chars produce correct
+        // (filename, needs_meta, dedup_key) via name_for_inst
+        let mut dom = rbx_dom_weak::WeakDom::new(rbx_dom_weak::InstanceBuilder::new("Folder"));
+        let root_ref = dom.root_ref();
+        let child = dom.insert(root_ref, rbx_dom_weak::InstanceBuilder::new("ModuleScript").with_name("Hey/Bro"));
+        let inst = dom.get_by_ref(child).unwrap();
+        let taken = std::collections::HashSet::new();
+        let (filename, needs_meta, dedup_key) = name_for_inst(
+            crate::snapshot_middleware::Middleware::ModuleScript,
+            inst, None, &taken,
+        ).unwrap();
+        assert_eq!(filename.as_ref(), "Hey_Bro.luau");
+        assert!(needs_meta);
+        assert_eq!(dedup_key, "Hey_Bro");
+    }
+
+    #[test]
+    fn syncback_collision_deduplicates() {
+        let mut dom = rbx_dom_weak::WeakDom::new(rbx_dom_weak::InstanceBuilder::new("Folder"));
+        let root_ref = dom.root_ref();
+        let child1 = dom.insert(root_ref, rbx_dom_weak::InstanceBuilder::new("ModuleScript").with_name("A/B"));
+        let child2 = dom.insert(root_ref, rbx_dom_weak::InstanceBuilder::new("ModuleScript").with_name("A:B"));
+        let inst1 = dom.get_by_ref(child1).unwrap();
+        let inst2 = dom.get_by_ref(child2).unwrap();
+
+        let mut taken = std::collections::HashSet::new();
+        let (f1, m1, dk1) = name_for_inst(
+            crate::snapshot_middleware::Middleware::ModuleScript,
+            inst1, None, &taken,
+        ).unwrap();
+        taken.insert(dk1.to_lowercase());
+        let (f2, m2, dk2) = name_for_inst(
+            crate::snapshot_middleware::Middleware::ModuleScript,
+            inst2, None, &taken,
+        ).unwrap();
+
+        assert_eq!(f1.as_ref(), "A_B.luau");
+        assert!(m1);
+        assert_eq!(f2.as_ref(), "A_B~1.luau");
+        assert!(m2);
+        assert_ne!(dk1.to_lowercase(), dk2.to_lowercase());
+    }
+
+    #[test]
+    fn syncback_idempotency_same_input_same_output() {
+        // Run the same set of instances through name_for_inst twice
+        // and verify identical output (determinism).
+        let names = vec!["Alpha", "Beta/Gamma", "Beta:Gamma", "Delta", "CON"];
+        let mw = crate::snapshot_middleware::Middleware::ModuleScript;
+
+        let mut dom = rbx_dom_weak::WeakDom::new(rbx_dom_weak::InstanceBuilder::new("Folder"));
+        let root = dom.root_ref();
+        let refs: Vec<_> = names.iter().map(|n|
+            dom.insert(root, rbx_dom_weak::InstanceBuilder::new("ModuleScript").with_name(*n))
+        ).collect();
+
+        let run = |dom: &rbx_dom_weak::WeakDom, refs: &[rbx_dom_weak::types::Ref]| -> Vec<(String, bool, String)> {
+            let mut taken = std::collections::HashSet::new();
+            refs.iter().map(|r| {
+                let inst = dom.get_by_ref(*r).unwrap();
+                let (f, m, dk) = name_for_inst(mw, inst, None, &taken).unwrap();
+                taken.insert(dk.to_lowercase());
+                (f.into_owned(), m, dk)
+            }).collect()
+        };
+
+        let result1 = run(&dom, &refs);
+        let result2 = run(&dom, &refs);
+        assert_eq!(result1, result2, "Two runs of name_for_inst must produce identical output");
+    }
 }

@@ -6,7 +6,7 @@ snapshot_id: "00000000000000000000000000000000"
 metadata:
   ignore_unknown_instances: false
   instigating_source:
-    Path: /root
+    Path: /root/init.csv
   relevant_paths:
     - /root
     - /root/init.luau

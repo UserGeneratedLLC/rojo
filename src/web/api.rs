@@ -354,7 +354,7 @@ impl ApiService {
         // they are NOT removed from the in-memory tree.
         let mut actually_removed: Vec<Ref> = Vec::new();
         if !request.removed.is_empty() {
-            let removal_actions: Vec<(Ref, Option<(PathBuf, bool)>)> = {
+            let removal_actions: Vec<(Ref, Option<PathBuf>)> = {
                 let tree = self.serve_session.tree();
                 request
                     .removed
@@ -364,7 +364,7 @@ impl ApiService {
                             inst.metadata().instigating_source.as_ref().and_then(|src| {
                                 match src {
                                     crate::snapshot::InstigatingSource::Path(p) => {
-                                        Some((p.clone(), p.is_dir()))
+                                        Some(p.clone())
                                     }
                                     crate::snapshot::InstigatingSource::ProjectNode {
                                         name,
@@ -386,66 +386,9 @@ impl ApiService {
 
             // Phase 2: Execute filesystem deletions without the lock
             for (id, action) in removal_actions {
-                if let Some((path, is_dir)) = action {
-                    if !path.exists() {
-                        log::info!(
-                            "Syncback: Path already removed (likely parent was deleted): {}",
-                            path.display()
-                        );
+                if let Some(path) = action {
+                    if self.remove_instance_at_path(&path) {
                         actually_removed.push(id);
-                        continue;
-                    }
-                    if is_dir {
-                        self.suppress_path_remove(&path);
-                        if let Err(err) = fs::remove_dir_all(&path) {
-                            log::warn!(
-                                "Failed to remove directory {:?} for instance {:?}: {}",
-                                path,
-                                id,
-                                err
-                            );
-                        } else {
-                            log::info!("Syncback: Removed directory at {}", path.display());
-                            actually_removed.push(id);
-                        }
-                    } else {
-                        self.suppress_path_remove(&path);
-                        if let Err(err) = fs::remove_file(&path) {
-                            log::warn!(
-                                "Failed to remove file {:?} for instance {:?}: {}",
-                                path,
-                                id,
-                                err
-                            );
-                        } else {
-                            log::info!("Syncback: Removed file at {}", path.display());
-                            actually_removed.push(id);
-                        }
-                        // Also remove adjacent meta file.
-                        // Strip known script suffixes (.server, .client, etc.)
-                        // rather than splitting on dots, so that names containing
-                        // dots (e.g. "Config.Client.server.luau") resolve correctly.
-                        if let Some(file_stem) = path.file_stem().and_then(|s| s.to_str()) {
-                            let base_name = file_stem
-                                .strip_suffix(".server")
-                                .or_else(|| file_stem.strip_suffix(".client"))
-                                .or_else(|| file_stem.strip_suffix(".plugin"))
-                                .or_else(|| file_stem.strip_suffix(".local"))
-                                .or_else(|| file_stem.strip_suffix(".legacy"))
-                                .unwrap_or(file_stem);
-                            if let Some(parent_dir) = path.parent() {
-                                let meta_path =
-                                    parent_dir.join(format!("{}.meta.json5", base_name));
-                                if meta_path.exists() {
-                                    self.suppress_path_remove(&meta_path);
-                                    let _ = fs::remove_file(&meta_path);
-                                    log::info!(
-                                        "Syncback: Removed adjacent meta file at {}",
-                                        meta_path.display()
-                                    );
-                                }
-                            }
-                        }
                     }
                 }
             }
@@ -1422,139 +1365,109 @@ impl ApiService {
         Ok(new_dir)
     }
 
-    /// Syncback a removed instance by deleting its file(s) from the filesystem.
-    /// This is called when the user selects "pull" for an instance that exists in Rojo
-    /// but has been deleted in Studio.
-    #[allow(dead_code)]
-    fn syncback_removed_instance(
-        &self,
-        removed_id: Ref,
-        tree: &crate::snapshot::RojoTree,
-    ) -> anyhow::Result<()> {
-        use anyhow::Context;
+    /// Remove an instance from the filesystem given its path.
+    ///
+    /// Handles three cases:
+    /// - Directory: `remove_dir_all`
+    /// - Init file (`init.luau`, `init.server.luau`, etc.): remove parent directory
+    ///   (which IS the instance) + grandparent-level adjacent meta
+    /// - Regular file: remove the file + adjacent `.meta.json5`
+    ///
+    /// Returns `true` if the removal succeeded (or the path was already gone),
+    /// `false` if the filesystem operation failed (logged as warning).
+    fn remove_instance_at_path(&self, path: &Path) -> bool {
+        use crate::syncback::adjacent_meta_path;
 
-        // Find the instance in the tree
-        let instance = tree
-            .get_instance(removed_id)
-            .context("Instance not found in Rojo tree")?;
-
-        // Get the instigating source and handle each variant appropriately
-        let instigating_source = instance
-            .metadata()
-            .instigating_source
-            .as_ref()
-            .context("Instance has no filesystem path (not synced from filesystem)")?;
-
-        // Only delete instances that originate from filesystem paths, not from project nodes
-        let instance_path = match instigating_source {
-            InstigatingSource::Path(path) => path,
-            InstigatingSource::ProjectNode { name, .. } => {
-                // Instances defined in project files cannot be removed via syncback
-                // because that would require modifying the project file structure
-                log::warn!(
-                    "Syncback: Cannot remove instance '{}' (id: {:?}) - it is defined in a project file",
-                    name,
-                    removed_id
-                );
-                anyhow::bail!(
-                    "Cannot remove instance '{}' because it is defined in a project file. \
-                     To remove this instance, edit the project file directly.",
-                    name
-                );
-            }
-        };
-
-        // Check if path exists - it may have already been deleted as part of a parent removal
-        // (e.g., if both a directory and its children are marked for removal, the directory
-        // deletion will recursively delete all children, so we just skip them)
-        if !instance_path.exists() {
-            log::trace!(
+        if !path.exists() {
+            log::info!(
                 "Syncback: Path already removed (likely parent was deleted): {}",
-                instance_path.display()
+                path.display()
             );
-            return Ok(());
+            return true;
         }
 
-        // Delete the file or directory
-        if instance_path.is_dir() {
-            self.suppress_path_remove(instance_path);
-            fs::remove_dir_all(instance_path).with_context(|| {
-                format!("Failed to remove directory: {}", instance_path.display())
-            })?;
-            log::info!("Syncback: Removed directory at {}", instance_path.display());
-        } else if instance_path.is_file() {
-            use crate::syncback::adjacent_meta_path;
+        if path.is_dir() {
+            self.suppress_path_remove(path);
+            if let Err(err) = fs::remove_dir_all(path) {
+                log::warn!("Failed to remove directory {:?}: {}", path, err);
+                return false;
+            }
+            log::info!("Syncback: Removed directory at {}", path.display());
+            return true;
+        }
 
-            let file_name = instance_path
-                .file_name()
-                .and_then(|f| f.to_str())
-                .unwrap_or("");
-            let is_init_file = file_name.starts_with("init.");
+        // File: check if it's an init file (directory-format script)
+        let file_name = path.file_name().and_then(|f| f.to_str()).unwrap_or("");
+        let is_init_file = file_name.starts_with("init.");
 
-            if is_init_file {
-                // Directory-format script: the parent directory represents the
-                // instance (e.g. src/MyModule/init.luau → the directory IS MyModule).
-                // Remove the entire directory.
-                let dir_path = instance_path.parent().unwrap();
-                self.suppress_path_remove(dir_path);
-                fs::remove_dir_all(dir_path).with_context(|| {
-                    format!(
-                        "Failed to remove directory for init file: {}",
-                        dir_path.display()
-                    )
-                })?;
-                log::info!(
-                    "Syncback: Removed directory {} (init file: {})",
-                    dir_path.display(),
-                    instance_path.display()
+        if is_init_file {
+            // Directory-format script: the parent directory represents the
+            // instance (e.g. src/MyModule/init.luau → the directory IS MyModule).
+            // Remove the entire directory.
+            let dir_path = path.parent().unwrap();
+            self.suppress_path_remove(dir_path);
+            if let Err(err) = fs::remove_dir_all(dir_path) {
+                log::warn!(
+                    "Failed to remove directory for init file {:?}: {}",
+                    dir_path,
+                    err
                 );
+                return false;
+            }
+            log::info!(
+                "Syncback: Removed directory {} (init file: {})",
+                dir_path.display(),
+                path.display()
+            );
 
-                // Also remove adjacent dir-level meta in the grandparent if it
-                // exists (e.g. grandparent/MyModule.meta.json5).
-                if let Some(grandparent) = dir_path.parent() {
-                    if let Some(dir_name) = dir_path.file_name().and_then(|f| f.to_str()) {
-                        let dir_meta = grandparent.join(format!("{}.meta.json5", dir_name));
-                        if dir_meta.exists() {
-                            if let Err(err) = fs::remove_file(&dir_meta) {
-                                log::warn!(
-                                    "Failed to remove dir-level meta file {}: {}",
-                                    dir_meta.display(),
-                                    err
-                                );
-                            }
+            // Also remove adjacent dir-level meta in the grandparent if it
+            // exists (e.g. grandparent/MyModule.meta.json5).
+            if let Some(grandparent) = dir_path.parent() {
+                if let Some(dir_name) = dir_path.file_name().and_then(|f| f.to_str()) {
+                    let dir_meta = grandparent.join(format!("{}.meta.json5", dir_name));
+                    if dir_meta.exists() {
+                        self.suppress_path_remove(&dir_meta);
+                        if let Err(err) = fs::remove_file(&dir_meta) {
+                            log::warn!(
+                                "Failed to remove dir-level meta file {}: {}",
+                                dir_meta.display(),
+                                err
+                            );
                         }
                     }
                 }
-            } else {
-                // Regular file: remove the file itself
-                self.suppress_path_remove(instance_path);
-                fs::remove_file(instance_path).with_context(|| {
-                    format!("Failed to remove file: {}", instance_path.display())
-                })?;
-                log::info!("Syncback: Removed file at {}", instance_path.display());
+            }
+        } else {
+            // Regular file: remove the file itself
+            self.suppress_path_remove(path);
+            if let Err(err) = fs::remove_file(path) {
+                log::warn!("Failed to remove file {:?}: {}", path, err);
+                return false;
+            }
+            log::info!("Syncback: Removed file at {}", path.display());
 
-                // Remove the adjacent meta file if it exists. The meta file is
-                // named after the script file's base stem (the slugified name),
-                // not the raw instance name.
-                let meta_path = adjacent_meta_path(instance_path);
-                if meta_path.exists() {
-                    if let Err(err) = fs::remove_file(&meta_path) {
-                        log::warn!(
-                            "Failed to remove adjacent meta file {}: {}",
-                            meta_path.display(),
-                            err
-                        );
-                    } else {
-                        log::info!(
-                            "Syncback: Removed adjacent meta file at {}",
-                            meta_path.display()
-                        );
-                    }
+            // Remove the adjacent meta file if it exists. The meta file is
+            // named after the script file's base stem (the slugified name),
+            // not the raw instance name.
+            let meta_path = adjacent_meta_path(path);
+            if meta_path.exists() {
+                self.suppress_path_remove(&meta_path);
+                if let Err(err) = fs::remove_file(&meta_path) {
+                    log::warn!(
+                        "Failed to remove adjacent meta file {}: {}",
+                        meta_path.display(),
+                        err
+                    );
+                } else {
+                    log::info!(
+                        "Syncback: Removed adjacent meta file at {}",
+                        meta_path.display()
+                    );
                 }
             }
         }
 
-        Ok(())
+        true
     }
 
     /// Check for duplicate names among children and return the set of unique children

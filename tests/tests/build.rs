@@ -65,6 +65,10 @@ gen_build_tests! {
     no_name_project,
     no_name_top_level_project,
     tilde_no_meta,
+    meta_name_override,
+    model_json_name_override,
+    dedup_suffix_with_meta,
+    init_meta_name_override,
 }
 
 fn run_build_test(test_name: &str) {

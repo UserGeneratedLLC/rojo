@@ -15,7 +15,7 @@ use crate::{
         apply_patch_set, compute_patch_set, AppliedPatchSet, InstigatingSource, PatchSet, RojoTree,
     },
     snapshot_middleware::{snapshot_from_vfs, snapshot_project_node},
-    syncback::{name_needs_slugify, slugify_name},
+    syncback::{deduplicate_name, name_needs_slugify, slugify_name, strip_script_suffix},
 };
 
 /// Processes file change events, updates the DOM, and sends those updates
@@ -226,6 +226,13 @@ impl JobThreadContext {
         }
     }
 
+    /// Suppress the next Remove VFS event for the given path.
+    fn suppress_path_remove(&self, path: &Path) {
+        let mut suppressed = self.suppressed_paths.lock().unwrap();
+        let key = Self::suppression_key(path);
+        suppressed.entry(key).or_insert((0, 0)).0 += 1;
+    }
+
     /// Upsert the `name` field in a `.meta.json5` file, suppressing filesystem
     /// events to avoid feedback loops.
     fn upsert_meta_name_field(&self, meta_path: &Path, real_name: &str) {
@@ -251,10 +258,11 @@ impl JobThreadContext {
                 self.unsuppress_path(meta_path);
             }
             Ok(RemoveNameOutcome::FileDeleted) => {
-                // File was deleted — also suppress the Remove event.
-                // suppress_path already covers Create/Write; we need
-                // suppress_path_any for the Remove event as well.
-                self.suppress_path_any(meta_path);
+                // File was deleted, not rewritten. Swap: undo the
+                // pre-emptive Write suppression and add a Remove
+                // suppression instead so the counts are (1, 0).
+                self.unsuppress_path(meta_path);
+                self.suppress_path_remove(meta_path);
             }
             Ok(RemoveNameOutcome::FieldRemoved) => {
                 // File was rewritten — suppress_path already covers it.
@@ -606,7 +614,7 @@ impl JobThreadContext {
             let mut tree = self.tree.lock().unwrap();
 
             // NOTE: We do NOT delete files from disk here. The API handler
-            // (handle_api_write → syncback_removed_instance) already deleted
+            // (handle_api_write → remove_instance_at_path) already deleted
             // the files before sending this PatchSet. Re-deleting would
             // destroy any new file created at the same path — e.g., when an
             // instance is renamed from "joe_test" to "joe/test", the new slug
@@ -688,6 +696,11 @@ impl JobThreadContext {
                                                     } else {
                                                         new_name.to_string()
                                                     };
+                                                // Directory renames: fs::rename fails safely
+                                                // on all platforms if the target is a non-empty
+                                                // directory, so no dedup is needed here (unlike
+                                                // the file rename path below, where Unix
+                                                // fs::rename silently overwrites).
                                                 let new_dir_path =
                                                     grandparent.join(&slugified_new_name);
 
@@ -791,12 +804,57 @@ impl JobThreadContext {
                                             } else {
                                                 new_name.to_string()
                                             };
+
+                                            // Guard against rename collision: if the target
+                                            // path already exists and isn't our own file,
+                                            // deduplicate the name against siblings.
+                                            let deduped_new_name;
+                                            {
+                                                let candidate_file = if extension.is_empty() {
+                                                    format!("{}{}", slugified_new_name, script_suffix)
+                                                } else {
+                                                    format!(
+                                                        "{}{}.{}",
+                                                        slugified_new_name, script_suffix, extension
+                                                    )
+                                                };
+                                                let candidate = parent.join(&candidate_file);
+                                                if candidate != *path && candidate.exists() {
+                                                    let mut taken: std::collections::HashSet<String> =
+                                                        std::collections::HashSet::new();
+                                                    if let Ok(entries) = fs::read_dir(parent) {
+                                                        for entry in entries.flatten() {
+                                                            let ep = entry.path();
+                                                            let slug = if ep.is_dir() {
+                                                                ep.file_name()
+                                                                    .and_then(|f| f.to_str())
+                                                                    .unwrap_or("")
+                                                                    .to_lowercase()
+                                                            } else {
+                                                                let s = ep
+                                                                    .file_stem()
+                                                                    .and_then(|f| f.to_str())
+                                                                    .unwrap_or("");
+                                                                strip_script_suffix(s).to_lowercase()
+                                                            };
+                                                            taken.insert(slug);
+                                                        }
+                                                    }
+                                                    // Free the slot we're vacating
+                                                    taken.remove(&old_base.to_lowercase());
+                                                    deduped_new_name =
+                                                        deduplicate_name(&slugified_new_name, &taken);
+                                                } else {
+                                                    deduped_new_name = slugified_new_name.clone();
+                                                }
+                                            }
+
                                             let new_file_name = if extension.is_empty() {
-                                                format!("{}{}", slugified_new_name, script_suffix)
+                                                format!("{}{}", deduped_new_name, script_suffix)
                                             } else {
                                                 format!(
                                                     "{}{}.{}",
-                                                    slugified_new_name, script_suffix, extension
+                                                    deduped_new_name, script_suffix, extension
                                                 )
                                             };
                                             let new_path = parent.join(&new_file_name);
@@ -828,7 +886,7 @@ impl JobThreadContext {
                                                         .join(format!("{}.meta.json5", old_base));
                                                     let new_meta = parent.join(format!(
                                                         "{}.meta.json5",
-                                                        slugified_new_name
+                                                        deduped_new_name
                                                     ));
                                                     if old_meta.exists() {
                                                         self.suppress_path_any(&old_meta);
@@ -839,7 +897,7 @@ impl JobThreadContext {
                                                             self.unsuppress_path(&new_meta);
                                                         }
                                                     }
-                                                    effective_meta_base = &slugified_new_name;
+                                                    effective_meta_base = &deduped_new_name;
                                                 }
                                             } else {
                                                 effective_meta_base = old_base;
@@ -848,12 +906,13 @@ impl JobThreadContext {
                                             // Always update the meta name field when the
                                             // instance name changed, even if the path didn't
                                             // change (e.g. "Foo/Bar" → "Foo|Bar" both slugify
-                                            // to "Foo_Bar").
+                                            // to "Foo_Bar"). Use deduped_new_name because
+                                            // dedup may have appended ~N.
                                             let current_meta = parent.join(format!(
                                                 "{}.meta.json5",
                                                 effective_meta_base
                                             ));
-                                            if slugified_new_name != *new_name {
+                                            if deduped_new_name != *new_name {
                                                 self.upsert_meta_name_field(
                                                     &current_meta,
                                                     new_name,

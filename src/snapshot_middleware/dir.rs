@@ -8,9 +8,10 @@ use memofs::{DirEntry, Vfs};
 
 use crate::{
     snapshot::{InstanceContext, InstanceMetadata, InstanceSnapshot, InstigatingSource},
+    snapshot_middleware::Middleware,
     syncback::{
-        hash_instance, name_needs_slugify, slugify_name, FsSnapshot, SyncbackReturn,
-        SyncbackSnapshot,
+        hash_instance, name_needs_slugify, slugify_name, strip_middleware_extension, FsSnapshot,
+        SyncbackReturn, SyncbackSnapshot,
     },
 };
 
@@ -186,25 +187,49 @@ pub fn syncback_dir_no_meta<'sync>(
             old_child_map.insert(inst.name(), inst);
         }
 
-        // Pre-seed taken_names from old children's slugified instance names
-        // so that new-only children correctly dedup against existing siblings
-        // (e.g., new "A/B" → slug "A_B" won't collide with existing "A_B").
+        // Pre-seed taken_names from old children's actual filesystem dedup keys
+        // so that new-only children correctly dedup against existing siblings.
+        // We derive keys from relevant_paths (the real filename on disk) rather
+        // than slugifying instance names, because an old instance may already
+        // have a tilde suffix (e.g. A_B~1.luau from prior dedup) that the bare
+        // slug wouldn't capture.
         // Only in incremental mode: in clean mode, old_ref is forced to None
         // for all children, so every child is treated as new and pre-seeding
         // would cause false collisions (spurious ~1 suffixes).
         if snapshot.data.is_incremental() {
             for inst in old_child_map.values() {
-                let name = inst.name();
-                let slug = if name_needs_slugify(name) {
-                    slugify_name(name).to_lowercase()
+                if let Some(path) = inst.metadata().relevant_paths.first() {
+                    if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
+                        let middleware = inst.metadata().middleware.unwrap_or(Middleware::Dir);
+                        let dedup_key =
+                            strip_middleware_extension(filename, middleware).to_lowercase();
+                        taken_names.insert(dedup_key);
+                    }
                 } else {
-                    name.to_lowercase()
-                };
-                taken_names.insert(slug);
+                    // Fallback (shouldn't happen for old instances with disk presence)
+                    let name = inst.name();
+                    let slug = if name_needs_slugify(name) {
+                        slugify_name(name).to_lowercase()
+                    } else {
+                        name.to_lowercase()
+                    };
+                    taken_names.insert(slug);
+                }
             }
         }
 
-        for new_child_ref in new_inst.children() {
+        // Sort children alphabetically for deterministic dedup ordering.
+        // Without this, DOM iteration order determines which sibling gets
+        // the base slug vs ~1, causing non-deterministic output across
+        // different serializations of the same place.
+        let mut sorted_children: Vec<_> = new_inst
+            .children()
+            .iter()
+            .map(|r| (*r, snapshot.get_new_instance(*r).unwrap().name.clone()))
+            .collect();
+        sorted_children.sort_by(|(_, a), (_, b)| a.cmp(b));
+
+        for (new_child_ref, _) in &sorted_children {
             let new_child = snapshot.get_new_instance(*new_child_ref).unwrap();
 
             // Skip children with duplicate names - cannot reliably sync them
@@ -282,7 +307,15 @@ pub fn syncback_dir_no_meta<'sync>(
         }));
     } else {
         // There is no old instance. Just add every child.
-        for new_child_ref in new_inst.children() {
+        // Sort alphabetically for deterministic dedup ordering.
+        let mut sorted_children: Vec<_> = new_inst
+            .children()
+            .iter()
+            .map(|r| (*r, snapshot.get_new_instance(*r).unwrap().name.clone()))
+            .collect();
+        sorted_children.sort_by(|(_, a), (_, b)| a.cmp(b));
+
+        for (new_child_ref, _) in &sorted_children {
             let new_child = snapshot.get_new_instance(*new_child_ref).unwrap();
 
             // Skip children with duplicate names - cannot reliably sync them

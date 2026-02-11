@@ -77,10 +77,16 @@ pub fn snapshot_csv_init(
 
     let mut init_snapshot = snapshot_csv(context, vfs, init_path, &dir_snapshot.name)?.unwrap();
 
+    // Preserve the init script's instigating_source (the actual file path)
+    // before copying the directory's metadata (which has the folder path)
+    let script_instigating_source = init_snapshot.metadata.instigating_source.take();
+
     init_snapshot.children = dir_snapshot.children;
     init_snapshot.metadata = dir_snapshot.metadata;
-    // The directory snapshot middleware includes all possible init paths
-    // so we don't need to add it here.
+
+    // Restore the init script's instigating_source so two-way sync writes
+    // to the actual file (e.g., init.csv) instead of the directory
+    init_snapshot.metadata.instigating_source = script_instigating_source;
 
     DirectoryMetadata::read_and_apply_all(vfs, folder_path, &mut init_snapshot)?;
 

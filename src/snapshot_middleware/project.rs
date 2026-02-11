@@ -21,8 +21,8 @@ use crate::{
     },
     snapshot_middleware::Middleware,
     syncback::{
-        filter_properties, inst_path, name_needs_slugify, slugify_name, FsSnapshot, SyncbackReturn,
-        SyncbackSnapshot,
+        filter_properties, inst_path, name_needs_slugify, slugify_name,
+        strip_middleware_extension, FsSnapshot, SyncbackReturn, SyncbackSnapshot,
     },
     variant_eq::variant_eq,
     RojoRef,
@@ -658,9 +658,12 @@ pub fn syncback_project<'sync>(
             std::collections::HashSet<String>,
         > = std::collections::HashMap::new();
 
-        // Pre-seed taken_names from old children's slugified instance names
-        // so that new-only children correctly dedup against existing siblings
-        // (e.g., new "utils" won't collide with existing "Utils.luau").
+        // Pre-seed taken_names from old children's actual filesystem dedup keys
+        // so that new-only children correctly dedup against existing siblings.
+        // We derive keys from relevant_paths (the real filename on disk) rather
+        // than slugifying instance names, because an old instance may already
+        // have a tilde suffix (e.g. A_B~1.luau from prior dedup) that the bare
+        // slug wouldn't capture.
         // Only in incremental mode: in clean mode, old_ref is forced to None
         // for all children, so every child is treated as new and pre-seeding
         // would cause false collisions (spurious ~1 suffixes).
@@ -668,13 +671,24 @@ pub fn syncback_project<'sync>(
             if let Some(parent_path) = ref_to_path_map.get(&new_inst.referent()) {
                 let taken = taken_names_per_dir.entry(parent_path.clone()).or_default();
                 for old_child in old_child_map.values() {
-                    let name = old_child.name();
-                    let slug = if name_needs_slugify(name) {
-                        slugify_name(name).to_lowercase()
+                    if let Some(path) = old_child.metadata().relevant_paths.first() {
+                        if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
+                            let middleware =
+                                old_child.metadata().middleware.unwrap_or(Middleware::Dir);
+                            let dedup_key =
+                                strip_middleware_extension(filename, middleware).to_lowercase();
+                            taken.insert(dedup_key);
+                        }
                     } else {
-                        name.to_lowercase()
-                    };
-                    taken.insert(slug);
+                        // Fallback (shouldn't happen for old instances with disk presence)
+                        let name = old_child.name();
+                        let slug = if name_needs_slugify(name) {
+                            slugify_name(name).to_lowercase()
+                        } else {
+                            name.to_lowercase()
+                        };
+                        taken.insert(slug);
+                    }
                 }
             }
         }

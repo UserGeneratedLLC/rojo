@@ -5156,3 +5156,87 @@ fn add_two_colliding_instances_deduplicates() {
         );
     });
 }
+
+/// Renaming a clean-named instance to a name with forbidden chars should
+/// produce a slugified filename + adjacent meta with the `name` field.
+#[test]
+fn rename_clean_to_slugified() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let (session_id, normal_id) = get_encoded_names_instance(&session, "Normal");
+
+        let src = session.path().join("src");
+        let old_path = src.join("Normal.luau");
+        assert_file_exists(&old_path, "Normal.luau before rename");
+
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: normal_id,
+                changed_name: Some("Hey/Bro".to_string()),
+                changed_class_name: None,
+                changed_properties: UstrMap::default(),
+                changed_metadata: None,
+            },
+        );
+
+        let new_path = src.join("Hey_Bro.luau");
+        let meta_path = src.join("Hey_Bro.meta.json5");
+
+        poll_file_exists(&new_path, "Hey_Bro.luau after rename");
+        poll_not_exists(&old_path, "Normal.luau should be gone after rename");
+
+        assert_file_exists(&meta_path, "Meta file for Hey/Bro with name field");
+        let meta_content = fs::read_to_string(&meta_path).unwrap();
+        assert!(
+            meta_content.contains("\"Hey/Bro\""),
+            "Meta should contain the real instance name \"Hey/Bro\", got: {}",
+            meta_content
+        );
+    });
+}
+
+/// Renaming a slugified instance back to a clean name should remove the
+/// meta `name` field (or the entire meta file if it had no other fields).
+#[test]
+fn rename_slugified_to_clean() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let (session_id, encoded_id) = get_encoded_names_instance(&session, "What?Module");
+
+        let src = session.path().join("src");
+        let old_path = src.join("What_Module.luau");
+        let old_meta = src.join("What_Module.meta.json5");
+        assert_file_exists(&old_path, "What_Module.luau before rename");
+        assert_file_exists(&old_meta, "What_Module.meta.json5 before rename");
+
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: encoded_id,
+                changed_name: Some("CleanName".to_string()),
+                changed_class_name: None,
+                changed_properties: UstrMap::default(),
+                changed_metadata: None,
+            },
+        );
+
+        let new_path = src.join("CleanName.luau");
+        let new_meta = src.join("CleanName.meta.json5");
+
+        poll_file_exists(&new_path, "CleanName.luau after rename");
+        poll_not_exists(&old_path, "What_Module.luau should be gone after rename");
+        poll_not_exists(&old_meta, "What_Module.meta.json5 should be gone after rename");
+
+        // The new meta file should either not exist (clean name needs no
+        // name override) or, if it exists, should NOT contain a "name" field.
+        if new_meta.exists() {
+            let meta_content = fs::read_to_string(&new_meta).unwrap();
+            assert!(
+                !meta_content.contains("\"name\""),
+                "CleanName.meta.json5 should not have a \"name\" field, got: {}",
+                meta_content
+            );
+        }
+    });
+}
