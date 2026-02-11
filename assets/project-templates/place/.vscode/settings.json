@@ -9,7 +9,7 @@
   "files.encoding": "utf8",
   "files.autoGuessEncoding": false,
 
-  "luau-lsp.sourcemap.rojoProjectFile": "plugin.project.json5",
+  "luau-lsp.sourcemap.rojoProjectFile": "default.project.json5",
   "luau-lsp.plugin.maximumRequestBodySize": "500mb",
   "luau-lsp.plugin.enabled": true,
   "luau-lsp.completion.autocompleteEnd": true,
