@@ -21,8 +21,8 @@ use crate::{
     },
     snapshot_middleware::Middleware,
     syncback::{
-        filter_properties, inst_path, name_needs_slugify, slugify_name,
-        strip_middleware_extension, FsSnapshot, SyncbackReturn, SyncbackSnapshot,
+        filter_properties, inst_path, name_needs_slugify, slugify_name, strip_middleware_extension,
+        FsSnapshot, SyncbackReturn, SyncbackSnapshot,
     },
     variant_eq::variant_eq,
     RojoRef,

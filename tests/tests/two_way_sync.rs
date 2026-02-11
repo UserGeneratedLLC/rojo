@@ -5226,7 +5226,10 @@ fn rename_slugified_to_clean() {
 
         poll_file_exists(&new_path, "CleanName.luau after rename");
         poll_not_exists(&old_path, "What_Module.luau should be gone after rename");
-        poll_not_exists(&old_meta, "What_Module.meta.json5 should be gone after rename");
+        poll_not_exists(
+            &old_meta,
+            "What_Module.meta.json5 should be gone after rename",
+        );
 
         // The new meta file should either not exist (clean name needs no
         // name override) or, if it exists, should NOT contain a "name" field.

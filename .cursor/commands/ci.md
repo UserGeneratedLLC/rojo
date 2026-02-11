@@ -4,28 +4,23 @@ Run the complete CI pipeline by executing the appropriate platform script.
 
 ## Instructions
 
-### 1. Determine rbx-dom Flag
+### 1. Run the CI Script
 
-- By default, run **without** the skip flag (full suite including rbx-dom).
-- If the user's message asks to **skip rbx-dom**, pass the skip flag (`-NoRbxDom` / `--no-rbx-dom`).
-
-### 2. Run the CI Script
+**Always run the full suite including rbx-dom. No exceptions. No flags.**
 
 **Windows (PowerShell):**
 ```powershell
-.\scripts\ci.ps1           # with rbx-dom
-.\scripts\ci.ps1 -NoRbxDom # without rbx-dom
+.\scripts\ci.ps1
 ```
 
 **macOS/Linux (Bash):**
 ```bash
-bash scripts/ci.sh              # with rbx-dom
-bash scripts/ci.sh --no-rbx-dom # without rbx-dom
+bash scripts/ci.sh
 ```
 
-**Monitor the script output as it runs.** After each step completes, check its result. If a step failed, kill the script and switch to manual fixing (step 3) — don't let it continue to the next step.
+**Monitor the script output as it runs.** After each step completes, check its result. If a step failed, kill the script and switch to manual fixing (step 2) — don't let it continue to the next step.
 
-### 3. Fix Failures Between Steps
+### 2. Fix Failures Between Steps
 
 When a step fails, stop the script and fix the issue before continuing. Use targeted commands to speed up the feedback loop:
 
@@ -41,10 +36,10 @@ When a step fails, stop the script and fix the issue before continuing. Use targ
    - **Never** delete or gut a test just to make CI green. Tests exist for a reason — the code must satisfy them, not the other way around.
    - **Re-run only the failing test(s)** to verify fixes quickly (e.g. `cargo test <test_name>`, `cargo test -p <crate>`). Do not re-run the entire suite until you believe all issues are resolved.
 
-3. **After all known issues are fixed**, re-run the full CI script from step 2 to catch any remaining failures.
+3. **After all known issues are fixed**, re-run the full CI script from step 1 to catch any remaining failures.
 
 4. Repeat until the script exits with `Overall: PASS`.
 
-### 4. Report
+### 3. Report
 
 Once CI passes clean, provide a brief summary of what was fixed (if anything) and confirm the final result.

@@ -811,17 +811,23 @@ impl JobThreadContext {
                                             let deduped_new_name;
                                             {
                                                 let candidate_file = if extension.is_empty() {
-                                                    format!("{}{}", slugified_new_name, script_suffix)
+                                                    format!(
+                                                        "{}{}",
+                                                        slugified_new_name, script_suffix
+                                                    )
                                                 } else {
                                                     format!(
                                                         "{}{}.{}",
-                                                        slugified_new_name, script_suffix, extension
+                                                        slugified_new_name,
+                                                        script_suffix,
+                                                        extension
                                                     )
                                                 };
                                                 let candidate = parent.join(&candidate_file);
                                                 if candidate != *path && candidate.exists() {
-                                                    let mut taken: std::collections::HashSet<String> =
-                                                        std::collections::HashSet::new();
+                                                    let mut taken: std::collections::HashSet<
+                                                        String,
+                                                    > = std::collections::HashSet::new();
                                                     if let Ok(entries) = fs::read_dir(parent) {
                                                         for entry in entries.flatten() {
                                                             let ep = entry.path();
@@ -835,15 +841,18 @@ impl JobThreadContext {
                                                                     .file_stem()
                                                                     .and_then(|f| f.to_str())
                                                                     .unwrap_or("");
-                                                                strip_script_suffix(s).to_lowercase()
+                                                                strip_script_suffix(s)
+                                                                    .to_lowercase()
                                                             };
                                                             taken.insert(slug);
                                                         }
                                                     }
                                                     // Free the slot we're vacating
                                                     taken.remove(&old_base.to_lowercase());
-                                                    deduped_new_name =
-                                                        deduplicate_name(&slugified_new_name, &taken);
+                                                    deduped_new_name = deduplicate_name(
+                                                        &slugified_new_name,
+                                                        &taken,
+                                                    );
                                                 } else {
                                                     deduped_new_name = slugified_new_name.clone();
                                                 }
