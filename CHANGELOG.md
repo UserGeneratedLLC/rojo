@@ -31,6 +31,67 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+## [8.1.0] (February 11th, 2026)
+
+* Overhaul filename handling: replace path encoding system with a slugify approach for robust round-trip fidelity between Roblox instances and the filesystem.
+* Refactor syncback instance processing, metadata name handling, and deduplication logic for correctness and clarity.
+* Add `bare_slug_from_filename` method for improved filename processing in snapshot middleware.
+* Fix stem-level deduplication edge cases and improve error handling in metadata file operations.
+* Streamline slugification logic in ApiService for two-way sync.
+* Add option to forget prior info for a place in the reminder notification.
+* Improve sourcemap path handling with `pathdiff` for correct relative paths.
+* Refactor property comparison in `compute_property_patches`.
+* Enhance session management in `App:startSession`.
+* Refactor upload command to use `rbx_cookie` for Roblox auth cookie retrieval.
+* Add build steps for VS Code extension in CI and release workflows; enable submodule checkout.
+* Update rbx-dom and vscode-rojo submodule references.
+
+<details>
+<summary>Full commit log</summary>
+
+- `f037ec3b` Refactor filename handling in ApiService to streamline slugification logic
+- `72b1d8d4` Merge branch 'slugify' into master
+- `bb266789` Add audit plan for slugify branch pass 3 and implement critical fixes
+- `2a917bf8` Update rbx-dom subproject reference to latest commit 2533e16e
+- `e01a143a` Update rbx-dom subproject reference to latest commit 5c8c108d
+- `8dfca6b1` Update rbx-dom subproject reference and adjust CI script paths for Lua and Rust formatting tools
+- `2ac0f117` Add option to forget prior info for place in reminder notif (#1215)
+- `434a3c45` Refactor CI documentation and improve change processing logic
+- `095e78df` Add option to forget prior info for place in reminder notif (#1215)
+- `2ff5c393` Implement fixes and enhancements from audit pass 2
+- `baf05dcb` Update slugify branch audit plan and implement fixes for identified issues
+- `d8175d3b` Add audit plan for slugify branch to ensure round-trip fidelity
+- `917949ed` Add bare_slug_from_filename method for improved filename processing
+- `085e1ab3` Refactor change processing and metadata handling for improved clarity
+- `7d47fe73` Enhance slug deduplication and metadata handling in syncback process
+- `f38c1f13` Refactor metadata name handling for improved clarity
+- `5a5e1a0c` Enhance error handling in metadata file operations
+- `f496bee3` Refactor CI pipeline scripts and documentation
+- `9688224c` Enhance slugification process and deduplication logic
+- `41264a5a` Implement removal of `name` field from `.meta.json5` files
+- `cc2eb2b6` Refactor syncback instance processing for improved efficiency
+- `7a090b10` Refactor syncback instance handling for improved readability
+- `560fce13` Implement fix for stem-level deduplication in file handling
+- `126c8e66` Update vscode-rojo submodule reference and complete migration plan for path encoding
+- `0955e38b` Add migration plan to replace path encoding system with slugify approach
+- `f0932600` Refactor instance path retrieval in snapshot.rs
+- `14e88157` Update rbx-dom submodule reference to the latest commit
+- `64d21dc6` Update submodule reference and refactor match statements for improved clarity
+- `181a003a` Improves sourcemap path handling with pathdiff
+- `80b83310` Refactor property comparison in compute_property_patches
+- `6f4a2792` Enhance session management in App:startSession
+- `d43b9bc0` Enable submodule checkout in CI and release workflows
+- `332566be` Add build steps for VS Code extension in CI and release workflows
+- `255b3464` Update vscode-rojo submodule to latest commit
+- `431a8b30` Update vscode-rojo submodule and add new rokit.toml configuration
+- `2803c2d7` Add .env to .gitignore and update dependencies
+- `7b737201` update docs
+- `0b1e8c89` Refactor upload command to use rbx_cookie for Roblox auth cookie retrieval
+
+</details>
+
+[8.1.0]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.1.0
+
 ## [8.0.3] (February 9th, 2026)
 
 * Bump toolchain dependencies in rokit.toml: selene 0.30.0, stylua 2.3.1.
