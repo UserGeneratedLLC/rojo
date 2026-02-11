@@ -1,0 +1,2 @@
+-- Child module
+return "child"

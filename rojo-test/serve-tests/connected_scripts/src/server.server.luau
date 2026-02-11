@@ -1,0 +1,2 @@
+-- Standalone Script
+print("server")

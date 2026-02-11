@@ -1,0 +1,2 @@
+-- Child A
+return "A"

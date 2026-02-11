@@ -9,7 +9,9 @@ globs:
   - "**/*.model.json"
 ---
 
-# Rojo Project File Format
+# Atlas Project File Format
+
+> Atlas is a fork of Rojo. Many internal identifiers, API endpoints, and struct names still reference the original "Rojo" naming.
 
 ## Project File Schema
 
@@ -21,7 +23,7 @@ globs:
 |-------|------|----------|-------------|
 | `name` | string | Yes* | Instance name (*optional if `default.project.json5`) |
 | `tree` | ProjectNode | Yes | Root instance tree structure |
-| `servePort` | number | No | Port for `rojo serve` (default: 34872) |
+| `servePort` | number | No | Port for `atlas serve` (default: 34872) |
 | `serveAddress` | string | No | Address to bind (default: `"127.0.0.1"`) |
 | `servePlaceIds` | number[] | No | Only allow sync to these place IDs |
 | `blockedPlaceIds` | number[] | No | Block sync to these place IDs |

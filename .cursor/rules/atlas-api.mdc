@@ -8,7 +8,26 @@ globs:
   - "plugin/src/ApiContext.lua"
 ---
 
-# Rojo API & Communication
+# Atlas API & Communication
+
+> Atlas is a fork of Rojo. Many internal identifiers, API endpoints, and struct names still reference the original "Rojo" naming.
+
+## Quality Standard
+
+This is a production-grade synchronization system. The filesystem must represent a 1:1 copy of the Studio place. The core invariant:
+
+**Round-trip identity:** Syncback (or two-way sync) writes a directory tree. Building an rbxl from that directory tree and forward-syncing it back must produce a bit-identical instance tree -- same names, same classes, same properties, same hierarchy, same ref targets. Any deviation is a bug.
+
+Every audit item must be evaluated against this standard. A "works most of the time" finding is not acceptable. If there is ANY code path where an instance name, property, or hierarchy relationship can be lost, mangled, or silently altered through a syncback→rebuild cycle, flag it as critical.
+
+## Code Quality Standard
+
+We are building a maintainable codebase. During audits, watch for duplicated logic -- the same slugify/dedup/meta-update pattern copy-pasted across `change_processor.rs`, `api.rs`, `dir.rs`, `project.rs`, etc. If you find duplicated code that could be consolidated into a shared helper:
+
+- **Small refactor** (extracting a helper function, consolidating 2-3 call sites): flag it AND fix it as part of the audit.
+- **Major system rewrite** (restructuring data flow, changing function signatures across 10+ call sites, redesigning the snapshot pipeline): flag it clearly in a "Deferred Refactors" section at the bottom of the report. We will evaluate whether it's worth doing after the audit is complete.
+
+The goal is clean, DRY code that is easy to reason about and hard to get wrong. If the same "compute meta path, check if name needs slugify, upsert/remove name field" sequence appears in 3+ places, that's a refactor candidate.
 
 **Protocol Version:** 5 | Server/plugin MAJOR.MINOR must match
 
@@ -635,7 +654,7 @@ if serverInfo.protocolVersion ~= Config.protocolVersion then showError("Protocol
 
 ```bash
 # Server
-RUST_LOG=rojo::web=debug,rojo::serve_session=debug rojo serve
+RUST_LOG=rojo::web=debug,rojo::serve_session=debug atlas serve
 ```
 
 ```lua

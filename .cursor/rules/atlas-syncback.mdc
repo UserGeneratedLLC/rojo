@@ -5,11 +5,30 @@ globs:
   - "src/cli/syncback.rs"
 ---
 
-# Rojo Syncback Architecture
+# Atlas Syncback Architecture
+
+> Atlas is a fork of Rojo. Many internal identifiers, API endpoints, and struct names still reference the original "Rojo" naming.
+
+## Quality Standard
+
+This is a production-grade synchronization system. The filesystem must represent a 1:1 copy of the Studio place. The core invariant:
+
+**Round-trip identity:** Syncback (or two-way sync) writes a directory tree. Building an rbxl from that directory tree and forward-syncing it back must produce a bit-identical instance tree -- same names, same classes, same properties, same hierarchy, same ref targets. Any deviation is a bug.
+
+Every audit item must be evaluated against this standard. A "works most of the time" finding is not acceptable. If there is ANY code path where an instance name, property, or hierarchy relationship can be lost, mangled, or silently altered through a syncback→rebuild cycle, flag it as critical.
+
+## Code Quality Standard
+
+We are building a maintainable codebase. During audits, watch for duplicated logic -- the same slugify/dedup/meta-update pattern copy-pasted across `change_processor.rs`, `api.rs`, `dir.rs`, `project.rs`, etc. If you find duplicated code that could be consolidated into a shared helper:
+
+- **Small refactor** (extracting a helper function, consolidating 2-3 call sites): flag it AND fix it as part of the audit.
+- **Major system rewrite** (restructuring data flow, changing function signatures across 10+ call sites, redesigning the snapshot pipeline): flag it clearly in a "Deferred Refactors" section at the bottom of the report. We will evaluate whether it's worth doing after the audit is complete.
+
+The goal is clean, DRY code that is easy to reason about and hard to get wrong. If the same "compute meta path, check if name needs slugify, upsert/remove name field" sequence appears in 3+ places, that's a refactor candidate.
 
 **Syncback** is the reverse operation of building: it takes a Roblox binary file (rbxl/rbxm) and writes instances back to the filesystem according to project structure.
 
-**Entry point:** `rojo syncback <project> --input <file>`
+**Entry point:** `atlas syncback <project> --input <file>`
 
 ## Core Concept
 
@@ -280,9 +299,9 @@ fs_snapshot.removed_paths()
 
 1. **Collect paths** - Map every Ref → full instance path (e.g., `Workspace.Part1`)
 2. **Collect referents** - Find all properties that are Refs, store as (source_path, target_path)
-3. **Link referents** - After syncback, use Rojo's `$id` / `Rojo_Target_PropertyName` system to link instances
+3. **Link referents** - After syncback, use Atlas's `$id` / `Rojo_Target_PropertyName` system to link instances
 
-**Rojo linking system:**
+**Atlas linking system:**
 ```json
 {
     "id": "some-unique-id",
@@ -402,7 +421,7 @@ All errors collected and reported at end.
 2. Sending file to server
 3. Server runs syncback command
 
-**Two-way sync (experimental)** is different - see `rojo-api.mdc`.
+**Two-way sync (experimental)** is different - see `atlas-api.mdc`.
 
 ## Performance Considerations
 
@@ -416,7 +435,7 @@ All errors collected and reported at end.
 
 **Enable verbose logging:**
 ```bash
-RUST_LOG=rojo::syncback=debug rojo syncback project/ --input place.rbxl
+RUST_LOG=rojo::syncback=debug atlas syncback project/ --input place.rbxl
 ```
 
 **Shows:**
@@ -428,10 +447,10 @@ RUST_LOG=rojo::syncback=debug rojo syncback project/ --input place.rbxl
 **Test syncback:**
 ```bash
 # Syncback once
-rojo syncback project/ --input place.rbxl
+atlas syncback project/ --input place.rbxl
 
 # Build back to verify roundtrip
-rojo build project/ -o rebuilt.rbxl
+atlas build project/ -o rebuilt.rbxl
 
 # Compare
 diff place.rbxl rebuilt.rbxl

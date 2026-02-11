@@ -4,52 +4,52 @@ overview: Expand the serve test suite to cover multi-step connected mode scenari
 todos:
   - id: fixtures
     content: "Create 4 new test fixtures in rojo-test/serve-tests/: connected_scripts, connected_init, connected_models, connected_slugify"
-    status: in_progress
+    status: completed
   - id: harness
     content: "Add harness helpers to tests/rojo_test/serve_util.rs: get_message_cursor for chaining multi-step tests, fresh_rebuild_read for round-trip verification"
-    status: pending
+    status: completed
   - id: phase1-format-transitions
     content: "Implement Phase 1: Format transition tests (standalone<->directory, init type changes) with round-trip verification -- 8 tests"
-    status: pending
+    status: completed
   - id: phase2-multi-step
     content: "Implement Phase 2: Multi-step connected sequence tests (create/edit/rename/delete lifecycle) with round-trip verification -- 5 tests"
-    status: pending
+    status: completed
   - id: phase3-init
     content: "Implement Phase 3: Init file operation tests during connected mode with round-trip verification -- 4 tests"
-    status: pending
+    status: completed
   - id: phase4-meta
     content: "Implement Phase 4: Property/meta file change tests -- 4 tests"
-    status: pending
+    status: completed
   - id: phase5-models
     content: "Implement Phase 5: Model JSON file change tests -- 5 tests"
-    status: pending
+    status: completed
   - id: phase6-cursor
     content: "Implement Phase 6: Cursor tracking and reconnection tests -- 3 tests"
-    status: pending
+    status: completed
   - id: phase7-mixed
     content: "Implement Phase 7: Mixed API + filesystem verification tests -- 2 tests"
-    status: pending
+    status: completed
   - id: phase8-slugify-fixture
     content: Create connected_slugify fixture with slugified files, dedup ~1 files, clean files, and directory-format slugified instances
-    status: pending
+    status: completed
   - id: phase8-slugify-forward
     content: "Implement Phase 8a: Slugify forward-sync tests -- editing/creating/deleting slugified files and verifying patches show real names from meta -- 6 tests"
-    status: pending
+    status: completed
   - id: phase8-dedup-forward
     content: "Implement Phase 8b: Dedup (~N suffix) forward-sync tests -- collision handling, ~1 with and without meta, add/remove colliding files -- 5 tests"
-    status: pending
+    status: completed
   - id: phase8-slugdir
     content: "Implement Phase 8c: Slugified directory format tests -- init type changes, child adds inside slugified dirs -- 3 tests"
-    status: pending
+    status: completed
   - id: phase8-meta-name-lifecycle
     content: "Implement Phase 8d: Meta name field lifecycle tests -- create/update/delete meta name, model.json5 name field -- 5 tests"
-    status: pending
+    status: completed
   - id: phase8-slug-multistep
     content: "Implement Phase 8e: Multi-step slugify scenarios with round-trip verification -- slug rename chains, collision evolution -- 3 tests"
-    status: pending
+    status: completed
   - id: run-and-review
     content: Run cargo test, cargo insta review, accept snapshots, verify clean pass
-    status: pending
+    status: completed
 isProject: false
 ---
 
