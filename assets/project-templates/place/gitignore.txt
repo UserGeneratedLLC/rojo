@@ -8,3 +8,12 @@
 
 # Sourcemap
 /sourcemap.json
+
+# IDEs
+/.idea
+
+# .env
+/.env
+
+# atlas
+/atlas.exe

@@ -18,6 +18,7 @@ use memofs::{InMemoryFs, Vfs, VfsSnapshot};
 use super::resolve_path;
 
 const GIT_IGNORE_PLACEHOLDER: &str = "gitignore.txt";
+const GIT_CONFIG_PLACEHOLDER: &str = "gitconfig.txt";
 
 static TEMPLATE_BINCODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/templates.bincode"));
 
@@ -106,6 +107,12 @@ impl InitCommand {
                         } else {
                             path.set_file_name(".gitignore");
                         }
+                    } else if file_stem == GIT_CONFIG_PLACEHOLDER {
+                        if self.skip_git {
+                            continue;
+                        } else {
+                            path.set_file_name(".gitconfig");
+                        }
                     }
                 }
                 write_if_not_exists(
@@ -132,50 +139,33 @@ impl InitCommand {
         };
 
         if !self.skip_rules {
-            if did_git_init {
-                log::debug!("Adding cursor rules as submodule...");
+            log::debug!("Cloning cursor rules...");
 
-                let result = Command::new("git")
-                    .args([
-                        "submodule",
-                        "add",
-                        "https://github.com/jrmelsha/cursor-rules.git",
-                        ".cursor",
-                    ])
-                    .current_dir(&base_path)
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
+            let cursor_dir = base_path.join(".cursor");
+            let result = Command::new("git")
+                .args([
+                    "clone",
+                    "--depth",
+                    "1",
+                    "https://github.com/jrmelsha/cursor-rules.git",
+                    ".cursor",
+                ])
+                .current_dir(&base_path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .status();
 
-                match result {
-                    Ok(status) if status.success() => {
-                        println!("Added cursor rules as submodule.");
+            match result {
+                Ok(status) if status.success() => {
+                    // Remove .git so it's just files, not a submodule
+                    let git_dir = cursor_dir.join(".git");
+                    if git_dir.exists() {
+                        let _ = fs::remove_dir_all(&git_dir);
                     }
-                    _ => {
-                        log::debug!("Failed to add cursor rules submodule, skipping.");
-                    }
+                    println!("Cloned cursor rules successfully.");
                 }
-            } else {
-                log::debug!("Cloning cursor rules (no git repo)...");
-
-                let result = Command::new("git")
-                    .args([
-                        "clone",
-                        "https://github.com/jrmelsha/cursor-rules.git",
-                        ".cursor",
-                    ])
-                    .current_dir(&base_path)
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
-
-                match result {
-                    Ok(status) if status.success() => {
-                        println!("Cloned cursor rules successfully.");
-                    }
-                    _ => {
-                        log::debug!("Failed to clone cursor rules, skipping.");
-                    }
+                _ => {
+                    log::debug!("Failed to clone cursor rules, skipping.");
                 }
             }
         }
