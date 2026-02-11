@@ -2135,13 +2135,13 @@ impl ApiService {
                 .map(|entries| {
                     entries
                         .flatten()
-                        .filter_map(|e| {
+                        .map(|e| {
                             let name = e.file_name();
                             let name_str = name.to_string_lossy();
                             if e.path().is_dir() {
-                                Some(name_str.to_lowercase())
+                                name_str.to_lowercase()
                             } else {
-                                Some(Self::bare_slug_from_filename(&name_str).to_lowercase())
+                                Self::bare_slug_from_filename(&name_str).to_lowercase()
                             }
                         })
                         .collect()

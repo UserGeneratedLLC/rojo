@@ -2110,6 +2110,10 @@ fn combined_rename_classname_source_blitz_10x() {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "Flaky on macOS: kqueue event storms cause server timeouts under rapid rename+write load"
+)]
 fn combined_rename_and_source_rapid_10x() {
     run_serve_test("syncback_write", |session, _redactions| {
         let src = session.path().join("src");
