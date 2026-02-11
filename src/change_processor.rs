@@ -11,11 +11,11 @@ use std::{
 
 use crate::{
     message_queue::MessageQueue,
-    path_encoding::encode_path_name,
     snapshot::{
         apply_patch_set, compute_patch_set, AppliedPatchSet, InstigatingSource, PatchSet, RojoTree,
     },
     snapshot_middleware::{snapshot_from_vfs, snapshot_project_node},
+    syncback::{deduplicate_name, name_needs_slugify, slugify_name, strip_script_suffix},
 };
 
 /// Processes file change events, updates the DOM, and sends those updates
@@ -222,6 +222,101 @@ impl JobThreadContext {
             counts.1 = counts.1.saturating_sub(1);
             if counts.0 == 0 && counts.1 == 0 {
                 suppressed.remove(&key);
+            }
+        }
+    }
+
+    /// Suppress the next Remove VFS event for the given path.
+    fn suppress_path_remove(&self, path: &Path) {
+        let mut suppressed = self.suppressed_paths.lock().unwrap();
+        let key = Self::suppression_key(path);
+        suppressed.entry(key).or_insert((0, 0)).0 += 1;
+    }
+
+    /// Upsert the `name` field in a `.meta.json5` file, suppressing filesystem
+    /// events to avoid feedback loops.
+    fn upsert_meta_name_field(&self, meta_path: &Path, real_name: &str) {
+        self.suppress_path(meta_path);
+        if let Err(err) = crate::syncback::meta::upsert_meta_name(meta_path, real_name) {
+            self.unsuppress_path(meta_path);
+            log::error!(
+                "Failed to upsert name in meta file {}: {}",
+                meta_path.display(),
+                err
+            );
+        }
+    }
+
+    /// Upsert the `name` field inside a `.model.json5` / `.model.json` file,
+    /// suppressing filesystem events.
+    fn upsert_model_name_field(&self, model_path: &Path, real_name: &str) {
+        self.suppress_path(model_path);
+        if let Err(err) = crate::syncback::meta::upsert_model_name(model_path, real_name) {
+            self.unsuppress_path(model_path);
+            log::error!(
+                "Failed to upsert name in model file {}: {}",
+                model_path.display(),
+                err
+            );
+        }
+    }
+
+    /// Remove the `name` field from a `.model.json5` / `.model.json` file,
+    /// suppressing filesystem events.
+    fn remove_model_name_field(&self, model_path: &Path) {
+        use crate::syncback::meta::RemoveNameOutcome;
+        self.suppress_path(model_path);
+        match crate::syncback::meta::remove_model_name(model_path) {
+            Ok(RemoveNameOutcome::NoOp) => {
+                self.unsuppress_path(model_path);
+            }
+            Ok(RemoveNameOutcome::FieldRemoved) => {
+                // File was rewritten — suppress_path already covers it.
+            }
+            Ok(RemoveNameOutcome::FileDeleted) => {
+                // Model files shouldn't be deleted (they have className etc),
+                // but handle for completeness.
+                self.unsuppress_path(model_path);
+                self.suppress_path_remove(model_path);
+            }
+            Err(err) => {
+                self.unsuppress_path(model_path);
+                log::error!(
+                    "Failed to remove name from model file {}: {}",
+                    model_path.display(),
+                    err
+                );
+            }
+        }
+    }
+
+    /// Remove the `name` field from a `.meta.json5` file, suppressing filesystem
+    /// events. If the file becomes empty after removal, deletes it entirely.
+    fn remove_meta_name_field(&self, meta_path: &Path) {
+        use crate::syncback::meta::RemoveNameOutcome;
+        // Suppress for the write/delete that may follow
+        self.suppress_path(meta_path);
+        match crate::syncback::meta::remove_meta_name(meta_path) {
+            Ok(RemoveNameOutcome::NoOp) => {
+                self.unsuppress_path(meta_path);
+            }
+            Ok(RemoveNameOutcome::FileDeleted) => {
+                // File was deleted, not rewritten. Swap: undo the
+                // pre-emptive Write suppression and add a Remove
+                // suppression instead so the counts are (1, 0).
+                self.unsuppress_path(meta_path);
+                self.suppress_path_remove(meta_path);
+            }
+            Ok(RemoveNameOutcome::FieldRemoved) => {
+                // File was rewritten — suppress_path already covers it.
+            }
+            Err(err) => {
+                self.unsuppress_path(meta_path);
+                log::error!(
+                    "Failed to remove name from meta file {}: {}",
+                    meta_path.display(),
+                    err
+                );
             }
         }
     }
@@ -561,47 +656,27 @@ impl JobThreadContext {
         let applied_patch = {
             let mut tree = self.tree.lock().unwrap();
 
+            // NOTE: We do NOT delete files from disk here. The API handler
+            // (handle_api_write → remove_instance_at_path) already deleted
+            // the files before sending this PatchSet. Re-deleting would
+            // destroy any new file created at the same path — e.g., when an
+            // instance is renamed from "joe_test" to "joe/test", the new slug
+            // is also "joe_test", so the API creates a new file at the same
+            // path that the removal just deleted. If we deleted again here,
+            // the new file would be destroyed.
+            //
+            // The PatchSet removal only needs to update the DOM tree (handled
+            // by apply_patch_set below).
             for &id in &patch_set.removed_instances {
                 if let Some(instance) = tree.get_instance(id) {
                     if let Some(instigating_source) = &instance.metadata().instigating_source {
                         match instigating_source {
                             InstigatingSource::Path(path) => {
-                                // Guard: file may already be deleted by the API's
-                                // syncback_removed_instance before this PatchSet arrives.
-                                if path.exists() {
-                                    if path.is_dir() {
-                                        log::info!(
-                                            "Two-way sync: Removing directory {}",
-                                            path.display()
-                                        );
-                                        if let Err(err) = fs::remove_dir_all(path) {
-                                            log::error!(
-                                                "Failed to remove directory {:?} for instance {:?}: {}",
-                                                path,
-                                                id,
-                                                err
-                                            );
-                                        }
-                                    } else {
-                                        log::info!(
-                                            "Two-way sync: Removing file {}",
-                                            path.display()
-                                        );
-                                        if let Err(err) = fs::remove_file(path) {
-                                            log::error!(
-                                                "Failed to remove file {:?} for instance {:?}: {}",
-                                                path,
-                                                id,
-                                                err
-                                            );
-                                        }
-                                    }
-                                } else {
-                                    log::info!(
-                                        "Two-way sync: File already removed: {}",
-                                        path.display()
-                                    );
-                                }
+                                log::info!(
+                                    "Two-way sync: Removing instance {:?} from tree (path: {})",
+                                    id,
+                                    path.display()
+                                );
                             }
                             InstigatingSource::ProjectNode { .. } => {
                                 log::warn!(
@@ -653,17 +728,27 @@ impl JobThreadContext {
                                         if is_init_file {
                                             let dir_path = path.parent().unwrap();
                                             if let Some(grandparent) = dir_path.parent() {
-                                                // Use the encoded dir name from the filesystem
-                                                // for the old meta lookup, and encode the new
-                                                // name for the new path. Using instance.name()
-                                                // (decoded) would fail for encoded names.
                                                 let dir_name = dir_path
                                                     .file_name()
                                                     .and_then(|f| f.to_str())
                                                     .unwrap_or("");
-                                                let encoded_new_name = encode_path_name(new_name);
+                                                // Slugify the new name for filesystem safety
+                                                let slugified_new_name =
+                                                    if name_needs_slugify(new_name) {
+                                                        slugify_name(new_name)
+                                                    } else {
+                                                        new_name.to_string()
+                                                    };
+                                                // Directory renames: fs::rename fails safely
+                                                // on all platforms if the target is a non-empty
+                                                // directory, so no dedup is needed here (unlike
+                                                // the file rename path below, where Unix
+                                                // fs::rename silently overwrites).
                                                 let new_dir_path =
-                                                    grandparent.join(&encoded_new_name);
+                                                    grandparent.join(&slugified_new_name);
+
+                                                // Track the effective directory path after any rename
+                                                let effective_dir_path;
 
                                                 if new_dir_path != dir_path {
                                                     log::info!(
@@ -684,6 +769,7 @@ impl JobThreadContext {
                                                             new_dir_path,
                                                             err
                                                         );
+                                                        effective_dir_path = dir_path.to_path_buf();
                                                     } else {
                                                         // The init file moved with the directory.
                                                         overridden_source_path =
@@ -696,7 +782,7 @@ impl JobThreadContext {
                                                             let new_meta =
                                                                 grandparent.join(format!(
                                                                     "{}.meta.json5",
-                                                                    encoded_new_name
+                                                                    slugified_new_name
                                                                 ));
                                                             self.suppress_path_any(&old_meta);
                                                             self.suppress_path(&new_meta);
@@ -707,14 +793,31 @@ impl JobThreadContext {
                                                                 self.unsuppress_path(&new_meta);
                                                             }
                                                         }
+                                                        effective_dir_path = new_dir_path.clone();
                                                     }
+                                                } else {
+                                                    effective_dir_path = dir_path.to_path_buf();
+                                                }
+
+                                                // Always update the meta name field when the
+                                                // instance name changed, even if the directory
+                                                // path didn't change (e.g. "Foo/Bar" → "Foo|Bar"
+                                                // both slugify to "Foo_Bar").
+                                                let init_meta =
+                                                    effective_dir_path.join("init.meta.json5");
+                                                if slugified_new_name != *new_name {
+                                                    self.upsert_meta_name_field(
+                                                        &init_meta, new_name,
+                                                    );
+                                                } else {
+                                                    self.remove_meta_name_field(&init_meta);
                                                 }
                                             }
                                         } else if let Some(parent) = path.parent() {
                                             // Derive the suffix from the existing filename
-                                            // rather than using replacen with the decoded
-                                            // instance name, which fails for encoded names
-                                            // (e.g., What%QUESTION%.server.luau).
+                                            // rather than using replacen with the instance
+                                            // name, which may differ from the filesystem
+                                            // name (e.g., slugified names).
                                             let extension = path
                                                 .extension()
                                                 .and_then(|e| e.to_str())
@@ -725,7 +828,7 @@ impl JobThreadContext {
                                                 .unwrap_or("");
                                             let known_suffixes = [
                                                 ".server", ".client", ".plugin", ".local",
-                                                ".legacy",
+                                                ".legacy", ".model",
                                             ];
                                             let script_suffix = known_suffixes
                                                 .iter()
@@ -738,16 +841,78 @@ impl JobThreadContext {
                                                 &stem[..stem.len() - script_suffix.len()]
                                             };
 
-                                            let encoded_new_name = encode_path_name(new_name);
+                                            let slugified_new_name = if name_needs_slugify(new_name)
+                                            {
+                                                slugify_name(new_name)
+                                            } else {
+                                                new_name.to_string()
+                                            };
+
+                                            // Guard against rename collision: if the target
+                                            // path already exists and isn't our own file,
+                                            // deduplicate the name against siblings.
+                                            let deduped_new_name;
+                                            {
+                                                let candidate_file = if extension.is_empty() {
+                                                    format!(
+                                                        "{}{}",
+                                                        slugified_new_name, script_suffix
+                                                    )
+                                                } else {
+                                                    format!(
+                                                        "{}{}.{}",
+                                                        slugified_new_name,
+                                                        script_suffix,
+                                                        extension
+                                                    )
+                                                };
+                                                let candidate = parent.join(&candidate_file);
+                                                if candidate != *path && candidate.exists() {
+                                                    let mut taken: std::collections::HashSet<
+                                                        String,
+                                                    > = std::collections::HashSet::new();
+                                                    if let Ok(entries) = fs::read_dir(parent) {
+                                                        for entry in entries.flatten() {
+                                                            let ep = entry.path();
+                                                            let slug = if ep.is_dir() {
+                                                                ep.file_name()
+                                                                    .and_then(|f| f.to_str())
+                                                                    .unwrap_or("")
+                                                                    .to_lowercase()
+                                                            } else {
+                                                                let s = ep
+                                                                    .file_stem()
+                                                                    .and_then(|f| f.to_str())
+                                                                    .unwrap_or("");
+                                                                strip_script_suffix(s)
+                                                                    .to_lowercase()
+                                                            };
+                                                            taken.insert(slug);
+                                                        }
+                                                    }
+                                                    // Free the slot we're vacating
+                                                    taken.remove(&old_base.to_lowercase());
+                                                    deduped_new_name = deduplicate_name(
+                                                        &slugified_new_name,
+                                                        &taken,
+                                                    );
+                                                } else {
+                                                    deduped_new_name = slugified_new_name.clone();
+                                                }
+                                            }
+
                                             let new_file_name = if extension.is_empty() {
-                                                format!("{}{}", encoded_new_name, script_suffix)
+                                                format!("{}{}", deduped_new_name, script_suffix)
                                             } else {
                                                 format!(
                                                     "{}{}.{}",
-                                                    encoded_new_name, script_suffix, extension
+                                                    deduped_new_name, script_suffix, extension
                                                 )
                                             };
                                             let new_path = parent.join(&new_file_name);
+
+                                            // Track the effective meta base name after any rename
+                                            let effective_meta_base: &str;
 
                                             if new_path != *path {
                                                 log::info!(
@@ -766,15 +931,16 @@ impl JobThreadContext {
                                                         new_path,
                                                         err
                                                     );
+                                                    effective_meta_base = old_base;
                                                 } else {
                                                     overridden_source_path = Some(new_path.clone());
                                                     let old_meta = parent
                                                         .join(format!("{}.meta.json5", old_base));
+                                                    let new_meta = parent.join(format!(
+                                                        "{}.meta.json5",
+                                                        deduped_new_name
+                                                    ));
                                                     if old_meta.exists() {
-                                                        let new_meta = parent.join(format!(
-                                                            "{}.meta.json5",
-                                                            encoded_new_name
-                                                        ));
                                                         self.suppress_path_any(&old_meta);
                                                         self.suppress_path(&new_meta);
                                                         if fs::rename(&old_meta, &new_meta).is_err()
@@ -783,6 +949,44 @@ impl JobThreadContext {
                                                             self.unsuppress_path(&new_meta);
                                                         }
                                                     }
+                                                    effective_meta_base = &deduped_new_name;
+                                                }
+                                            } else {
+                                                effective_meta_base = old_base;
+                                            }
+
+                                            // Always update the name field when the
+                                            // instance name changed, even if the path didn't
+                                            // change (e.g. "Foo/Bar" → "Foo|Bar" both slugify
+                                            // to "Foo_Bar"). Use deduped_new_name because
+                                            // dedup may have appended ~N.
+                                            //
+                                            // For .model.json5/.model.json files, the name
+                                            // field lives INSIDE the model file, not in
+                                            // adjacent .meta.json5.
+                                            if script_suffix == ".model" {
+                                                let model_file = overridden_source_path
+                                                    .as_deref()
+                                                    .unwrap_or(path.as_path());
+                                                if deduped_new_name != *new_name {
+                                                    self.upsert_model_name_field(
+                                                        model_file, new_name,
+                                                    );
+                                                } else {
+                                                    self.remove_model_name_field(model_file);
+                                                }
+                                            } else {
+                                                let current_meta = parent.join(format!(
+                                                    "{}.meta.json5",
+                                                    effective_meta_base
+                                                ));
+                                                if deduped_new_name != *new_name {
+                                                    self.upsert_meta_name_field(
+                                                        &current_meta,
+                                                        new_name,
+                                                    );
+                                                } else {
+                                                    self.remove_meta_name_field(&current_meta);
                                                 }
                                             }
                                         }
@@ -861,10 +1065,9 @@ impl JobThreadContext {
                                                     format!("init{}.luau", new_suffix)
                                                 }
                                             } else {
-                                                // Derive the encoded base name from the
-                                                // filesystem path, not instance.name()
-                                                // (which is decoded). This preserves
-                                                // encoding like What%QUESTION% on disk.
+                                                // Derive the base name from the filesystem
+                                                // path, not instance.name() (which may
+                                                // differ from the slugified filename).
                                                 let stem = actual_file
                                                     .file_stem()
                                                     .and_then(|s| s.to_str())

@@ -1,0 +1,10 @@
+{
+  "name": "reserved_name_override",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "$path": "src"
+    }
+  }
+}

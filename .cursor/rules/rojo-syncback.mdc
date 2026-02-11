@@ -210,10 +210,12 @@ snapshot.with_new_path(path, new_ref, old_ref)
 ```
 
 **Filename generation** (`file_names.rs`):
-- Uses instance name
+- Slugifies instance name (`slugify_name()`: forbidden chars → `_`)
+- Deduplicates against taken names (`deduplicate_name()`: appends `~1`, `~2`, etc.)
 - Adds appropriate extension based on middleware
-- Encodes Windows-invalid chars if enabled
+- Stores real name in `.meta.json5` `name` field when slug differs
 - Example: `Script` named "My Script" → `My Script.server.luau`
+- Example: `Script` named "Hey/Bro" → `Hey_Bro.server.luau` + meta with `name: "Hey/Bro"`
 
 ### Property Filtering
 
@@ -378,7 +380,7 @@ Filesystem:
    - Solution: Use clean mode
    
 2. **Invalid filename** - Instance name contains invalid chars
-   - Solution: Enable `decodeWindowsInvalidChars` or rename in Studio
+   - Solution: Handled automatically by `slugify_name()` + metadata `name` field
    
 3. **Ref to pruned instance** - Property points to instance not in project
    - Logged as warning, property not synced

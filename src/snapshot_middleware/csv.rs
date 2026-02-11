@@ -10,9 +10,8 @@ use rbx_dom_weak::{types::Variant, ustr};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    path_encoding::encode_path_name,
     snapshot::{InstanceContext, InstanceMetadata, InstanceSnapshot},
-    syncback::{FsSnapshot, SyncbackReturn, SyncbackSnapshot},
+    syncback::{name_needs_slugify, slugify_name, FsSnapshot, SyncbackReturn, SyncbackSnapshot},
 };
 
 use super::{
@@ -78,10 +77,16 @@ pub fn snapshot_csv_init(
 
     let mut init_snapshot = snapshot_csv(context, vfs, init_path, &dir_snapshot.name)?.unwrap();
 
+    // Preserve the init script's instigating_source (the actual file path)
+    // before copying the directory's metadata (which has the folder path)
+    let script_instigating_source = init_snapshot.metadata.instigating_source.take();
+
     init_snapshot.children = dir_snapshot.children;
     init_snapshot.metadata = dir_snapshot.metadata;
-    // The directory snapshot middleware includes all possible init paths
-    // so we don't need to add it here.
+
+    // Restore the init script's instigating_source so two-way sync writes
+    // to the actual file (e.g., init.csv) instead of the directory
+    init_snapshot.metadata.instigating_source = script_instigating_source;
 
     DirectoryMetadata::read_and_apply_all(vfs, folder_path, &mut init_snapshot)?;
 
@@ -110,10 +115,20 @@ pub fn syncback_csv<'sync>(
 
         if !meta.is_empty() {
             let parent = snapshot.path.parent_err()?;
-            let meta_name = if snapshot.encode_windows_invalid_chars() {
-                encode_path_name(&new_inst.name)
+            let meta_name = snapshot
+                .path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("");
+            let meta_name = if meta_name.is_empty() {
+                let instance_name = &new_inst.name;
+                if name_needs_slugify(instance_name) {
+                    slugify_name(instance_name)
+                } else {
+                    instance_name.clone()
+                }
             } else {
-                new_inst.name.clone()
+                meta_name.to_string()
             };
             fs_snapshot.add_file(
                 parent.join(format!("{}.meta.json5", meta_name)),

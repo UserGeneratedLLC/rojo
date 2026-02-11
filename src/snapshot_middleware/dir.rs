@@ -8,7 +8,11 @@ use memofs::{DirEntry, Vfs};
 
 use crate::{
     snapshot::{InstanceContext, InstanceMetadata, InstanceSnapshot, InstigatingSource},
-    syncback::{hash_instance, FsSnapshot, SyncbackReturn, SyncbackSnapshot},
+    snapshot_middleware::Middleware,
+    syncback::{
+        hash_instance, name_needs_slugify, slugify_name, strip_middleware_extension, FsSnapshot,
+        SyncbackReturn, SyncbackSnapshot,
+    },
 };
 
 use super::{meta_file::DirectoryMetadata, snapshot_from_vfs};
@@ -138,6 +142,12 @@ pub fn syncback_dir_no_meta<'sync>(
     let mut children = Vec::new();
     let mut removed_children = Vec::new();
 
+    // taken_names tracks claimed bare slugs (without extensions) for dedup.
+    // Pre-seeded from old tree children's slugified instance names so that
+    // new-only children correctly dedup against existing siblings, regardless
+    // of iteration order (see plan: fix_stem-level_dedup §2).
+    let mut taken_names: HashSet<String> = HashSet::new();
+
     // Detect duplicate child names (case-insensitive for file system safety).
     // We skip duplicates instead of failing, tracking them in stats.
     let mut child_name_counts: HashMap<String, usize> = HashMap::new();
@@ -177,7 +187,49 @@ pub fn syncback_dir_no_meta<'sync>(
             old_child_map.insert(inst.name(), inst);
         }
 
-        for new_child_ref in new_inst.children() {
+        // Pre-seed taken_names from old children's actual filesystem dedup keys
+        // so that new-only children correctly dedup against existing siblings.
+        // We derive keys from relevant_paths (the real filename on disk) rather
+        // than slugifying instance names, because an old instance may already
+        // have a tilde suffix (e.g. A_B~1.luau from prior dedup) that the bare
+        // slug wouldn't capture.
+        // Only in incremental mode: in clean mode, old_ref is forced to None
+        // for all children, so every child is treated as new and pre-seeding
+        // would cause false collisions (spurious ~1 suffixes).
+        if snapshot.data.is_incremental() {
+            for inst in old_child_map.values() {
+                if let Some(path) = inst.metadata().relevant_paths.first() {
+                    if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
+                        let middleware = inst.metadata().middleware.unwrap_or(Middleware::Dir);
+                        let dedup_key =
+                            strip_middleware_extension(filename, middleware).to_lowercase();
+                        taken_names.insert(dedup_key);
+                    }
+                } else {
+                    // Fallback (shouldn't happen for old instances with disk presence)
+                    let name = inst.name();
+                    let slug = if name_needs_slugify(name) {
+                        slugify_name(name).to_lowercase()
+                    } else {
+                        name.to_lowercase()
+                    };
+                    taken_names.insert(slug);
+                }
+            }
+        }
+
+        // Sort children alphabetically for deterministic dedup ordering.
+        // Without this, DOM iteration order determines which sibling gets
+        // the base slug vs ~1, causing non-deterministic output across
+        // different serializations of the same place.
+        let mut sorted_children: Vec<_> = new_inst
+            .children()
+            .iter()
+            .map(|r| (*r, snapshot.get_new_instance(*r).unwrap().name.clone()))
+            .collect();
+        sorted_children.sort_by(|(_, a), (_, b)| a.cmp(b));
+
+        for (new_child_ref, _) in &sorted_children {
             let new_child = snapshot.get_new_instance(*new_child_ref).unwrap();
 
             // Skip children with duplicate names - cannot reliably sync them
@@ -220,10 +272,19 @@ pub fn syncback_dir_no_meta<'sync>(
                     continue;
                 }
                 // This child exists in both doms. Pass it on.
-                children.push(snapshot.with_joined_path(*new_child_ref, Some(old_child.id()))?);
+                let (child_snap, _needs_meta, dedup_key) = snapshot.with_joined_path(
+                    *new_child_ref,
+                    Some(old_child.id()),
+                    &taken_names,
+                )?;
+                taken_names.insert(dedup_key.to_lowercase());
+                children.push(child_snap);
             } else {
                 // The child only exists in the the new dom
-                children.push(snapshot.with_joined_path(*new_child_ref, None)?);
+                let (child_snap, _needs_meta, dedup_key) =
+                    snapshot.with_joined_path(*new_child_ref, None, &taken_names)?;
+                taken_names.insert(dedup_key.to_lowercase());
+                children.push(child_snap);
             }
         }
         // Any children that are in the old dom but not the new one are removed.
@@ -246,7 +307,15 @@ pub fn syncback_dir_no_meta<'sync>(
         }));
     } else {
         // There is no old instance. Just add every child.
-        for new_child_ref in new_inst.children() {
+        // Sort alphabetically for deterministic dedup ordering.
+        let mut sorted_children: Vec<_> = new_inst
+            .children()
+            .iter()
+            .map(|r| (*r, snapshot.get_new_instance(*r).unwrap().name.clone()))
+            .collect();
+        sorted_children.sort_by(|(_, a), (_, b)| a.cmp(b));
+
+        for (new_child_ref, _) in &sorted_children {
             let new_child = snapshot.get_new_instance(*new_child_ref).unwrap();
 
             // Skip children with duplicate names - cannot reliably sync them
@@ -267,7 +336,10 @@ pub fn syncback_dir_no_meta<'sync>(
             if snapshot.should_ignore_tree(*new_child_ref) {
                 continue;
             }
-            children.push(snapshot.with_joined_path(*new_child_ref, None)?);
+            let (child_snap, _needs_meta, dedup_key) =
+                snapshot.with_joined_path(*new_child_ref, None, &taken_names)?;
+            taken_names.insert(dedup_key.to_lowercase());
+            children.push(child_snap);
         }
     }
     let mut fs_snapshot = FsSnapshot::new();

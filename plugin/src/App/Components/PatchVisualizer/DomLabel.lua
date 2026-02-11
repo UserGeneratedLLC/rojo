@@ -112,11 +112,10 @@ local function DiffBar(props)
 			}),
 		}
 
-		if removed > 0 then
-			local color = if props.isWhitespaceOnly then theme.Diff.WhitespaceOnly else theme.Diff.Remove
-			children.SegRemove = e("Frame", {
-				Size = UDim2.fromScale(removed / total, 1),
-				BackgroundColor3 = color,
+		if propChanges > 0 then
+			children.SegProp = e("Frame", {
+				Size = UDim2.fromScale(propChanges / total, 1),
+				BackgroundColor3 = theme.Diff.Property,
 				BackgroundTransparency = props.transparency,
 				BorderSizePixel = 0,
 				LayoutOrder = 1,
@@ -134,10 +133,11 @@ local function DiffBar(props)
 			})
 		end
 
-		if propChanges > 0 then
-			children.SegProp = e("Frame", {
-				Size = UDim2.fromScale(propChanges / total, 1),
-				BackgroundColor3 = theme.Diff.Property,
+		if removed > 0 then
+			local color = if props.isWhitespaceOnly then theme.Diff.WhitespaceOnly else theme.Diff.Remove
+			children.SegRemove = e("Frame", {
+				Size = UDim2.fromScale(removed / total, 1),
+				BackgroundColor3 = color,
 				BackgroundTransparency = props.transparency,
 				BorderSizePixel = 0,
 				LayoutOrder = 3,
@@ -678,7 +678,7 @@ function DomLabel:render()
 							then theme.Diff.WhitespaceOnly
 							else theme.Diff.Remove,
 						transparency = props.transparency,
-						layoutOrder = 1,
+						layoutOrder = 3,
 						tooltipText = (props.changeInfo.linesRemoved or 0)
 							.. (if (props.changeInfo.linesRemoved or 0) == 1 then " line removed" else " lines removed")
 							.. (if props.changeInfo.isWhitespaceOnly then " (whitespace only)" else ""),
@@ -707,7 +707,7 @@ function DomLabel:render()
 						text = props.changeInfo.propChanges .. "P",
 						color = theme.Diff.Property,
 						transparency = props.transparency,
-						layoutOrder = 3,
+						layoutOrder = 1,
 						tooltipText = props.changeInfo.propChanges .. (if props.changeInfo.propChanges == 1
 							then " property change"
 							else " property changes") .. " (excluding Source)",

@@ -36,6 +36,9 @@ pub struct AdjacentMetadata {
     #[serde(default, skip_serializing_if = "IndexMap::is_empty")]
     pub attributes: IndexMap<String, UnresolvedValue>,
 
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
     #[serde(skip)]
     pub path: PathBuf,
 }
@@ -52,9 +55,8 @@ impl AdjacentMetadata {
         _name: &str,
         snapshot: &mut InstanceSnapshot,
     ) -> anyhow::Result<()> {
-        // Use the file stem from the actual path (which has encoded chars)
-        // rather than the decoded name, so meta files are found correctly
-        // when encodeWindowsInvalidChars is enabled.
+        // Use the file stem from the actual path (which may be slugified)
+        // rather than the instance name, so meta files are found correctly.
         // Strip known script type suffixes to get the base name for the meta file.
         let file_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
         let base_name = file_stem
@@ -156,6 +158,20 @@ impl AdjacentMetadata {
             }
         }
 
+        let name = snapshot
+            .old_inst()
+            .and_then(|inst| inst.metadata().specified_name.clone())
+            .or_else(|| {
+                // Filesystem name differs from the instance name (due to
+                // slugification or deduplication). Store the real name so
+                // it survives a round-trip through the filesystem.
+                if snapshot.needs_meta_name {
+                    Some(snapshot.new_inst().name.clone())
+                } else {
+                    None
+                }
+            });
+
         Ok(Some(Self {
             ignore_unknown_instances: if ignore_unknown_instances {
                 Some(true)
@@ -164,6 +180,7 @@ impl AdjacentMetadata {
             },
             properties,
             attributes,
+            name,
             path,
             id: None,
             schema,
@@ -225,11 +242,26 @@ impl AdjacentMetadata {
         Ok(())
     }
 
+    fn apply_name(&mut self, snapshot: &mut InstanceSnapshot) -> anyhow::Result<()> {
+        if self.name.is_some() && snapshot.metadata.specified_name.is_some() {
+            anyhow::bail!(
+                "cannot specify a name using {} (instance has a name from somewhere else)",
+                self.path.display()
+            );
+        }
+        if let Some(name) = &self.name {
+            snapshot.name = name.clone().into();
+        }
+        snapshot.metadata.specified_name = self.name.take();
+        Ok(())
+    }
+
     pub fn apply_all(&mut self, snapshot: &mut InstanceSnapshot) -> anyhow::Result<()> {
         self.apply_ignore_unknown_instances(snapshot);
         self.apply_properties(snapshot)?;
         self.apply_id(snapshot)?;
         self.apply_schema(snapshot)?;
+        self.apply_name(snapshot)?;
         Ok(())
     }
 
@@ -238,11 +270,13 @@ impl AdjacentMetadata {
     ///
     /// - The number of properties and attributes is 0
     /// - `ignore_unknown_instances` is None
+    /// - `name` is None
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.attributes.is_empty()
             && self.properties.is_empty()
             && self.ignore_unknown_instances.is_none()
+            && self.name.is_none()
     }
 
     // TODO: Add method to allow selectively applying parts of metadata and
@@ -273,6 +307,9 @@ pub struct DirectoryMetadata {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub class_name: Option<Ustr>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
 
     #[serde(skip)]
     pub path: PathBuf,
@@ -383,6 +420,20 @@ impl DirectoryMetadata {
             }
         }
 
+        let name = snapshot
+            .old_inst()
+            .and_then(|inst| inst.metadata().specified_name.clone())
+            .or_else(|| {
+                // Filesystem name differs from the instance name (due to
+                // slugification or deduplication). Store the real name so
+                // it survives a round-trip through the filesystem.
+                if snapshot.needs_meta_name {
+                    Some(snapshot.new_inst().name.clone())
+                } else {
+                    None
+                }
+            });
+
         Ok(Some(Self {
             ignore_unknown_instances: if ignore_unknown_instances {
                 Some(true)
@@ -392,6 +443,7 @@ impl DirectoryMetadata {
             properties,
             attributes,
             class_name: None,
+            name,
             path,
             id: None,
             schema,
@@ -404,6 +456,7 @@ impl DirectoryMetadata {
         self.apply_properties(snapshot)?;
         self.apply_id(snapshot)?;
         self.apply_schema(snapshot)?;
+        self.apply_name(snapshot)?;
 
         Ok(())
     }
@@ -475,17 +528,34 @@ impl DirectoryMetadata {
         snapshot.metadata.schema = self.schema.take();
         Ok(())
     }
+
+    fn apply_name(&mut self, snapshot: &mut InstanceSnapshot) -> anyhow::Result<()> {
+        if self.name.is_some() && snapshot.metadata.specified_name.is_some() {
+            anyhow::bail!(
+                "cannot specify a name using {} (instance has a name from somewhere else)",
+                self.path.display()
+            );
+        }
+        if let Some(name) = &self.name {
+            snapshot.name = name.clone().into();
+        }
+        snapshot.metadata.specified_name = self.name.take();
+        Ok(())
+    }
+
     /// Returns whether the metadata is 'empty', meaning it doesn't have anything
     /// worth persisting in it. Specifically:
     ///
     /// - The number of properties and attributes is 0
     /// - `ignore_unknown_instances` is None
     /// - `class_name` is either None or not Some("Folder")
+    /// - `name` is None
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.attributes.is_empty()
             && self.properties.is_empty()
             && self.ignore_unknown_instances.is_none()
+            && self.name.is_none()
             && if let Some(class) = &self.class_name {
                 class == "Folder"
             } else {

@@ -185,9 +185,10 @@ fn do_something() -> Result<()> {
 pub struct InstanceContext {
     pub path_ignore_rules: Arc<Vec<PathIgnoreRule>>,
     pub sync_rules: Vec<SyncRule>,
-    pub decode_windows_invalid_chars: bool,
 }
 ```
+
+**Filename handling:** Instance names with forbidden filesystem chars are slugified (forbidden chars → `_`), deduplicated (`~1`, `~2`, etc. on collision), and the real name is stored in `.meta.json5`/`.model.json5` `name` fields. See `src/syncback/file_names.rs`.
 
 **VFS passed separately to snapshot functions:**
 ```rust

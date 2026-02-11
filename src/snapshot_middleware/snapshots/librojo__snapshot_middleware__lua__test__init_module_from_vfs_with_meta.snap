@@ -19,8 +19,7 @@ metadata:
     - /root/init.server.lua
     - /root/init.client.lua
     - /root/init.meta.json5
-  context:
-    decode_windows_invalid_chars: true
+  context: {}
   specified_id: manually specified
   middleware: ~
   schema: ~

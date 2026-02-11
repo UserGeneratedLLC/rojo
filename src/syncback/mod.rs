@@ -1,6 +1,7 @@
 mod file_names;
 mod fs_snapshot;
 mod hash;
+pub mod meta;
 mod property_filter;
 mod ref_properties;
 mod snapshot;
@@ -29,7 +30,11 @@ use crate::{
     Project,
 };
 
-pub use file_names::{extension_for_middleware, name_for_inst, validate_file_name};
+pub use file_names::{
+    adjacent_meta_path, deduplicate_name, extension_for_middleware, name_for_inst,
+    name_needs_slugify, slugify_name, strip_middleware_extension, strip_script_suffix,
+    validate_file_name,
+};
 pub use fs_snapshot::FsSnapshot;
 pub use hash::*;
 pub use property_filter::{
@@ -448,6 +453,7 @@ pub fn syncback_loop_with_stats(
         new: new_tree.root_ref(),
         path: project.file_location.clone(),
         middleware: Some(Middleware::Project),
+        needs_meta_name: false,
     }];
 
     let mut fs_snapshot = FsSnapshot::new();
@@ -959,7 +965,7 @@ pub fn get_best_middleware(snapshot: &SyncbackSnapshot) -> Middleware {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
+#[serde(rename_all = "camelCase")]
 pub struct SyncbackRules {
     /// A list of subtrees in a file that will be ignored by Syncback.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -996,12 +1002,6 @@ pub struct SyncbackRules {
     /// generally a better UX.
     #[serde(skip_serializing_if = "Option::is_none")]
     create_ignore_dir_paths: Option<bool>,
-    /// Whether to encode Windows-invalid characters in file names during
-    /// syncback. Characters like `<`, `>`, `:`, `"`, `/`, `\`, `|`, `?`, `*`
-    /// will be encoded as `%LT%`, `%GT%`, `%COLON%`, etc.
-    /// Defaults to `true`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    encode_windows_invalid_chars: Option<bool>,
     /// When enabled, only "visible" services will be synced back. This includes
     /// commonly used services like Workspace, ReplicatedStorage, ServerScriptService,
     /// etc., while ignoring internal/hidden services like Chat, HttpService, etc.
@@ -1052,13 +1052,6 @@ impl SyncbackRules {
         }
 
         Ok(globs)
-    }
-
-    /// Returns whether special characters (including periods) should be encoded
-    /// in file names during syncback. Defaults to `true`.
-    #[inline]
-    pub fn encode_windows_invalid_chars(&self) -> bool {
-        self.encode_windows_invalid_chars.unwrap_or(true)
     }
 
     /// Returns whether hidden/internal services should be ignored during

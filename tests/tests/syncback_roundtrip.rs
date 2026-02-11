@@ -8,6 +8,7 @@
 //! Produces semantically identical output. This validates that the syncback
 //! system correctly reconstructs project structure from binary place files.
 
+use std::collections::HashMap;
 use std::{fs, path::Path};
 
 use rbx_dom_weak::{ustr, WeakDom};
@@ -284,6 +285,11 @@ roundtrip_tests! {
 
     // Issue regression tests
     issue_546,
+
+    // Slugified names and metadata overrides
+    meta_name_override,
+    model_json_name_override,
+    dedup_suffix_with_meta,
 }
 
 // =============================================================================
@@ -336,4 +342,112 @@ fn infer_service_name() {
 #[ignore = "Ref property IDs differ between builds (expected)"]
 fn rbxmx_ref() {
     run_roundtrip_test("rbxmx_ref");
+}
+
+// =============================================================================
+// SYNCBACK IDEMPOTENCY TEST
+// =============================================================================
+
+/// Build -> syncback -> syncback again. The second syncback must produce
+/// zero filesystem changes (i.e., the result is identical to the first).
+/// This validates that syncback output is stable and self-consistent.
+#[test]
+fn syncback_idempotency() {
+    let _ = env_logger::try_init();
+
+    // Use dedup_suffix_with_meta as it exercises slugified names + meta
+    let project_path = Path::new(BUILD_TESTS_PATH).join("dedup_suffix_with_meta");
+
+    // 1. Build original -> rbxm
+    let (_tmp1, original_rbxm) = run_rojo_build(&project_path, "original.rbxm");
+
+    // 2. First syncback
+    let first_dir = tempdir().expect("Failed to create temp dir");
+    copy_project_dir(&project_path, first_dir.path());
+    assert!(
+        run_rojo_syncback_clean(first_dir.path(), &original_rbxm),
+        "First syncback should succeed"
+    );
+    ensure_project_dirs_exist(first_dir.path());
+
+    // Snapshot all files after first syncback
+    let first_snapshot = snapshot_dir(first_dir.path());
+
+    // 3. Build from first syncback result -> rbxm
+    let (_tmp2, first_rbxm) = run_rojo_build(first_dir.path(), "first.rbxm");
+
+    // 4. Second syncback (into a copy of the first syncback result)
+    let second_dir = tempdir().expect("Failed to create temp dir");
+    copy_project_dir(first_dir.path(), second_dir.path());
+    assert!(
+        run_rojo_syncback_clean(second_dir.path(), &first_rbxm),
+        "Second syncback should succeed"
+    );
+    ensure_project_dirs_exist(second_dir.path());
+
+    // 5. Snapshot all files after second syncback
+    let second_snapshot = snapshot_dir(second_dir.path());
+
+    // 6. Compare snapshots — must be identical
+    assert_eq!(
+        first_snapshot.len(),
+        second_snapshot.len(),
+        "File count should be identical between first and second syncback.\n\
+         First: {:?}\nSecond: {:?}",
+        first_snapshot.keys().collect::<Vec<_>>(),
+        second_snapshot.keys().collect::<Vec<_>>(),
+    );
+
+    for (path, first_content) in &first_snapshot {
+        let second_content = second_snapshot.get(path).unwrap_or_else(|| {
+            panic!(
+                "File {:?} exists after first syncback but not after second",
+                path
+            )
+        });
+        assert_eq!(
+            first_content, second_content,
+            "File {:?} changed between first and second syncback",
+            path
+        );
+    }
+}
+
+/// Snapshot all files under a directory into a map of relative_path -> contents.
+fn snapshot_dir(root: &Path) -> HashMap<String, Vec<u8>> {
+    let mut result = HashMap::new();
+    snapshot_dir_inner(root, root, &mut result);
+    result
+}
+
+fn snapshot_dir_inner(root: &Path, current: &Path, map: &mut HashMap<String, Vec<u8>>) {
+    if let Ok(entries) = fs::read_dir(current) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                snapshot_dir_inner(root, &path, map);
+            } else {
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                if let Ok(content) = fs::read(&path) {
+                    map.insert(relative, content);
+                }
+            }
+        }
+    }
+}
+
+// =============================================================================
+// WINDOWS RESERVED NAME ROUNDTRIP TEST
+// =============================================================================
+
+/// Instances named after Windows reserved names (CON, PRN) should round-trip
+/// correctly: slugified on disk, real name in meta, rebuild produces correct
+/// instance names.
+#[test]
+fn reserved_name_roundtrip() {
+    run_roundtrip_test("reserved_name_override");
 }

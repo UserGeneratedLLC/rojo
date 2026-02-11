@@ -1,5 +1,6 @@
 ---
 source: tests/tests/build.rs
+assertion_line: 106
 expression: contents
 ---
 <roblox version="4">
@@ -9,7 +10,7 @@ expression: contents
     </Properties>
     <Item class="Folder" referent="1">
       <Properties>
-        <string name="Name">Expected Name</string>
+        <string name="Name">Overridden Name</string>
       </Properties>
     </Item>
   </Item>

@@ -1,0 +1,6 @@
+{
+  "name": "dedup_suffix_with_meta",
+  "tree": {
+    "$path": "src"
+  }
+}

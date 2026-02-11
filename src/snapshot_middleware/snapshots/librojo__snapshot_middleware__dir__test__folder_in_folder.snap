@@ -19,8 +19,7 @@ metadata:
     - /foo/init.server.lua
     - /foo/init.client.lua
     - /foo/init.meta.json5
-  context:
-    decode_windows_invalid_chars: true
+  context: {}
   specified_id: ~
   middleware: ~
   schema: ~
@@ -45,8 +44,7 @@ children:
         - /foo/Child/init.server.lua
         - /foo/Child/init.client.lua
         - /foo/Child/init.meta.json5
-      context:
-        decode_windows_invalid_chars: true
+      context: {}
       specified_id: ~
       middleware: dir
       schema: ~

@@ -1,0 +1,30 @@
+---
+source: tests/tests/build.rs
+expression: contents
+---
+<roblox version="4">
+  <Item class="DataModel" referent="0">
+    <Properties>
+      <string name="Name">reserved_name_override</string>
+    </Properties>
+    <Item class="ReplicatedStorage" referent="1">
+      <Properties>
+        <string name="Name">ReplicatedStorage</string>
+      </Properties>
+      <Item class="ModuleScript" referent="2">
+        <Properties>
+          <string name="Name">CON</string>
+          <string name="Source"><![CDATA[return "I am CON"
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="3">
+        <Properties>
+          <string name="Name">PRN</string>
+          <string name="Source"><![CDATA[return "I am PRN"
+]]></string>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+</roblox>

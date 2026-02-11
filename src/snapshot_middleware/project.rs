@@ -20,7 +20,10 @@ use crate::{
         PathIgnoreRule, SyncRule,
     },
     snapshot_middleware::Middleware,
-    syncback::{filter_properties, inst_path, FsSnapshot, SyncbackReturn, SyncbackSnapshot},
+    syncback::{
+        filter_properties, inst_path, name_needs_slugify, slugify_name, strip_middleware_extension,
+        FsSnapshot, SyncbackReturn, SyncbackSnapshot,
+    },
     variant_eq::variant_eq,
     RojoRef,
 };
@@ -647,7 +650,55 @@ pub fn syncback_project<'sync>(
 
         // All of the children in this loop are by their nature not in the
         // project, so we just need to run syncback on them.
-        for (name, new_child) in new_child_map.drain() {
+        //
+        // Track taken names (bare slugs) per parent directory so siblings
+        // under the same parent deduplicate against each other.
+        let mut taken_names_per_dir: std::collections::HashMap<
+            std::path::PathBuf,
+            std::collections::HashSet<String>,
+        > = std::collections::HashMap::new();
+
+        // Pre-seed taken_names from old children's actual filesystem dedup keys
+        // so that new-only children correctly dedup against existing siblings.
+        // We derive keys from relevant_paths (the real filename on disk) rather
+        // than slugifying instance names, because an old instance may already
+        // have a tilde suffix (e.g. A_B~1.luau from prior dedup) that the bare
+        // slug wouldn't capture.
+        // Only in incremental mode: in clean mode, old_ref is forced to None
+        // for all children, so every child is treated as new and pre-seeding
+        // would cause false collisions (spurious ~1 suffixes).
+        if snapshot.data.is_incremental() {
+            if let Some(parent_path) = ref_to_path_map.get(&new_inst.referent()) {
+                let taken = taken_names_per_dir.entry(parent_path.clone()).or_default();
+                for old_child in old_child_map.values() {
+                    if let Some(path) = old_child.metadata().relevant_paths.first() {
+                        if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
+                            let middleware =
+                                old_child.metadata().middleware.unwrap_or(Middleware::Dir);
+                            let dedup_key =
+                                strip_middleware_extension(filename, middleware).to_lowercase();
+                            taken.insert(dedup_key);
+                        }
+                    } else {
+                        // Fallback (shouldn't happen for old instances with disk presence)
+                        let name = old_child.name();
+                        let slug = if name_needs_slugify(name) {
+                            slugify_name(name).to_lowercase()
+                        } else {
+                            name.to_lowercase()
+                        };
+                        taken.insert(slug);
+                    }
+                }
+            }
+        }
+
+        // Sort remaining children by name for deterministic dedup ordering.
+        // Without this, HashMap iteration order determines which sibling gets
+        // the base slug vs ~1, causing non-deterministic output across runs.
+        let mut remaining_children: Vec<_> = new_child_map.drain().collect();
+        remaining_children.sort_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
+        for (name, new_child) in remaining_children {
             // Skip instances of ignored classes
             if snapshot.should_ignore_class(&new_child.class) {
                 // Also remove from old_child_map so it won't be marked as removed
@@ -680,11 +731,15 @@ pub fn syncback_project<'sync>(
                 // concern with directories because they're singular things,
                 // files that contain their own children.
                 if parent_middleware != Middleware::Project {
-                    descendant_snapshots.push(snapshot.with_base_path(
+                    let taken_names = taken_names_per_dir.entry(parent_path.clone()).or_default();
+                    let (child_snap, _needs_meta, dedup_key) = snapshot.with_base_path(
                         &parent_path,
                         new_child.referent(),
                         None,
-                    )?);
+                        taken_names,
+                    )?;
+                    taken_names.insert(dedup_key.to_lowercase());
+                    descendant_snapshots.push(child_snap);
                 }
             }
         }

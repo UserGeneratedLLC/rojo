@@ -1,0 +1,6 @@
+{
+  "name": "model_json_name_override",
+  "tree": {
+    "$path": "src"
+  }
+}
