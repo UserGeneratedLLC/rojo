@@ -31,7 +31,7 @@ use crate::{
 
 pub use file_names::{
     deduplicate_name, extension_for_middleware, name_for_inst, name_needs_slugify, slugify_name,
-    validate_file_name,
+    strip_middleware_extension, validate_file_name,
 };
 pub use fs_snapshot::FsSnapshot;
 pub use hash::*;

@@ -15,7 +15,7 @@ use crate::{
         apply_patch_set, compute_patch_set, AppliedPatchSet, InstigatingSource, PatchSet, RojoTree,
     },
     snapshot_middleware::{snapshot_from_vfs, snapshot_project_node},
-    syncback::{name_needs_slugify, slugify_name},
+    syncback::{deduplicate_name, name_needs_slugify, slugify_name},
 };
 
 /// Processes file change events, updates the DOM, and sends those updates
@@ -309,6 +309,42 @@ impl JobThreadContext {
                 }
             }
         }
+    }
+
+    /// Deduplicate a slugified name against existing entries in a parent
+    /// directory. Reads the directory, strips entries to bare slugs (file_stem),
+    /// and uses `deduplicate_name` to find a collision-free name.
+    fn dedup_against_dir(slug: &str, parent_dir: &Path, exclude: Option<&str>) -> String {
+        let mut taken = std::collections::HashSet::new();
+        if let Ok(entries) = fs::read_dir(parent_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name();
+                let name_str = name.to_string_lossy();
+                // Use file_stem as a rough bare-slug approximation.
+                // For directories this is the dir name itself; for files
+                // it strips the last extension (e.g., "foo.server" from
+                // "foo.server.luau").  This is conservative: it may over-
+                // dedup in rare cases (compound extensions) but never
+                // under-dedup.
+                let stem = if entry.path().is_dir() {
+                    name_str.to_string()
+                } else {
+                    std::path::Path::new(name_str.as_ref())
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(&name_str)
+                        .to_string()
+                };
+                // Exclude the entry being renamed (it will be gone after rename)
+                if let Some(ex) = exclude {
+                    if name_str == ex {
+                        continue;
+                    }
+                }
+                taken.insert(stem.to_lowercase());
+            }
+        }
+        deduplicate_name(slug, &taken)
     }
 
     /// Computes and applies patches to the DOM for a given file path.
@@ -723,12 +759,22 @@ impl JobThreadContext {
                                                     .and_then(|f| f.to_str())
                                                     .unwrap_or("");
                                                 // Slugify the new name for filesystem safety
-                                                let slugified_new_name =
+                                                let mut slugified_new_name =
                                                     if name_needs_slugify(new_name) {
                                                         slugify_name(new_name)
                                                     } else {
                                                         new_name.to_string()
                                                     };
+                                                // Dedup against siblings to avoid overwriting
+                                                // an existing directory at the target path
+                                                let candidate = grandparent.join(&slugified_new_name);
+                                                if candidate.exists() && candidate != dir_path {
+                                                    slugified_new_name = Self::dedup_against_dir(
+                                                        &slugified_new_name,
+                                                        grandparent,
+                                                        dir_path.file_name().and_then(|s| s.to_str()),
+                                                    );
+                                                }
                                                 let new_dir_path =
                                                     grandparent.join(&slugified_new_name);
 
@@ -816,12 +862,33 @@ impl JobThreadContext {
                                                 &stem[..stem.len() - script_suffix.len()]
                                             };
 
-                                            let slugified_new_name = if name_needs_slugify(new_name)
-                                            {
-                                                slugify_name(new_name)
+                                            let mut slugified_new_name =
+                                                if name_needs_slugify(new_name) {
+                                                    slugify_name(new_name)
+                                                } else {
+                                                    new_name.to_string()
+                                                };
+                                            // Dedup against siblings to avoid overwriting
+                                            // an existing file at the target path
+                                            let test_file_name = if extension.is_empty() {
+                                                format!("{}{}", slugified_new_name, script_suffix)
                                             } else {
-                                                new_name.to_string()
+                                                format!(
+                                                    "{}{}.{}",
+                                                    slugified_new_name, script_suffix, extension
+                                                )
                                             };
+                                            let test_path = parent.join(&test_file_name);
+                                            if test_path.exists() && test_path != *path {
+                                                let old_filename = path
+                                                    .file_name()
+                                                    .and_then(|s| s.to_str());
+                                                slugified_new_name = Self::dedup_against_dir(
+                                                    &slugified_new_name,
+                                                    parent,
+                                                    old_filename,
+                                                );
+                                            }
                                             let new_file_name = if extension.is_empty() {
                                                 format!("{}{}", slugified_new_name, script_suffix)
                                             } else {

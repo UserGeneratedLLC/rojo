@@ -564,19 +564,80 @@ impl ApiService {
                 }
             }
 
+            // Group added instances by parent so siblings share a dedup set.
+            // This prevents two instances in the same batch from claiming the
+            // same slug when added to the same parent.
+            let mut adds_by_parent: HashMap<Ref, Vec<&crate::web::interface::AddedInstance>> =
+                HashMap::new();
             for added in request.added.values() {
-                if let Err(err) = self.syncback_added_instance(
-                    added,
-                    &tree,
-                    &duplicate_siblings_cache,
-                    &stats,
-                    &converted_parents,
-                ) {
-                    log::warn!(
-                        "Failed to syncback added instance '{}': {}",
-                        added.name,
-                        err
-                    );
+                if let Some(parent_ref) = added.parent {
+                    adds_by_parent.entry(parent_ref).or_default().push(added);
+                } else {
+                    // No parent — process individually (will fail with context)
+                    adds_by_parent
+                        .entry(Ref::none())
+                        .or_default()
+                        .push(added);
+                }
+            }
+            for (parent_ref, siblings) in &adds_by_parent {
+                // Pre-seed sibling_slugs from the tree's existing children
+                // of this parent so new instances dedup against existing ones.
+                // We derive slugs from actual filesystem paths (via instigating_source)
+                // to correctly account for dedup suffixes (e.g., Hey_Bro~1).
+                let mut sibling_slugs: HashSet<String> = if *parent_ref != Ref::none() {
+                    if let Some(parent_inst) = tree.get_instance(*parent_ref) {
+                        use crate::snapshot::InstigatingSource;
+                        use crate::syncback::{name_needs_slugify, strip_middleware_extension};
+                        parent_inst
+                            .children()
+                            .iter()
+                            .filter_map(|r| tree.get_instance(*r))
+                            .map(|inst| {
+                                // Prefer filesystem path for accurate dedup keys
+                                if let Some(InstigatingSource::Path(p)) =
+                                    &inst.metadata().instigating_source
+                                {
+                                    if let Some(fname) = p.file_name().and_then(|s| s.to_str()) {
+                                        if let Some(mw) = inst.metadata().middleware {
+                                            return strip_middleware_extension(fname, mw)
+                                                .to_lowercase();
+                                        }
+                                        // No middleware info — use filename as-is
+                                        // (directory entries have no extension)
+                                        return fname.to_lowercase();
+                                    }
+                                }
+                                // Fallback: re-slugify instance name
+                                let name = inst.name();
+                                if name_needs_slugify(name) {
+                                    slugify_name(name).to_lowercase()
+                                } else {
+                                    name.to_lowercase()
+                                }
+                            })
+                            .collect()
+                    } else {
+                        HashSet::new()
+                    }
+                } else {
+                    HashSet::new()
+                };
+                for added in siblings {
+                    if let Err(err) = self.syncback_added_instance(
+                        added,
+                        &tree,
+                        &duplicate_siblings_cache,
+                        &stats,
+                        &converted_parents,
+                        &mut sibling_slugs,
+                    ) {
+                        log::warn!(
+                            "Failed to syncback added instance '{}': {}",
+                            added.name,
+                            err
+                        );
+                    }
                 }
             }
         }
@@ -768,6 +829,7 @@ impl ApiService {
         duplicate_siblings_cache: &HashSet<Ref>,
         stats: &crate::syncback::SyncbackStats,
         converted_parents: &HashMap<Ref, PathBuf>,
+        sibling_slugs: &mut HashSet<String>,
     ) -> anyhow::Result<()> {
         use anyhow::Context;
 
@@ -899,29 +961,13 @@ impl ApiService {
             }
         };
 
-        // Seed sibling slugs from the tree's existing children of the parent.
-        // This gives us bare instance-name-level slugs (no extensions) for
-        // accurate dedup against existing siblings.
-        let sibling_slugs: HashSet<String> = {
-            use crate::syncback::name_needs_slugify;
-            parent_instance
-                .children()
-                .iter()
-                .filter_map(|r| tree.get_instance(*r))
-                .map(|inst| {
-                    let name = inst.name();
-                    if name_needs_slugify(name) {
-                        slugify_name(name).to_lowercase()
-                    } else {
-                        name.to_lowercase()
-                    }
-                })
-                .collect()
-        };
-
-        // Create the instance at the resolved path
-        self.syncback_instance_to_path_with_stats(added, &parent_dir, stats, &sibling_slugs)
-            .map(|_| ())
+        // Create the instance at the resolved path, accumulating its claimed
+        // slug into sibling_slugs so subsequent siblings in the same batch
+        // see it as taken.
+        let slug =
+            self.syncback_instance_to_path_with_stats(added, &parent_dir, stats, sibling_slugs)?;
+        sibling_slugs.insert(slug);
+        Ok(())
     }
 
     /// Update an existing instance in place instead of creating new files.
@@ -1086,7 +1132,7 @@ impl ApiService {
                 if existing_path.is_dir() {
                     // Update init.meta.json5 if needed
                     if !added.properties.is_empty() {
-                        self.write_init_meta_json(existing_path, added)?;
+                        self.write_init_meta_json(existing_path, added, None)?;
                         log::info!(
                             "Syncback: Updated existing {} at {}/init.meta.json5",
                             class_name,
@@ -1104,7 +1150,7 @@ impl ApiService {
                     }
                 } else {
                     // It's a standalone file (e.g., .model.json5)
-                    let content = self.serialize_instance_to_model_json(added)?;
+                    let content = self.serialize_instance_to_model_json(added, None)?;
                     self.suppress_path(existing_path);
                     fs::write(existing_path, &content).with_context(|| {
                         format!("Failed to write file: {}", existing_path.display())
@@ -1845,8 +1891,8 @@ impl ApiService {
                     format!("Failed to create directory: {}", dir_path.display())
                 })?;
 
-                // Write init.meta.json5 if has ANY properties (Attributes, Tags, etc.)
-                let has_metadata = if added.properties.is_empty() {
+                // Write init.meta.json5 if has ANY properties or needs a name field
+                let has_metadata = if added.properties.is_empty() && meta_name_field.is_none() {
                     false
                 } else {
                     self.write_directory_meta_json(&dir_path, added, meta_name_field)?;
@@ -1880,7 +1926,7 @@ impl ApiService {
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
                     })?;
-                    self.write_init_meta_json(&dir_path, added)?;
+                    self.write_init_meta_json(&dir_path, added, meta_name_field)?;
                     log::info!(
                         "Syncback: Created StringValue directory at {}",
                         dir_path.display()
@@ -1900,6 +1946,23 @@ impl ApiService {
                     fs::write(&file_path, value.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
+                    // Write adjacent meta for name preservation if slugified
+                    if let Some(real_name) = meta_name_field {
+                        let meta = self.build_meta_object(
+                            None,
+                            Some(real_name),
+                            indexmap::IndexMap::new(),
+                            indexmap::IndexMap::new(),
+                        );
+                        let meta_path =
+                            parent_dir.join(format!("{}.meta.json5", encoded_name));
+                        let content = crate::json::to_vec_pretty_sorted(&meta)
+                            .context("Failed to serialize meta")?;
+                        self.suppress_path(&meta_path);
+                        fs::write(&meta_path, &content).with_context(|| {
+                            format!("Failed to write meta: {}", meta_path.display())
+                        })?;
+                    }
                     log::info!("Syncback: Created StringValue at {}", file_path.display());
                 }
             }
@@ -1921,6 +1984,8 @@ impl ApiService {
                     fs::write(&init_path, content.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", init_path.display())
                     })?;
+                    // Write init.meta.json5 for className and name preservation
+                    self.write_init_meta_json(&dir_path, added, meta_name_field)?;
                     log::info!(
                         "Syncback: Created LocalizationTable directory at {}",
                         dir_path.display()
@@ -1932,6 +1997,23 @@ impl ApiService {
                     fs::write(&file_path, content.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
+                    // Write adjacent meta for name preservation if slugified
+                    if let Some(real_name) = meta_name_field {
+                        let meta = self.build_meta_object(
+                            None,
+                            Some(real_name),
+                            indexmap::IndexMap::new(),
+                            indexmap::IndexMap::new(),
+                        );
+                        let meta_path =
+                            parent_dir.join(format!("{}.meta.json5", encoded_name));
+                        let content = crate::json::to_vec_pretty_sorted(&meta)
+                            .context("Failed to serialize meta")?;
+                        self.suppress_path(&meta_path);
+                        fs::write(&meta_path, &content).with_context(|| {
+                            format!("Failed to write meta: {}", meta_path.display())
+                        })?;
+                    }
                     log::info!(
                         "Syncback: Created LocalizationTable at {}",
                         file_path.display()
@@ -1968,7 +2050,7 @@ impl ApiService {
                     })?;
 
                     // Write init.meta.json5 with class and properties
-                    self.write_init_meta_json(&dir_path, added)?;
+                    self.write_init_meta_json(&dir_path, added, meta_name_field)?;
 
                     log::info!(
                         "Syncback: Updated {} at {}/init.meta.json5",
@@ -1979,7 +2061,8 @@ impl ApiService {
                     // Recursively process children
                     self.process_children_incremental(&unique_children, &dir_path, stats)?;
                 } else {
-                    let content = self.serialize_instance_to_model_json(added)?;
+                    let content =
+                        self.serialize_instance_to_model_json(added, meta_name_field)?;
                     // Use the detected file path if available (preserves .model.json
                     // vs .model.json5), otherwise default to .model.json5
                     let file_path = match &existing_format {
@@ -2004,13 +2087,41 @@ impl ApiService {
 
     /// Process children with incremental slug tracking, so each child's
     /// claimed name is added to the taken set before processing the next.
+    /// Pre-seeds the taken set from existing directory entries so new children
+    /// don't collide with files already on disk.
     fn process_children_incremental(
         &self,
         children: &[&crate::web::interface::AddedInstance],
         dir_path: &std::path::Path,
         stats: &crate::syncback::SyncbackStats,
     ) -> anyhow::Result<()> {
-        let mut taken = HashSet::new();
+        // Seed from existing directory entries (bare stems, lowercased)
+        let mut taken: HashSet<String> = if dir_path.is_dir() {
+            fs::read_dir(dir_path)
+                .ok()
+                .map(|entries| {
+                    entries
+                        .flatten()
+                        .filter_map(|e| {
+                            let name = e.file_name();
+                            let name_str = name.to_string_lossy();
+                            // For directories, the name IS the slug.
+                            // For files, strip the last extension to approximate the slug.
+                            if e.path().is_dir() {
+                                Some(name_str.to_lowercase())
+                            } else {
+                                std::path::Path::new(name_str.as_ref())
+                                    .file_stem()
+                                    .and_then(|s| s.to_str())
+                                    .map(|s| s.to_lowercase())
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        } else {
+            HashSet::new()
+        };
         for child in children {
             let slug = self.syncback_instance_to_path_with_stats(child, dir_path, stats, &taken)?;
             taken.insert(slug);
@@ -2091,6 +2202,7 @@ impl ApiService {
         &self,
         dir_path: &std::path::Path,
         added: &crate::web::interface::AddedInstance,
+        instance_name: Option<&str>,
     ) -> anyhow::Result<()> {
         use anyhow::Context;
 
@@ -2098,7 +2210,8 @@ impl ApiService {
             self.filter_properties_for_meta(&added.class_name, &added.properties, None);
 
         // For non-Folder classes, we need to include className
-        let meta = self.build_meta_object(Some(&added.class_name), None, properties, attributes);
+        let meta =
+            self.build_meta_object(Some(&added.class_name), instance_name, properties, attributes);
         let meta_path = dir_path.join("init.meta.json5");
         let content = crate::json::to_vec_pretty_sorted(&meta)
             .context("Failed to serialize init.meta.json5")?;
@@ -2329,6 +2442,7 @@ impl ApiService {
     fn serialize_instance_to_model_json(
         &self,
         added: &crate::web::interface::AddedInstance,
+        instance_name: Option<&str>,
     ) -> anyhow::Result<Vec<u8>> {
         use anyhow::Context;
         use serde_json::json;
@@ -2340,6 +2454,9 @@ impl ApiService {
         // Build the JSON model structure
         // Format: https://rojo.space/docs/v7/sync-details/#json-models
         let mut model = serde_json::Map::new();
+        if let Some(name) = instance_name {
+            model.insert("name".to_string(), json!(name));
+        }
         model.insert("className".to_string(), json!(added.class_name));
 
         if !properties.is_empty() {

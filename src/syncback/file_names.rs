@@ -85,8 +85,9 @@ pub fn name_for_inst<'a>(
 }
 
 /// Strips the middleware extension from a filename to recover the bare slug.
-/// Used internally by `name_for_inst` to derive the dedup key for old instances.
-fn strip_middleware_extension(filename: &str, middleware: Middleware) -> String {
+/// Used by `name_for_inst` to derive the dedup key for old instances, and by
+/// callers that need to seed `taken_names` from filesystem paths.
+pub fn strip_middleware_extension(filename: &str, middleware: Middleware) -> String {
     // Dir middleware has no extension — filename IS the slug
     match middleware {
         Middleware::Dir
