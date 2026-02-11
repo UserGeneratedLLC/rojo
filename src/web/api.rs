@@ -2079,6 +2079,43 @@ impl ApiService {
         Ok(encoded_name.to_lowercase())
     }
 
+    /// Extracts the bare slug from a filename by stripping Rojo's known
+    /// extensions (compound and simple) and script suffixes.
+    ///
+    /// Examples:
+    /// - `Foo.server.luau` → `Foo`  (strip `.luau`, then `.server`)
+    /// - `Bar.client.lua`  → `Bar`
+    /// - `Baz.model.json5` → `Baz`  (compound extension)
+    /// - `Data.txt`        → `Data` (simple extension)
+    /// - `init.luau`       → `init` (no suffix match)
+    fn bare_slug_from_filename(filename: &str) -> &str {
+        // Try compound extensions first (must check before simple strip)
+        if let Some(stem) = filename
+            .strip_suffix(".model.json5")
+            .or_else(|| filename.strip_suffix(".model.json"))
+            .or_else(|| filename.strip_suffix(".project.json5"))
+            .or_else(|| filename.strip_suffix(".project.json"))
+            .or_else(|| filename.strip_suffix(".meta.json5"))
+            .or_else(|| filename.strip_suffix(".meta.json"))
+        {
+            return stem;
+        }
+
+        // Strip outer extension (.luau, .lua, .csv, .txt, etc.)
+        let stem = std::path::Path::new(filename)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or(filename);
+
+        // Strip known script suffixes from the stem
+        stem.strip_suffix(".server")
+            .or_else(|| stem.strip_suffix(".client"))
+            .or_else(|| stem.strip_suffix(".plugin"))
+            .or_else(|| stem.strip_suffix(".local"))
+            .or_else(|| stem.strip_suffix(".legacy"))
+            .unwrap_or(stem)
+    }
+
     /// Process children with incremental slug tracking, so each child's
     /// claimed name is added to the taken set before processing the next.
     /// Pre-seeds the taken set from existing directory entries so new children
@@ -2089,7 +2126,11 @@ impl ApiService {
         dir_path: &std::path::Path,
         stats: &crate::syncback::SyncbackStats,
     ) -> anyhow::Result<()> {
-        // Seed from existing directory entries (bare stems, lowercased)
+        // Seed from existing directory entries (bare slugs, lowercased).
+        // For script files with compound extensions (.server.luau, .client.luau,
+        // etc.), we must strip both the outer extension AND the script suffix to
+        // recover the bare slug. Plain file_stem() only strips one extension,
+        // yielding "Foo.server" instead of "Foo".
         let mut taken: HashSet<String> = if dir_path.is_dir() {
             fs::read_dir(dir_path)
                 .ok()
@@ -2099,15 +2140,10 @@ impl ApiService {
                         .filter_map(|e| {
                             let name = e.file_name();
                             let name_str = name.to_string_lossy();
-                            // For directories, the name IS the slug.
-                            // For files, strip the last extension to approximate the slug.
                             if e.path().is_dir() {
                                 Some(name_str.to_lowercase())
                             } else {
-                                std::path::Path::new(name_str.as_ref())
-                                    .file_stem()
-                                    .and_then(|s| s.to_str())
-                                    .map(|s| s.to_lowercase())
+                                Some(Self::bare_slug_from_filename(&name_str).to_lowercase())
                             }
                         })
                         .collect()
