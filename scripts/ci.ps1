@@ -88,10 +88,8 @@ Record-Result "Plugin Tests" $pluginTests
 
 if ($RbxDom) {
     Write-Step 10 "Auto-fix Lua Formatting (Stylua) for rbx_dom_lua"
-    Push-Location rbx-dom
-    stylua rbx_dom_lua/src
+    stylua rbx-dom/rbx_dom_lua/src
     $styluaRbxDom = $LASTEXITCODE
-    Pop-Location
     Record-Result "Stylua (rbx_dom_lua)" $styluaRbxDom
 
     Write-Step 11 "Auto-fix Rust Formatting (rbx-dom)"
@@ -102,10 +100,8 @@ if ($RbxDom) {
     Record-Result "Rustfmt (rbx-dom)" $rustfmtRbxDom
 
     Write-Step 12 "Lua Static Analysis (Selene) for rbx_dom_lua"
-    Push-Location rbx-dom
-    selene rbx_dom_lua/src
+    selene rbx-dom/rbx_dom_lua/src
     $seleneRbxDom = $LASTEXITCODE
-    Pop-Location
     Record-Result "Selene (rbx_dom_lua)" $seleneRbxDom
 
     Write-Step 13 "Rust Linting (Clippy) for rbx-dom - Auto-fix"
