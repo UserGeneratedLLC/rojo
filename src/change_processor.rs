@@ -121,22 +121,6 @@ impl ChangeProcessor {
                     select! {
                         recv(vfs_receiver) -> event => {
                             task.handle_vfs_event(event?);
-
-                            // Drain any additional queued VFS events without
-                            // blocking. This prevents a backlog of hundreds
-                            // of events from holding the tree lock for minutes.
-                            let mut drained = 0u64;
-                            while let Ok(extra) = vfs_receiver.try_recv() {
-                                task.handle_vfs_event(extra);
-                                drained += 1;
-                            }
-                            if drained > 0 {
-                                log::debug!(
-                                    "Drained {} additional VFS events from backlog",
-                                    drained
-                                );
-                            }
-
                             task.process_pending_recoveries();
 
                             // Schedule a reconciliation 200ms from now if one isn't pending.
@@ -151,22 +135,6 @@ impl ChangeProcessor {
                             if reconcile_at.is_some_and(|d| Instant::now() >= d) {
                                 task.reconcile_tree();
                                 reconcile_at = None;
-
-                                // After reconciliation, drain and discard any pending
-                                // VFS events. The reconciliation already computed the
-                                // correct state from disk — stale events would only
-                                // re-introduce drift (they reference paths from before
-                                // the reconciliation).
-                                let mut discarded = 0u64;
-                                while vfs_receiver.try_recv().is_ok() {
-                                    discarded += 1;
-                                }
-                                if discarded > 0 {
-                                    log::info!(
-                                        "Discarded {} stale VFS events after reconciliation",
-                                        discarded
-                                    );
-                                }
                             }
                         },
                         recv(tree_mutation_receiver) -> patch_set => {
@@ -180,8 +148,6 @@ impl ChangeProcessor {
                                 );
                                 task.reconcile_tree();
                                 reconcile_at = None;
-                                // Drain stale events after reconciliation
-                                while vfs_receiver.try_recv().is_ok() {}
                             }
                         },
                         recv(shutdown_receiver) -> _ => {
@@ -195,8 +161,6 @@ impl ChangeProcessor {
                             if reconcile_at.is_some_and(|d| Instant::now() >= d) {
                                 task.reconcile_tree();
                                 reconcile_at = None;
-                                // Drain stale events after reconciliation
-                                while vfs_receiver.try_recv().is_ok() {}
                             }
                         },
                     }
