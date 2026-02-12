@@ -151,6 +151,7 @@ pub async fn call(
             service.handle_api_open(request).await
         }
         (&Method::POST, "/api/write") => service.handle_api_write(request).await,
+        (&Method::GET, "/api/validate-tree") => service.handle_api_validate_tree().await,
 
         (_method, path) => msgpack(
             ErrorResponse::not_found(format!("Route not found: {}", path)),
@@ -283,6 +284,13 @@ impl ApiService {
             ignore_hidden_services,
             visible_services,
         })
+    }
+
+    /// Read-only tree freshness check for test infrastructure.
+    /// Re-snapshots from disk and returns drift counts without applying corrections.
+    async fn handle_api_validate_tree(&self) -> Response<Full<Bytes>> {
+        let report = self.serve_session.check_tree_freshness();
+        msgpack_ok(&report)
     }
 
     /// Handle WebSocket upgrade for real-time message streaming

@@ -4,28 +4,28 @@ overview: Create test fixtures that replicate VFS tree staleness, add a tree-fre
 todos:
   - id: api-endpoint
     content: Add GET /api/validate-tree endpoint that re-snapshots and returns drift counts without correcting the tree
-    status: pending
+    status: completed
   - id: session-method
     content: Extract check_tree_freshness() in ServeSession (no age gate, no apply, returns counts) and set VALIDATE_TREE_ON_CONNECT = false
-    status: pending
+    status: completed
   - id: test-helper
     content: Add assert_tree_fresh() helper and ValidateTreeResponse type to tests/rojo_test/serve_util.rs
-    status: pending
+    status: completed
   - id: fixture
     content: Create rojo-test/serve-tests/stale_tree/ fixture with project file and multiple scripts
-    status: pending
+    status: completed
   - id: staleness-tests
     content: "Write 4 new staleness tests: bulk changes, post-API external edit, rapid delete/recreate, directory restructure"
-    status: pending
+    status: completed
   - id: append-freshness
     content: Append assert_tree_fresh() to all watcher_* and echo_suppression_* tests in two_way_sync.rs
-    status: pending
+    status: completed
   - id: tighten-echo
     content: Tighten echo suppression cursor_delta assertion from < 10 to <= 3
-    status: pending
+    status: completed
   - id: chaos-fuzzer
     content: Write chaos fuzzer test that slams the filesystem with random operations for 10 seconds, then asserts tree freshness
-    status: pending
+    status: completed
 isProject: false
 ---
 

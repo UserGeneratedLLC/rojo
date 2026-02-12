@@ -26,6 +26,18 @@ use crate::{
 /// Set to `true` to validate on plugin connect (useful for testing, do not enable on production).
 const VALIDATE_TREE_ON_CONNECT: bool = false;
 
+/// Result of a read-only tree freshness check. Reports how many instances
+/// differ between the in-memory tree and the real filesystem.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeFreshnessReport {
+    pub is_fresh: bool,
+    pub added: usize,
+    pub removed: usize,
+    pub updated: usize,
+    pub elapsed_ms: f64,
+}
+
 /// Contains all of the state for a Rojo serve session. A serve session is used
 /// when we need to build a Rojo tree and possibly rebuild it when input files
 /// change.
@@ -262,6 +274,45 @@ impl ServeSession {
             .as_ref()
             .map(|rules| rules.ignore_hidden_services())
             .unwrap_or(true)
+    }
+
+    /// Read-only check: re-snapshots from disk and returns how many
+    /// instances differ between the in-memory tree and the real filesystem.
+    /// Does NOT apply corrections — the tree is left unchanged.
+    pub fn check_tree_freshness(&self) -> TreeFreshnessReport {
+        let start = Instant::now();
+        let start_path = self.root_project.folder_location();
+        let instance_context = InstanceContext::new();
+
+        let snapshot = match snapshot_from_vfs(&instance_context, &self.vfs, start_path) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("Tree freshness check snapshot error: {:?}", e);
+                return TreeFreshnessReport {
+                    is_fresh: false,
+                    added: 0,
+                    removed: 0,
+                    updated: 0,
+                    elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
+                };
+            }
+        };
+
+        let tree = self.tree.lock().unwrap();
+        let root_id = tree.get_root_id();
+        let patch_set = compute_patch_set(snapshot, &tree, root_id);
+
+        let added = patch_set.added_instances.len();
+        let removed = patch_set.removed_instances.len();
+        let updated = patch_set.updated_instances.len();
+
+        TreeFreshnessReport {
+            is_fresh: added == 0 && removed == 0 && updated == 0,
+            added,
+            removed,
+            updated,
+            elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
+        }
     }
 
     /// Re-snapshots the project tree from the real filesystem and patches

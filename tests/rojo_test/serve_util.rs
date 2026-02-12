@@ -278,6 +278,27 @@ impl TestServeSession {
         Ok(deserialize_msgpack(&body).expect("Server returned malformed response"))
     }
 
+    /// Assert the in-memory tree exactly matches the filesystem.
+    /// Calls the read-only `/api/validate-tree` endpoint which re-snapshots
+    /// from disk and diffs against the current tree without applying corrections.
+    /// Panics with drift counts if any discrepancy is found.
+    pub fn assert_tree_fresh(&self) {
+        let url = format!("http://localhost:{}/api/validate-tree", self.port);
+        let body = reqwest::blocking::get(url)
+            .expect("Failed to call /api/validate-tree")
+            .bytes()
+            .expect("Failed to read validate-tree response body");
+        let report: librojo::TreeFreshnessReport =
+            deserialize_msgpack(&body).expect("Failed to deserialize TreeFreshnessReport");
+
+        assert!(
+            report.is_fresh,
+            "Tree does not match filesystem: {} added, {} removed, {} updated \
+             (validated in {:.1}ms)",
+            report.added, report.removed, report.updated, report.elapsed_ms
+        );
+    }
+
     /// Post to /api/write to simulate plugin syncback operations.
     /// Uses the library's WriteRequest type for proper serialization.
     /// Uses human-readable msgpack format to match server expectations.
