@@ -1479,6 +1479,10 @@ fn clean_to_slug_to_clean_via_filesystem() {
         let info = session.get_api_rojo().unwrap();
         let root_id = info.root_instance_id;
 
+        // Intern the initial tree so parent Refs are in the redaction map
+        let read_response = session.get_api_read(root_id).unwrap();
+        read_response.intern_and_redact(&mut redactions, root_id);
+
         let src = session.path().join("src");
 
         // Step 1: Add meta to Normal.luau -> name becomes "Nor:mal"

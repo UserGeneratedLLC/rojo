@@ -120,8 +120,25 @@ impl ChangeProcessor {
 
                     select! {
                         recv(vfs_receiver) -> event => {
-                            task.handle_vfs_event(event?);
-                            task.process_pending_recoveries();
+                            let mut all_patches = task.handle_vfs_event(event?);
+
+                            // Drain any pending events that arrived during processing.
+                            // This ensures that multi-event filesystem operations (e.g.,
+                            // rename = REMOVE + CREATE on Windows) produce a single
+                            // batched message instead of separate per-event messages,
+                            // giving consistent behavior across platforms.
+                            while let Ok(event) = vfs_receiver.try_recv() {
+                                all_patches.extend(task.handle_vfs_event(event));
+                            }
+
+                            all_patches.extend(task.process_pending_recoveries());
+
+                            if !all_patches.is_empty() {
+                                let merged = AppliedPatchSet::merge(all_patches);
+                                if !merged.is_empty() {
+                                    task.message_queue.push_messages(&[merged]);
+                                }
+                            }
 
                             // Schedule a reconciliation 200ms from now if one isn't pending.
                             if reconcile_at.is_none() {
@@ -470,7 +487,7 @@ impl JobThreadContext {
         applied_patches
     }
 
-    fn handle_vfs_event(&self, event: VfsEvent) {
+    fn handle_vfs_event(&self, event: VfsEvent) -> Vec<AppliedPatchSet> {
         // Log EVERY VFS event at INFO level for diagnostics.
         // This is intentionally verbose — it is critical for debugging
         // file watcher desync issues (e.g., rapid delete+recreate).
@@ -532,7 +549,7 @@ impl JobThreadContext {
                             "VFS event SUPPRESSED (API syncback echo): {}",
                             self.display_path(path)
                         );
-                        return;
+                        return Vec::new();
                     }
                 }
             }
@@ -673,15 +690,13 @@ impl JobThreadContext {
             log::info!("VFS event applied: no changes");
         }
 
-        // Notify anyone listening to the message queue about the changes we
-        // just made.
-        self.message_queue.push_messages(&applied_patches);
+        applied_patches
     }
 
     /// Processes any pending recovery checks for paths that were recently
     /// removed. If a path has reappeared on the real filesystem after the
     /// recovery delay, we trigger a re-snapshot to bring the tree back in sync.
-    fn process_pending_recoveries(&self) {
+    fn process_pending_recoveries(&self) -> Vec<AppliedPatchSet> {
         const RECOVERY_DELAY: Duration = Duration::from_millis(200);
 
         let ready: Vec<PathBuf> = {
@@ -701,6 +716,7 @@ impl JobThreadContext {
             ready
         };
 
+        let mut all_patches = Vec::new();
         for path in ready {
             if std::fs::metadata(&path).is_ok() {
                 log::info!(
@@ -718,7 +734,7 @@ impl JobThreadContext {
                         total_removed,
                         total_updated
                     );
-                    self.message_queue.push_messages(&patches);
+                    all_patches.extend(patches);
                 }
             } else {
                 log::info!(
@@ -727,6 +743,7 @@ impl JobThreadContext {
                 );
             }
         }
+        all_patches
     }
 
     /// Re-snapshots the entire project from the real filesystem and patches

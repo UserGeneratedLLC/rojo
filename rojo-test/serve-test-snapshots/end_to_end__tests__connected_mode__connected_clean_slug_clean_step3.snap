@@ -5,9 +5,20 @@ expression: "packet.intern_and_redact(&mut redactions, ())"
 body:
   messageCursor: 3
   messages:
-    - added: {}
+    - added:
+        id-13:
+          Children: []
+          ClassName: ModuleScript
+          Id: id-13
+          Metadata:
+            ignoreUnknownInstances: false
+          Name: Has/Slash
+          Parent: id-3
+          Properties:
+            Source:
+              "!String": "-- Normal clean-named module\nreturn \"normal\"\n"
       removed:
-        - id-3
+        - id-8
       updated: []
 packetType: messages
 sessionId: id-1
