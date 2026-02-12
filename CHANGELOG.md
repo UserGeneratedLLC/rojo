@@ -31,6 +31,14 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+* Fix tree drift caused by echo suppression eating VFS events for newly added instances. New-instance file writes no longer suppress watcher events, allowing the tree to pick them up correctly.
+* Add periodic tree reconciliation in the ChangeProcessor to recover from lost OS file notification events (Windows `ReadDirectoryChangesW` buffer overflow). Runs automatically after event bursts settle.
+* Add `GET /api/validate-tree` endpoint for test infrastructure to verify tree-filesystem consistency.
+* Add `assert_tree_fresh()` test helper and tree freshness assertions to all watcher and echo suppression tests.
+* Add VFS staleness tests (bulk changes, post-API external edit, rapid delete/recreate, directory restructure) and a chaos fuzzer stress test.
+* Tighten echo suppression test assertions from lenient bounds to precise expected values.
+* Expose `WatcherCriticalError` channel from VFS to ChangeProcessor for `RescanRequired` event handling.
+
 ## [8.1.0] (February 11th, 2026)
 
 * Overhaul filename handling: replace path encoding system with a slugify approach for robust round-trip fidelity between Roblox instances and the filesystem.
