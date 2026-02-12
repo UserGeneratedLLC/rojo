@@ -31,13 +31,36 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+## [8.2.0] (February 12th, 2026)
+
 * Fix tree drift caused by echo suppression eating VFS events for newly added instances. New-instance file writes no longer suppress watcher events, allowing the tree to pick them up correctly.
 * Add periodic tree reconciliation in the ChangeProcessor to recover from lost OS file notification events (Windows `ReadDirectoryChangesW` buffer overflow). Runs automatically after event bursts settle.
 * Add `GET /api/validate-tree` endpoint for test infrastructure to verify tree-filesystem consistency.
-* Add `assert_tree_fresh()` test helper and tree freshness assertions to all watcher and echo suppression tests.
-* Add VFS staleness tests (bulk changes, post-API external edit, rapid delete/recreate, directory restructure) and a chaos fuzzer stress test.
-* Tighten echo suppression test assertions from lenient bounds to precise expected values.
 * Expose `WatcherCriticalError` channel from VFS to ChangeProcessor for `RescanRequired` event handling.
+* Add VFS staleness tests, chaos fuzzer stress test, and tree freshness assertions across the connected mode test suite.
+* Tighten echo suppression test assertions from lenient bounds to precise expected values.
+* Update protocol version to 6.
+
+<details>
+<summary>Full commit log</summary>
+
+- `d84b6a35` Merge pull request #1 from UserGeneratedLLC/vfs-patches
+- `2e49763b` Update snapshot files and enhance VFS event handling
+- `b1789a37` Refactor VFS event handling in ChangeProcessor
+- `7f89d4ce` Enhance tree synchronization and testing capabilities
+- `8462c06b` Enhance VFS initialization and error handling
+- `ec7f9101` Refactor API file handling and improve echo suppression documentation
+- `e2f515d8` Update dependencies and enhance VFS staleness testing
+- `200c5ca2` Update protocol version to 6 and enhance API documentation
+- `f798f3f5` Enhance connected mode test suite and introduce VFS staleness fixtures
+- `316d7ea7` Update logging levels in Rojo plugin and enhance test plans
+- `2cc17269` Add git configuration and update gitignore for project template
+- `77b9c0e5` Update Luau LSP sourcemap file in VS Code settings
+- `11d0e9d8` Update VS Code configuration and dependencies
+
+</details>
+
+[8.2.0]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.2.0
 
 ## [8.1.0] (February 11th, 2026)
 

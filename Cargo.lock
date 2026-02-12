@@ -172,7 +172,7 @@ dependencies = [
 
 [[package]]
 name = "atlas"
-version = "8.1.0"
+version = "8.2.0"
 dependencies = [
  "anyhow",
  "backtrace",
@@ -565,7 +565,7 @@ dependencies = [
  "heck",
  "proc-macro2 1.0.106",
  "quote 1.0.44",
- "syn 2.0.114",
+ "syn 2.0.115",
 ]
 
 [[package]]
@@ -904,7 +904,7 @@ checksum = "97369cbbc041bc366949bc74d34658d6cda5621039731c6310521892a3a20ae0"
 dependencies = [
  "proc-macro2 1.0.106",
  "quote 1.0.44",
- "syn 2.0.114",
+ "syn 2.0.115",
 ]
 
 [[package]]
@@ -1141,7 +1141,7 @@ checksum = "162ee34ebcb7c64a8abebc059ce0fee27c2262618d7b60ed8faf72fef13c3650"
 dependencies = [
  "proc-macro2 1.0.106",
  "quote 1.0.44",
- "syn 2.0.114",
+ "syn 2.0.115",
 ]
 
 [[package]]
@@ -1656,9 +1656,9 @@ checksum = "92ecc6618181def0457392ccd0ee51198e065e016d1d527a7ac1b6dc7c1f09d2"
 
 [[package]]
 name = "jiff"
-version = "0.2.19"
+version = "0.2.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d89a5b5e10d5a9ad6e5d1f4bd58225f655d6fe9767575a5e8ac5a6fe64e04495"
+checksum = "c867c356cc096b33f4981825ab281ecba3db0acefe60329f044c1789d94c6543"
 dependencies = [
  "jiff-static",
  "log",
@@ -1669,13 +1669,13 @@ dependencies = [
 
 [[package]]
 name = "jiff-static"
-version = "0.2.19"
+version = "0.2.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff7a39c8862fc1369215ccf0a8f12dd4598c7f6484704359f0351bd617034dbf"
+checksum = "f7946b4325269738f270bb55b3c19ab5c5040525f83fd625259422a9d25d9be5"
 dependencies = [
  "proc-macro2 1.0.106",
  "quote 1.0.44",
- "syn 2.0.114",
+ "syn 2.0.115",
 ]
 
 [[package]]
@@ -2125,7 +2125,7 @@ dependencies = [
  "pest_meta",
  "proc-macro2 1.0.106",
  "quote 1.0.44",
- "syn 2.0.114",
+ "syn 2.0.115",
 ]
 
 [[package]]
@@ -2253,7 +2253,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
 dependencies = [
  "proc-macro2 1.0.106",
- "syn 2.0.114",
+ "syn 2.0.115",
 ]
 
 [[package]]
@@ -2303,7 +2303,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52717f9a02b6965224f95ca2a81e2e0c5c43baacd28ca057577988930b6c3d5b"
 dependencies = [
  "quote 1.0.44",
- "syn 2.0.114",
+ "syn 2.0.115",
 ]
 
 [[package]]
@@ -3007,7 +3007,7 @@ checksum = "d540f220d3187173da220f885ab66608367b6574e925011a9353e4badda91d79"
 dependencies = [
  "proc-macro2 1.0.106",
  "quote 1.0.44",
- "syn 2.0.114",
+ "syn 2.0.115",
 ]
 
 [[package]]
@@ -3234,7 +3234,7 @@ dependencies = [
  "heck",
  "proc-macro2 1.0.106",
  "quote 1.0.44",
- "syn 2.0.114",
+ "syn 2.0.115",
 ]
 
 [[package]]
@@ -3256,9 +3256,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "2.0.114"
+version = "2.0.115"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d4d107df263a3013ef9b1879b0df87d706ff80f65a86ea879bd9c31f9b307c2a"
+checksum = "6e614ed320ac28113fa64972c4262d5dbc89deacdfd00c34a3e4cea073243c12"
 dependencies = [
  "proc-macro2 1.0.106",
  "quote 1.0.44",
@@ -3282,7 +3282,7 @@ checksum = "728a70f3dbaf5bab7f0c4b1ac8d7ae5ea60a4b5549c8a5914361c99147a709d2"
 dependencies = [
  "proc-macro2 1.0.106",
  "quote 1.0.44",
- "syn 2.0.114",
+ "syn 2.0.115",
 ]
 
 [[package]]
@@ -3342,7 +3342,7 @@ checksum = "4fee6c4efc90059e10f81e6d42c60a18f76588c3d74cb83a0b242a2b6c7504c1"
 dependencies = [
  "proc-macro2 1.0.106",
  "quote 1.0.44",
- "syn 2.0.114",
+ "syn 2.0.115",
 ]
 
 [[package]]
@@ -3353,7 +3353,7 @@ checksum = "ebc4ee7f67670e9b64d05fa4253e753e016c6c95ff35b89b7941d6b856dec1d5"
 dependencies = [
  "proc-macro2 1.0.106",
  "quote 1.0.44",
- "syn 2.0.114",
+ "syn 2.0.115",
 ]
 
 [[package]]
@@ -3492,7 +3492,7 @@ checksum = "af407857209536a95c8e56f8231ef2c2e2aff839b22e07a1ffcbc617e9db9fa5"
 dependencies = [
  "proc-macro2 1.0.106",
  "quote 1.0.44",
- "syn 2.0.114",
+ "syn 2.0.115",
 ]
 
 [[package]]
@@ -3972,7 +3972,7 @@ dependencies = [
  "bumpalo",
  "proc-macro2 1.0.106",
  "quote 1.0.44",
- "syn 2.0.114",
+ "syn 2.0.115",
  "wasm-bindgen-shared",
 ]
 
@@ -4389,7 +4389,7 @@ dependencies = [
  "heck",
  "indexmap",
  "prettyplease",
- "syn 2.0.114",
+ "syn 2.0.115",
  "wasm-metadata",
  "wit-bindgen-core",
  "wit-component",
@@ -4405,7 +4405,7 @@ dependencies = [
  "prettyplease",
  "proc-macro2 1.0.106",
  "quote 1.0.44",
- "syn 2.0.114",
+ "syn 2.0.115",
  "wit-bindgen-core",
  "wit-bindgen-rust",
 ]
@@ -4504,7 +4504,7 @@ checksum = "b659052874eb698efe5b9e8cf382204678a0086ebf46982b79d6ca3182927e5d"
 dependencies = [
  "proc-macro2 1.0.106",
  "quote 1.0.44",
- "syn 2.0.114",
+ "syn 2.0.115",
  "synstructure",
 ]
 
@@ -4525,7 +4525,7 @@ checksum = "4122cd3169e94605190e77839c9a40d40ed048d305bfdc146e7df40ab0f3e517"
 dependencies = [
  "proc-macro2 1.0.106",
  "quote 1.0.44",
- "syn 2.0.114",
+ "syn 2.0.115",
 ]
 
 [[package]]
@@ -4545,7 +4545,7 @@ checksum = "d71e5d6e06ab090c67b5e44993ec16b72dcbaabc526db883a360057678b48502"
 dependencies = [
  "proc-macro2 1.0.106",
  "quote 1.0.44",
- "syn 2.0.114",
+ "syn 2.0.115",
  "synstructure",
 ]
 
@@ -4585,14 +4585,14 @@ checksum = "eadce39539ca5cb3985590102671f2567e659fca9666581ad3411d59207951f3"
 dependencies = [
  "proc-macro2 1.0.106",
  "quote 1.0.44",
- "syn 2.0.114",
+ "syn 2.0.115",
 ]
 
 [[package]]
 name = "zmij"
-version = "1.0.20"
+version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4de98dfa5d5b7fef4ee834d0073d560c9ca7b6c46a71d058c48db7960f8cfaf7"
+checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
 
 [[package]]
 name = "zstd"
