@@ -77,9 +77,14 @@ impl ChangeProcessor {
         tree_mutation_receiver: Receiver<PatchSet>,
         suppressed_paths: Arc<Mutex<std::collections::HashMap<PathBuf, (usize, usize)>>>,
         project_root: PathBuf,
+        critical_error_receiver: Option<Receiver<memofs::WatcherCriticalError>>,
     ) -> Self {
         let (shutdown_sender, shutdown_receiver) = crossbeam_channel::bounded(1);
         let vfs_receiver = vfs.event_receiver();
+        // Use crossbeam::never() for callers that don't provide an error receiver
+        // (non-serve commands). never() blocks forever without selecting.
+        let critical_error_receiver =
+            critical_error_receiver.unwrap_or_else(crossbeam_channel::never);
         let task = JobThreadContext {
             tree,
             vfs,
@@ -94,23 +99,105 @@ impl ChangeProcessor {
             .spawn(move || {
                 log::trace!("ChangeProcessor thread started");
 
+                // Tracks when to run the next reconciliation pass. Set to
+                // Some(future_instant) after VFS events arrive, cleared
+                // after reconcile_tree() runs. This ensures we only do the
+                // full re-snapshot once per burst of activity.
+                let mut reconcile_at: Option<Instant> = None;
+
                 loop {
+                    // Compute the timeout for the default branch.
+                    // If a reconciliation is pending, wake up when it's due
+                    // (clamped to at least 50ms to avoid busy-spinning).
+                    // Otherwise use the normal 500ms sweep interval.
+                    let timeout = match reconcile_at {
+                        Some(deadline) => {
+                            let remaining = deadline.saturating_duration_since(Instant::now());
+                            remaining.max(Duration::from_millis(50))
+                        }
+                        None => Duration::from_millis(500),
+                    };
+
                     select! {
                         recv(vfs_receiver) -> event => {
                             task.handle_vfs_event(event?);
+
+                            // Drain any additional queued VFS events without
+                            // blocking. This prevents a backlog of hundreds
+                            // of events from holding the tree lock for minutes.
+                            let mut drained = 0u64;
+                            while let Ok(extra) = vfs_receiver.try_recv() {
+                                task.handle_vfs_event(extra);
+                                drained += 1;
+                            }
+                            if drained > 0 {
+                                log::debug!(
+                                    "Drained {} additional VFS events from backlog",
+                                    drained
+                                );
+                            }
+
                             task.process_pending_recoveries();
+
+                            // Schedule a reconciliation 200ms from now if one isn't pending.
+                            if reconcile_at.is_none() {
+                                reconcile_at = Some(Instant::now() + Duration::from_millis(200));
+                            }
+
+                            // If the deadline has passed, reconcile now. This check runs
+                            // inside the VFS branch because during sustained event bursts,
+                            // the `default` branch never fires (the VFS channel is never
+                            // idle long enough).
+                            if reconcile_at.is_some_and(|d| Instant::now() >= d) {
+                                task.reconcile_tree();
+                                reconcile_at = None;
+
+                                // After reconciliation, drain and discard any pending
+                                // VFS events. The reconciliation already computed the
+                                // correct state from disk — stale events would only
+                                // re-introduce drift (they reference paths from before
+                                // the reconciliation).
+                                let mut discarded = 0u64;
+                                while vfs_receiver.try_recv().is_ok() {
+                                    discarded += 1;
+                                }
+                                if discarded > 0 {
+                                    log::info!(
+                                        "Discarded {} stale VFS events after reconciliation",
+                                        discarded
+                                    );
+                                }
+                            }
                         },
                         recv(tree_mutation_receiver) -> patch_set => {
                             task.handle_tree_event(patch_set?);
+                        },
+                        recv(critical_error_receiver) -> err => {
+                            if let Ok(memofs::WatcherCriticalError::RescanRequired) = err {
+                                log::warn!(
+                                    "VFS watcher lost events (RescanRequired). \
+                                     Triggering full tree reconciliation."
+                                );
+                                task.reconcile_tree();
+                                reconcile_at = None;
+                                // Drain stale events after reconciliation
+                                while vfs_receiver.try_recv().is_ok() {}
+                            }
                         },
                         recv(shutdown_receiver) -> _ => {
                             log::trace!("ChangeProcessor shutdown signal received...");
                             return Ok(());
                         },
-                        default(Duration::from_millis(500)) => {
-                            // Periodic sweep even when no events arrive —
-                            // catches files recreated after their Remove was processed.
+                        default(timeout) => {
                             task.process_pending_recoveries();
+
+                            // If a reconciliation deadline has passed, run it now.
+                            if reconcile_at.is_some_and(|d| Instant::now() >= d) {
+                                task.reconcile_tree();
+                                reconcile_at = None;
+                                // Drain stale events after reconciliation
+                                while vfs_receiver.try_recv().is_ok() {}
+                            }
                         },
                     }
                 }
@@ -400,7 +487,9 @@ impl JobThreadContext {
         }
 
         for id in affected_ids {
-            if let Some(result) = compute_and_apply_changes(&mut tree, &self.vfs, id, &self.project_root) {
+            if let Some(result) =
+                compute_and_apply_changes(&mut tree, &self.vfs, id, &self.project_root)
+            {
                 // If an instance was removed, schedule a recovery check
                 // in case the path is recreated momentarily.
                 if let Some(removed_path) = result.removed_path {
@@ -674,6 +763,61 @@ impl JobThreadContext {
                 );
             }
         }
+    }
+
+    /// Re-snapshots the entire project from the real filesystem and patches
+    /// the in-memory tree to correct any drift from missed VFS events.
+    /// Called when the file watcher reports `RescanRequired`.
+    fn reconcile_tree(&self) {
+        use crate::snapshot::InstanceContext;
+
+        let start = Instant::now();
+        let instance_context = InstanceContext::new();
+
+        let snapshot = match snapshot_from_vfs(&instance_context, &self.vfs, &self.project_root) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("Tree reconciliation snapshot error: {:?}", e);
+                return;
+            }
+        };
+
+        let mut tree = self.tree.lock().unwrap();
+        let root_id = tree.get_root_id();
+        let patch_set = compute_patch_set(snapshot, &tree, root_id);
+
+        // Only reconcile structural drift (added/removed instances).
+        // Property updates from compute_patch_set can produce false positives
+        // (e.g., Ref properties differ between snapshot IDs and tree IDs).
+        // Property changes are already handled correctly by individual VFS events.
+        if patch_set.removed_instances.is_empty() && patch_set.added_instances.is_empty() {
+            log::info!(
+                "Tree reconciliation: no drift detected ({:.1?})",
+                start.elapsed()
+            );
+            return;
+        }
+
+        let added = patch_set.added_instances.len();
+        let removed = patch_set.removed_instances.len();
+
+        // Strip property updates to avoid false-positive patches
+        let structural_patch = PatchSet {
+            added_instances: patch_set.added_instances,
+            removed_instances: patch_set.removed_instances,
+            updated_instances: Vec::new(),
+        };
+
+        let applied = apply_patch_set(&mut tree, structural_patch);
+        drop(tree);
+
+        self.message_queue.push_messages(&[applied]);
+        log::info!(
+            "Tree reconciliation: corrected {} added, {} removed ({:.1?})",
+            added,
+            removed,
+            start.elapsed()
+        );
     }
 
     fn handle_tree_event(&self, patch_set: PatchSet) {

@@ -721,9 +721,9 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 
 			if selection == "push" then
 				-- Apply Rojo changes to Studio
-			Log.info("[Push] Update: {}", instancePath)
-			table.insert(pushPatch.updated, change)
-		elseif selection == "pull" and self.__twoWaySync then
+				Log.info("[Push] Update: {}", instancePath)
+				table.insert(pushPatch.updated, change)
+			elseif selection == "pull" and self.__twoWaySync then
 				-- Send Studio state back to Rojo
 				if instance then
 					local propertiesToSync = change.changedProperties
@@ -821,12 +821,12 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 			for _ in pairs(pushPatch.added) do
 				addCount += 1
 			end
-		Log.info(
-			"Applying to Studio: {} additions, {} removals, {} updates",
-			addCount,
-			#pushPatch.removed,
-			#pushPatch.updated
-		)
+			Log.info(
+				"Applying to Studio: {} additions, {} removals, {} updates",
+				addCount,
+				#pushPatch.removed,
+				#pushPatch.updated
+			)
 			self:__applyPatch(pushPatch)
 		end
 

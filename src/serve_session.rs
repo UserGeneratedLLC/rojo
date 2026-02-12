@@ -117,7 +117,11 @@ impl ServeSession {
     /// The project file is expected to be loaded out-of-band since it's
     /// currently loaded from the filesystem directly instead of through the
     /// in-memory filesystem layer.
-    pub fn new<P: AsRef<Path>>(vfs: Vfs, start_path: P) -> Result<Self, ServeSessionError> {
+    pub fn new<P: AsRef<Path>>(
+        vfs: Vfs,
+        start_path: P,
+        critical_error_receiver: Option<crossbeam_channel::Receiver<memofs::WatcherCriticalError>>,
+    ) -> Result<Self, ServeSessionError> {
         let start_path = start_path.as_ref();
         let start_time = Instant::now();
 
@@ -158,6 +162,7 @@ impl ServeSession {
             tree_mutation_receiver,
             Arc::clone(&suppressed_paths),
             root_project.folder_location().to_path_buf(),
+            critical_error_receiver,
         );
 
         Ok(Self {

@@ -35,9 +35,9 @@ impl ServeCommand {
     pub fn run(self) -> anyhow::Result<()> {
         let project_path = resolve_path(&self.project);
 
-        let vfs = Vfs::new_default();
+        let (vfs, critical_errors) = Vfs::new_default_with_errors();
 
-        let session = Arc::new(ServeSession::new(vfs, project_path)?);
+        let session = Arc::new(ServeSession::new(vfs, project_path, Some(critical_errors))?);
 
         let ip = self
             .address

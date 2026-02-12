@@ -81,7 +81,7 @@ impl BuildCommand {
         let vfs = Vfs::new_default();
         vfs.set_watch_enabled(self.watch);
 
-        let session = ServeSession::new(vfs, project_path)?;
+        let session = ServeSession::new(vfs, project_path, None)?;
         let mut cursor = session.message_queue().cursor();
 
         write_model(&session, &output_path, output_kind)?;

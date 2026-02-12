@@ -14,9 +14,7 @@ use insta::assert_yaml_snapshot;
 
 use crate::rojo_test::{
     internable::InternAndRedact,
-    serve_util::{
-        assert_round_trip, get_message_cursor, run_serve_test,
-    },
+    serve_util::{assert_round_trip, get_message_cursor, run_serve_test},
 };
 
 use librojo::web_api::SocketPacketType;
@@ -300,7 +298,11 @@ fn multi_file_sequential_edits() {
         // Edit standalone.luau
         let packet = session
             .recv_socket_packet(SocketPacketType::Messages, 0, || {
-                fs::write(src.join("standalone.luau"), "-- edited standalone\nreturn 1").unwrap();
+                fs::write(
+                    src.join("standalone.luau"),
+                    "-- edited standalone\nreturn 1",
+                )
+                .unwrap();
             })
             .unwrap();
         assert_yaml_snapshot!(
@@ -453,7 +455,11 @@ fn edit_init_then_edit_child() {
 
         let packet = session
             .recv_socket_packet(SocketPacketType::Messages, 0, || {
-                fs::write(dir.join("init.luau"), "-- edited init\nreturn { edited = true }").unwrap();
+                fs::write(
+                    dir.join("init.luau"),
+                    "-- edited init\nreturn { edited = true }",
+                )
+                .unwrap();
             })
             .unwrap();
         assert_yaml_snapshot!(
@@ -464,7 +470,11 @@ fn edit_init_then_edit_child() {
         let cursor = get_message_cursor(&packet);
         let packet = session
             .recv_socket_packet(SocketPacketType::Messages, cursor, || {
-                fs::write(dir.join("ChildA.luau"), "-- edited child A\nreturn 'edited'").unwrap();
+                fs::write(
+                    dir.join("ChildA.luau"),
+                    "-- edited child A\nreturn 'edited'",
+                )
+                .unwrap();
             })
             .unwrap();
         assert_yaml_snapshot!(
@@ -562,11 +572,7 @@ fn adjacent_meta_creation() {
 
         // Use server.server.luau (Script class) since Disabled is a Script property
         let meta_path = session.path().join("src/server.server.meta.json5");
-        fs::write(
-            &meta_path,
-            r#"{ "properties": { "Disabled": true } }"#,
-        )
-        .unwrap();
+        fs::write(&meta_path, r#"{ "properties": { "Disabled": true } }"#).unwrap();
 
         // Give VFS time to process the CREATE event
         std::thread::sleep(std::time::Duration::from_millis(1500));
@@ -587,11 +593,7 @@ fn adjacent_meta_delete() {
         let meta_path = session.path().join("src/server.server.meta.json5");
 
         // Create meta file with Disabled property
-        fs::write(
-            &meta_path,
-            r#"{ "properties": { "Disabled": true } }"#,
-        )
-        .unwrap();
+        fs::write(&meta_path, r#"{ "properties": { "Disabled": true } }"#).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(1500));
         assert_round_trip(&session, root_id);
 
@@ -612,11 +614,7 @@ fn init_meta_creation() {
 
         // DirScript has init.server.luau (Script class), so Disabled is valid
         let meta_path = session.path().join("src/DirScript/init.meta.json5");
-        fs::write(
-            &meta_path,
-            r#"{ "properties": { "Disabled": true } }"#,
-        )
-        .unwrap();
+        fs::write(&meta_path, r#"{ "properties": { "Disabled": true } }"#).unwrap();
 
         let socket_packet = session
             .get_api_socket_packet(SocketPacketType::Messages, 0)
@@ -685,11 +683,7 @@ fn model_json_create() {
 
         let socket_packet = session
             .recv_socket_packet(SocketPacketType::Messages, 0, || {
-                fs::write(
-                    &model_path,
-                    r#"{ "className": "Folder" }"#,
-                )
-                .unwrap();
+                fs::write(&model_path, r#"{ "className": "Folder" }"#).unwrap();
             })
             .unwrap();
         assert_yaml_snapshot!(
@@ -1131,7 +1125,11 @@ fn add_third_collision() {
         let socket_packet = session
             .recv_socket_packet(SocketPacketType::Messages, 0, || {
                 fs::write(src.join("Hey_Bro~2.meta.json5"), r#"{ "name": "Hey*Bro" }"#).unwrap();
-                fs::write(src.join("Hey_Bro~2.luau"), "-- third collision\nreturn 'Hey*Bro'").unwrap();
+                fs::write(
+                    src.join("Hey_Bro~2.luau"),
+                    "-- third collision\nreturn 'Hey*Bro'",
+                )
+                .unwrap();
             })
             .unwrap();
         assert_yaml_snapshot!(

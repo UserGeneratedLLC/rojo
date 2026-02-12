@@ -262,6 +262,17 @@ impl Vfs {
         Self::new(StdBackend::new())
     }
 
+    /// Creates a new `Vfs` with the default backend, also returning
+    /// the critical error receiver for monitoring watcher health.
+    ///
+    /// Use this when you need to detect `RescanRequired` errors and
+    /// trigger a tree reconciliation after lost events.
+    pub fn new_default_with_errors() -> (Self, crossbeam_channel::Receiver<WatcherCriticalError>) {
+        let backend = StdBackend::new();
+        let error_rx = backend.critical_error_receiver();
+        (Self::new(backend), error_rx)
+    }
+
     /// Creates a new `Vfs` suitable for one-shot operations like syncback.
     ///
     /// Unlike `new_default()`, this creates a backend that:

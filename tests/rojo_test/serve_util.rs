@@ -130,6 +130,10 @@ impl TestServeSession {
         &self.project_path
     }
 
+    pub fn port(&self) -> usize {
+        self.port
+    }
+
     /// Waits for the `rojo serve` server to come online with expontential
     /// backoff.
     pub fn wait_to_come_online(&mut self) -> ServerInfoResponse {
@@ -284,7 +288,13 @@ impl TestServeSession {
     /// Panics with drift counts if any discrepancy is found.
     pub fn assert_tree_fresh(&self) {
         let url = format!("http://localhost:{}/api/validate-tree", self.port);
-        let body = reqwest::blocking::get(url)
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .expect("Failed to build reqwest client");
+        let body = client
+            .get(&url)
+            .send()
             .expect("Failed to call /api/validate-tree")
             .bytes()
             .expect("Failed to read validate-tree response body");
@@ -472,9 +482,7 @@ pub fn fresh_rebuild_read(project_path: &Path) -> NormalizedInstance {
         match reqwest::blocking::get(&url) {
             Ok(resp) => {
                 if let Ok(body) = resp.bytes() {
-                    if let Ok(server_info) =
-                        deserialize_msgpack::<ServerInfoResponse>(&body)
-                    {
+                    if let Ok(server_info) = deserialize_msgpack::<ServerInfoResponse>(&body) {
                         info = Some(server_info);
                         break;
                     }

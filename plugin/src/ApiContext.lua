@@ -198,12 +198,7 @@ function ApiContext:write(patch)
 	end
 
 	if #patch.removed > 0 or addedCount > 0 or #patch.updated > 0 then
-		Log.info(
-			"Sending to server: {} removals, {} additions, {} updates",
-			#patch.removed,
-			addedCount,
-			#patch.updated
-		)
+		Log.info("Sending to server: {} removals, {} additions, {} updates", #patch.removed, addedCount, #patch.updated)
 	end
 
 	for _, removed in ipairs(patch.removed) do
