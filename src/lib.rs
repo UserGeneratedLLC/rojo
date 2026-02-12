@@ -29,6 +29,7 @@ mod web;
 
 pub use project::*;
 pub use rojo_ref::*;
+pub use serve_session::TreeFreshnessReport;
 pub use session_id::SessionId;
 pub use snapshot::{
     InstanceContext, InstanceMetadata, InstanceSnapshot, InstanceWithMeta, InstanceWithMetaMut,

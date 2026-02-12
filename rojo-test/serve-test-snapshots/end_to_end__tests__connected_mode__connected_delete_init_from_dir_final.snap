@@ -1,0 +1,148 @@
+---
+source: tests/tests/connected_mode.rs
+expression: "read_response.intern_and_redact(&mut redactions, root_id)"
+---
+instances:
+  id-10:
+    Children: []
+    ClassName: ModuleScript
+    Id: id-10
+    Metadata:
+      ignoreUnknownInstances: false
+    Name: Handler
+    Parent: id-3
+    Properties:
+      Source:
+        "!String": "-- Handler module\nreturn {}\n"
+  id-11:
+    Children: []
+    ClassName: Script
+    Id: id-11
+    Metadata:
+      ignoreUnknownInstances: false
+    Name: local
+    Parent: id-4
+    Properties:
+      RunContext:
+        "!Enum": 2
+      Source:
+        "!String": "-- Standalone LocalScript\nprint(\"client\")\n"
+  id-12:
+    Children: []
+    ClassName: Script
+    Id: id-12
+    Metadata:
+      ignoreUnknownInstances: false
+    Name: server
+    Parent: id-4
+    Properties:
+      RunContext:
+        "!Enum": 1
+      Source:
+        "!String": "-- Standalone Script\nprint(\"server\")\n"
+  id-13:
+    Children: []
+    ClassName: ModuleScript
+    Id: id-13
+    Metadata:
+      ignoreUnknownInstances: false
+    Name: standalone
+    Parent: id-4
+    Properties:
+      Source:
+        "!String": "-- Standalone ModuleScript\nreturn {}\n"
+  id-2:
+    Children:
+      - id-4
+    ClassName: DataModel
+    Id: id-2
+    Metadata:
+      ignoreUnknownInstances: true
+    Name: connected_scripts
+    Parent: "00000000000000000000000000000000"
+    Properties: {}
+  id-3:
+    Children:
+      - id-10
+    ClassName: Folder
+    Id: id-3
+    Metadata:
+      ignoreUnknownInstances: false
+    Name: DirScript
+    Parent: id-4
+    Properties: {}
+  id-4:
+    Children:
+      - id-5
+      - id-7
+      - id-3
+      - id-11
+      - id-12
+      - id-13
+    ClassName: ReplicatedStorage
+    Id: id-4
+    Metadata:
+      ignoreUnknownInstances: false
+    Name: ReplicatedStorage
+    Parent: id-2
+    Properties: {}
+  id-5:
+    Children:
+      - id-6
+    ClassName: LocalScript
+    Id: id-5
+    Metadata:
+      ignoreUnknownInstances: false
+    Name: DirLocal
+    Parent: id-4
+    Properties:
+      Source:
+        "!String": "-- Directory LocalScript\nprint(\"dir local\")\n"
+  id-6:
+    Children: []
+    ClassName: ModuleScript
+    Id: id-6
+    Metadata:
+      ignoreUnknownInstances: false
+    Name: Helper
+    Parent: id-5
+    Properties:
+      Source:
+        "!String": "-- Helper module\nreturn {}\n"
+  id-7:
+    Children:
+      - id-8
+      - id-9
+    ClassName: ModuleScript
+    Id: id-7
+    Metadata:
+      ignoreUnknownInstances: false
+    Name: DirModule
+    Parent: id-4
+    Properties:
+      Source:
+        "!String": "-- Directory ModuleScript\nreturn { dir = true }\n"
+  id-8:
+    Children: []
+    ClassName: ModuleScript
+    Id: id-8
+    Metadata:
+      ignoreUnknownInstances: false
+    Name: ChildA
+    Parent: id-7
+    Properties:
+      Source:
+        "!String": "-- Child A\nreturn \"A\"\n"
+  id-9:
+    Children: []
+    ClassName: ModuleScript
+    Id: id-9
+    Metadata:
+      ignoreUnknownInstances: false
+    Name: ChildB
+    Parent: id-7
+    Properties:
+      Source:
+        "!String": "-- Child B\nreturn \"B\"\n"
+messageCursor: "[message-cursor]"
+sessionId: id-1

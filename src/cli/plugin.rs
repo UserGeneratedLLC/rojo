@@ -55,7 +55,7 @@ fn initialize_plugin() -> anyhow::Result<ServeSession> {
     in_memory_fs.load_snapshot("/plugin", plugin_snapshot)?;
 
     let vfs = Vfs::new(in_memory_fs);
-    Ok(ServeSession::new(vfs, "/plugin")?)
+    Ok(ServeSession::new(vfs, "/plugin", None)?)
 }
 
 fn install_plugin() -> anyhow::Result<()> {

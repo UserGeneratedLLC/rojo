@@ -5,11 +5,30 @@ globs:
   - "src/cli/syncback.rs"
 ---
 
-# Rojo Syncback Architecture
+# Atlas Syncback Architecture
+
+> Atlas is a fork of Rojo. Many internal identifiers, API endpoints, and struct names still reference the original "Rojo" naming.
+
+## Quality Standard
+
+This is a production-grade synchronization system. The filesystem must represent a 1:1 copy of the Studio place. The core invariant:
+
+**Round-trip identity:** Syncback (or two-way sync) writes a directory tree. Building an rbxl from that directory tree and forward-syncing it back must produce a bit-identical instance tree -- same names, same classes, same properties, same hierarchy, same ref targets. Any deviation is a bug.
+
+Every audit item must be evaluated against this standard. A "works most of the time" finding is not acceptable. If there is ANY code path where an instance name, property, or hierarchy relationship can be lost, mangled, or silently altered through a syncback→rebuild cycle, flag it as critical.
+
+## Code Quality Standard
+
+We are building a maintainable codebase. During audits, watch for duplicated logic -- the same slugify/dedup/meta-update pattern copy-pasted across `change_processor.rs`, `api.rs`, `dir.rs`, `project.rs`, etc. If you find duplicated code that could be consolidated into a shared helper:
+
+- **Small refactor** (extracting a helper function, consolidating 2-3 call sites): flag it AND fix it as part of the audit.
+- **Major system rewrite** (restructuring data flow, changing function signatures across 10+ call sites, redesigning the snapshot pipeline): flag it clearly in a "Deferred Refactors" section at the bottom of the report. We will evaluate whether it's worth doing after the audit is complete.
+
+The goal is clean, DRY code that is easy to reason about and hard to get wrong. If the same "compute meta path, check if name needs slugify, upsert/remove name field" sequence appears in 3+ places, that's a refactor candidate.
 
 **Syncback** is the reverse operation of building: it takes a Roblox binary file (rbxl/rbxm) and writes instances back to the filesystem according to project structure.
 
-**Entry point:** `rojo syncback <project> --input <file>`
+**Entry point:** `atlas syncback <project> --input <file>`
 
 ## Core Concept
 
@@ -33,6 +52,7 @@ syncback/
   snapshot.rs         - Convert instances → snapshots
   fs_snapshot.rs      - Filesystem representation
   file_names.rs       - Generate valid filenames
+  meta.rs             - Meta file read/write helpers
   property_filter.rs  - Filter properties per syncback rules
   ref_properties.rs   - Handle Ref properties (cross-references)
   hash/               - Content hashing for change detection
@@ -100,18 +120,33 @@ pub struct SyncbackRules {
     /// Roblox tree paths to ignore (e.g., "ServerStorage/Secrets")
     pub ignore_trees: Vec<String>,
     
-    /// Filesystem paths to ignore (e.g., "src/client/*")
-    pub ignore_paths: Vec<PathBuf>,
+    /// Filesystem glob patterns to ignore (e.g., "src/client/*")
+    pub ignore_paths: Vec<String>,
     
     /// Properties to not sync back per class
     /// Example: {"BasePart": ["Color"], "Script": ["Disabled"]}
-    pub ignore_properties: HashMap<String, Vec<String>>,
+    pub ignore_properties: IndexMap<Ustr, Vec<Ustr>>,
+    
+    /// Instance classes to skip entirely
+    pub ignore_classes: Vec<String>,
     
     /// Whether to sync Workspace.CurrentCamera (default: false)
-    pub sync_current_camera: bool,
+    pub sync_current_camera: Option<bool>,
     
     /// Whether to sync unscriptable properties (default: true)
-    pub sync_unscriptable: bool,
+    pub sync_unscriptable: Option<bool>,
+    
+    /// Whether to skip Ref properties (default: false)
+    pub ignore_referents: Option<bool>,
+    
+    /// Whether /** in ignore paths also matches the directory itself
+    pub create_ignore_dir_paths: Option<bool>,
+    
+    /// Override root-level ignoreHiddenServices for syncback
+    pub ignore_hidden_services: Option<bool>,
+    
+    /// Warn on duplicate child names during syncback
+    pub warn_duplicate_names: Option<bool>,
 }
 ```
 
@@ -188,6 +223,7 @@ pub struct SyncbackSnapshot<'sync> {
     pub new: Ref,                    // New tree instance (Roblox file)
     pub path: PathBuf,               // Target filesystem path
     pub middleware: Option<Middleware>, // How to write (Lua, Rbxm, etc.)
+    pub needs_meta_name: bool,       // Filesystem name differs from instance name
 }
 ```
 
@@ -280,9 +316,9 @@ fs_snapshot.removed_paths()
 
 1. **Collect paths** - Map every Ref → full instance path (e.g., `Workspace.Part1`)
 2. **Collect referents** - Find all properties that are Refs, store as (source_path, target_path)
-3. **Link referents** - After syncback, use Rojo's `$id` / `Rojo_Target_PropertyName` system to link instances
+3. **Link referents** - After syncback, use Atlas's `$id` / `Rojo_Target_PropertyName` system to link instances
 
-**Rojo linking system:**
+**Atlas linking system:**
 ```json
 {
     "id": "some-unique-id",
@@ -314,9 +350,9 @@ stats.record_duplicate_name(path, name)
 stats.record_rbxm_fallback(path, reason)
 stats.record_unknown_class(class_name)
 stats.record_unknown_property(class, property)
-stats.has_issues()      // Any warnings?
+stats.has_issues()         // Any warnings?
 stats.has_unknown_types()  // Unknown classes/properties?
-stats.log_summary()     // Log final report
+stats.log_summary()        // Log final report
 ```
 
 **Logged at end of syncback:**
@@ -345,7 +381,7 @@ print('hello')
 ```json5
 // src/MyScript.server.meta.json5 (for MyScript.server.luau)
 {
-    "$properties": {
+    "properties": {
         "Disabled": false
     }
 }
@@ -388,12 +424,7 @@ Filesystem:
 4. **Write permission** - Can't write to file
    - Error reported, syncback continues for other files
 
-**Error collection:**
-```rust
-stats.record_error(&format!("Failed to sync {}: {}", path.display(), error));
-```
-
-All errors collected and reported at end.
+**Error propagation:** Errors are propagated via `anyhow::bail!`, not collected in stats. Fatal errors abort the syncback; non-fatal issues are logged as warnings.
 
 ## Integration with Plugin
 
@@ -402,7 +433,7 @@ All errors collected and reported at end.
 2. Sending file to server
 3. Server runs syncback command
 
-**Two-way sync (experimental)** is different - see `rojo-api.mdc`.
+**Two-way sync (experimental)** is different - see `atlas-api.mdc`.
 
 ## Performance Considerations
 
@@ -416,7 +447,7 @@ All errors collected and reported at end.
 
 **Enable verbose logging:**
 ```bash
-RUST_LOG=rojo::syncback=debug rojo syncback project/ --input place.rbxl
+RUST_LOG=rojo::syncback=debug atlas syncback project/ --input place.rbxl
 ```
 
 **Shows:**
@@ -428,10 +459,10 @@ RUST_LOG=rojo::syncback=debug rojo syncback project/ --input place.rbxl
 **Test syncback:**
 ```bash
 # Syncback once
-rojo syncback project/ --input place.rbxl
+atlas syncback project/ --input place.rbxl
 
 # Build back to verify roundtrip
-rojo build project/ -o rebuilt.rbxl
+atlas build project/ -o rebuilt.rbxl
 
 # Compare
 diff place.rbxl rebuilt.rbxl

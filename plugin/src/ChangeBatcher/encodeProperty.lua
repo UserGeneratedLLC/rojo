@@ -11,7 +11,13 @@ return function(instance, propertyName, propertyDescriptor)
 	end
 
 	local dataType = propertyDescriptor.dataType
-	local encodeSuccess, encodeResult = RbxDom.EncodedValue.encode(readResult, dataType)
+	local pcallOk, encodeSuccess, encodeResult = pcall(RbxDom.EncodedValue.encode, readResult, dataType)
+
+	if not pcallOk then
+		-- Encoder threw an error (e.g., Ref, Region3, SharedString)
+		Log.warn("Could not sync back property {:?}.{}: {}", instance, propertyName, encodeSuccess)
+		return false, nil
+	end
 
 	if not encodeSuccess then
 		Log.warn("Could not sync back property {:?}.{}: {}", instance, propertyName, encodeResult)

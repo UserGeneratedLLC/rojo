@@ -9,7 +9,9 @@ globs:
   - "**/*.model.json"
 ---
 
-# Rojo Project File Format
+# Atlas Project File Format
+
+> Atlas is a fork of Rojo. Many internal identifiers, API endpoints, and struct names still reference the original "Rojo" naming.
 
 ## Project File Schema
 
@@ -21,7 +23,7 @@ globs:
 |-------|------|----------|-------------|
 | `name` | string | Yes* | Instance name (*optional if `default.project.json5`) |
 | `tree` | ProjectNode | Yes | Root instance tree structure |
-| `servePort` | number | No | Port for `rojo serve` (default: 34872) |
+| `servePort` | number | No | Port for `atlas serve` (default: 34872) |
 | `serveAddress` | string | No | Address to bind (default: `"127.0.0.1"`) |
 | `servePlaceIds` | number[] | No | Only allow sync to these place IDs |
 | `blockedPlaceIds` | number[] | No | Block sync to these place IDs |
@@ -99,6 +101,7 @@ Used in `tree` and recursively for all children.
 | `*.lua` | ModuleScript | — | Legacy |
 | `*.server.lua` | Script | Legacy | Legacy |
 | `*.client.lua` | LocalScript | — | Legacy |
+| `*.plugin.lua` | Script | Plugin | Legacy |
 
 **Prefer `.luau`** — modern RunContext. `.lua` is legacy (still supported).
 
@@ -197,6 +200,9 @@ Configure `syncbackRules` object for Roblox → filesystem sync:
 | `syncCurrentCamera` | bool | `false` | Whether to sync `Workspace.CurrentCamera` |
 | `syncUnscriptable` | bool | `true` | Whether to sync unscriptable properties |
 | `ignoreReferents` | bool | `false` | Whether to skip Ref properties (e.g., `Model.PrimaryPart`) |
+| `createIgnoreDirPaths` | bool | `false` | Whether `/**` in ignore paths also matches the directory itself |
+| `ignoreHiddenServices` | bool | — | Override root-level `ignoreHiddenServices` for syncback |
+| `warnDuplicateNames` | bool | `false` | Warn on duplicate child names during syncback |
 
 ```json5
 {
@@ -210,41 +216,69 @@ Configure `syncbackRules` object for Roblox → filesystem sync:
     "ignoreClasses": ["Terrain", "Camera"],
     "syncCurrentCamera": false,
     "syncUnscriptable": true,
-    "ignoreReferents": false
+    "ignoreReferents": false,
+    "createIgnoreDirPaths": false,
+    "warnDuplicateNames": false
   }
 }
 ```
 
 ## Meta Files
 
-Add metadata to file-based instances. Example: `MyScript.server.meta.json5` (for `MyScript.server.luau`)
+Add metadata to file-based instances. Meta files use **camelCase keys** (no `$` prefix -- that's only for ProjectNode).
+
+**Adjacent meta** (e.g. `MyScript.server.meta.json5` for `MyScript.server.luau`):
 
 ```json5
 {
-  "$className": "Script",        // Override (rare)
-  "$properties": { "Disabled": false },
-  "$attributes": { "Priority": 1 },
-  "$ignoreUnknownInstances": true
+  "name": "Key:Script",              // Override filename-derived instance name (slugify support)
+  "id": "unique-id",                 // For Ref property linking
+  "properties": { "Disabled": false },
+  "attributes": { "Priority": 1 },
+  "ignoreUnknownInstances": true
 }
 ```
 
-**Meta files CAN'T:** Override name, set `$path`, have children.
+**Directory meta** (e.g. `init.meta.json5` inside a directory):
+
+```json5
+{
+  "name": "My:Folder",              // Override directory-derived instance name
+  "className": "Configuration",     // Override class (directory meta only)
+  "id": "unique-id",
+  "properties": { "Anchored": true },
+  "attributes": { "Health": 100 },
+  "ignoreUnknownInstances": false
+}
+```
+
+**Key differences from ProjectNode:** Meta uses `className`, `properties`, `attributes` (camelCase, no `$` prefix). Adjacent meta does NOT support `className`.
+
+**`name` field (slugify support):** When an instance name contains forbidden filesystem characters (`: / ? * < > | " \`), syncback slugifies the filename (forbidden chars → `_`) and stores the real name in the `name` field. On forward sync, `name` overrides the filename-derived instance name. On collisions (e.g. `A/B` and `A_B` both slugify to `A_B`), `~1`, `~2` suffixes are appended and meta `name` fields distinguish them.
+
+**Meta files CAN'T:** Set `$path`, have children.
 
 ## Model.json5 Format
 
-Inline instance definition:
+Inline instance definition. Like meta files, model files use **camelCase keys** (no `$` prefix).
 
 ```json5
 {
-  "$className": "Tool",
-  "$properties": { "CanBeDropped": false },
-  "$attributes": { "Damage": 50 },
-  "Handle": {
-    "$className": "Part",
-    "$properties": { "Size": [1, 1, 3] }
+  "name": "What?Model",                   // Override filename-derived name (slugify support)
+  "className": "Tool",
+  "id": "unique-id",
+  "properties": { "CanBeDropped": false },
+  "attributes": { "Damage": 50 },
+  "children": {
+    "Handle": {
+      "className": "Part",
+      "properties": { "Size": [1, 1, 3] }
+    }
   }
 }
 ```
+
+**Note:** Children are nested under a `"children"` key (not flattened like in ProjectNode).
 
 ## Property Formats
 

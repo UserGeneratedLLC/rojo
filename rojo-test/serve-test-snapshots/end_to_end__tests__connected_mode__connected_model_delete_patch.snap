@@ -1,0 +1,13 @@
+---
+source: tests/tests/connected_mode.rs
+expression: "socket_packet.intern_and_redact(&mut redactions, ())"
+---
+body:
+  messageCursor: 1
+  messages:
+    - added: {}
+      removed:
+        - id-6
+      updated: []
+packetType: messages
+sessionId: id-1

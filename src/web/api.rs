@@ -151,6 +151,7 @@ pub async fn call(
             service.handle_api_open(request).await
         }
         (&Method::POST, "/api/write") => service.handle_api_write(request).await,
+        (&Method::GET, "/api/validate-tree") => service.handle_api_validate_tree().await,
 
         (_method, path) => msgpack(
             ErrorResponse::not_found(format!("Route not found: {}", path)),
@@ -283,6 +284,13 @@ impl ApiService {
             ignore_hidden_services,
             visible_services,
         })
+    }
+
+    /// Read-only tree freshness check for test infrastructure.
+    /// Re-snapshots from disk and returns drift counts without applying corrections.
+    async fn handle_api_validate_tree(&self) -> Response<Full<Bytes>> {
+        let report = self.serve_session.check_tree_freshness();
+        msgpack_ok(&report)
     }
 
     /// Handle WebSocket upgrade for real-time message streaming
@@ -1083,7 +1091,7 @@ impl ApiService {
                         } else {
                             None
                         };
-                        self.write_init_meta_json(existing_path, added, instance_name)?;
+                        self.write_init_meta_json(existing_path, added, instance_name, true)?;
                         log::info!(
                             "Syncback: Updated existing {} at {}/init.meta.json5",
                             class_name,
@@ -1728,23 +1736,19 @@ impl ApiService {
                             added.name
                         );
                         if old_path.exists() {
-                            self.suppress_path_remove(old_path);
                             let _ = fs::remove_file(old_path);
                         }
                         let meta_path = parent_dir.join(format!("{}.meta.json5", encoded_name));
                         if meta_path.exists() {
-                            self.suppress_path_remove(&meta_path);
                             let _ = fs::remove_file(&meta_path);
                         }
                     }
 
                     let dir_path = parent_dir.join(&encoded_name);
-                    self.suppress_path(&dir_path);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
                     })?;
                     let init_path = dir_path.join("init.luau");
-                    self.suppress_path(&init_path);
                     fs::write(&init_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", init_path.display())
                     })?;
@@ -1753,7 +1757,6 @@ impl ApiService {
                     self.process_children_incremental(&unique_children, &dir_path, stats)?;
                 } else {
                     let file_path = parent_dir.join(format!("{}.luau", encoded_name));
-                    self.suppress_path(&file_path);
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
@@ -1783,23 +1786,19 @@ impl ApiService {
                             added.name
                         );
                         if old_path.exists() {
-                            self.suppress_path_remove(old_path);
                             let _ = fs::remove_file(old_path);
                         }
                         let meta_path = parent_dir.join(format!("{}.meta.json5", encoded_name));
                         if meta_path.exists() {
-                            self.suppress_path_remove(&meta_path);
                             let _ = fs::remove_file(&meta_path);
                         }
                     }
 
                     let dir_path = parent_dir.join(&encoded_name);
-                    self.suppress_path(&dir_path);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
                     })?;
                     let init_path = dir_path.join(format!("init.{}.luau", script_suffix));
-                    self.suppress_path(&init_path);
                     fs::write(&init_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", init_path.display())
                     })?;
@@ -1809,7 +1808,6 @@ impl ApiService {
                 } else {
                     let file_path =
                         parent_dir.join(format!("{}.{}.luau", encoded_name, script_suffix));
-                    self.suppress_path(&file_path);
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
@@ -1838,23 +1836,19 @@ impl ApiService {
                             added.name
                         );
                         if old_path.exists() {
-                            self.suppress_path_remove(old_path);
                             let _ = fs::remove_file(old_path);
                         }
                         let meta_path = parent_dir.join(format!("{}.meta.json5", encoded_name));
                         if meta_path.exists() {
-                            self.suppress_path_remove(&meta_path);
                             let _ = fs::remove_file(&meta_path);
                         }
                     }
 
                     let dir_path = parent_dir.join(&encoded_name);
-                    self.suppress_path(&dir_path);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
                     })?;
                     let init_path = dir_path.join("init.local.luau");
-                    self.suppress_path(&init_path);
                     fs::write(&init_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", init_path.display())
                     })?;
@@ -1863,7 +1857,6 @@ impl ApiService {
                     self.process_children_incremental(&unique_children, &dir_path, stats)?;
                 } else {
                     let file_path = parent_dir.join(format!("{}.local.luau", encoded_name));
-                    self.suppress_path(&file_path);
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
@@ -1881,7 +1874,6 @@ impl ApiService {
             "Folder" | "Configuration" | "Tool" | "ScreenGui" | "SurfaceGui" | "BillboardGui"
             | "AdGui" => {
                 let dir_path = parent_dir.join(&encoded_name);
-                self.suppress_path(&dir_path);
                 fs::create_dir_all(&dir_path).with_context(|| {
                     format!("Failed to create directory: {}", dir_path.display())
                 })?;
@@ -1898,7 +1890,6 @@ impl ApiService {
                 // Uses !has_children which accounts for filtered duplicate children
                 if !has_children && !has_metadata {
                     let gitkeep = dir_path.join(".gitkeep");
-                    self.suppress_path(&gitkeep);
                     fs::write(gitkeep, b"").with_context(|| "Failed to write .gitkeep")?;
                 }
 
@@ -1917,11 +1908,10 @@ impl ApiService {
                 if has_children {
                     // Must become directory - store StringValue data in init.meta.json5
                     let dir_path = parent_dir.join(&encoded_name);
-                    self.suppress_path(&dir_path);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
                     })?;
-                    self.write_init_meta_json(&dir_path, added, meta_name_field)?;
+                    self.write_init_meta_json(&dir_path, added, meta_name_field, false)?;
                     log::info!(
                         "Syncback: Created StringValue directory at {}",
                         dir_path.display()
@@ -1937,7 +1927,6 @@ impl ApiService {
                         })
                         .unwrap_or_default();
                     let file_path = parent_dir.join(format!("{}.txt", encoded_name));
-                    self.suppress_path(&file_path);
                     fs::write(&file_path, value.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
@@ -1952,7 +1941,6 @@ impl ApiService {
                         let meta_path = parent_dir.join(format!("{}.meta.json5", encoded_name));
                         let content = crate::json::to_vec_pretty_sorted(&meta)
                             .context("Failed to serialize meta")?;
-                        self.suppress_path(&meta_path);
                         fs::write(&meta_path, &content).with_context(|| {
                             format!("Failed to write meta: {}", meta_path.display())
                         })?;
@@ -1969,17 +1957,15 @@ impl ApiService {
                 if has_children {
                     // Must become directory with init.csv
                     let dir_path = parent_dir.join(&encoded_name);
-                    self.suppress_path(&dir_path);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
                     })?;
                     let init_path = dir_path.join("init.csv");
-                    self.suppress_path(&init_path);
                     fs::write(&init_path, content.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", init_path.display())
                     })?;
                     // Write init.meta.json5 for className and name preservation
-                    self.write_init_meta_json(&dir_path, added, meta_name_field)?;
+                    self.write_init_meta_json(&dir_path, added, meta_name_field, false)?;
                     log::info!(
                         "Syncback: Created LocalizationTable directory at {}",
                         dir_path.display()
@@ -1987,7 +1973,6 @@ impl ApiService {
                     self.process_children_incremental(&unique_children, &dir_path, stats)?;
                 } else {
                     let file_path = parent_dir.join(format!("{}.csv", encoded_name));
-                    self.suppress_path(&file_path);
                     fs::write(&file_path, content.as_bytes()).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
@@ -2002,7 +1987,6 @@ impl ApiService {
                         let meta_path = parent_dir.join(format!("{}.meta.json5", encoded_name));
                         let content = crate::json::to_vec_pretty_sorted(&meta)
                             .context("Failed to serialize meta")?;
-                        self.suppress_path(&meta_path);
                         fs::write(&meta_path, &content).with_context(|| {
                             format!("Failed to write meta: {}", meta_path.display())
                         })?;
@@ -2031,19 +2015,17 @@ impl ApiService {
                             added.name
                         );
                         if old_path.exists() {
-                            self.suppress_path_remove(old_path);
                             let _ = fs::remove_file(old_path);
                         }
                     }
 
                     let dir_path = parent_dir.join(&encoded_name);
-                    self.suppress_path(&dir_path);
                     fs::create_dir_all(&dir_path).with_context(|| {
                         format!("Failed to create directory: {}", dir_path.display())
                     })?;
 
                     // Write init.meta.json5 with class and properties
-                    self.write_init_meta_json(&dir_path, added, meta_name_field)?;
+                    self.write_init_meta_json(&dir_path, added, meta_name_field, false)?;
 
                     log::info!(
                         "Syncback: Updated {} at {}/init.meta.json5",
@@ -2061,7 +2043,6 @@ impl ApiService {
                         ExistingFileFormat::Standalone(p) => p.clone(),
                         _ => parent_dir.join(format!("{}.model.json5", encoded_name)),
                     };
-                    self.suppress_path(&file_path);
                     fs::write(&file_path, &content).with_context(|| {
                         format!("Failed to write file: {}", file_path.display())
                     })?;
@@ -2180,7 +2161,6 @@ impl ApiService {
         let meta_path = dir_path.join("init.meta.json5");
         let content = crate::json::to_vec_pretty_sorted(&meta)
             .context("Failed to serialize init.meta.json5")?;
-        self.suppress_path(&meta_path);
         fs::write(&meta_path, &content)
             .with_context(|| format!("Failed to write meta file: {}", meta_path.display()))?;
         log::info!(
@@ -2213,7 +2193,6 @@ impl ApiService {
         let meta_path = dir_path.join("init.meta.json5");
         let content = crate::json::to_vec_pretty_sorted(&meta)
             .context("Failed to serialize init.meta.json5")?;
-        self.suppress_path(&meta_path);
         fs::write(&meta_path, &content)
             .with_context(|| format!("Failed to write meta file: {}", meta_path.display()))?;
         log::info!(
@@ -2231,6 +2210,7 @@ impl ApiService {
         dir_path: &std::path::Path,
         added: &crate::web::interface::AddedInstance,
         instance_name: Option<&str>,
+        suppress_vfs: bool,
     ) -> anyhow::Result<()> {
         use anyhow::Context;
 
@@ -2247,7 +2227,9 @@ impl ApiService {
         let meta_path = dir_path.join("init.meta.json5");
         let content = crate::json::to_vec_pretty_sorted(&meta)
             .context("Failed to serialize init.meta.json5")?;
-        self.suppress_path(&meta_path);
+        if suppress_vfs {
+            self.suppress_path(&meta_path);
+        }
         fs::write(&meta_path, &content)
             .with_context(|| format!("Failed to write meta file: {}", meta_path.display()))?;
         log::info!(
@@ -2458,7 +2440,6 @@ impl ApiService {
         let meta_path = parent_dir.join(format!("{}.meta.json5", name));
         let content =
             crate::json::to_vec_pretty_sorted(&meta).context("Failed to serialize meta.json5")?;
-        self.suppress_path(&meta_path);
         fs::write(&meta_path, &content)
             .with_context(|| format!("Failed to write meta file: {}", meta_path.display()))?;
         log::info!(
@@ -3062,6 +3043,14 @@ async fn handle_websocket_subscription(
         "WebSocket subscription established for session {}",
         session_id
     );
+
+    // Validate the in-memory tree against the real filesystem on every
+    // plugin connect. This corrects any drift caused by missed VFS watcher
+    // events so the plugin always sees the true state.
+    let corrections = serve_session.validate_tree();
+    if !corrections.is_empty() {
+        message_queue.push_messages(&corrections);
+    }
 
     // Now continuously listen for new messages using select to handle both incoming messages
     // and WebSocket control messages concurrently

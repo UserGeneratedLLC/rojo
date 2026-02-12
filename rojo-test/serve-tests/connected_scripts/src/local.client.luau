@@ -1,0 +1,2 @@
+-- Standalone LocalScript
+print("client")

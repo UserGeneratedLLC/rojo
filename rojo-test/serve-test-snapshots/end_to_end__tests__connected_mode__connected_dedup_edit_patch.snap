@@ -1,0 +1,19 @@
+---
+source: tests/tests/connected_mode.rs
+expression: "socket_packet.intern_and_redact(&mut redactions, ())"
+---
+body:
+  messageCursor: 1
+  messages:
+    - added: {}
+      removed: []
+      updated:
+        - changedClassName: ~
+          changedMetadata: ~
+          changedName: ~
+          changedProperties:
+            Source:
+              "!String": "-- edited dedup\nreturn 'edited'"
+          id: id-3
+packetType: messages
+sessionId: id-1

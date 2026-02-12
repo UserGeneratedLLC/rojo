@@ -3,6 +3,7 @@ local Log = require(Packages.Log)
 local RbxDom = require(Packages.RbxDom)
 
 local encodeProperty = require(script.Parent.encodeProperty)
+local UNENCODABLE_DATA_TYPES = require(script.Parent.propertyFilter)
 
 return function(instance, instanceId, properties)
 	local update = {
@@ -18,6 +19,10 @@ return function(instance, instanceId, properties)
 
 			if not descriptor then
 				Log.debug("Could not sync back property {:?}.{}", instance, propertyName)
+				continue
+			end
+
+			if UNENCODABLE_DATA_TYPES[descriptor.dataType] then
 				continue
 			end
 

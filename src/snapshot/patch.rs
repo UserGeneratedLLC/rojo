@@ -81,6 +81,23 @@ impl AppliedPatchSet {
     pub fn is_empty(&self) -> bool {
         self.removed.is_empty() && self.added.is_empty() && self.updated.is_empty()
     }
+
+    /// Merge multiple patch sets into a single consolidated set.
+    ///
+    /// Different platforms deliver VFS events in different orders for the
+    /// same filesystem operation (e.g., macOS FSEvents sends CREATE first,
+    /// Windows ReadDirectoryChangesW sends REMOVE first for renames).
+    /// Merging ensures the WebSocket message structure is identical
+    /// regardless of event ordering.
+    pub fn merge(patches: Vec<AppliedPatchSet>) -> AppliedPatchSet {
+        let mut merged = AppliedPatchSet::new();
+        for patch in patches {
+            merged.removed.extend(patch.removed);
+            merged.added.extend(patch.added);
+            merged.updated.extend(patch.updated);
+        }
+        merged
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -219,13 +219,24 @@ function ServeSession:__onWebSocketMessage(messagesPacket)
 		return
 	end
 
-	Log.debug("Received {} messages from Rojo server", #messagesPacket.messages)
+	Log.info("Received {} messages from Rojo server", #messagesPacket.messages)
 
 	-- Combine all messages into a single patch
 	local combinedPatch = PatchSet.newEmpty()
 	for _, message in messagesPacket.messages do
 		PatchSet.assign(combinedPatch, message)
 	end
+
+	local addedCount = 0
+	for _ in pairs(combinedPatch.added) do
+		addedCount += 1
+	end
+	Log.info(
+		"Combined patch: {} removals, {} additions, {} updates",
+		#combinedPatch.removed,
+		addedCount,
+		#combinedPatch.updated
+	)
 
 	-- If we're already waiting for confirmation, merge into the patch being confirmed
 	-- Changes flow into the dialogue even in one-shot mode so user can see them
@@ -580,7 +591,7 @@ function ServeSession:__applyPatch(patch)
 	end
 
 	if not PatchSet.isEmpty(unappliedPatch) then
-		Log.debug(
+		Log.info(
 			"Could not apply all changes requested by the Rojo server:\n{}",
 			PatchSet.humanSummary(self.__instanceMap, unappliedPatch)
 		)
@@ -696,7 +707,7 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 				ignoreCount += 1
 			end
 		end
-		Log.debug("User selections: {} push, {} pull, {} ignored", pushCount, pullCount, ignoreCount)
+		Log.info("User selections: {} push, {} pull, {} ignored", pushCount, pullCount, ignoreCount)
 
 		-- Build partial patches based on selections
 		local pushPatch = PatchSet.newEmpty() -- Items to apply to Studio
@@ -710,7 +721,7 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 
 			if selection == "push" then
 				-- Apply Rojo changes to Studio
-				Log.trace("[Push] Update: {}", instancePath)
+				Log.info("[Push] Update: {}", instancePath)
 				table.insert(pushPatch.updated, change)
 			elseif selection == "pull" and self.__twoWaySync then
 				-- Send Studio state back to Rojo
@@ -723,7 +734,7 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 							continue
 						end
 					end
-					Log.trace("[Pull] Update: {}", instancePath)
+					Log.info("[Pull] Update: {}", instancePath)
 					local update = encodePatchUpdate(instance, change.id, propertiesToSync)
 					if update then
 						table.insert(pullPatch.updated, update)
@@ -754,7 +765,7 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 
 			if selection == "push" then
 				-- Apply Rojo removal to Studio (delete the instance)
-				Log.trace("[Push] Delete: {}", instancePath)
+				Log.info("[Push] Delete: {}", instancePath)
 				table.insert(pushPatch.removed, idOrInstance)
 			elseif selection == "pull" and self.__twoWaySync then
 				-- Syncback: Create file in Rojo from Studio instance
@@ -789,7 +800,7 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 
 			if selection == "push" then
 				-- Apply Rojo addition to Studio
-				Log.trace("[Push] Add: {}.{}", parentPath, instanceName)
+				Log.info("[Push] Add: {}.{}", parentPath, instanceName)
 				pushPatch.added[id] = change
 			elseif selection == "pull" and self.__twoWaySync then
 				-- Don't add in Studio, remove from Rojo
@@ -810,7 +821,7 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 			for _ in pairs(pushPatch.added) do
 				addCount += 1
 			end
-			Log.debug(
+			Log.info(
 				"Applying to Studio: {} additions, {} removals, {} updates",
 				addCount,
 				#pushPatch.removed,

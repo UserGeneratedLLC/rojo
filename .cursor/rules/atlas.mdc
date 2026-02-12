@@ -1,30 +1,49 @@
 ---
-description: "Essential Rojo context: architecture, contribution workflow, and code conventions for this project."
+description: "Essential Atlas context: architecture, contribution workflow, and code conventions for this project."
 alwaysApply: true
 ---
 
-# Rojo Project Guide
+# Atlas Project Guide
 
-## What is Rojo?
+> Atlas is a fork of Rojo. Many internal identifiers, API endpoints, and struct names still reference the original "Rojo" naming.
 
-Rojo bridges filesystem and Roblox Studio, enabling professional development tools (VS Code, Git) for Roblox. It's designed for power users building complex games, libraries, and plugins.
+## Quality Standard
+
+This is a production-grade synchronization system. The filesystem must represent a 1:1 copy of the Studio place. The core invariant:
+
+**Round-trip identity:** Syncback (or two-way sync) writes a directory tree. Building an rbxl from that directory tree and forward-syncing it back must produce a bit-identical instance tree -- same names, same classes, same properties, same hierarchy, same ref targets. Any deviation is a bug.
+
+Every audit item must be evaluated against this standard. A "works most of the time" finding is not acceptable. If there is ANY code path where an instance name, property, or hierarchy relationship can be lost, mangled, or silently altered through a syncback→rebuild cycle, flag it as critical.
+
+## Code Quality Standard
+
+We are building a maintainable codebase. During audits, watch for duplicated logic -- the same slugify/dedup/meta-update pattern copy-pasted across `change_processor.rs`, `api.rs`, `dir.rs`, `project.rs`, etc. If you find duplicated code that could be consolidated into a shared helper:
+
+- **Small refactor** (extracting a helper function, consolidating 2-3 call sites): flag it AND fix it as part of the audit.
+- **Major system rewrite** (restructuring data flow, changing function signatures across 10+ call sites, redesigning the snapshot pipeline): flag it clearly in a "Deferred Refactors" section at the bottom of the report. We will evaluate whether it's worth doing after the audit is complete.
+
+The goal is clean, DRY code that is easy to reason about and hard to get wrong. If the same "compute meta path, check if name needs slugify, upsert/remove name field" sequence appears in 3+ places, that's a refactor candidate.
+
+## What is Atlas?
+
+Atlas bridges filesystem and Roblox Studio, enabling professional development tools (VS Code, Git) for Roblox. It's designed for power users building complex games, libraries, and plugins.
 
 **Core capabilities:**
 - Filesystem-based development with live sync to Studio
 - Build/upload rbxl/rbxm files from command line
 - Syncback: pull instances from Roblox → filesystem (7.7.0+)
-- Two-way sync (plugin-based): live bidirectional sync during `rojo serve` sessions
+- Two-way sync (plugin-based): live bidirectional sync during `atlas serve` sessions
 
 ### Two-Way Sync Strategy
 
-**Long-term goal:** Plugin-based two-way sync will completely replace the `rojo syncback` CLI command, allowing syncback to be deprecated.
+**Long-term goal:** Plugin-based two-way sync will completely replace the `atlas syncback` CLI command, allowing syncback to be deprecated.
 
 **Current state:**
-- `rojo syncback` (CLI) is the **ground truth** for Roblox → filesystem syncing. It is battle-tested and handles edge cases reliably.
-- Plugin-based two-way sync (via `rojo serve` + the Studio plugin) is under active development to reach feature parity and match the resilience of CLI syncback.
+- `atlas syncback` (CLI) is the **ground truth** for Roblox → filesystem syncing. It is battle-tested and handles edge cases reliably.
+- Plugin-based two-way sync (via `atlas serve` + the Studio plugin) is under active development to reach feature parity and match the resilience of CLI syncback.
 - The bar for replacing syncback is high: plugin two-way sync must handle all the same scenarios (encoded names, nested projects, property conflicts, large trees, concurrent edits) just as reliably before syncback can be deprecated.
 
-**When working on two-way sync:** Plugin-based sync must produce **exactly the same filesystem output** that `rojo syncback` would give for the same input. Byte-for-byte identical files, identical directory structures, identical naming. If the plugin path produces different results, treat syncback as the correct reference unless there's an explicit, documented reason to diverge. Any divergence is a bug until proven otherwise.
+**When working on two-way sync:** Plugin-based sync must produce **exactly the same filesystem output** that `atlas syncback` would give for the same input. Byte-for-byte identical files, identical directory structures, identical naming. If the plugin path produces different results, treat syncback as the correct reference unless there's an explicit, documented reason to diverge. Any divergence is a bug until proven otherwise.
 
 ## Architecture Overview
 
@@ -36,7 +55,7 @@ Rojo bridges filesystem and Roblox Studio, enabling professional development too
 
 ### The Snapshot System
 
-Rojo's core innovation (`src/snapshot/`):
+Atlas's core innovation (`src/snapshot/`):
 1. **Snapshot Generation**: Pure function filesystem → instance tree
 2. **Diffing**: Generate minimal PatchSet
 3. **Patch Application**: Apply changes, return AppliedPatchSet for plugin
@@ -105,7 +124,7 @@ bash scripts/watch-build-plugin.sh  # macOS/Linux
 bash scripts/unit-test-plugin.sh
 ```
 
-**Install plugin:** `rojo plugin install`
+**Install plugin:** `atlas plugin install`
 
 ### Testing
 
@@ -138,7 +157,7 @@ Every PR updates `CHANGELOG.md`:
 ```markdown
 ## Unreleased
 
-* Made a change to Rojo ([#1234])
+* Made a change to Atlas ([#1234])
 
 [#1234]: https://github.com/UserGeneratedLLC/rojo/pull/1234
 ```
@@ -275,7 +294,8 @@ Prefer JSON5 over JSON for comments and trailing commas:
 ### Loading a Project (Rust)
 ```rust
 use librojo::Project;
-let project = Project::load_from_slice(path, contents)?;
+let project = Project::load_fuzzy(&vfs, path)?;
+// or: Project::load_exact(path)?;
 ```
 
 ### Building Snapshots (Rust)
@@ -293,26 +313,29 @@ Reconciler.applyPatch(instanceMap, patch)
 ## File Organization
 
 ```
-src/                 - Rust server/CLI
-  cli/              - Command implementations
-  snapshot/         - Core snapshot system
-  snapshot_middleware/ - File type handlers
-  syncback/         - Roblox → filesystem
-  web/              - HTTP/WebSocket server
+src/                     - Rust server/CLI
+  cli/                  - Command implementations
+  snapshot/             - Core snapshot system
+  snapshot_middleware/   - File type handlers
+  syncback/             - Roblox → filesystem
+  web/                  - HTTP/WebSocket server
+  change_processor.rs   - Two-way sync filesystem writer
 
-plugin/src/         - Lua Studio plugin
-  App/              - Roact UI components
-  Reconciler/       - Patch application logic
-  Config.lua        - Version and protocol config
+plugin/src/             - Lua Studio plugin
+  App/                  - Roact UI components
+  Reconciler/           - Patch application logic
+  ChangeBatcher/        - Two-way sync patch creation
+  Config.lua            - Version and protocol config
 
-rbx-dom/            - Git submodule (separate repo)
-  rbx_binary/       - Binary format (rbxm/rbxl)
-  rbx_xml/          - XML format (rbxmx/rbxlx)
-  rbx_dom_weak/     - Instance representation
-  rbx_reflection/   - Property metadata
+rbx-dom/                - Git submodule (separate repo)
+  rbx_binary/           - Binary format (rbxm/rbxl)
+  rbx_xml/              - XML format (rbxmx/rbxlx)
+  rbx_dom_weak/         - Instance representation
+  rbx_reflection/       - Property metadata
+  rbx_reflection_database/ - Reflection DB
 
-tests/              - Rust integration tests
-rojo-test/          - Test fixtures and utilities
+tests/                  - Rust integration tests
+rojo-test/              - Test fixtures and utilities
 ```
 
 ## Anti-Patterns to Avoid
@@ -330,7 +353,7 @@ rojo-test/          - Test fixtures and utilities
 
 ## Version Information
 
-- **Protocol version:** 5 (`plugin/src/Config.lua`)
+- **Protocol version:** 6 (`plugin/src/Config.lua`)
 - **Server/Plugin must match:** MAJOR.MINOR (e.g., 7.7.x works with 7.7.y)
 - **MSRV:** Rust 1.88
 - **License:** MPL-2.0 (rbx-dom uses MIT)

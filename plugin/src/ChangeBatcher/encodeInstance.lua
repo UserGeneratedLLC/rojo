@@ -21,6 +21,7 @@ local Log = require(Packages.Log)
 local RbxDom = require(Packages.RbxDom)
 
 local encodeProperty = require(script.Parent.encodeProperty)
+local UNENCODABLE_DATA_TYPES = require(script.Parent.propertyFilter)
 
 -- Script class names that need Source property
 local SCRIPT_CLASS_NAMES = {
@@ -234,6 +235,10 @@ encodeInstance = function(instance, parentId, _skipPathCheck)
 				-- Get the full PropertyDescriptor for encoding
 				local descriptor = RbxDom.findCanonicalPropertyDescriptor(instance.ClassName, propertyName)
 				if descriptor then
+					if UNENCODABLE_DATA_TYPES[descriptor.dataType] then
+						continue
+					end
+
 					local encodeSuccess, encodeResult = encodeProperty(instance, propertyName, descriptor)
 					if encodeSuccess and encodeResult ~= nil then
 						properties[propertyName] = encodeResult

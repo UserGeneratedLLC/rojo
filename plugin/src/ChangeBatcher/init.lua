@@ -107,12 +107,11 @@ function ChangeBatcher:__flush()
 		return nil
 	end
 
-	-- Log summary at debug level
 	local addedCount = 0
 	for _ in pairs(patch.added) do
 		addedCount += 1
 	end
-	Log.debug("Two-way sync: {} updates, {} additions, {} removals", #patch.updated, addedCount, #patch.removed)
+	Log.info("Two-way sync: {} updates, {} additions, {} removals", #patch.updated, addedCount, #patch.removed)
 
 	return patch
 end

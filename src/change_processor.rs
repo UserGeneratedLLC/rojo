@@ -2,6 +2,7 @@ use crossbeam_channel::{select, Receiver, RecvError, Sender};
 use jod_thread::JoinHandle;
 use memofs::{IoResultExt, Vfs, VfsEvent};
 use rbx_dom_weak::types::{Ref, Variant};
+use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use std::{
@@ -17,6 +18,27 @@ use crate::{
     snapshot_middleware::{snapshot_from_vfs, snapshot_project_node},
     syncback::{deduplicate_name, name_needs_slugify, slugify_name, strip_script_suffix},
 };
+
+/// Wrapper that displays a path relative to a project root directory.
+struct RelPath<'a> {
+    path: &'a Path,
+    root: &'a Path,
+}
+
+impl fmt::Display for RelPath<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.path
+            .strip_prefix(self.root)
+            .unwrap_or(self.path)
+            .display()
+            .fmt(f)
+    }
+}
+
+/// Returns a display wrapper that shows `path` relative to `root`.
+fn rel_path<'a>(path: &'a Path, root: &'a Path) -> RelPath<'a> {
+    RelPath { path, root }
+}
 
 /// Processes file change events, updates the DOM, and sends those updates
 /// through a channel for other stuff to consume.
@@ -54,15 +76,22 @@ impl ChangeProcessor {
         message_queue: Arc<MessageQueue<AppliedPatchSet>>,
         tree_mutation_receiver: Receiver<PatchSet>,
         suppressed_paths: Arc<Mutex<std::collections::HashMap<PathBuf, (usize, usize)>>>,
+        project_root: PathBuf,
+        critical_error_receiver: Option<Receiver<memofs::WatcherCriticalError>>,
     ) -> Self {
         let (shutdown_sender, shutdown_receiver) = crossbeam_channel::bounded(1);
         let vfs_receiver = vfs.event_receiver();
+        // Use crossbeam::never() for callers that don't provide an error receiver
+        // (non-serve commands). never() blocks forever without selecting.
+        let critical_error_receiver =
+            critical_error_receiver.unwrap_or_else(crossbeam_channel::never);
         let task = JobThreadContext {
             tree,
             vfs,
             message_queue,
             pending_recovery: Mutex::new(Vec::new()),
             suppressed_paths,
+            project_root,
         };
 
         let job_thread = jod_thread::Builder::new()
@@ -70,23 +99,86 @@ impl ChangeProcessor {
             .spawn(move || {
                 log::trace!("ChangeProcessor thread started");
 
+                // Tracks when to run the next reconciliation pass. Set to
+                // Some(future_instant) after VFS events arrive, cleared
+                // after reconcile_tree() runs. This ensures we only do the
+                // full re-snapshot once per burst of activity.
+                let mut reconcile_at: Option<Instant> = None;
+
                 loop {
+                    // Compute the timeout for the default branch.
+                    // If a reconciliation is pending, wake up when it's due
+                    // (clamped to at least 50ms to avoid busy-spinning).
+                    // Otherwise use the normal 500ms sweep interval.
+                    let timeout = match reconcile_at {
+                        Some(deadline) => {
+                            let remaining = deadline.saturating_duration_since(Instant::now());
+                            remaining.max(Duration::from_millis(50))
+                        }
+                        None => Duration::from_millis(500),
+                    };
+
                     select! {
                         recv(vfs_receiver) -> event => {
-                            task.handle_vfs_event(event?);
-                            task.process_pending_recoveries();
+                            let mut all_patches = task.handle_vfs_event(event?);
+
+                            // Drain any pending events that arrived during processing.
+                            // This ensures that multi-event filesystem operations (e.g.,
+                            // rename = REMOVE + CREATE on Windows) produce a single
+                            // batched message instead of separate per-event messages,
+                            // giving consistent behavior across platforms.
+                            while let Ok(event) = vfs_receiver.try_recv() {
+                                all_patches.extend(task.handle_vfs_event(event));
+                            }
+
+                            all_patches.extend(task.process_pending_recoveries());
+
+                            if !all_patches.is_empty() {
+                                let merged = AppliedPatchSet::merge(all_patches);
+                                if !merged.is_empty() {
+                                    task.message_queue.push_messages(&[merged]);
+                                }
+                            }
+
+                            // Schedule a reconciliation 200ms from now if one isn't pending.
+                            if reconcile_at.is_none() {
+                                reconcile_at = Some(Instant::now() + Duration::from_millis(200));
+                            }
+
+                            // If the deadline has passed, reconcile now. This check runs
+                            // inside the VFS branch because during sustained event bursts,
+                            // the `default` branch never fires (the VFS channel is never
+                            // idle long enough).
+                            if reconcile_at.is_some_and(|d| Instant::now() >= d) {
+                                task.reconcile_tree();
+                                reconcile_at = None;
+                            }
                         },
                         recv(tree_mutation_receiver) -> patch_set => {
                             task.handle_tree_event(patch_set?);
+                        },
+                        recv(critical_error_receiver) -> err => {
+                            if let Ok(memofs::WatcherCriticalError::RescanRequired) = err {
+                                log::warn!(
+                                    "VFS watcher lost events (RescanRequired). \
+                                     Triggering full tree reconciliation."
+                                );
+                                task.reconcile_tree();
+                                reconcile_at = None;
+                            }
                         },
                         recv(shutdown_receiver) -> _ => {
                             log::trace!("ChangeProcessor shutdown signal received...");
                             return Ok(());
                         },
-                        default(Duration::from_millis(500)) => {
-                            // Periodic sweep even when no events arrive —
-                            // catches files recreated after their Remove was processed.
+                        default(timeout) => {
                             task.process_pending_recoveries();
+
+                            // If a reconciliation deadline has passed, run it now.
+                            if reconcile_at.is_some_and(|d| Instant::now() >= d) {
+                                task.reconcile_tree();
+                                reconcile_at = None;
+                            }
                         },
                     }
                 }
@@ -132,9 +224,17 @@ struct JobThreadContext {
     /// Paths recently written by the API's syncback. Events for these paths
     /// are suppressed to avoid redundant re-snapshots. Values are `(remove_count, create_write_count)`.
     suppressed_paths: Arc<Mutex<std::collections::HashMap<PathBuf, (usize, usize)>>>,
+
+    /// Root directory of the project, used to display relative paths in logs.
+    project_root: PathBuf,
 }
 
 impl JobThreadContext {
+    /// Returns a display wrapper that shows `path` relative to the project root.
+    fn display_path<'a>(&'a self, path: &'a Path) -> RelPath<'a> {
+        rel_path(path, &self.project_root)
+    }
+
     /// Find the init file inside a directory-format script folder.
     /// Returns the path to the first `init.*.luau` or `init.*.lua` found.
     fn find_init_file(dir: &Path) -> Option<PathBuf> {
@@ -241,7 +341,7 @@ impl JobThreadContext {
             self.unsuppress_path(meta_path);
             log::error!(
                 "Failed to upsert name in meta file {}: {}",
-                meta_path.display(),
+                self.display_path(meta_path),
                 err
             );
         }
@@ -255,7 +355,7 @@ impl JobThreadContext {
             self.unsuppress_path(model_path);
             log::error!(
                 "Failed to upsert name in model file {}: {}",
-                model_path.display(),
+                self.display_path(model_path),
                 err
             );
         }
@@ -283,7 +383,7 @@ impl JobThreadContext {
                 self.unsuppress_path(model_path);
                 log::error!(
                     "Failed to remove name from model file {}: {}",
-                    model_path.display(),
+                    self.display_path(model_path),
                     err
                 );
             }
@@ -314,7 +414,7 @@ impl JobThreadContext {
                 self.unsuppress_path(meta_path);
                 log::error!(
                     "Failed to remove name from meta file {}: {}",
-                    meta_path.display(),
+                    self.display_path(meta_path),
                     err
                 );
             }
@@ -342,7 +442,7 @@ impl JobThreadContext {
 
             log::info!(
                 "apply_patches: path {} affects IDs {:?}",
-                current_path.display(),
+                self.display_path(current_path),
                 ids
             );
 
@@ -352,7 +452,7 @@ impl JobThreadContext {
 
             log::info!(
                 "apply_patches: no IDs at {}, trying parent...",
-                current_path.display()
+                self.display_path(current_path)
             );
             match current_path.parent() {
                 Some(parent) => current_path = parent,
@@ -363,12 +463,14 @@ impl JobThreadContext {
         if affected_ids.is_empty() {
             log::info!(
                 "apply_patches: no affected instances found for path {}",
-                path.display()
+                self.display_path(&path)
             );
         }
 
         for id in affected_ids {
-            if let Some(result) = compute_and_apply_changes(&mut tree, &self.vfs, id) {
+            if let Some(result) =
+                compute_and_apply_changes(&mut tree, &self.vfs, id, &self.project_root)
+            {
                 // If an instance was removed, schedule a recovery check
                 // in case the path is recreated momentarily.
                 if let Some(removed_path) = result.removed_path {
@@ -385,14 +487,14 @@ impl JobThreadContext {
         applied_patches
     }
 
-    fn handle_vfs_event(&self, event: VfsEvent) {
+    fn handle_vfs_event(&self, event: VfsEvent) -> Vec<AppliedPatchSet> {
         // Log EVERY VFS event at INFO level for diagnostics.
         // This is intentionally verbose — it is critical for debugging
         // file watcher desync issues (e.g., rapid delete+recreate).
         match &event {
-            VfsEvent::Create(path) => log::info!("VFS event: CREATE {}", path.display()),
-            VfsEvent::Write(path) => log::info!("VFS event: WRITE {}", path.display()),
-            VfsEvent::Remove(path) => log::info!("VFS event: REMOVE {}", path.display()),
+            VfsEvent::Create(path) => log::info!("VFS event: CREATE {}", self.display_path(path)),
+            VfsEvent::Write(path) => log::info!("VFS event: WRITE {}", self.display_path(path)),
+            VfsEvent::Remove(path) => log::info!("VFS event: REMOVE {}", self.display_path(path)),
             _ => log::info!("VFS event: OTHER {:?}", event),
         }
 
@@ -445,9 +547,9 @@ impl JobThreadContext {
                             .expect("Error applying VFS change");
                         log::info!(
                             "VFS event SUPPRESSED (API syncback echo): {}",
-                            path.display()
+                            self.display_path(path)
                         );
-                        return;
+                        return Vec::new();
                     }
                 }
             }
@@ -466,8 +568,8 @@ impl JobThreadContext {
                     Ok(canonical_path) => {
                         log::info!(
                             "VFS: canonicalize OK for {} -> {}",
-                            path.display(),
-                            canonical_path.display()
+                            self.display_path(&path),
+                            self.display_path(&canonical_path)
                         );
                         self.apply_patches(canonical_path)
                     }
@@ -509,7 +611,7 @@ impl JobThreadContext {
                             log::info!(
                                 "VFS: phantom Create/Write for non-existent {} — \
                                  consumed pending suppression (likely stale rename event)",
-                                path.display()
+                                self.display_path(&path)
                             );
                             Vec::new()
                         } else {
@@ -523,8 +625,8 @@ impl JobThreadContext {
                                     log::info!(
                                         "VFS: Create/Write for vanished file {} — \
                                          resolved via parent to {}",
-                                        path.display(),
-                                        resolved.display()
+                                        self.display_path(&path),
+                                        self.display_path(&resolved)
                                     );
                                     self.apply_patches(resolved)
                                 }
@@ -532,7 +634,7 @@ impl JobThreadContext {
                                     log::info!(
                                         "VFS: Skipping Create/Write for {} — \
                                          parent no longer exists: {}",
-                                        path.display(),
+                                        self.display_path(&path),
                                         err
                                     );
                                     Vec::new()
@@ -552,13 +654,13 @@ impl JobThreadContext {
                 match self.vfs.canonicalize(parent) {
                     Ok(parent_normalized) => {
                         let resolved = parent_normalized.join(file_name);
-                        log::info!("VFS: Remove resolved to {}", resolved.display());
+                        log::info!("VFS: Remove resolved to {}", self.display_path(&resolved));
                         self.apply_patches(resolved)
                     }
                     Err(err) => {
                         log::info!(
                             "VFS: Skipping remove event for {} — parent no longer exists: {}",
-                            path.display(),
+                            self.display_path(&path),
                             err
                         );
                         Vec::new()
@@ -588,15 +690,13 @@ impl JobThreadContext {
             log::info!("VFS event applied: no changes");
         }
 
-        // Notify anyone listening to the message queue about the changes we
-        // just made.
-        self.message_queue.push_messages(&applied_patches);
+        applied_patches
     }
 
     /// Processes any pending recovery checks for paths that were recently
     /// removed. If a path has reappeared on the real filesystem after the
     /// recovery delay, we trigger a re-snapshot to bring the tree back in sync.
-    fn process_pending_recoveries(&self) {
+    fn process_pending_recoveries(&self) -> Vec<AppliedPatchSet> {
         const RECOVERY_DELAY: Duration = Duration::from_millis(200);
 
         let ready: Vec<PathBuf> = {
@@ -616,11 +716,12 @@ impl JobThreadContext {
             ready
         };
 
+        let mut all_patches = Vec::new();
         for path in ready {
             if std::fs::metadata(&path).is_ok() {
                 log::info!(
                     "VFS recovery: path {} was removed but has reappeared on disk. Re-snapshotting.",
-                    path.display()
+                    self.display_path(&path)
                 );
                 let patches = self.apply_patches(path);
                 if !patches.is_empty() {
@@ -633,15 +734,71 @@ impl JobThreadContext {
                         total_removed,
                         total_updated
                     );
-                    self.message_queue.push_messages(&patches);
+                    all_patches.extend(patches);
                 }
             } else {
                 log::info!(
                     "VFS recovery: path {} confirmed removed from disk.",
-                    path.display()
+                    self.display_path(&path)
                 );
             }
         }
+        all_patches
+    }
+
+    /// Re-snapshots the entire project from the real filesystem and patches
+    /// the in-memory tree to correct any drift from missed VFS events.
+    /// Called when the file watcher reports `RescanRequired`.
+    fn reconcile_tree(&self) {
+        use crate::snapshot::InstanceContext;
+
+        let start = Instant::now();
+        let instance_context = InstanceContext::new();
+
+        let snapshot = match snapshot_from_vfs(&instance_context, &self.vfs, &self.project_root) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("Tree reconciliation snapshot error: {:?}", e);
+                return;
+            }
+        };
+
+        let mut tree = self.tree.lock().unwrap();
+        let root_id = tree.get_root_id();
+        let patch_set = compute_patch_set(snapshot, &tree, root_id);
+
+        // Only reconcile structural drift (added/removed instances).
+        // Property updates from compute_patch_set can produce false positives
+        // (e.g., Ref properties differ between snapshot IDs and tree IDs).
+        // Property changes are already handled correctly by individual VFS events.
+        if patch_set.removed_instances.is_empty() && patch_set.added_instances.is_empty() {
+            log::info!(
+                "Tree reconciliation: no drift detected ({:.1?})",
+                start.elapsed()
+            );
+            return;
+        }
+
+        let added = patch_set.added_instances.len();
+        let removed = patch_set.removed_instances.len();
+
+        // Strip property updates to avoid false-positive patches
+        let structural_patch = PatchSet {
+            added_instances: patch_set.added_instances,
+            removed_instances: patch_set.removed_instances,
+            updated_instances: Vec::new(),
+        };
+
+        let applied = apply_patch_set(&mut tree, structural_patch);
+        drop(tree);
+
+        self.message_queue.push_messages(&[applied]);
+        log::info!(
+            "Tree reconciliation: corrected {} added, {} removed ({:.1?})",
+            added,
+            removed,
+            start.elapsed()
+        );
     }
 
     fn handle_tree_event(&self, patch_set: PatchSet) {
@@ -675,7 +832,7 @@ impl JobThreadContext {
                                 log::info!(
                                     "Two-way sync: Removing instance {:?} from tree (path: {})",
                                     id,
-                                    path.display()
+                                    self.display_path(path)
                                 );
                             }
                             InstigatingSource::ProjectNode { .. } => {
@@ -753,8 +910,8 @@ impl JobThreadContext {
                                                 if new_dir_path != dir_path {
                                                     log::info!(
                                                         "Two-way sync: Renaming directory {} -> {}",
-                                                        dir_path.display(),
-                                                        new_dir_path.display()
+                                                        self.display_path(dir_path),
+                                                        self.display_path(&new_dir_path)
                                                     );
                                                     self.suppress_path_any(dir_path);
                                                     self.suppress_path(&new_dir_path);
@@ -917,8 +1074,8 @@ impl JobThreadContext {
                                             if new_path != *path {
                                                 log::info!(
                                                     "Two-way sync: Renaming {} -> {}",
-                                                    path.display(),
-                                                    new_path.display()
+                                                    self.display_path(path),
+                                                    self.display_path(&new_path)
                                                 );
                                                 self.suppress_path_any(path);
                                                 self.suppress_path(&new_path);
@@ -1094,8 +1251,8 @@ impl JobThreadContext {
                                                      renaming {} -> {}",
                                                     old_class,
                                                     new_class,
-                                                    actual_file.display(),
-                                                    new_path.display()
+                                                    self.display_path(&actual_file),
+                                                    self.display_path(&new_path)
                                                 );
                                                 self.suppress_path_any(&actual_file);
                                                 self.suppress_path(&new_path);
@@ -1118,7 +1275,7 @@ impl JobThreadContext {
                                             log::warn!(
                                                 "Cannot change ClassName for directory {} \
                                                  — no init file found inside",
-                                                path.display()
+                                                self.display_path(path)
                                             );
                                         }
                                     } else if old_is_script != new_is_script {
@@ -1177,7 +1334,7 @@ impl JobThreadContext {
                                 if let Some(Variant::String(value)) = changed_value {
                                     log::info!(
                                         "Two-way sync: Writing Source to {}",
-                                        write_path.display()
+                                        self.display_path(write_path)
                                     );
                                     self.suppress_path(write_path);
                                     if let Err(err) = fs::write(write_path, value) {
@@ -1242,7 +1399,14 @@ struct ComputeResult {
     removed_path: Option<PathBuf>,
 }
 
-fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<ComputeResult> {
+fn compute_and_apply_changes(
+    tree: &mut RojoTree,
+    vfs: &Vfs,
+    id: Ref,
+    project_root: &Path,
+) -> Option<ComputeResult> {
+    // Use rel_path(p, project_root) inline for log display.
+
     let metadata = tree
         .get_metadata(id)
         .expect("metadata missing for instance present in tree");
@@ -1281,12 +1445,12 @@ fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<
 
             log::info!(
                 "compute_and_apply_changes: checking path {} for instance {:?}{}",
-                path.display(),
+                rel_path(path, project_root),
                 id,
                 if is_init_file {
                     format!(
                         " (init file, will snapshot parent dir {})",
-                        snapshot_path.display()
+                        rel_path(snapshot_path, project_root)
                     )
                 } else {
                     String::new()
@@ -1300,7 +1464,7 @@ fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<
                     // that path and use it as the source for our patch.
                     log::info!(
                         "compute_and_apply_changes: path EXISTS via VFS, re-snapshotting {}",
-                        snapshot_path.display()
+                        rel_path(snapshot_path, project_root)
                     );
 
                     let snapshot = match snapshot_from_vfs(&metadata.context, vfs, snapshot_path) {
@@ -1329,7 +1493,7 @@ fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<
                             "compute_and_apply_changes: VFS says path removed but REAL \
                              filesystem confirms it EXISTS: {}. Re-snapshotting instead \
                              of removing.",
-                            path.display()
+                            rel_path(path, project_root)
                         );
 
                         let snapshot =
@@ -1338,7 +1502,7 @@ fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<
                                 Err(err) => {
                                     log::error!(
                                         "Recovery snapshot error for {}: {:?}",
-                                        snapshot_path.display(),
+                                        rel_path(snapshot_path, project_root),
                                         err
                                     );
                                     return None;
@@ -1359,8 +1523,8 @@ fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<
                         log::info!(
                             "compute_and_apply_changes: init file {} deleted but parent \
                              directory {} still exists. Re-snapshotting directory.",
-                            path.display(),
-                            snapshot_path.display()
+                            rel_path(path, project_root),
+                            rel_path(snapshot_path, project_root)
                         );
 
                         let snapshot =
@@ -1369,7 +1533,7 @@ fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<
                                 Err(err) => {
                                     log::error!(
                                         "Directory re-snapshot error for {}: {:?}",
-                                        snapshot_path.display(),
+                                        rel_path(snapshot_path, project_root),
                                         err
                                     );
                                     return None;
@@ -1390,7 +1554,7 @@ fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<
                             "compute_and_apply_changes: path NOT FOUND on disk, removing \
                              instance {:?} for {}. Scheduling recovery check.",
                             id,
-                            path.display()
+                            rel_path(path, project_root)
                         );
 
                         let removed_path = path.to_path_buf();
@@ -1407,7 +1571,7 @@ fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<
                 Err(err) => {
                     log::error!(
                         "Error processing filesystem change for {}: {:?}",
-                        path.display(),
+                        rel_path(path, project_root),
                         err
                     );
                     None
@@ -1427,7 +1591,7 @@ fn compute_and_apply_changes(tree: &mut RojoTree, vfs: &Vfs, id: Ref) -> Option<
             log::info!(
                 "compute_and_apply_changes: re-snapshotting project node '{}' at {}",
                 name,
-                path.display()
+                rel_path(path, project_root)
             );
 
             let snapshot_result = snapshot_project_node(

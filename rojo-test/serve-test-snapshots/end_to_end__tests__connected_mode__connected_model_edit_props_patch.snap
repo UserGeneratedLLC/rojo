@@ -1,0 +1,21 @@
+---
+source: tests/tests/connected_mode.rs
+expression: "socket_packet.intern_and_redact(&mut redactions, ())"
+---
+body:
+  messageCursor: 1
+  messages:
+    - added:
+        id-7:
+          Children: []
+          ClassName: Folder
+          Id: id-7
+          Metadata:
+            ignoreUnknownInstances: false
+          Name: NewChild
+          Parent: id-6
+          Properties: {}
+      removed: []
+      updated: []
+packetType: messages
+sessionId: id-1

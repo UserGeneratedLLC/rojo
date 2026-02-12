@@ -12,16 +12,13 @@
 //! 7. ProjectNode guard (no project file corruption)
 //! 8. Echo suppression (no redundant VFS patches)
 //!
-//! NOTE: Tests operate on pre-existing instances already in the Rojo tree
-//! (from the initial snapshot). Adding new instances via the API writes files
-//! to disk but relies on VFS events for tree updates; with echo suppression,
-//! those events are suppressed for the paths the API wrote. This is correct
-//! behavior — the plugin reconciles its own tree and doesn't need Rojo to
-//! re-snapshot what it just sent. Tests that need to interact with the tree
-//! (read back IDs, send updates) must use instances from the initial snapshot.
+//! NOTE: Adding new instances via the API writes files to disk WITHOUT
+//! VFS echo suppression — the watcher must pick up the new files to add
+//! them to the tree. Updates and removals of EXISTING instances DO suppress
+//! their VFS echoes since the tree is already mutated via handle_tree_event.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use std::{fs, thread};
 
@@ -721,13 +718,17 @@ fn echo_suppression_prevents_redundant_patches() {
         let read_after = session.get_api_read(root_id).unwrap();
         let cursor_delta = read_after.message_cursor - initial_cursor;
 
-        // With proper echo suppression, the cursor should not advance excessively
+        // For a single add: ~2 messages (1 from handle_tree_event broadcast +
+        // 1 from VFS watcher adding the new instance to the tree). Allowing 3
+        // accounts for platform-specific directory-level VFS events.
         assert!(
-            cursor_delta < 10,
-            "Message cursor should not advance excessively (delta={}), \
-             indicating echo suppression is working",
+            cursor_delta <= 3,
+            "Echo suppression: cursor advanced by {} (expected ~2 for add: \
+             1 tree mutation + 1 VFS pickup)",
             cursor_delta
         );
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -2351,14 +2352,18 @@ fn echo_suppression_rapid_adds_10x() {
             );
         }
 
-        // Server should still be responsive
+        // Server should still be responsive. 10 adds x ~2 events each
+        // (1 handle_tree_event + 1 VFS pickup) = ~20, with margin for
+        // platform-specific directory events.
         let read_after = session.get_api_read(root_id).unwrap();
         let cursor_delta = read_after.message_cursor - initial_cursor;
         assert!(
-            cursor_delta < 50,
-            "Cursor delta {} should be reasonable with echo suppression",
+            cursor_delta <= 30,
+            "Cursor delta {} should be bounded (10 adds x ~2 events + margin)",
             cursor_delta
         );
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -2425,6 +2430,8 @@ fn echo_suppression_mixed_operations() {
 
         // Verify removal
         assert_not_exists(&src.join("Echo.luau"), "Echo.luau after removal");
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -2858,6 +2865,8 @@ fn watcher_rapid_source_edits_on_disk_10x() {
         }
 
         poll_tree_source(&session, rs_id, "existing", "-- disk v10", 3000);
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -2873,6 +2882,8 @@ fn watcher_burst_writes_100x() {
         fs::write(&file_path, "-- burst final\nreturn {}").unwrap();
 
         poll_tree_source(&session, rs_id, "existing", "-- burst final", 3000);
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -2903,6 +2914,8 @@ fn watcher_filesystem_rename_chain_10x() {
             original_content, content,
             "Content preserved through renames"
         );
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -2924,6 +2937,8 @@ fn watcher_rename_with_content_change() {
             "-- atomic overwrite content",
             3000,
         );
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -2947,6 +2962,8 @@ fn watcher_delete_recreate_immediate() {
             "-- recreated immediately",
             3000,
         );
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -2970,6 +2987,8 @@ fn watcher_delete_recreate_cycle_5x() {
                 5000,
             );
         }
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -2990,6 +3009,8 @@ fn watcher_delete_recreate_different_content() {
         .unwrap();
 
         poll_tree_source(&session, rs_id, "existing", "-- completely different", 5000);
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -3021,6 +3042,8 @@ fn watcher_edit_init_file() {
             child_read.instances.values().any(|i| i.name == "ChildA"),
             "ChildA should still exist after init edit"
         );
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -3067,6 +3090,8 @@ fn watcher_init_type_cycling_10x() {
             child_read.instances.values().any(|i| i.name == "ChildB"),
             "ChildB should survive init type cycling"
         );
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -3081,6 +3106,8 @@ fn watcher_delete_init_file() {
 
         // Without init file, directory becomes a Folder
         poll_tree_class(&session, rs_id, "DirModuleWithChildren", "Folder", 3000);
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -3098,6 +3125,8 @@ fn watcher_replace_init_file_type() {
         fs::write(&new_init, &content).unwrap();
 
         poll_tree_class(&session, rs_id, "DirModuleWithChildren", "Script", 3000);
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -3121,6 +3150,8 @@ fn watcher_standalone_to_directory_conversion() {
         fs::write(dir.join("ChildNew.luau"), "-- new child\nreturn {}").unwrap();
 
         poll_tree_has_child(&session, rs_id, "StandaloneModule", "ChildNew", 5000);
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -3151,6 +3182,8 @@ fn watcher_directory_to_standalone_conversion() {
             "Standalone should have no children, found {}",
             child_count
         );
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -3199,6 +3232,8 @@ fn watcher_format_flip_flop_5x() {
                 5000,
             );
         }
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -3227,6 +3262,8 @@ fn watcher_atomic_save_pattern() {
                 3000,
             );
         }
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -3254,6 +3291,8 @@ fn watcher_backup_rename_write_pattern() {
         if backup.exists() {
             fs::remove_file(&backup).unwrap();
         }
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -3281,6 +3320,8 @@ fn watcher_parent_directory_rename() {
             child_read.instances.values().any(|i| i.name == "ChildA"),
             "ChildA should be in renamed directory"
         );
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -3293,6 +3334,8 @@ fn watcher_parent_directory_delete_all() {
         fs::remove_dir_all(src.join("DirModuleWithChildren")).unwrap();
 
         poll_tree_no_instance(&session, rs_id, "DirModuleWithChildren", 5000);
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -3335,6 +3378,8 @@ fn watcher_filesystem_and_api_concurrent() {
             "Script should be updated via API, got: {}",
             script_content
         );
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -3364,6 +3409,8 @@ fn watcher_multi_file_simultaneous_edits() {
                 5000,
             );
         }
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -3832,6 +3879,8 @@ fn watcher_standalone_to_dir_then_rename() {
 
         poll_tree_has_instance(&session, rs_id, "RenamedAfterConversion", 5000);
         poll_tree_no_instance(&session, rs_id, "StandaloneModule", 3000);
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -3858,6 +3907,8 @@ fn watcher_dir_to_standalone_then_rename() {
 
         poll_tree_has_instance(&session, rs_id, "CollapsedAndRenamed", 5000);
         poll_tree_no_instance(&session, rs_id, "DirModuleWithChildren", 3000);
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -3882,6 +3933,8 @@ fn watcher_standalone_to_dir_then_change_init_type() {
         fs::rename(dir.join("init.luau"), dir.join("init.server.luau")).unwrap();
 
         poll_tree_class(&session, rs_id, "StandaloneModule", "Script", 5000);
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -3915,6 +3968,8 @@ fn watcher_init_delete_recreate_different_type() {
             child_read.instances.values().any(|i| i.name == "ChildA"),
             "ChildA should survive init type transition"
         );
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -3942,6 +3997,8 @@ fn watcher_init_delete_children_survive() {
             child_read.instances.values().any(|i| i.name == "ChildB"),
             "ChildB should exist after init deletion"
         );
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -3974,6 +4031,8 @@ fn watcher_format_flip_flop_with_rename() {
         fs::write(src.join("FlipRenamed.luau"), "-- collapsed back\nreturn {}").unwrap();
 
         poll_tree_source(&session, rs_id, "FlipRenamed", "-- collapsed back", 5000);
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -4009,6 +4068,8 @@ fn watcher_rename_5_files_simultaneously() {
         for old in &names {
             poll_tree_no_instance(&session, rs_id, old, 3000);
         }
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -4036,6 +4097,8 @@ fn watcher_delete_recreate_5_files_simultaneously() {
         for (i, name) in names.iter().enumerate() {
             poll_tree_source(&session, rs_id, name, &format!("-- recreated {}", i), 5000);
         }
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -4063,6 +4126,8 @@ fn watcher_mixed_rename_edit_delete_5_files() {
         poll_tree_source(&session, rs_id, "Charlie", "-- charlie fresh", 5000);
         poll_tree_has_instance(&session, rs_id, "DeltaMoved", 5000);
         poll_tree_source(&session, rs_id, "Echo", "-- echo edited", 5000);
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -4476,6 +4541,8 @@ fn watcher_directory_rename_then_delete_init() {
             child_read.instances.values().any(|i| i.name == "ChildA"),
             "ChildA should survive rename + init deletion"
         );
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -4496,6 +4563,8 @@ fn watcher_directory_init_swap_and_rename() {
 
         poll_tree_has_instance(&session, rs_id, "SwappedAndRenamed", 5000);
         poll_tree_class(&session, rs_id, "SwappedAndRenamed", "Script", 5000);
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -4529,6 +4598,8 @@ fn watcher_directory_rapid_init_cycling_and_rename() {
         // Children intact
         assert_file_exists(&final_dir.join("ChildA.luau"), "ChildA in FinalCycled");
         assert_file_exists(&final_dir.join("ChildB.luau"), "ChildB in FinalCycled");
+
+        session.assert_tree_fresh();
     });
 }
 
@@ -5591,5 +5662,318 @@ fn add_case_insensitive_colliding_instances() {
             dedup.exists(),
             dedup_lower.exists()
         );
+    });
+}
+
+// ===========================================================================
+// VFS Staleness Tests
+//
+// These tests verify the in-memory tree stays in sync with the real filesystem
+// after various operation patterns that are known to stress the file watcher.
+// Every test ends with `session.assert_tree_fresh()` which re-snapshots from
+// disk and asserts zero drift.
+// ===========================================================================
+
+/// Simulate a git-checkout-like bulk change: overwrite 20+ files simultaneously.
+#[test]
+fn stale_tree_bulk_filesystem_changes() {
+    run_serve_test("stale_tree", |session, _redactions| {
+        let src = session.path().join("src");
+
+        // Let the watcher fully start
+        thread::sleep(Duration::from_secs(1));
+
+        // Overwrite all initial files and add 15 more — no sleep between writes
+        for i in 0..20 {
+            let name = format!("bulk_{}.luau", i);
+            fs::write(src.join(&name), format!("return \"bulk {}\"", i)).unwrap();
+        }
+
+        // Wait for tree to settle by polling for the last written file
+        poll_tree_has_instance(&session, get_rs_id(&session), "bulk_19", 5000);
+
+        session.assert_tree_fresh();
+    });
+}
+
+/// After an API write (which triggers echo suppression), an external
+/// overwrite of the SAME file must still be picked up.
+#[test]
+fn stale_tree_after_api_write_then_external_edit() {
+    run_serve_test("stale_tree", |session, _redactions| {
+        let info = session.get_api_rojo().unwrap();
+        let root_read = session.get_api_read(info.root_instance_id).unwrap();
+        let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+        let rs_read = session.get_api_read(rs_id).unwrap();
+        let (a_id, _) = find_by_name(&rs_read.instances, "a");
+
+        // Step 1: API write updates Source (triggers suppression for the file)
+        let mut props = UstrMap::default();
+        props.insert(
+            ustr("Source"),
+            Some(Variant::String("return \"api wrote this\"".to_string())),
+        );
+        let update = InstanceUpdate {
+            id: a_id,
+            changed_name: None,
+            changed_class_name: None,
+            changed_properties: props,
+            changed_metadata: None,
+        };
+        send_update(&session, &info.session_id, update);
+
+        // Step 2: External overwrite with DIFFERENT content
+        let file_path = session.path().join("src").join("a.luau");
+        fs::write(&file_path, "return \"external override\"").unwrap();
+
+        // Step 3: Wait for the external change to propagate
+        poll_tree_source(&session, rs_id, "a", "external override", 5000);
+
+        // Step 4: Full tree must match filesystem exactly
+        session.assert_tree_fresh();
+    });
+}
+
+/// Delete all initial files and immediately create new ones with different names.
+/// Tests the debouncer coalescing edge case (Remove + Create in quick succession).
+#[test]
+fn stale_tree_rapid_delete_recreate_different_names() {
+    run_serve_test("stale_tree", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+
+        thread::sleep(Duration::from_secs(1));
+
+        // Delete all 5 initial files
+        for name in &["a.luau", "b.luau", "c.luau", "d.luau", "e.luau"] {
+            let _ = fs::remove_file(src.join(name));
+        }
+        // Immediately create 5 new files with different names
+        for i in 0..5 {
+            fs::write(
+                src.join(format!("new_{}.luau", i)),
+                format!("return \"new {}\"", i),
+            )
+            .unwrap();
+        }
+
+        // Wait for the last new file to appear in the tree
+        poll_tree_has_instance(&session, rs_id, "new_4", STRESS_POLL_TIMEOUT_MS);
+
+        // Old names must be gone
+        for name in &["a", "b", "c", "d", "e"] {
+            poll_tree_no_instance(&session, rs_id, name, STRESS_POLL_TIMEOUT_MS);
+        }
+
+        session.assert_tree_fresh();
+    });
+}
+
+/// Bulk restructure: delete a subdirectory, rename a file, change another file's content.
+/// Simulates the kind of multi-operation batch a VCS does.
+#[test]
+fn stale_tree_directory_restructure() {
+    run_serve_test("stale_tree", |session, _redactions| {
+        let src = session.path().join("src");
+        let rs_id = get_rs_id(&session);
+
+        thread::sleep(Duration::from_secs(1));
+
+        // Delete the sub/ directory
+        let _ = fs::remove_dir_all(src.join("sub"));
+
+        // Rename a.luau → x.luau
+        let _ = fs::rename(src.join("a.luau"), src.join("x.luau"));
+
+        // Change content of b.luau
+        fs::write(src.join("b.luau"), "return \"restructured b\"").unwrap();
+
+        // Wait for changes to settle
+        poll_tree_has_instance(&session, rs_id, "x", STRESS_POLL_TIMEOUT_MS);
+        poll_tree_no_instance(&session, rs_id, "a", STRESS_POLL_TIMEOUT_MS);
+        poll_tree_source(
+            &session,
+            rs_id,
+            "b",
+            "restructured b",
+            STRESS_POLL_TIMEOUT_MS,
+        );
+
+        session.assert_tree_fresh();
+    });
+}
+
+// ===========================================================================
+// Chaos Fuzzer
+//
+// Slams the filesystem with random operations for 10 seconds straight, then
+// waits for the watcher to settle and asserts zero tree drift. This is the
+// nuclear option for finding watcher desync bugs.
+// ===========================================================================
+
+/// Chaos fuzzer: 3 seconds of random filesystem abuse (~500 ops).
+/// This test exercises the ChangeProcessor's reconciliation mechanism
+/// which corrects drift from lost OS events (ReadDirectoryChangesW
+/// buffer overflow on Windows). Run manually with:
+///   cargo test fuzz_filesystem_chaos -- --ignored --nocapture
+///
+/// Known limitation: on Windows, the notify crate's debouncer
+/// continues delivering stale events for 60+ seconds after the chaos
+/// ends. These stale events re-introduce drift after reconciliation.
+/// A complete fix requires ignoring events that predate the last
+/// reconciliation, which is tracked as future work.
+#[test]
+#[ignore]
+fn fuzz_filesystem_chaos() {
+    run_serve_test("stale_tree", |session, _redactions| {
+        let src = session.path().join("src");
+
+        // Let the watcher fully start
+        thread::sleep(Duration::from_secs(1));
+
+        // Track our own inventory
+        let initial_files: Vec<PathBuf> = ["a.luau", "b.luau", "c.luau", "d.luau", "e.luau"]
+            .iter()
+            .map(|f| src.join(f))
+            .collect();
+        let mut known_files: Vec<PathBuf> = initial_files;
+        let mut known_dirs: Vec<PathBuf> = vec![src.join("sub")];
+        let mut file_counter = 0u64;
+        let mut dir_counter = 0u64;
+
+        let start = Instant::now();
+        let duration = Duration::from_secs(3);
+        let mut op_count = 0u64;
+
+        while start.elapsed() < duration {
+            let op = rand::random_range(0..9u32);
+            match op {
+                // 0: Create a new file
+                0 => {
+                    file_counter += 1;
+                    let name = format!("fuzz_{}.luau", file_counter);
+                    let path = src.join(&name);
+                    if fs::write(&path, format!("return \"fuzz {}\"", file_counter)).is_ok() {
+                        known_files.push(path);
+                    }
+                }
+                // 1: Delete a random existing file
+                1 => {
+                    if !known_files.is_empty() {
+                        let idx = rand::random_range(0..known_files.len());
+                        let path = known_files.swap_remove(idx);
+                        let _ = fs::remove_file(&path);
+                    }
+                }
+                // 2: Overwrite a random existing file
+                2 => {
+                    if !known_files.is_empty() {
+                        let idx = rand::random_range(0..known_files.len());
+                        let path = &known_files[idx];
+                        let _ = fs::write(path, format!("return \"overwrite {}\"", op_count));
+                    }
+                }
+                // 3: Rename a random file
+                3 => {
+                    if !known_files.is_empty() {
+                        file_counter += 1;
+                        let idx = rand::random_range(0..known_files.len());
+                        let old_path = known_files.swap_remove(idx);
+                        let new_name = format!("renamed_{}.luau", file_counter);
+                        let new_path = src.join(&new_name);
+                        if fs::rename(&old_path, &new_path).is_ok() {
+                            known_files.push(new_path);
+                        }
+                    }
+                }
+                // 4: Create a subdirectory + file inside it
+                4 => {
+                    dir_counter += 1;
+                    let dir_name = format!("dir_{}", dir_counter);
+                    let dir_path = src.join(&dir_name);
+                    if fs::create_dir_all(&dir_path).is_ok() {
+                        known_dirs.push(dir_path.clone());
+                        file_counter += 1;
+                        let file_path = dir_path.join(format!("child_{}.luau", file_counter));
+                        if fs::write(&file_path, format!("return \"child {}\"", file_counter))
+                            .is_ok()
+                        {
+                            known_files.push(file_path);
+                        }
+                    }
+                }
+                // 5: Delete a random subdirectory (recursive)
+                5 => {
+                    if !known_dirs.is_empty() {
+                        let idx = rand::random_range(0..known_dirs.len());
+                        let dir_path = known_dirs.swap_remove(idx);
+                        // Remove tracked files inside this dir
+                        known_files.retain(|f| !f.starts_with(&dir_path));
+                        let _ = fs::remove_dir_all(&dir_path);
+                    }
+                }
+                // 6: Rename a random directory
+                6 => {
+                    if !known_dirs.is_empty() {
+                        dir_counter += 1;
+                        let idx = rand::random_range(0..known_dirs.len());
+                        let old_dir = known_dirs.swap_remove(idx);
+                        let new_name = format!("rdir_{}", dir_counter);
+                        let new_dir = src.join(&new_name);
+                        if fs::rename(&old_dir, &new_dir).is_ok() {
+                            // Update tracked file paths inside the renamed dir
+                            for f in &mut known_files {
+                                if f.starts_with(&old_dir) {
+                                    let rel = f.strip_prefix(&old_dir).unwrap().to_path_buf();
+                                    *f = new_dir.join(rel);
+                                }
+                            }
+                            known_dirs.push(new_dir);
+                        }
+                    }
+                }
+                // 7: Rapid delete+recreate same file (known edge case)
+                7 => {
+                    if !known_files.is_empty() {
+                        let idx = rand::random_range(0..known_files.len());
+                        let path = known_files[idx].clone();
+                        let _ = fs::remove_file(&path);
+                        let _ = fs::write(&path, format!("return \"recreated {}\"", op_count));
+                    }
+                }
+                // 8: Double-write same file
+                8 => {
+                    if !known_files.is_empty() {
+                        let idx = rand::random_range(0..known_files.len());
+                        let path = &known_files[idx];
+                        let _ = fs::write(path, format!("return \"write1 {}\"", op_count));
+                        let _ = fs::write(path, format!("return \"write2 {}\"", op_count));
+                    }
+                }
+                _ => unreachable!(),
+            }
+
+            op_count += 1;
+
+            // Tiny random delay (0-10ms) to vary timing pressure on the debouncer
+            thread::sleep(Duration::from_millis(rand::random_range(0..10u64)));
+        }
+
+        eprintln!(
+            "Chaos fuzzer completed {} operations in {:?}",
+            op_count,
+            start.elapsed()
+        );
+
+        // Wait for the VFS event backlog to mostly drain, then verify freshness.
+        // The ChangeProcessor's periodic reconciliation corrects drift from
+        // lost OS events (ReadDirectoryChangesW buffer overflow).
+        thread::sleep(Duration::from_secs(5));
+
+        // THE CRITICAL ASSERTION: tree must match filesystem after all that chaos.
+        // The ChangeProcessor's reconcile_tree runs every ~200ms during event
+        // processing and catches drift from lost OS events. By this point,
+        // the tree should be consistent with disk.
+        session.assert_tree_fresh();
     });
 }

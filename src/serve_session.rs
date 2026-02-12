@@ -23,6 +23,21 @@ use crate::{
     snapshot_middleware::snapshot_from_vfs,
 };
 
+/// Set to `true` to validate on plugin connect (useful for testing, do not enable on production).
+const VALIDATE_TREE_ON_CONNECT: bool = false;
+
+/// Result of a read-only tree freshness check. Reports how many instances
+/// differ between the in-memory tree and the real filesystem.
+#[derive(Debug, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeFreshnessReport {
+    pub is_fresh: bool,
+    pub added: usize,
+    pub removed: usize,
+    pub updated: usize,
+    pub elapsed_ms: f64,
+}
+
 /// Contains all of the state for a Rojo serve session. A serve session is used
 /// when we need to build a Rojo tree and possibly rebuild it when input files
 /// change.
@@ -102,7 +117,11 @@ impl ServeSession {
     /// The project file is expected to be loaded out-of-band since it's
     /// currently loaded from the filesystem directly instead of through the
     /// in-memory filesystem layer.
-    pub fn new<P: AsRef<Path>>(vfs: Vfs, start_path: P) -> Result<Self, ServeSessionError> {
+    pub fn new<P: AsRef<Path>>(
+        vfs: Vfs,
+        start_path: P,
+        critical_error_receiver: Option<crossbeam_channel::Receiver<memofs::WatcherCriticalError>>,
+    ) -> Result<Self, ServeSessionError> {
         let start_path = start_path.as_ref();
         let start_time = Instant::now();
 
@@ -142,6 +161,8 @@ impl ServeSession {
             Arc::clone(&message_queue),
             tree_mutation_receiver,
             Arc::clone(&suppressed_paths),
+            root_project.folder_location().to_path_buf(),
+            critical_error_receiver,
         );
 
         Ok(Self {
@@ -258,6 +279,106 @@ impl ServeSession {
             .as_ref()
             .map(|rules| rules.ignore_hidden_services())
             .unwrap_or(true)
+    }
+
+    /// Read-only check: re-snapshots from disk and returns how many
+    /// instances differ between the in-memory tree and the real filesystem.
+    /// Does NOT apply corrections — the tree is left unchanged.
+    pub fn check_tree_freshness(&self) -> TreeFreshnessReport {
+        let start = Instant::now();
+        let start_path = self.root_project.folder_location();
+        let instance_context = InstanceContext::new();
+
+        let snapshot = match snapshot_from_vfs(&instance_context, &self.vfs, start_path) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("Tree freshness check snapshot error: {:?}", e);
+                return TreeFreshnessReport {
+                    is_fresh: false,
+                    added: 0,
+                    removed: 0,
+                    updated: 0,
+                    elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
+                };
+            }
+        };
+
+        let tree = self.tree.lock().unwrap();
+        let root_id = tree.get_root_id();
+        let patch_set = compute_patch_set(snapshot, &tree, root_id);
+
+        let added = patch_set.added_instances.len();
+        let removed = patch_set.removed_instances.len();
+        let updated = patch_set.updated_instances.len();
+
+        TreeFreshnessReport {
+            is_fresh: added == 0 && removed == 0 && updated == 0,
+            added,
+            removed,
+            updated,
+            elapsed_ms: start.elapsed().as_secs_f64() * 1000.0,
+        }
+    }
+
+    /// Re-snapshots the project tree from the real filesystem and patches
+    /// the in-memory tree to correct any drift caused by missed VFS watcher
+    /// events. Called on plugin connect to guarantee the tree is fresh.
+    ///
+    /// Skipped on freshly-started sessions (< 5 s) where the tree is
+    /// guaranteed correct and the VFS watcher should handle all changes.
+    ///
+    /// Controlled by [`VALIDATE_TREE_ON_CONNECT`]; set that constant to
+    /// `false` to disable this entirely during testing.
+    pub fn validate_tree(&self) -> Vec<AppliedPatchSet> {
+        if !VALIDATE_TREE_ON_CONNECT {
+            log::debug!("Tree validation skipped (VALIDATE_TREE_ON_CONNECT = false)");
+            return Vec::new();
+        }
+
+        // On a freshly-started session the tree was just built from the
+        // filesystem and cannot be stale. Skip validation to avoid racing
+        // with the VFS watcher on early file changes.
+        const MIN_SESSION_AGE: std::time::Duration = std::time::Duration::from_secs(5);
+        if self.start_time.elapsed() < MIN_SESSION_AGE {
+            log::debug!(
+                "Tree validation skipped (session age {:.1?} < {:.1?})",
+                self.start_time.elapsed(),
+                MIN_SESSION_AGE
+            );
+            return Vec::new();
+        }
+
+        let start = Instant::now();
+        let start_path = self.root_project.folder_location();
+        let instance_context = InstanceContext::new();
+
+        let snapshot = match snapshot_from_vfs(&instance_context, &self.vfs, start_path) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("Tree validation snapshot error: {:?}", e);
+                return Vec::new();
+            }
+        };
+
+        let mut tree = self.tree.lock().unwrap();
+        let root_id = tree.get_root_id();
+        let patch_set = compute_patch_set(snapshot, &tree, root_id);
+
+        if patch_set.removed_instances.is_empty()
+            && patch_set.added_instances.is_empty()
+            && patch_set.updated_instances.is_empty()
+        {
+            log::info!(
+                "Tree validation complete (no corrections needed) in {:.1?}",
+                start.elapsed()
+            );
+            return Vec::new();
+        }
+
+        log::info!("Tree validation found stale state, applying corrections");
+        let applied = apply_patch_set(&mut tree, patch_set);
+        log::info!("Tree validation complete in {:.1?}", start.elapsed());
+        vec![applied]
     }
 }
 

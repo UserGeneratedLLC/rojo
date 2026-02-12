@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     fmt::Write as _,
     fs,
     io::Read as _,
@@ -15,7 +16,8 @@ use serde::Deserialize;
 use tempfile::{tempdir, TempDir};
 
 use librojo::web_api::{
-    ReadResponse, SerializeResponse, ServerInfoResponse, SocketPacket, SocketPacketType,
+    ReadResponse, SerializeResponse, ServerInfoResponse, SocketPacket, SocketPacketBody,
+    SocketPacketType,
 };
 use rojo_insta_ext::RedactionMap;
 
@@ -126,6 +128,10 @@ impl TestServeSession {
 
     pub fn path(&self) -> &Path {
         &self.project_path
+    }
+
+    pub fn port(&self) -> usize {
+        self.port
     }
 
     /// Waits for the `rojo serve` server to come online with expontential
@@ -276,6 +282,33 @@ impl TestServeSession {
         Ok(deserialize_msgpack(&body).expect("Server returned malformed response"))
     }
 
+    /// Assert the in-memory tree exactly matches the filesystem.
+    /// Calls the read-only `/api/validate-tree` endpoint which re-snapshots
+    /// from disk and diffs against the current tree without applying corrections.
+    /// Panics with drift counts if any discrepancy is found.
+    pub fn assert_tree_fresh(&self) {
+        let url = format!("http://localhost:{}/api/validate-tree", self.port);
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(60))
+            .build()
+            .expect("Failed to build reqwest client");
+        let body = client
+            .get(&url)
+            .send()
+            .expect("Failed to call /api/validate-tree")
+            .bytes()
+            .expect("Failed to read validate-tree response body");
+        let report: librojo::TreeFreshnessReport =
+            deserialize_msgpack(&body).expect("Failed to deserialize TreeFreshnessReport");
+
+        assert!(
+            report.is_fresh,
+            "Tree does not match filesystem: {} added, {} removed, {} updated \
+             (validated in {:.1}ms)",
+            report.added, report.removed, report.updated, report.elapsed_ms
+        );
+    }
+
     /// Post to /api/write to simulate plugin syncback operations.
     /// Uses the library's WriteRequest type for proper serialization.
     /// Uses human-readable msgpack format to match server expectations.
@@ -333,6 +366,163 @@ fn get_port_number() -> usize {
     let port = listener.local_addr().unwrap().port() as usize;
     drop(listener);
     port
+}
+
+/// Extract the message cursor from a SocketPacket for use in subsequent
+/// WebSocket subscriptions when chaining multi-step tests.
+pub fn get_message_cursor(packet: &SocketPacket) -> u32 {
+    match &packet.body {
+        SocketPacketBody::Messages(msg) => msg.message_cursor,
+    }
+}
+
+/// A normalized instance representation for structural tree comparison.
+/// Two separate `rojo serve` sessions produce different `Ref` values,
+/// so we need a Ref-free representation for round-trip identity checks.
+#[derive(Debug, PartialEq, Eq, serde::Serialize)]
+pub struct NormalizedInstance {
+    pub name: String,
+    pub class_name: String,
+    pub properties: BTreeMap<String, String>,
+    pub children: Vec<NormalizedInstance>,
+}
+
+/// Normalize a ReadResponse into a NormalizedInstance tree rooted at the given ID.
+/// Strips Refs, sorts children by (name, class_name) for deterministic comparison.
+pub fn normalize_read_response(read: &ReadResponse, root_id: Ref) -> NormalizedInstance {
+    fn normalize_recursive(
+        instances: &std::collections::HashMap<Ref, librojo::web_api::Instance>,
+        id: Ref,
+    ) -> NormalizedInstance {
+        let inst = &instances[&id];
+        let mut properties: BTreeMap<String, String> = BTreeMap::new();
+        for (key, value) in &inst.properties {
+            // Skip Ref properties (non-deterministic)
+            match &**value {
+                rbx_dom_weak::types::Variant::Ref(_) => continue,
+                _ => {
+                    properties.insert(key.to_string(), format!("{value:?}"));
+                }
+            }
+        }
+        let mut children: Vec<NormalizedInstance> = inst
+            .children
+            .iter()
+            .map(|child_id| normalize_recursive(instances, *child_id))
+            .collect();
+        children.sort_by(|a, b| (&a.name, &a.class_name).cmp(&(&b.name, &b.class_name)));
+        NormalizedInstance {
+            name: inst.name.to_string(),
+            class_name: inst.class_name.to_string(),
+            properties,
+            children,
+        }
+    }
+    normalize_recursive(&read.instances, root_id)
+}
+
+/// Start a fresh `rojo serve` on the given project path, read the full tree,
+/// and return a NormalizedInstance tree.
+///
+/// This verifies the round-trip invariant: the filesystem state written by
+/// the live session, when read from scratch, must produce the same tree.
+pub fn fresh_rebuild_read(project_path: &Path) -> NormalizedInstance {
+    let project_file = if project_path.join("default.project.json5").exists() {
+        project_path.join("default.project.json5")
+    } else if project_path.join("default.project.json").exists() {
+        project_path.join("default.project.json")
+    } else {
+        panic!(
+            "No default project file found in {}",
+            project_path.display()
+        );
+    };
+
+    let port = get_port_number();
+    let port_string = port.to_string();
+    let working_dir = get_working_dir_path();
+
+    let process = Command::new(ROJO_PATH)
+        .args([
+            "serve",
+            project_file.to_str().unwrap(),
+            "--port",
+            port_string.as_str(),
+        ])
+        .current_dir(working_dir)
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("Couldn't start fresh Rojo for round-trip check");
+
+    let mut kill_guard = KillOnDrop(process);
+
+    // Wait for fresh server to come online with same backoff
+    const BASE_DURATION_MS: f32 = 30.0;
+    const EXP_BACKOFF_FACTOR: f32 = 1.3;
+    const MAX_TRIES: u32 = 5;
+
+    let mut info = None;
+    for i in 1..=MAX_TRIES {
+        match kill_guard.0.try_wait() {
+            Ok(Some(status)) => {
+                let mut stderr_output = String::new();
+                if let Some(mut stderr) = kill_guard.0.stderr.take() {
+                    let _ = stderr.read_to_string(&mut stderr_output);
+                }
+                panic!(
+                    "Fresh Rojo process exited with status {}\nstderr:\n{}",
+                    status, stderr_output
+                );
+            }
+            Ok(None) => {}
+            Err(err) => panic!("Failed to wait on fresh Rojo process: {}", err),
+        }
+
+        let url = format!("http://localhost:{}/api/rojo", port);
+        match reqwest::blocking::get(&url) {
+            Ok(resp) => {
+                if let Ok(body) = resp.bytes() {
+                    if let Ok(server_info) = deserialize_msgpack::<ServerInfoResponse>(&body) {
+                        info = Some(server_info);
+                        break;
+                    }
+                }
+            }
+            Err(_) => {}
+        }
+        let retry_time_ms = BASE_DURATION_MS * (i as f32).powf(EXP_BACKOFF_FACTOR);
+        thread::sleep(Duration::from_millis(retry_time_ms as u64));
+    }
+
+    let info = info.expect("Fresh Rojo server did not respond");
+    let root_id = info.root_instance_id;
+
+    let url = format!("http://localhost:{}/api/read/{}", port, root_id);
+    let body = reqwest::blocking::get(&url)
+        .expect("Failed to read from fresh server")
+        .bytes()
+        .expect("Failed to get bytes from fresh server");
+    let read: ReadResponse =
+        deserialize_msgpack(&body).expect("Fresh server returned malformed response");
+
+    normalize_read_response(&read, root_id)
+}
+
+/// Assert that the live session tree matches a fresh rebuild from the filesystem.
+/// This is the core round-trip identity check.
+pub fn assert_round_trip(session: &TestServeSession, root_id: Ref) {
+    // Give VFS events time to settle before checking
+    thread::sleep(Duration::from_millis(500));
+
+    let live_read = session.get_api_read(root_id).unwrap();
+    let live_tree = normalize_read_response(&live_read, root_id);
+    let fresh_tree = fresh_rebuild_read(session.path());
+
+    assert_eq!(
+        live_tree, fresh_tree,
+        "Round-trip identity violation: live tree and fresh rebuild differ. \
+         The filesystem state does not faithfully represent the instance tree."
+    );
 }
 
 /// Takes a SerializeResponse and creates an XML model out of the response.

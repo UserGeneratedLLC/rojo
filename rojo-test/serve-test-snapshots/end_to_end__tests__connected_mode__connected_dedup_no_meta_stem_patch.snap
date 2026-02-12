@@ -1,0 +1,23 @@
+---
+source: tests/tests/connected_mode.rs
+expression: "socket_packet.intern_and_redact(&mut redactions, ())"
+---
+body:
+  messageCursor: 1
+  messages:
+    - added:
+        id-13:
+          Children: []
+          ClassName: ModuleScript
+          Id: id-13
+          Metadata:
+            ignoreUnknownInstances: false
+          Name: Foo~1
+          Parent: id-3
+          Properties:
+            Source:
+              "!String": "-- no meta, tilde is literal\nreturn 'Foo~1'"
+      removed: []
+      updated: []
+packetType: messages
+sessionId: id-1
