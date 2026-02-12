@@ -29,7 +29,7 @@ We are building a maintainable codebase. During audits, watch for duplicated log
 
 The goal is clean, DRY code that is easy to reason about and hard to get wrong. If the same "compute meta path, check if name needs slugify, upsert/remove name field" sequence appears in 3+ places, that's a refactor candidate.
 
-**Protocol Version:** 5 | Server/plugin MAJOR.MINOR must match
+**Protocol Version:** 6 | Server/plugin MAJOR.MINOR must match
 
 ## Architecture
 
@@ -50,19 +50,25 @@ Studio → ChangeBatcher → Plugin → WebSocket → Server → Filesystem
 | `/api/write` | POST | Two-way sync: plugin sends changes |
 | `/api/open/:id` | POST | Open script in editor (`{"cursor": [line, col]}`) |
 | `/api/ref-patch/:id` | GET | Fix Ref properties after syncback |
+| `/api/socket/:cursor` | GET | WebSocket upgrade for live patch streaming |
 
 ### Server Info Response (`GET /api/rojo`)
 
 ```json
 {
     "serverVersion": "7.7.0-rc.1",
-    "protocolVersion": 5,
+    "serverFork": "atlas",
+    "protocolVersion": 6,
     "sessionId": "uuid",
     "projectName": "MyProject",
     "expectedPlaceIds": [123456],
+    "unexpectedPlaceIds": [111111],
     "rootInstanceId": "00000000-0000-0000-0000-000000000000",
     "syncSourceOnly": true,
-    "visibleServices": ["Workspace", "ServerScriptService"]
+    "visibleServices": ["Workspace", "ServerScriptService"],
+    "placeId": 123456,
+    "gameId": 789012,
+    "ignoreHiddenServices": true
 }
 ```
 
@@ -70,17 +76,18 @@ Studio → ChangeBatcher → Plugin → WebSocket → Server → Filesystem
 
 ```json
 {
+    "sessionId": "uuid",
     "removed": ["id-1"],
-    "added": { "id-2": { "id": "id-2", "className": "Folder", "name": "New", "properties": {}, "children": [] } },
-    "updated": [{ "id": "id-3", "changedName": "Renamed", "changedProperties": { "Source": "print('hi')" } }]
+    "added": { "id-2": { "parent": "parent-id", "className": "Folder", "name": "New", "properties": {}, "children": [] } },
+    "updated": [{ "id": "id-3", "changedName": "Renamed", "changedClassName": "Script", "changedProperties": { "Source": "print('hi')" }, "changedMetadata": {} }]
 }
 ```
 
 **Format detection:** `Name/init.luau` → directory | `Name.luau` → file | neither → use `has_children` (`.lua` also supported)
 
-## WebSocket Protocol (v5)
+## WebSocket Protocol (v6)
 
-**Connection:** `ws://host:port/api/rojo`
+**Connection:** `ws://host:port/api/socket/:cursor`
 
 1. Connect → Receive `ServerInfo` handshake → Send `{type = "Subscribe"}` → Receive patches
 
@@ -112,11 +119,15 @@ Studio → ChangeBatcher → Plugin → WebSocket → Server → Filesystem
 
 ```rust
 pub struct ServeSession {
-    session_id: Uuid,
-    tree_handle: Arc<Mutex<RojoTree>>,
-    message_queue: MessageQueue,
-    project: Project,
-    vfs: Vfs,
+    session_id: SessionId,
+    tree: Arc<Mutex<RojoTree>>,
+    message_queue: Arc<MessageQueue<AppliedPatchSet>>,
+    root_project: Project,
+    vfs: Arc<Vfs>,
+    change_processor: ChangeProcessor,
+    start_time: Instant,
+    tree_mutation_sender: Sender<PatchSet>,
+    suppressed_paths: Arc<Mutex<HashMap<PathBuf, (usize, usize)>>>,
 }
 ```
 
@@ -223,8 +234,8 @@ for _, update in patch.updated do Reconciler.hydrate(instanceMap:fromId(update.i
 │  Sends PatchSet to tree_mutation_sender channel                             │
 │       ▼                                                                     │
 │  ChangeProcessor::handle_tree_event() [src/change_processor.rs]             │
-│       │ For removed: fs::remove_file(instigating_source.path)               │
-│       │ For updated: if "Source" property → fs::write(path, value)          │
+│       │ For removed: fs::remove_file(path) + remove meta                    │
+│       │ For updated: Source writes, renames, ClassName changes, properties  │
 │       ▼                                                                     │
 │  apply_patch_set() → Updates RojoTree                                       │
 │       ▼                                                                     │
@@ -510,54 +521,14 @@ true, false, 42, "string"
 
 ### Server-Side: ChangeProcessor (`src/change_processor.rs`)
 
-Receives patches from plugin via `tree_mutation_receiver` channel:
+Receives patches from plugin via `tree_mutation_receiver` channel. Handles removals, Source writes, renames (with slugify/dedup/meta lifecycle), ClassName changes (script type transitions via file renames), and property writes to meta/model files.
 
-```rust
-fn handle_tree_event(&self, patch_set: PatchSet) {
-    let mut tree = self.tree.lock().unwrap();
-    
-    // Process removals
-    for &id in &patch_set.removed_instances {
-        if let Some(instance) = tree.get_instance(id) {
-            match &instance.metadata().instigating_source {
-                Some(InstigatingSource::Path(path)) => {
-                    log::info!("Two-way sync: Removing file {}", path.display());
-                    fs::remove_file(path)?;
-                }
-                Some(InstigatingSource::ProjectNode { .. }) => {
-                    log::warn!("Cannot remove instance from project file");
-                }
-                None => {
-                    log::warn!("Cannot remove instance without instigating source");
-                }
-            }
-        }
-    }
-    
-    // Process updates
-    for update in &patch_set.updated_instances {
-        if let Some(instance) = tree.get_instance(update.id) {
-            // Currently only Source property is supported
-            if let Some(Variant::String(source)) = update.changed_properties.get("Source") {
-                match &instance.metadata().instigating_source {
-                    Some(InstigatingSource::Path(path)) => {
-                        log::info!("Two-way sync: Writing Source to {}", path.display());
-                        fs::write(path, source)?;
-                    }
-                    _ => log::warn!("Cannot update instance without path source"),
-                }
-            }
-            
-            // Other property changes logged but not written
-            if update.changed_name.is_some() { log::warn!("Cannot rename instances yet"); }
-            if update.changed_class_name.is_some() { log::warn!("Cannot change ClassName yet"); }
-        }
-    }
-    
-    apply_patch_set(&mut tree, patch_set);  // Update DOM
-    self.message_queue.push_messages(&[applied_patch]);  // Broadcast to plugins
-}
-```
+**Capabilities:**
+- **Removals:** Deletes file + associated meta file via `InstigatingSource::Path`
+- **Source writes:** Updates script file contents
+- **Renames:** Slugifies new name, deduplicates against siblings, renames file on disk, creates/updates/removes meta `name` field as needed. Handles both standalone files and init-file directories.
+- **ClassName changes:** Script-to-script transitions (e.g. ModuleScript → Script) via file extension renames
+- **Property writes:** Attributes and other properties written to meta/model files via `syncback_updated_properties` in `api.rs`
 
 **InstigatingSource:** Every instance in RojoTree tracks where it came from:
 - `InstigatingSource::Path(PathBuf)` - Created from a file, can be written back
@@ -620,14 +591,9 @@ end
 | **Undo/redo triggers spurious changes** | Studio's ChangeHistoryService fires property changes during undo | Can cause unexpected writes or conflicts |
 | **Rapid changes interleave** | 200ms batch window may split logically related changes | Partial updates can leave inconsistent state |
 | **Reparenting not supported** | `Parent` property changes to non-nil values are ignored | Moving instances in Studio doesn't sync |
-| **Renaming not supported** | `changedName` logged but not written | Renaming in Studio doesn't sync |
-| **ClassName changes ignored** | Would require file type change | Changing script type doesn't sync |
-| **Only Source property writes** | Other properties logged but not written to filesystem | Only script content syncs reliably |
 | **Project node instances immutable** | InstigatingSource::ProjectNode cannot be modified | Instances from project file can't be changed |
 | **Duplicate-named siblings skipped** | Path ambiguity makes reliable sync impossible | Instances with same-name siblings ignored |
 | **Ref properties complex** | Instance references may become invalid when instances move | ObjectValue.Value may not sync correctly |
-
-**Recommended workflow:** Use one-way sync (server → Studio) as primary. Use two-way sync only for script Source changes with careful attention to undo/redo behavior.
 
 ## Protocol Enforcement
 

@@ -52,6 +52,7 @@ syncback/
   snapshot.rs         - Convert instances → snapshots
   fs_snapshot.rs      - Filesystem representation
   file_names.rs       - Generate valid filenames
+  meta.rs             - Meta file read/write helpers
   property_filter.rs  - Filter properties per syncback rules
   ref_properties.rs   - Handle Ref properties (cross-references)
   hash/               - Content hashing for change detection
@@ -119,18 +120,33 @@ pub struct SyncbackRules {
     /// Roblox tree paths to ignore (e.g., "ServerStorage/Secrets")
     pub ignore_trees: Vec<String>,
     
-    /// Filesystem paths to ignore (e.g., "src/client/*")
-    pub ignore_paths: Vec<PathBuf>,
+    /// Filesystem glob patterns to ignore (e.g., "src/client/*")
+    pub ignore_paths: Vec<String>,
     
     /// Properties to not sync back per class
     /// Example: {"BasePart": ["Color"], "Script": ["Disabled"]}
-    pub ignore_properties: HashMap<String, Vec<String>>,
+    pub ignore_properties: IndexMap<Ustr, Vec<Ustr>>,
+    
+    /// Instance classes to skip entirely
+    pub ignore_classes: Vec<String>,
     
     /// Whether to sync Workspace.CurrentCamera (default: false)
-    pub sync_current_camera: bool,
+    pub sync_current_camera: Option<bool>,
     
     /// Whether to sync unscriptable properties (default: true)
-    pub sync_unscriptable: bool,
+    pub sync_unscriptable: Option<bool>,
+    
+    /// Whether to skip Ref properties (default: false)
+    pub ignore_referents: Option<bool>,
+    
+    /// Whether /** in ignore paths also matches the directory itself
+    pub create_ignore_dir_paths: Option<bool>,
+    
+    /// Override root-level ignoreHiddenServices for syncback
+    pub ignore_hidden_services: Option<bool>,
+    
+    /// Warn on duplicate child names during syncback
+    pub warn_duplicate_names: Option<bool>,
 }
 ```
 
@@ -207,6 +223,7 @@ pub struct SyncbackSnapshot<'sync> {
     pub new: Ref,                    // New tree instance (Roblox file)
     pub path: PathBuf,               // Target filesystem path
     pub middleware: Option<Middleware>, // How to write (Lua, Rbxm, etc.)
+    pub needs_meta_name: bool,       // Filesystem name differs from instance name
 }
 ```
 
@@ -333,9 +350,9 @@ stats.record_duplicate_name(path, name)
 stats.record_rbxm_fallback(path, reason)
 stats.record_unknown_class(class_name)
 stats.record_unknown_property(class, property)
-stats.has_issues()      // Any warnings?
+stats.has_issues()         // Any warnings?
 stats.has_unknown_types()  // Unknown classes/properties?
-stats.log_summary()     // Log final report
+stats.log_summary()        // Log final report
 ```
 
 **Logged at end of syncback:**
@@ -364,7 +381,7 @@ print('hello')
 ```json5
 // src/MyScript.server.meta.json5 (for MyScript.server.luau)
 {
-    "$properties": {
+    "properties": {
         "Disabled": false
     }
 }
@@ -407,12 +424,7 @@ Filesystem:
 4. **Write permission** - Can't write to file
    - Error reported, syncback continues for other files
 
-**Error collection:**
-```rust
-stats.record_error(&format!("Failed to sync {}: {}", path.display(), error));
-```
-
-All errors collected and reported at end.
+**Error propagation:** Errors are propagated via `anyhow::bail!`, not collected in stats. Fatal errors abort the syncback; non-fatal issues are logged as warnings.
 
 ## Integration with Plugin
 
