@@ -12,13 +12,10 @@
 //! 7. ProjectNode guard (no project file corruption)
 //! 8. Echo suppression (no redundant VFS patches)
 //!
-//! NOTE: Tests operate on pre-existing instances already in the Rojo tree
-//! (from the initial snapshot). Adding new instances via the API writes files
-//! to disk but relies on VFS events for tree updates; with echo suppression,
-//! those events are suppressed for the paths the API wrote. This is correct
-//! behavior — the plugin reconciles its own tree and doesn't need Rojo to
-//! re-snapshot what it just sent. Tests that need to interact with the tree
-//! (read back IDs, send updates) must use instances from the initial snapshot.
+//! NOTE: Adding new instances via the API writes files to disk WITHOUT
+//! VFS echo suppression — the watcher must pick up the new files to add
+//! them to the tree. Updates and removals of EXISTING instances DO suppress
+//! their VFS echoes since the tree is already mutated via handle_tree_event.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -721,13 +718,13 @@ fn echo_suppression_prevents_redundant_patches() {
         let read_after = session.get_api_read(root_id).unwrap();
         let cursor_delta = read_after.message_cursor - initial_cursor;
 
-        // With proper echo suppression, the cursor should not advance excessively.
-        // For a single add: 0–3 messages (the suppressed echo plus potential
-        // metadata/re-snapshot).  Anything higher means echo events are leaking.
+        // For a single add: ~2 messages (1 from handle_tree_event broadcast +
+        // 1 from VFS watcher adding the new instance to the tree). Allowing 3
+        // accounts for platform-specific directory-level VFS events.
         assert!(
             cursor_delta <= 3,
-            "Echo suppression failure: cursor advanced by {} (expected <= 3). \
-             VFS echo events are leaking through suppression.",
+            "Echo suppression: cursor advanced by {} (expected ~2 for add: \
+             1 tree mutation + 1 VFS pickup)",
             cursor_delta
         );
 
@@ -2355,12 +2352,14 @@ fn echo_suppression_rapid_adds_10x() {
             );
         }
 
-        // Server should still be responsive
+        // Server should still be responsive. 10 adds x ~2 events each
+        // (1 handle_tree_event + 1 VFS pickup) = ~20, with margin for
+        // platform-specific directory events.
         let read_after = session.get_api_read(root_id).unwrap();
         let cursor_delta = read_after.message_cursor - initial_cursor;
         assert!(
-            cursor_delta < 50,
-            "Cursor delta {} should be reasonable with echo suppression",
+            cursor_delta <= 30,
+            "Cursor delta {} should be bounded (10 adds x ~2 events + margin)",
             cursor_delta
         );
 
