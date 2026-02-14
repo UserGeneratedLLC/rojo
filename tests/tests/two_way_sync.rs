@@ -7101,3 +7101,97 @@ fn ref_rename_to_slugified_name_updates_ref_paths() {
         );
     });
 }
+
+// ===========================================================================
+// Ref on different standalone file formats (meta path computation coverage)
+//
+// These tests cover branches 2 and 4 of syncback_updated_properties:
+// - Branch 2: Standalone script → adjacent ScriptName.meta.json5
+//   (strips .server/.client/.plugin/.local/.legacy suffix from stem)
+// - Branch 4: Non-script standalone file (.txt, .csv) → adjacent FileName.meta.json5
+// ===========================================================================
+
+/// Setting a Ref property on a standalone script should write to the adjacent
+/// meta file with the compound suffix stripped: TestScript.server.luau →
+/// TestScript.meta.json5 (NOT TestScript.server.meta.json5).
+#[test]
+fn ref_on_standalone_script() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, _, _, part1_id, _, _) = ref_test_setup(&session);
+
+        // Find TestScript
+        let info = session.get_api_rojo().unwrap();
+        let root_read = session.get_api_read(info.root_instance_id).unwrap();
+        let (workspace_id, _) = find_by_name(&root_read.instances, "Workspace");
+        let ws_read = session.get_api_read(workspace_id).unwrap();
+        let (script_id, _) = find_by_name(&ws_read.instances, "TestScript");
+
+        let mut props = UstrMap::default();
+        props.insert(ustr("PrimaryPart"), Some(Variant::Ref(part1_id)));
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: script_id,
+                changed_name: None,
+                changed_class_name: None,
+                changed_properties: props,
+                changed_metadata: None,
+            },
+        );
+
+        // Adjacent meta should be ScriptName.meta.json5 (NOT ScriptName.server.meta.json5)
+        let meta_path = session.path().join("src/Workspace/TestScript.meta.json5");
+        poll_meta_has_ref_attr(
+            &meta_path,
+            "Rojo_Ref_PrimaryPart",
+            "Workspace/TestModel/Part1",
+        );
+
+        // Verify the wrong path does NOT have the attribute
+        let wrong_meta = session
+            .path()
+            .join("src/Workspace/TestScript.server.meta.json5");
+        assert!(
+            !wrong_meta.exists(),
+            "TestScript.server.meta.json5 should NOT be created"
+        );
+    });
+}
+
+/// Setting a Ref property on a non-script standalone file (.txt → StringValue)
+/// should write to the adjacent FileName.meta.json5.
+#[test]
+fn ref_on_txt_file_instance() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, _, _, part1_id, _, _) = ref_test_setup(&session);
+
+        let info = session.get_api_rojo().unwrap();
+        let root_read = session.get_api_read(info.root_instance_id).unwrap();
+        let (workspace_id, _) = find_by_name(&root_read.instances, "Workspace");
+        let ws_read = session.get_api_read(workspace_id).unwrap();
+        let (string_id, _) = find_by_name(&ws_read.instances, "TestString");
+
+        let mut props = UstrMap::default();
+        props.insert(ustr("PrimaryPart"), Some(Variant::Ref(part1_id)));
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: string_id,
+                changed_name: None,
+                changed_class_name: None,
+                changed_properties: props,
+                changed_metadata: None,
+            },
+        );
+
+        // Adjacent meta for .txt is FileName.meta.json5
+        let meta_path = session.path().join("src/Workspace/TestString.meta.json5");
+        poll_meta_has_ref_attr(
+            &meta_path,
+            "Rojo_Ref_PrimaryPart",
+            "Workspace/TestModel/Part1",
+        );
+    });
+}
