@@ -22,7 +22,9 @@ use rbx_dom_weak::{
 
 use crate::{
     serve_session::ServeSession,
-    snapshot::{InstanceWithMeta, InstigatingSource, PatchSet, PatchUpdate},
+    snapshot::{
+        InstanceSnapshot, InstanceWithMeta, InstigatingSource, PatchAdd, PatchSet, PatchUpdate,
+    },
     syncback::{slugify_name, VISIBLE_SERVICES},
     web::{
         interface::{
@@ -163,6 +165,7 @@ pub async fn call(
 pub struct ApiService {
     serve_session: Arc<ServeSession>,
     suppressed_paths: Arc<Mutex<HashMap<PathBuf, (usize, usize)>>>,
+    ref_path_index: Arc<Mutex<crate::RefPathIndex>>,
 }
 
 /// Derives the directory name from a standalone script's filesystem path.
@@ -218,9 +221,11 @@ fn dir_name_from_instance_path(standalone_path: &Path) -> &str {
 impl ApiService {
     pub fn new(serve_session: Arc<ServeSession>) -> Self {
         let suppressed_paths = serve_session.suppressed_paths();
+        let ref_path_index = serve_session.ref_path_index();
         ApiService {
             serve_session,
             suppressed_paths,
+            ref_path_index,
         }
     }
 
@@ -646,9 +651,7 @@ impl ApiService {
                 }
 
                 // Write non-Source properties to meta/model files
-                if let Err(err) =
-                    self.syncback_updated_properties(update, &tree, &added_paths)
-                {
+                if let Err(err) = self.syncback_updated_properties(update, &tree, &added_paths) {
                     log::warn!(
                         "Failed to persist non-Source properties for instance {:?}: {}",
                         update.id,
@@ -688,15 +691,64 @@ impl ApiService {
             })
             .collect();
 
+        // Build InstanceSnapshots from added instances so the tree gets
+        // them immediately (instead of waiting for the VFS watcher). The
+        // plugin's GUID is used as the snapshot_id so that apply_patch_set's
+        // snapshot_id_to_instance_id map rewrites Ref properties in
+        // updated_instances to point to the correct tree IDs.
+        let added_instances: Vec<PatchAdd> = request
+            .added
+            .iter()
+            .filter_map(|(guid, added)| {
+                let parent_ref = added.parent?;
+                Some(PatchAdd {
+                    parent_id: parent_ref,
+                    instance: Self::added_instance_to_snapshot(*guid, added),
+                })
+            })
+            .collect();
+
         tree_mutation_sender
             .send(PatchSet {
                 removed_instances: actually_removed,
-                added_instances: Vec::new(),
+                added_instances,
                 updated_instances,
             })
             .unwrap();
 
         msgpack_ok(WriteResponse { session_id })
+    }
+
+    /// Convert an `AddedInstance` (from the plugin's write request) to an
+    /// `InstanceSnapshot` suitable for inclusion in a PatchSet. The plugin's
+    /// GUID is used as the `snapshot_id` so that `apply_patch_set` can map
+    /// it to the tree ID assigned during insertion. This allows Ref properties
+    /// in the same request to reference newly-added instances immediately.
+    fn added_instance_to_snapshot(
+        guid: Ref,
+        added: &crate::web::interface::AddedInstance,
+    ) -> InstanceSnapshot {
+        use rbx_dom_weak::ustr;
+        use std::borrow::Cow;
+
+        let properties: UstrMap<Variant> = added
+            .properties
+            .iter()
+            .map(|(k, v)| (ustr(k), v.clone()))
+            .collect();
+
+        InstanceSnapshot {
+            snapshot_id: guid,
+            name: Cow::Owned(added.name.clone()),
+            class_name: ustr(&added.class_name),
+            properties,
+            children: added
+                .children
+                .iter()
+                .map(|child| Self::added_instance_to_snapshot(Ref::new(), child))
+                .collect(),
+            metadata: Default::default(),
+        }
     }
 
     /// Syncback an added instance by creating a file in the filesystem.
@@ -2670,8 +2722,7 @@ impl ApiService {
                             target_ref,
                             path
                         );
-                        ref_attributes
-                            .insert(attr_name, serde_json::Value::String(path.clone()));
+                        ref_attributes.insert(attr_name, serde_json::Value::String(path.clone()));
                     } else {
                         log::warn!(
                             "Cannot persist Ref property '{}' for instance {:?}: \
@@ -2697,6 +2748,17 @@ impl ApiService {
         let (properties, mut attributes) =
             self.filter_properties_for_meta(class_name.as_str(), &props, skip_prop);
 
+        // Collect Rojo_Ref_* path values for index maintenance.
+        let ref_path_values: Vec<String> = ref_attributes
+            .iter()
+            .filter_map(|(_, v)| v.as_str().map(|s| s.to_string()))
+            .collect();
+        let removed_ref_values: Vec<String> = remove_attributes
+            .iter()
+            .filter(|a| a.starts_with(crate::REF_PATH_ATTRIBUTE_PREFIX))
+            .cloned()
+            .collect();
+
         // Merge Rojo_Ref_* attributes into the attributes map
         for (k, v) in ref_attributes {
             attributes.insert(k, v);
@@ -2705,6 +2767,9 @@ impl ApiService {
         if properties.is_empty() && attributes.is_empty() && remove_attributes.is_empty() {
             return Ok(());
         }
+
+        // Track which meta file was written for index maintenance.
+        let written_meta_path: PathBuf;
 
         // Determine which meta file to write based on file structure
         if inst_path.is_dir() {
@@ -2729,6 +2794,7 @@ impl ApiService {
                 "Syncback: Persisted non-Source properties to {}",
                 meta_path.display()
             );
+            written_meta_path = meta_path;
         } else if is_script {
             // Standalone script: write to adjacent Name.meta.json5
             // Derive the base name from the filesystem path (not instance.name())
@@ -2762,6 +2828,7 @@ impl ApiService {
                 "Syncback: Persisted non-Source properties to {}",
                 meta_path.display()
             );
+            written_meta_path = meta_path;
         } else {
             // Non-script standalone file. Only .model.json5/.model.json support
             // in-place JSON property updates. Other file types (.txt, .csv, .toml,
@@ -2789,6 +2856,7 @@ impl ApiService {
                     "Syncback: Persisted non-Source properties to {}",
                     inst_path.display()
                 );
+                written_meta_path = inst_path.to_path_buf();
             } else {
                 // For .txt, .csv, .toml, .yaml, etc. — use adjacent meta file
                 let parent_dir = inst_path.parent().context("No parent directory")?;
@@ -2812,6 +2880,26 @@ impl ApiService {
                     "Syncback: Persisted non-Source properties to {}",
                     meta_path.display()
                 );
+                written_meta_path = meta_path;
+            }
+        }
+
+        // Update the RefPathIndex with the new/removed Rojo_Ref_* entries.
+        {
+            let mut index = self.ref_path_index.lock().unwrap();
+
+            // Remove entries for attributes that were deleted
+            for attr_name in &removed_ref_values {
+                // We don't know the old path value here, but we can read
+                // it from the file before removal. Since merge_or_build_meta
+                // already removed them, we need to remove ALL entries that
+                // point to this meta file. Scan the index for this file.
+                index.remove_file(&written_meta_path, attr_name);
+            }
+
+            // Add entries for new/updated Rojo_Ref_* attributes
+            for path_value in &ref_path_values {
+                index.add(path_value, &written_meta_path);
             }
         }
 

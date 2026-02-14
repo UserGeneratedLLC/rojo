@@ -486,9 +486,9 @@ fn ref_attr_empty_path_resolves_to_root() {
 
     // Empty path should resolve to root (RojoTree.get_instance_by_path("") returns root)
     let has_ref = patch_set.updated_instances.iter().any(|u| {
-        u.changed_properties.get(&ustr("PrimaryPart")).is_some_and(
-            |v| matches!(v, Some(Variant::Ref(r)) if *r == root_id),
-        )
+        u.changed_properties
+            .get(&ustr("PrimaryPart"))
+            .is_some_and(|v| matches!(v, Some(Variant::Ref(r)) if *r == root_id))
     });
     assert!(has_ref, "Empty path should resolve to root instance");
 }
@@ -531,11 +531,7 @@ fn ref_attr_priority_path_wins_over_target() {
         .first()
         .copied()
         .unwrap();
-    let model_children: Vec<_> = tree
-        .get_instance(model_id)
-        .unwrap()
-        .children()
-        .to_vec();
+    let model_children: Vec<_> = tree.get_instance(model_id).unwrap().children().to_vec();
     let target_id = model_children[0]; // Target
     let other_id = model_children[1]; // OtherPart
 
@@ -585,9 +581,6 @@ fn ref_attr_priority_path_wins_over_target() {
                 "Rojo_Ref_* should win over Rojo_Target_* -- PrimaryPart should point to Target, not OtherPart"
             );
         }
-        other => panic!(
-            "PrimaryPart should be Some(Variant::Ref), got {:?}",
-            other
-        ),
+        other => panic!("PrimaryPart should be Some(Variant::Ref), got {:?}", other),
     }
 }

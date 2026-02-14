@@ -76,6 +76,7 @@ impl ChangeProcessor {
         message_queue: Arc<MessageQueue<AppliedPatchSet>>,
         tree_mutation_receiver: Receiver<PatchSet>,
         suppressed_paths: Arc<Mutex<std::collections::HashMap<PathBuf, (usize, usize)>>>,
+        ref_path_index: Arc<Mutex<crate::RefPathIndex>>,
         project_root: PathBuf,
         critical_error_receiver: Option<Receiver<memofs::WatcherCriticalError>>,
     ) -> Self {
@@ -92,6 +93,7 @@ impl ChangeProcessor {
             pending_recovery: Mutex::new(Vec::new()),
             suppressed_paths,
             project_root,
+            ref_path_index,
         };
 
         let job_thread = jod_thread::Builder::new()
@@ -227,6 +229,10 @@ struct JobThreadContext {
 
     /// Root directory of the project, used to display relative paths in logs.
     project_root: PathBuf,
+
+    /// Index of meta/model files that contain `Rojo_Ref_*` attributes.
+    /// Shared with ApiService for efficient rename path updates.
+    ref_path_index: Arc<Mutex<crate::RefPathIndex>>,
 }
 
 impl JobThreadContext {
@@ -390,16 +396,16 @@ impl JobThreadContext {
         }
     }
 
-    /// After an instance is renamed, scan all meta/model files on disk for
-    /// `Rojo_Ref_*` attributes whose path references the old name, and update
-    /// them to the new path.
+    /// After an instance is renamed, update all `Rojo_Ref_*` attributes on
+    /// disk that reference the old path prefix, replacing it with the new
+    /// prefix.
     ///
-    /// The Rojo_Ref_* attributes only exist on the filesystem (in meta/model
-    /// JSON5 files), not in the tree's Attributes property. The tree stores
-    /// Variant::Ref properties directly by instance ID.
+    /// Uses the `RefPathIndex` for O(affected_files) lookup instead of
+    /// scanning the full tree. After updating files, also updates the index
+    /// keys and filesystem paths so future renames remain efficient.
     fn update_ref_paths_after_rename(
         &self,
-        tree: &mut crate::snapshot::RojoTree,
+        _tree: &mut crate::snapshot::RojoTree,
         old_path: &str,
         new_path: &str,
     ) {
@@ -407,89 +413,74 @@ impl JobThreadContext {
             return;
         }
 
-        let root_id = tree.root().id();
-        let mut files_to_check: Vec<std::path::PathBuf> = Vec::new();
+        // Look up affected files via the pre-computed index.
+        let files_from_index = self.ref_path_index.lock().unwrap().find_by_prefix(old_path);
 
-        // The old and new tree path segments (last component of each path).
-        // Used to map stale InstigatingSource paths to their actual on-disk
-        // locations after a directory rename.
-        // Use split_ref_path for escape-aware splitting (handles instance
-        // names containing "/" which are escaped as "\/" in ref paths).
+        if files_from_index.is_empty() {
+            return;
+        }
+
+        // The directory may have already been renamed on disk by the time
+        // this function is called. The index still stores old filesystem
+        // paths. Remap them: replace the old directory segment with the
+        // new one so we can find the actual files.
         let old_segments = crate::split_ref_path(old_path);
         let old_segment = old_segments.last().map(|s| s.as_str()).unwrap_or(old_path);
         let new_segments = crate::split_ref_path(new_path);
         let new_segment = new_segments.last().map(|s| s.as_str()).unwrap_or(new_path);
 
-        // Collect all filesystem paths from instances in the tree.
-        // We check each instance's instigating source for meta/model files.
-        for inst_with_meta in tree.descendants(root_id) {
-            if let Some(source) = &inst_with_meta.metadata().instigating_source {
-                let inst_path = source.path();
+        // Pre-compute slugified forms for fallback comparison.
+        let slugified_old = if name_needs_slugify(old_segment) {
+            Some(slugify_name(old_segment))
+        } else {
+            None
+        };
+        let slugified_new = || -> String {
+            if name_needs_slugify(new_segment) {
+                slugify_name(new_segment)
+            } else {
+                new_segment.to_string()
+            }
+        };
 
-                // If the InstigatingSource path contains the old segment (stale
-                // after directory rename), map it to the new segment to find the
-                // actual file on disk. Use targeted path component replacement
-                // to avoid false matches on substrings (e.g., replacing "Part"
-                // inside "PartContainer").
-                let inst_path = {
-                    if !inst_path.exists() {
-                        let mut components: Vec<_> = inst_path.components().collect();
-                        let mut replaced = false;
-                        for comp in &mut components {
-                            if let std::path::Component::Normal(os_str) = comp {
-                                if let Some(s) = os_str.to_str() {
-                                    if s == old_segment {
-                                        *comp = std::path::Component::Normal(
-                                            std::ffi::OsStr::new(new_segment),
-                                        );
+        let original_paths = files_from_index.clone();
+        let files_to_check: Vec<PathBuf> = files_from_index
+            .into_iter()
+            .map(|file_path| {
+                if file_path.exists() {
+                    return file_path;
+                }
+                // File doesn't exist at old path — remap directory component.
+                let mut result = PathBuf::new();
+                let mut replaced = false;
+                for comp in file_path.components() {
+                    if !replaced {
+                        if let std::path::Component::Normal(os_str) = comp {
+                            if let Some(s) = os_str.to_str() {
+                                if s == old_segment {
+                                    result.push(new_segment);
+                                    replaced = true;
+                                    continue;
+                                }
+                                if let Some(ref slug) = slugified_old {
+                                    if s == slug.as_str() {
+                                        result.push(slugified_new());
                                         replaced = true;
-                                        break; // Only replace the first exact match
+                                        continue;
                                     }
                                 }
                             }
                         }
-                        if replaced {
-                            components.iter().collect::<PathBuf>()
-                        } else {
-                            inst_path.to_path_buf()
-                        }
-                    } else {
-                        inst_path.to_path_buf()
                     }
-                };
-
-                // For directory-format instances, check init.meta.json5
-                if inst_path.is_dir() {
-                    let init_meta = inst_path.join("init.meta.json5");
-                    if init_meta.exists() {
-                        files_to_check.push(init_meta);
-                    }
-                } else {
-                    let file_name = inst_path.file_name().and_then(|f| f.to_str()).unwrap_or("");
-
-                    // Model files contain attributes inline
-                    if file_name.ends_with(".model.json5") || file_name.ends_with(".model.json") {
-                        files_to_check.push(inst_path.to_path_buf());
-                    }
-
-                    // Check for adjacent .meta.json5
-                    if let Some(parent) = inst_path.parent() {
-                        let stem = inst_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                        let base = stem
-                            .strip_suffix(".server")
-                            .or_else(|| stem.strip_suffix(".client"))
-                            .or_else(|| stem.strip_suffix(".plugin"))
-                            .or_else(|| stem.strip_suffix(".local"))
-                            .or_else(|| stem.strip_suffix(".legacy"))
-                            .unwrap_or(stem);
-                        let meta_path = parent.join(format!("{}.meta.json5", base));
-                        if meta_path.exists() {
-                            files_to_check.push(meta_path);
-                        }
-                    }
+                    result.push(comp);
                 }
-            }
-        }
+                if replaced {
+                    result
+                } else {
+                    file_path
+                }
+            })
+            .collect();
 
         let mut updated_count = 0;
         for file_path in &files_to_check {
@@ -513,7 +504,17 @@ impl JobThreadContext {
             }
         }
 
+        // Update the index: both the path keys AND the filesystem paths.
         if updated_count > 0 {
+            let mut index = self.ref_path_index.lock().unwrap();
+            index.update_prefix(old_path, new_path);
+            // Also update filesystem paths in the index entries
+            for (old_file, new_file) in original_paths.iter().zip(files_to_check.iter()) {
+                if old_file != new_file {
+                    index.rename_file(old_file, new_file);
+                }
+            }
+
             log::info!(
                 "Updated Rojo_Ref_* paths in {} file(s): '{}' -> '{}'",
                 updated_count,

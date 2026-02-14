@@ -6707,10 +6707,11 @@ fn ref_stale_path_after_parent_rename() {
     });
 }
 
-/// 10b: Add a new Part and set PrimaryPart to it in the SAME write request.
-/// EXPECTED: FAIL -- the new Part is not in the tree when
-/// syncback_updated_properties runs because additions go through the VFS
-/// watcher asynchronously.
+/// Add a new Part and set PrimaryPart to it in the SAME write request.
+/// The `added_paths` mechanism in `syncback_updated_properties` pre-computes
+/// paths for instances from `request.added`, so the Rojo_Ref_PrimaryPart
+/// attribute is written correctly even though the new Part hasn't been
+/// added to the tree by the VFS watcher yet.
 #[test]
 fn ref_to_instance_added_in_same_request() {
     run_serve_test("ref_two_way_sync", |session, _| {
@@ -6755,9 +6756,8 @@ fn ref_to_instance_added_in_same_request() {
         // Wait for processing
         thread::sleep(Duration::from_millis(500));
 
-        // The meta file should contain Rojo_Ref_PrimaryPart pointing to the new Part
-        // This SHOULD FAIL because the new Part isn't in the tree yet when
-        // syncback_updated_properties processes the PrimaryPart update
+        // The meta file should contain Rojo_Ref_PrimaryPart pointing to the new Part.
+        // The added_paths fallback resolves the path from the AddedInstance data.
         let meta_path = session
             .path()
             .join("src/Workspace/TestModel/init.meta.json5");
@@ -6765,6 +6765,26 @@ fn ref_to_instance_added_in_same_request() {
             &meta_path,
             "Rojo_Ref_PrimaryPart",
             "Workspace/TestModel/NewPart",
+        );
+
+        // Verify the tree also has a resolved PrimaryPart Ref (not dangling).
+        // The added instance should be in the PatchSet's added_instances,
+        // so apply_patch_set maps the plugin GUID to a real tree ID.
+        // Wait for VFS watcher to fill in metadata.
+        thread::sleep(Duration::from_millis(500));
+
+        let model_read = session.get_api_read(model_id).unwrap();
+        let model_inst = model_read.instances.get(&model_id);
+        assert!(model_inst.is_some(), "Model should be readable after write");
+
+        // Find NewPart among model's children
+        let new_part_exists = model_read
+            .instances
+            .values()
+            .any(|inst| inst.name == "NewPart");
+        assert!(
+            new_part_exists,
+            "NewPart should exist in the tree after immediate ID assignment"
         );
     });
 }

@@ -108,6 +108,10 @@ pub struct ServeSession {
     /// the appropriate counter, each suppressed VFS event decrements it.
     #[allow(dead_code)]
     suppressed_paths: Arc<Mutex<std::collections::HashMap<std::path::PathBuf, (usize, usize)>>>,
+
+    /// Index of meta/model files that contain `Rojo_Ref_*` attributes.
+    /// Shared between ApiService (writes) and ChangeProcessor (rename updates).
+    ref_path_index: Arc<Mutex<crate::RefPathIndex>>,
 }
 
 impl ServeSession {
@@ -153,6 +157,7 @@ impl ServeSession {
 
         let (tree_mutation_sender, tree_mutation_receiver) = crossbeam_channel::unbounded();
         let suppressed_paths = Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let ref_path_index = Arc::new(Mutex::new(crate::RefPathIndex::new()));
 
         log::trace!("Starting ChangeProcessor");
         let change_processor = ChangeProcessor::start(
@@ -161,6 +166,7 @@ impl ServeSession {
             Arc::clone(&message_queue),
             tree_mutation_receiver,
             Arc::clone(&suppressed_paths),
+            Arc::clone(&ref_path_index),
             root_project.folder_location().to_path_buf(),
             critical_error_receiver,
         );
@@ -175,6 +181,7 @@ impl ServeSession {
             tree_mutation_sender,
             vfs,
             suppressed_paths,
+            ref_path_index,
         })
     }
 
@@ -197,6 +204,12 @@ impl ServeSession {
         &self,
     ) -> Arc<Mutex<std::collections::HashMap<std::path::PathBuf, (usize, usize)>>> {
         Arc::clone(&self.suppressed_paths)
+    }
+
+    /// Returns a handle to the Ref path index, shared between ApiService
+    /// and ChangeProcessor for efficient rename path updates.
+    pub fn ref_path_index(&self) -> Arc<Mutex<crate::RefPathIndex>> {
+        Arc::clone(&self.ref_path_index)
     }
 
     #[allow(unused)]

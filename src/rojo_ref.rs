@@ -1,4 +1,10 @@
-use std::{borrow::Cow, fmt, sync::Arc};
+use std::{
+    borrow::Cow,
+    collections::{HashMap, HashSet},
+    fmt,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use rbx_dom_weak::{
     types::{Ref, Variant},
@@ -163,6 +169,113 @@ impl RojoRef {
 impl fmt::Display for RojoRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_str())
+    }
+}
+
+/// Index of meta/model files that contain `Rojo_Ref_*` attributes.
+///
+/// Maps the `Rojo_Ref_*` attribute VALUE (the instance path string) to the
+/// set of filesystem paths (meta/model files) where that attribute appears.
+/// This allows `update_ref_paths_after_rename` to find affected files in
+/// O(affected_files) instead of O(tree_size).
+#[derive(Debug, Default)]
+pub struct RefPathIndex {
+    paths_to_files: HashMap<String, HashSet<PathBuf>>,
+}
+
+impl RefPathIndex {
+    pub fn new() -> Self {
+        Self {
+            paths_to_files: HashMap::new(),
+        }
+    }
+
+    /// Record that `meta_file` contains a `Rojo_Ref_*` attribute with value
+    /// `ref_path` (the instance path string, e.g., "Workspace/Model/Part1").
+    pub fn add(&mut self, ref_path: &str, meta_file: &Path) {
+        self.paths_to_files
+            .entry(ref_path.to_string())
+            .or_default()
+            .insert(meta_file.to_path_buf());
+    }
+
+    /// Remove the record that `meta_file` contains a `Rojo_Ref_*` attribute
+    /// with value `ref_path`. Called when an attribute is removed or its value
+    /// changes.
+    pub fn remove(&mut self, ref_path: &str, meta_file: &Path) {
+        if let Some(files) = self.paths_to_files.get_mut(ref_path) {
+            files.remove(meta_file);
+            if files.is_empty() {
+                self.paths_to_files.remove(ref_path);
+            }
+        }
+    }
+
+    /// Remove `meta_file` from ALL entries in the index.
+    /// Used when a Rojo_Ref_* attribute is removed and we don't know the old
+    /// path value.
+    pub fn remove_file(&mut self, meta_file: &Path, _attr_name: &str) {
+        let mut empty_keys = Vec::new();
+        for (path, files) in &mut self.paths_to_files {
+            files.remove(meta_file);
+            if files.is_empty() {
+                empty_keys.push(path.clone());
+            }
+        }
+        for key in empty_keys {
+            self.paths_to_files.remove(&key);
+        }
+    }
+
+    /// Find all meta/model files that contain a `Rojo_Ref_*` attribute whose
+    /// value equals `prefix` or starts with `prefix/`. These are the files
+    /// that need updating when an instance at `prefix` is renamed.
+    pub fn find_by_prefix(&self, prefix: &str) -> Vec<PathBuf> {
+        let prefix_with_sep = format!("{prefix}/");
+        let mut result = Vec::new();
+        for (path, files) in &self.paths_to_files {
+            if path == prefix || path.starts_with(&prefix_with_sep) {
+                result.extend(files.iter().cloned());
+            }
+        }
+        // Deduplicate (a single file may have multiple Rojo_Ref_* attrs
+        // matching the prefix)
+        result.sort();
+        result.dedup();
+        result
+    }
+
+    /// Rename a file in all index entries (update the filesystem path).
+    /// Called when a directory is renamed and the meta files move to new paths.
+    pub fn rename_file(&mut self, old_file: &Path, new_file: &Path) {
+        for files in self.paths_to_files.values_mut() {
+            if files.remove(old_file) {
+                files.insert(new_file.to_path_buf());
+            }
+        }
+    }
+
+    /// Update all index entries after a rename: replace `old_prefix` with
+    /// `new_prefix` in all matching path keys.
+    pub fn update_prefix(&mut self, old_prefix: &str, new_prefix: &str) {
+        let old_with_sep = format!("{old_prefix}/");
+        let mut to_rename: Vec<(String, String)> = Vec::new();
+        for path in self.paths_to_files.keys() {
+            if path == old_prefix {
+                to_rename.push((path.clone(), new_prefix.to_string()));
+            } else if path.starts_with(&old_with_sep) {
+                let new_path = format!("{new_prefix}{}", &path[old_prefix.len()..]);
+                to_rename.push((path.clone(), new_path));
+            }
+        }
+        for (old_key, new_key) in to_rename {
+            if let Some(files) = self.paths_to_files.remove(&old_key) {
+                self.paths_to_files
+                    .entry(new_key)
+                    .or_default()
+                    .extend(files);
+            }
+        }
     }
 }
 
@@ -337,5 +450,119 @@ mod tests {
     #[test]
     fn ref_target_attr_name_value() {
         assert_eq!(ref_target_attribute_name("Value"), "Rojo_Target_Value");
+    }
+
+    // -----------------------------------------------------------------------
+    // RefPathIndex tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ref_path_index_add_and_find() {
+        let mut index = RefPathIndex::new();
+        index.add(
+            "Workspace/Model/Part1",
+            Path::new("/project/init.meta.json5"),
+        );
+        let results = index.find_by_prefix("Workspace/Model/Part1");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], PathBuf::from("/project/init.meta.json5"));
+    }
+
+    #[test]
+    fn ref_path_index_find_by_prefix_children() {
+        let mut index = RefPathIndex::new();
+        index.add("Workspace/Model/Part1", Path::new("/a.meta.json5"));
+        index.add("Workspace/Model/Part2", Path::new("/b.meta.json5"));
+        index.add("Workspace/Other", Path::new("/c.meta.json5"));
+
+        // "Workspace/Model" should match both Part1 and Part2
+        let results = index.find_by_prefix("Workspace/Model");
+        assert_eq!(results.len(), 2);
+    }
+
+    #[test]
+    fn ref_path_index_find_exact_match() {
+        let mut index = RefPathIndex::new();
+        index.add("Workspace/Model", Path::new("/a.meta.json5"));
+        let results = index.find_by_prefix("Workspace/Model");
+        assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn ref_path_index_no_partial_match() {
+        let mut index = RefPathIndex::new();
+        index.add("Workspace/ModelExtra", Path::new("/a.meta.json5"));
+        // "Workspace/Model" should NOT match "Workspace/ModelExtra"
+        let results = index.find_by_prefix("Workspace/Model");
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn ref_path_index_remove() {
+        let mut index = RefPathIndex::new();
+        let path = Path::new("/a.meta.json5");
+        index.add("Workspace/Part", path);
+        assert_eq!(index.find_by_prefix("Workspace/Part").len(), 1);
+
+        index.remove("Workspace/Part", path);
+        assert!(index.find_by_prefix("Workspace/Part").is_empty());
+    }
+
+    #[test]
+    fn ref_path_index_remove_nonexistent_is_noop() {
+        let mut index = RefPathIndex::new();
+        // Should not panic
+        index.remove("Workspace/Missing", Path::new("/x.meta.json5"));
+    }
+
+    #[test]
+    fn ref_path_index_remove_file() {
+        let mut index = RefPathIndex::new();
+        let file = Path::new("/a.meta.json5");
+        index.add("Workspace/Part1", file);
+        index.add("Workspace/Part2", file);
+
+        index.remove_file(file, "Rojo_Ref_PrimaryPart");
+        assert!(index.find_by_prefix("Workspace/Part1").is_empty());
+        assert!(index.find_by_prefix("Workspace/Part2").is_empty());
+    }
+
+    #[test]
+    fn ref_path_index_update_prefix() {
+        let mut index = RefPathIndex::new();
+        index.add("Workspace/OldModel/Part1", Path::new("/a.meta.json5"));
+        index.add("Workspace/OldModel/Part2", Path::new("/b.meta.json5"));
+        index.add("Workspace/Other", Path::new("/c.meta.json5"));
+
+        index.update_prefix("Workspace/OldModel", "Workspace/NewModel");
+
+        assert!(index.find_by_prefix("Workspace/OldModel").is_empty());
+        assert_eq!(index.find_by_prefix("Workspace/NewModel").len(), 2);
+        // "Workspace/Other" should be unchanged
+        assert_eq!(index.find_by_prefix("Workspace/Other").len(), 1);
+    }
+
+    #[test]
+    fn ref_path_index_update_prefix_exact() {
+        let mut index = RefPathIndex::new();
+        index.add("Workspace/Part", Path::new("/a.meta.json5"));
+
+        index.update_prefix("Workspace/Part", "Workspace/RenamedPart");
+
+        assert!(index.find_by_prefix("Workspace/Part").is_empty());
+        assert_eq!(index.find_by_prefix("Workspace/RenamedPart").len(), 1);
+    }
+
+    #[test]
+    fn ref_path_index_deduplicate_results() {
+        let mut index = RefPathIndex::new();
+        let file = Path::new("/shared.meta.json5");
+        // Same file has two Rojo_Ref_* attrs both under the same prefix
+        index.add("Workspace/Model/Part1", file);
+        index.add("Workspace/Model/Part2", file);
+
+        let results = index.find_by_prefix("Workspace/Model");
+        // Should be deduplicated to just one entry
+        assert_eq!(results.len(), 1);
     }
 }
