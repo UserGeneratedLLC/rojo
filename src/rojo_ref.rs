@@ -50,3 +50,64 @@ impl fmt::Display for RojoRef {
         write!(f, "{}", self.as_str())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rbx_dom_weak::InstanceBuilder;
+
+    // -----------------------------------------------------------------------
+    // ref_attribute_name tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ref_attr_name_primary_part() {
+        assert_eq!(ref_attribute_name("PrimaryPart"), "Rojo_Ref_PrimaryPart");
+    }
+
+    #[test]
+    fn ref_attr_name_value() {
+        assert_eq!(ref_attribute_name("Value"), "Rojo_Ref_Value");
+    }
+
+    #[test]
+    fn ref_attr_name_part0() {
+        assert_eq!(ref_attribute_name("Part0"), "Rojo_Ref_Part0");
+    }
+
+    #[test]
+    fn ref_attr_name_attachment0() {
+        assert_eq!(ref_attribute_name("Attachment0"), "Rojo_Ref_Attachment0");
+    }
+
+    #[test]
+    fn ref_attr_name_adornee() {
+        assert_eq!(ref_attribute_name("Adornee"), "Rojo_Ref_Adornee");
+    }
+
+    // -----------------------------------------------------------------------
+    // ref_target_path tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ref_target_path_root_child() {
+        let mut dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let child = dom.insert(dom.root_ref(), InstanceBuilder::new("Workspace"));
+        assert_eq!(ref_target_path(&dom, child), "Workspace");
+    }
+
+    #[test]
+    fn ref_target_path_deeply_nested() {
+        let mut dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let a = dom.insert(dom.root_ref(), InstanceBuilder::new("A"));
+        let b = dom.insert(a, InstanceBuilder::new("B"));
+        let c = dom.insert(b, InstanceBuilder::new("C"));
+        assert_eq!(ref_target_path(&dom, c), "A/B/C");
+    }
+
+    #[test]
+    fn ref_target_path_root_is_empty() {
+        let dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        assert_eq!(ref_target_path(&dom, dom.root_ref()), "");
+    }
+}

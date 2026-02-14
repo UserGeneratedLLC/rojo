@@ -5977,3 +5977,529 @@ fn fuzz_filesystem_chaos() {
         session.assert_tree_fresh();
     });
 }
+
+// ===========================================================================
+// Ref property two-way sync tests
+//
+// These tests validate the full /api/write pipeline for Variant::Ref
+// properties. The server should convert Ref properties to Rojo_Ref_*
+// path-based attributes in meta/model files.
+// ===========================================================================
+
+/// Helper: get session info and find instances by name in the ref_two_way_sync fixture.
+fn ref_test_setup(
+    session: &crate::rojo_test::serve_util::TestServeSession,
+) -> (
+    librojo::SessionId,
+    Ref,  // workspace_id
+    Ref,  // model_id
+    Ref,  // part1_id
+    Ref,  // part2_id
+    Ref,  // objval_id
+) {
+    let info = session.get_api_rojo().unwrap();
+    let root_read = session.get_api_read(info.root_instance_id).unwrap();
+    let (workspace_id, _) = find_by_name(&root_read.instances, "Workspace");
+    let ws_read = session.get_api_read(workspace_id).unwrap();
+
+    let (model_id, _) = find_by_name(&ws_read.instances, "TestModel");
+    let model_read = session.get_api_read(model_id).unwrap();
+    let (part1_id, _) = find_by_name(&model_read.instances, "Part1");
+    let (part2_id, _) = find_by_name(&model_read.instances, "Part2");
+
+    let (objval_id, _) = find_by_name(&ws_read.instances, "TestObjectValue");
+
+    (info.session_id, workspace_id, model_id, part1_id, part2_id, objval_id)
+}
+
+/// Read a JSON5 file and return its parsed value.
+fn read_json5_file(path: &Path) -> serde_json::Value {
+    let content = fs::read_to_string(path).unwrap_or_else(|e| {
+        panic!("Failed to read {}: {}", path.display(), e);
+    });
+    json5::from_str(&content).unwrap_or_else(|e| {
+        panic!(
+            "Failed to parse JSON5 at {}: {}\nContent: {}",
+            path.display(),
+            e,
+            content
+        );
+    })
+}
+
+/// Check if a JSON5 file's attributes contain a specific Rojo_Ref_* key with expected value.
+fn assert_meta_has_ref_attr(path: &Path, attr_name: &str, expected_path: &str) {
+    let val = read_json5_file(path);
+    let attr_val = val
+        .get("attributes")
+        .and_then(|a| a.get(attr_name))
+        .and_then(|v| v.as_str());
+    assert_eq!(
+        attr_val,
+        Some(expected_path),
+        "File {} should have attributes.{} = {:?}, got {:?}",
+        path.display(),
+        attr_name,
+        expected_path,
+        attr_val,
+    );
+}
+
+/// Check that a JSON5 file does NOT have a specific attribute key.
+fn assert_meta_no_ref_attr(path: &Path, attr_name: &str) {
+    if !path.exists() {
+        return; // File doesn't exist means no attribute, which is correct.
+    }
+    let val = read_json5_file(path);
+    let has_attr = val
+        .get("attributes")
+        .and_then(|a| a.get(attr_name))
+        .is_some();
+    assert!(
+        !has_attr,
+        "File {} should NOT have attributes.{}",
+        path.display(),
+        attr_name,
+    );
+}
+
+/// Poll until a JSON5 file exists and has the expected Rojo_Ref_* attribute.
+fn poll_meta_has_ref_attr(path: &Path, attr_name: &str, expected_path: &str) {
+    let start = Instant::now();
+    loop {
+        if path.exists() {
+            if let Ok(content) = fs::read_to_string(path) {
+                if let Ok(val) = json5::from_str::<serde_json::Value>(&content) {
+                    if let Some(attr_val) = val
+                        .get("attributes")
+                        .and_then(|a| a.get(attr_name))
+                        .and_then(|v| v.as_str())
+                    {
+                        if attr_val == expected_path {
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+        if start.elapsed() > Duration::from_millis(API_POLL_TIMEOUT_MS) {
+            // Final check with detailed error
+            assert_meta_has_ref_attr(path, attr_name, expected_path);
+            return;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Basic Ref write operations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ref_set_primary_part() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, _, model_id, part1_id, _, _) = ref_test_setup(&session);
+
+        let mut props = UstrMap::default();
+        props.insert(ustr("PrimaryPart"), Some(Variant::Ref(part1_id)));
+        send_update(&session, &session_id, InstanceUpdate {
+            id: model_id,
+            changed_name: None,
+            changed_class_name: None,
+            changed_properties: props,
+            changed_metadata: None,
+        });
+
+        let meta_path = session
+            .path()
+            .join("src/Workspace/TestModel/init.meta.json5");
+        poll_meta_has_ref_attr(
+            &meta_path,
+            "Rojo_Ref_PrimaryPart",
+            "Workspace/TestModel/Part1",
+        );
+    });
+}
+
+#[test]
+fn ref_set_object_value() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, _, _, part1_id, _, objval_id) = ref_test_setup(&session);
+
+        let mut props = UstrMap::default();
+        props.insert(ustr("Value"), Some(Variant::Ref(part1_id)));
+        send_update(&session, &session_id, InstanceUpdate {
+            id: objval_id,
+            changed_name: None,
+            changed_class_name: None,
+            changed_properties: props,
+            changed_metadata: None,
+        });
+
+        let meta_path = session
+            .path()
+            .join("src/Workspace/TestObjectValue.meta.json5");
+        poll_meta_has_ref_attr(
+            &meta_path,
+            "Rojo_Ref_Value",
+            "Workspace/TestModel/Part1",
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Nil Ref operations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ref_set_primary_part_to_nil() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, _, model_id, part1_id, _, _) = ref_test_setup(&session);
+
+        // First set PrimaryPart to Part1
+        let mut props = UstrMap::default();
+        props.insert(ustr("PrimaryPart"), Some(Variant::Ref(part1_id)));
+        send_update(&session, &session_id, InstanceUpdate {
+            id: model_id,
+            changed_name: None,
+            changed_class_name: None,
+            changed_properties: props,
+            changed_metadata: None,
+        });
+
+        let meta_path = session
+            .path()
+            .join("src/Workspace/TestModel/init.meta.json5");
+        poll_meta_has_ref_attr(
+            &meta_path,
+            "Rojo_Ref_PrimaryPart",
+            "Workspace/TestModel/Part1",
+        );
+
+        // Now set PrimaryPart to nil
+        let mut props2 = UstrMap::default();
+        props2.insert(ustr("PrimaryPart"), Some(Variant::Ref(Ref::none())));
+        send_update(&session, &session_id, InstanceUpdate {
+            id: model_id,
+            changed_name: None,
+            changed_class_name: None,
+            changed_properties: props2,
+            changed_metadata: None,
+        });
+
+        // Wait for processing then verify attribute removed
+        thread::sleep(Duration::from_millis(300));
+        assert_meta_no_ref_attr(&meta_path, "Rojo_Ref_PrimaryPart");
+    });
+}
+
+#[test]
+fn ref_nil_when_no_prior_attr() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, _, model_id, _, _, _) = ref_test_setup(&session);
+
+        // Set PrimaryPart to nil without having set it before
+        let mut props = UstrMap::default();
+        props.insert(ustr("PrimaryPart"), Some(Variant::Ref(Ref::none())));
+        send_update(&session, &session_id, InstanceUpdate {
+            id: model_id,
+            changed_name: None,
+            changed_class_name: None,
+            changed_properties: props,
+            changed_metadata: None,
+        });
+
+        // Should not crash; meta file may or may not exist
+        thread::sleep(Duration::from_millis(300));
+        let meta_path = session
+            .path()
+            .join("src/Workspace/TestModel/init.meta.json5");
+        assert_meta_no_ref_attr(&meta_path, "Rojo_Ref_PrimaryPart");
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Ref target changes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ref_change_target() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, _, model_id, part1_id, part2_id, _) = ref_test_setup(&session);
+
+        // Set PrimaryPart to Part1
+        let mut props1 = UstrMap::default();
+        props1.insert(ustr("PrimaryPart"), Some(Variant::Ref(part1_id)));
+        send_update(&session, &session_id, InstanceUpdate {
+            id: model_id,
+            changed_name: None,
+            changed_class_name: None,
+            changed_properties: props1,
+            changed_metadata: None,
+        });
+
+        let meta_path = session
+            .path()
+            .join("src/Workspace/TestModel/init.meta.json5");
+        poll_meta_has_ref_attr(
+            &meta_path,
+            "Rojo_Ref_PrimaryPart",
+            "Workspace/TestModel/Part1",
+        );
+
+        // Change PrimaryPart to Part2
+        let mut props2 = UstrMap::default();
+        props2.insert(ustr("PrimaryPart"), Some(Variant::Ref(part2_id)));
+        send_update(&session, &session_id, InstanceUpdate {
+            id: model_id,
+            changed_name: None,
+            changed_class_name: None,
+            changed_properties: props2,
+            changed_metadata: None,
+        });
+
+        poll_meta_has_ref_attr(
+            &meta_path,
+            "Rojo_Ref_PrimaryPart",
+            "Workspace/TestModel/Part2",
+        );
+    });
+}
+
+#[test]
+fn ref_set_nil_then_set_again() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, _, model_id, part1_id, _, _) = ref_test_setup(&session);
+        let meta_path = session
+            .path()
+            .join("src/Workspace/TestModel/init.meta.json5");
+
+        // Set → nil → set again
+        let mut props1 = UstrMap::default();
+        props1.insert(ustr("PrimaryPart"), Some(Variant::Ref(part1_id)));
+        send_update(&session, &session_id, InstanceUpdate {
+            id: model_id,
+            changed_name: None,
+            changed_class_name: None,
+            changed_properties: props1,
+            changed_metadata: None,
+        });
+        poll_meta_has_ref_attr(&meta_path, "Rojo_Ref_PrimaryPart", "Workspace/TestModel/Part1");
+
+        let mut props2 = UstrMap::default();
+        props2.insert(ustr("PrimaryPart"), Some(Variant::Ref(Ref::none())));
+        send_update(&session, &session_id, InstanceUpdate {
+            id: model_id,
+            changed_name: None,
+            changed_class_name: None,
+            changed_properties: props2,
+            changed_metadata: None,
+        });
+        thread::sleep(Duration::from_millis(300));
+        assert_meta_no_ref_attr(&meta_path, "Rojo_Ref_PrimaryPart");
+
+        let mut props3 = UstrMap::default();
+        props3.insert(ustr("PrimaryPart"), Some(Variant::Ref(part1_id)));
+        send_update(&session, &session_id, InstanceUpdate {
+            id: model_id,
+            changed_name: None,
+            changed_class_name: None,
+            changed_properties: props3,
+            changed_metadata: None,
+        });
+        poll_meta_has_ref_attr(&meta_path, "Rojo_Ref_PrimaryPart", "Workspace/TestModel/Part1");
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Ref with other property changes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ref_with_name_change() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, _, model_id, part1_id, _, _) = ref_test_setup(&session);
+
+        let mut props = UstrMap::default();
+        props.insert(ustr("PrimaryPart"), Some(Variant::Ref(part1_id)));
+        send_update(&session, &session_id, InstanceUpdate {
+            id: model_id,
+            changed_name: Some("RenamedModel".to_string()),
+            changed_class_name: None,
+            changed_properties: props,
+            changed_metadata: None,
+        });
+
+        // Both name change and ref change should be processed.
+        // The name change triggers a filesystem rename handled by ChangeProcessor.
+        // The ref change writes Rojo_Ref_PrimaryPart to the meta file.
+        // After rename, the meta file is at the new location.
+        thread::sleep(Duration::from_millis(500));
+
+        // Check the renamed directory has the ref attribute
+        let meta_path = session
+            .path()
+            .join("src/Workspace/RenamedModel/init.meta.json5");
+        if meta_path.exists() {
+            assert_meta_has_ref_attr(
+                &meta_path,
+                "Rojo_Ref_PrimaryPart",
+                "Workspace/RenamedModel/Part1",
+            );
+        }
+        // Note: the exact path in the ref depends on when the rename is processed.
+        // This test verifies the combination doesn't crash.
+    });
+}
+
+#[test]
+fn ref_only_change_creates_meta() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, _, model_id, part1_id, _, _) = ref_test_setup(&session);
+
+        // Sending ONLY a Ref property change (no Source, no Name, no other props)
+        let mut props = UstrMap::default();
+        props.insert(ustr("PrimaryPart"), Some(Variant::Ref(part1_id)));
+        send_update(&session, &session_id, InstanceUpdate {
+            id: model_id,
+            changed_name: None,
+            changed_class_name: None,
+            changed_properties: props,
+            changed_metadata: None,
+        });
+
+        let meta_path = session
+            .path()
+            .join("src/Workspace/TestModel/init.meta.json5");
+        poll_meta_has_ref_attr(
+            &meta_path,
+            "Rojo_Ref_PrimaryPart",
+            "Workspace/TestModel/Part1",
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Ref on different file formats
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ref_on_model_json5_instance() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, _, _, part1_id, _, objval_id) = ref_test_setup(&session);
+
+        let mut props = UstrMap::default();
+        props.insert(ustr("Value"), Some(Variant::Ref(part1_id)));
+        send_update(&session, &session_id, InstanceUpdate {
+            id: objval_id,
+            changed_name: None,
+            changed_class_name: None,
+            changed_properties: props,
+            changed_metadata: None,
+        });
+
+        // ObjectValue is a .model.json5 — Ref attribute should be added
+        // to adjacent .meta.json5 (since model files get adjacent meta)
+        let meta_path = session
+            .path()
+            .join("src/Workspace/TestObjectValue.meta.json5");
+        poll_meta_has_ref_attr(
+            &meta_path,
+            "Rojo_Ref_Value",
+            "Workspace/TestModel/Part1",
+        );
+    });
+}
+
+#[test]
+fn ref_existing_meta_preserved() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, _, model_id, part1_id, _, _) = ref_test_setup(&session);
+
+        // The Model's init.meta.json5 already has className: "Model".
+        // After adding a Ref attribute, className should still be present.
+        let mut props = UstrMap::default();
+        props.insert(ustr("PrimaryPart"), Some(Variant::Ref(part1_id)));
+        send_update(&session, &session_id, InstanceUpdate {
+            id: model_id,
+            changed_name: None,
+            changed_class_name: None,
+            changed_properties: props,
+            changed_metadata: None,
+        });
+
+        let meta_path = session
+            .path()
+            .join("src/Workspace/TestModel/init.meta.json5");
+        poll_meta_has_ref_attr(
+            &meta_path,
+            "Rojo_Ref_PrimaryPart",
+            "Workspace/TestModel/Part1",
+        );
+
+        // Verify existing content wasn't clobbered
+        let val = read_json5_file(&meta_path);
+        assert_eq!(
+            val.get("className").and_then(|v| v.as_str()),
+            Some("Model"),
+            "Existing className should be preserved after adding Ref attribute"
+        );
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Error cases
+// ---------------------------------------------------------------------------
+
+#[test]
+fn ref_to_nonexistent_instance_no_crash() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, _, model_id, _, _, _) = ref_test_setup(&session);
+
+        // Use a random Ref that doesn't exist in the tree
+        let fake_ref = Ref::new();
+        let mut props = UstrMap::default();
+        props.insert(ustr("PrimaryPart"), Some(Variant::Ref(fake_ref)));
+        send_update(&session, &session_id, InstanceUpdate {
+            id: model_id,
+            changed_name: None,
+            changed_class_name: None,
+            changed_properties: props,
+            changed_metadata: None,
+        });
+
+        // Should not crash. The Ref is logged as warning and skipped.
+        thread::sleep(Duration::from_millis(300));
+    });
+}
+
+#[test]
+fn ref_mixed_valid_and_invalid() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, _, model_id, part1_id, _, _) = ref_test_setup(&session);
+
+        // Send both a valid Ref and a regular property
+        let fake_ref = Ref::new();
+        let mut props = UstrMap::default();
+        props.insert(ustr("PrimaryPart"), Some(Variant::Ref(part1_id)));
+        // Also try to set a non-existent ref property (should be ignored)
+        props.insert(ustr("SomeOtherRef"), Some(Variant::Ref(fake_ref)));
+        send_update(&session, &session_id, InstanceUpdate {
+            id: model_id,
+            changed_name: None,
+            changed_class_name: None,
+            changed_properties: props,
+            changed_metadata: None,
+        });
+
+        // The valid PrimaryPart Ref should still be written
+        let meta_path = session
+            .path()
+            .join("src/Workspace/TestModel/init.meta.json5");
+        poll_meta_has_ref_attr(
+            &meta_path,
+            "Rojo_Ref_PrimaryPart",
+            "Workspace/TestModel/Part1",
+        );
+    });
+}

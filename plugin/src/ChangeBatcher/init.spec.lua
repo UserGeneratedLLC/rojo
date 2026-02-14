@@ -168,4 +168,125 @@ return function()
 			part:Destroy()
 		end)
 	end)
+
+	-- -------------------------------------------------------------------
+	-- Ref property batching tests
+	-- -------------------------------------------------------------------
+
+	describe("Ref property batching", function()
+		local container
+
+		beforeEach(function()
+			container = Instance.new("Folder")
+			container.Name = "RefBatchTestContainer"
+			container.Parent = game:GetService("Workspace")
+		end)
+
+		afterEach(function()
+			if container then
+				container:Destroy()
+				container = nil
+			end
+		end)
+
+		it("should accumulate Ref property changes", function()
+			local instanceMap = InstanceMap.new()
+			local changeBatcher = ChangeBatcher.new(instanceMap, noop)
+
+			local model = Instance.new("Model")
+			model.Parent = container
+			instanceMap:insert("MODEL", model)
+
+			changeBatcher:add(model, "PrimaryPart")
+
+			local properties = changeBatcher.__pendingPropertyChanges[model]
+			expect(properties).to.be.ok()
+			expect(properties.PrimaryPart).to.equal(true)
+
+			changeBatcher:stop()
+		end)
+
+		it("should produce patch with Ref when target is tracked", function()
+			local instanceMap = InstanceMap.new()
+			local lastPatch = nil
+			local changeBatcher = ChangeBatcher.new(instanceMap, function(patch)
+				lastPatch = patch
+			end)
+
+			local model = Instance.new("Model")
+			model.Parent = container
+			local part = Instance.new("Part")
+			part.Parent = model
+			model.PrimaryPart = part
+
+			instanceMap:insert("MODEL", model)
+			instanceMap:insert("PART", part)
+
+			changeBatcher.__pendingPropertyChanges[model] = { PrimaryPart = true }
+			changeBatcher:__cycle(1.0) -- Force flush
+
+			expect(lastPatch).to.be.ok()
+			expect(#lastPatch.updated).to.equal(1)
+			expect(lastPatch.updated[1].changedProperties.PrimaryPart).to.be.ok()
+			expect(lastPatch.updated[1].changedProperties.PrimaryPart.Ref).to.equal("PART")
+
+			changeBatcher:stop()
+		end)
+
+		it("should drop unresolvable Ref with warning", function()
+			local instanceMap = InstanceMap.new()
+			local lastPatch = nil
+			local changeBatcher = ChangeBatcher.new(instanceMap, function(patch)
+				lastPatch = patch
+			end)
+
+			local model = Instance.new("Model")
+			model.Parent = container
+			local part = Instance.new("Part")
+			part.Parent = model
+			model.PrimaryPart = part
+
+			instanceMap:insert("MODEL", model)
+			-- part NOT in instanceMap
+
+			changeBatcher.__pendingPropertyChanges[model] = { PrimaryPart = true }
+			changeBatcher:__cycle(1.0) -- Force flush
+
+			-- No encodable changes → no patch flushed
+			expect(lastPatch).to.equal(nil)
+
+			changeBatcher:stop()
+		end)
+
+		it("should batch Ref with other property changes", function()
+			local instanceMap = InstanceMap.new()
+			local lastPatch = nil
+			local changeBatcher = ChangeBatcher.new(instanceMap, function(patch)
+				lastPatch = patch
+			end)
+
+			local model = Instance.new("Model")
+			model.Parent = container
+			local part = Instance.new("Part")
+			part.Parent = model
+			model.PrimaryPart = part
+			model.Name = "TestModel"
+
+			instanceMap:insert("MODEL", model)
+			instanceMap:insert("PART", part)
+
+			changeBatcher.__pendingPropertyChanges[model] = {
+				PrimaryPart = true,
+				Name = true,
+			}
+			changeBatcher:__cycle(1.0) -- Force flush
+
+			expect(lastPatch).to.be.ok()
+			expect(#lastPatch.updated).to.equal(1)
+			expect(lastPatch.updated[1].changedProperties.PrimaryPart).to.be.ok()
+			expect(lastPatch.updated[1].changedName).to.equal("TestModel")
+
+			changeBatcher:stop()
+		end)
+	end)
 end

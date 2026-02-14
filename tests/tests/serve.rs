@@ -803,3 +803,196 @@ fn api_write_existing_instance() {
         );
     });
 }
+
+// ===========================================================================
+// Rojo_Ref_* path-based forward-sync tests
+//
+// These tests validate that Rojo_Ref_* attributes in meta/model files
+// correctly resolve to Variant::Ref properties during forward sync
+// (filesystem → server → plugin).
+// ===========================================================================
+
+/// Initial load: Model with Rojo_Ref_PrimaryPart attribute should have
+/// PrimaryPart resolved as a Variant::Ref in the read response.
+#[test]
+fn ref_path_initial_load() {
+    run_serve_test("ref_forward_sync", |session, _redactions| {
+        let info = session.get_api_rojo().unwrap();
+
+        let read_response = session.get_api_read(info.root_instance_id).unwrap();
+        let instances = &read_response.instances;
+
+        // Find MyModel and check it has a PrimaryPart Ref property
+        let model = instances
+            .values()
+            .find(|inst| inst.name == "MyModel")
+            .expect("MyModel should exist in read response");
+
+        let has_primary_part = model
+            .properties
+            .iter()
+            .any(|(name, _)| name == "PrimaryPart");
+        assert!(
+            has_primary_part,
+            "MyModel should have PrimaryPart property resolved from Rojo_Ref_PrimaryPart"
+        );
+    });
+}
+
+/// Add a Rojo_Ref_PrimaryPart attribute to an existing meta file.
+/// The forward-sync patch should include a PrimaryPart Ref update.
+#[test]
+fn ref_path_add_attribute_to_existing_meta() {
+    run_serve_test("ref_forward_sync", |session, mut redactions| {
+        let _info = session.get_api_rojo().unwrap();
+
+        // Modify MyModel's meta to change PrimaryPart to OtherPart
+        let meta_path = session
+            .path()
+            .join("src/Workspace/MyModel/init.meta.json5");
+
+        let socket_packet = session
+            .recv_socket_packet(SocketPacketType::Messages, 0, || {
+                fs::write(
+                    &meta_path,
+                    r#"{
+                        "className": "Model",
+                        "attributes": {
+                            "Rojo_Ref_PrimaryPart": "Workspace/MyModel/OtherPart"
+                        }
+                    }"#,
+                )
+                .unwrap();
+            })
+            .unwrap();
+
+        // Verify we got a patch -- the PrimaryPart should be updated
+        let redacted = socket_packet.intern_and_redact(&mut redactions, ());
+        assert_yaml_snapshot!("ref_path_change_target_patch", redacted);
+    });
+}
+
+/// Remove a Rojo_Ref_PrimaryPart attribute from a meta file.
+/// The forward-sync patch should update PrimaryPart to nil.
+#[test]
+fn ref_path_remove_attribute() {
+    run_serve_test("ref_forward_sync", |session, mut redactions| {
+        let _info = session.get_api_rojo().unwrap();
+
+        let meta_path = session
+            .path()
+            .join("src/Workspace/MyModel/init.meta.json5");
+
+        let socket_packet = session
+            .recv_socket_packet(SocketPacketType::Messages, 0, || {
+                // Remove the Rojo_Ref_PrimaryPart attribute
+                fs::write(
+                    &meta_path,
+                    r#"{
+                        "className": "Model",
+                        "attributes": {}
+                    }"#,
+                )
+                .unwrap();
+            })
+            .unwrap();
+
+        let redacted = socket_packet.intern_and_redact(&mut redactions, ());
+        assert_yaml_snapshot!("ref_path_remove_attr_patch", redacted);
+    });
+}
+
+/// Add a new model file with a Rojo_Ref_Value attribute.
+/// The forward-sync patch should include the new instance with Value resolved.
+#[test]
+fn ref_path_new_file_with_ref_attr() {
+    run_serve_test("ref_forward_sync", |session, mut redactions| {
+        let _info = session.get_api_rojo().unwrap();
+
+        let new_file = session
+            .path()
+            .join("src/Workspace/MyModel/RefValue.model.json5");
+
+        let socket_packet = session
+            .recv_socket_packet(SocketPacketType::Messages, 0, || {
+                fs::write(
+                    &new_file,
+                    r#"{
+                        "className": "ObjectValue",
+                        "attributes": {
+                            "Rojo_Ref_Value": "Workspace/MyModel/Target"
+                        }
+                    }"#,
+                )
+                .unwrap();
+            })
+            .unwrap();
+
+        let redacted = socket_packet.intern_and_redact(&mut redactions, ());
+        assert_yaml_snapshot!("ref_path_new_file_patch", redacted);
+    });
+}
+
+/// Rojo_Ref_* pointing to a non-existent path should not crash and
+/// the property should not be set.
+#[test]
+fn ref_path_nonexistent_target_no_crash() {
+    run_serve_test("ref_forward_sync", |session, mut redactions| {
+        let _info = session.get_api_rojo().unwrap();
+
+        let meta_path = session
+            .path()
+            .join("src/Workspace/MyModel/init.meta.json5");
+
+        let socket_packet = session
+            .recv_socket_packet(SocketPacketType::Messages, 0, || {
+                fs::write(
+                    &meta_path,
+                    r#"{
+                        "className": "Model",
+                        "attributes": {
+                            "Rojo_Ref_PrimaryPart": "Workspace/NonExistent/Part"
+                        }
+                    }"#,
+                )
+                .unwrap();
+            })
+            .unwrap();
+
+        // Should receive a patch without crashing.
+        // The PrimaryPart might be nil or missing (not a resolved Ref).
+        let redacted = socket_packet.intern_and_redact(&mut redactions, ());
+        assert_yaml_snapshot!("ref_path_nonexistent_patch", redacted);
+    });
+}
+
+/// Multiple Rojo_Ref_* attributes on the same instance should all resolve.
+#[test]
+fn ref_path_multiple_attributes() {
+    run_serve_test("ref_forward_sync", |session, mut redactions| {
+        let _info = session.get_api_rojo().unwrap();
+
+        let meta_path = session
+            .path()
+            .join("src/Workspace/MyModel/init.meta.json5");
+
+        let socket_packet = session
+            .recv_socket_packet(SocketPacketType::Messages, 0, || {
+                fs::write(
+                    &meta_path,
+                    r#"{
+                        "className": "Model",
+                        "attributes": {
+                            "Rojo_Ref_PrimaryPart": "Workspace/MyModel/Target",
+                            "Rojo_Ref_CustomRef": "Workspace/MyModel/OtherPart"
+                        }
+                    }"#,
+                )
+                .unwrap();
+            })
+            .unwrap();
+
+        let redacted = socket_packet.intern_and_redact(&mut redactions, ());
+        assert_yaml_snapshot!("ref_path_multiple_attrs_patch", redacted);
+    });
+}

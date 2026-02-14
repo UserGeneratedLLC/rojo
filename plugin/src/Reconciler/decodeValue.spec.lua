@@ -201,6 +201,51 @@ return function()
 
 			instanceMap:stop()
 		end)
+
+		it("should decode ref after instance was inserted later", function()
+			local instanceMap = InstanceMap.new()
+
+			local part = Instance.new("Part")
+			part.Parent = container
+
+			local partId = generateId()
+
+			-- Try decoding BEFORE inserting → should fail
+			local success1, _ = decodeValue({ Ref = partId }, instanceMap)
+			expect(success1).to.equal(false)
+
+			-- Insert and try again → should succeed
+			instanceMap:insert(partId, part)
+			local success2, value2 = decodeValue({ Ref = partId }, instanceMap)
+			expect(success2).to.equal(true)
+			expect(value2).to.equal(part)
+
+			instanceMap:stop()
+		end)
+
+		it("should decode ref to different instance types", function()
+			local instanceMap = InstanceMap.new()
+
+			local folder = Instance.new("Folder")
+			folder.Parent = container
+			local folderId = generateId()
+			instanceMap:insert(folderId, folder)
+
+			local model = Instance.new("Model")
+			model.Parent = container
+			local modelId = generateId()
+			instanceMap:insert(modelId, model)
+
+			local s1, v1 = decodeValue({ Ref = folderId }, instanceMap)
+			expect(s1).to.equal(true)
+			expect(v1).to.equal(folder)
+
+			local s2, v2 = decodeValue({ Ref = modelId }, instanceMap)
+			expect(s2).to.equal(true)
+			expect(v2).to.equal(model)
+
+			instanceMap:stop()
+		end)
 	end)
 
 	describe("Vector3 decoding", function()
