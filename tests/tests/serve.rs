@@ -847,9 +847,7 @@ fn ref_path_add_attribute_to_existing_meta() {
         let _info = session.get_api_rojo().unwrap();
 
         // Modify MyModel's meta to change PrimaryPart to OtherPart
-        let meta_path = session
-            .path()
-            .join("src/Workspace/MyModel/init.meta.json5");
+        let meta_path = session.path().join("src/Workspace/MyModel/init.meta.json5");
 
         let socket_packet = session
             .recv_socket_packet(SocketPacketType::Messages, 0, || {
@@ -879,9 +877,7 @@ fn ref_path_remove_attribute() {
     run_serve_test("ref_forward_sync", |session, mut redactions| {
         let _info = session.get_api_rojo().unwrap();
 
-        let meta_path = session
-            .path()
-            .join("src/Workspace/MyModel/init.meta.json5");
+        let meta_path = session.path().join("src/Workspace/MyModel/init.meta.json5");
 
         let socket_packet = session
             .recv_socket_packet(SocketPacketType::Messages, 0, || {
@@ -940,9 +936,7 @@ fn ref_path_nonexistent_target_no_crash() {
     run_serve_test("ref_forward_sync", |session, mut redactions| {
         let _info = session.get_api_rojo().unwrap();
 
-        let meta_path = session
-            .path()
-            .join("src/Workspace/MyModel/init.meta.json5");
+        let meta_path = session.path().join("src/Workspace/MyModel/init.meta.json5");
 
         let socket_packet = session
             .recv_socket_packet(SocketPacketType::Messages, 0, || {
@@ -972,9 +966,7 @@ fn ref_path_multiple_attributes() {
     run_serve_test("ref_forward_sync", |session, mut redactions| {
         let _info = session.get_api_rojo().unwrap();
 
-        let meta_path = session
-            .path()
-            .join("src/Workspace/MyModel/init.meta.json5");
+        let meta_path = session.path().join("src/Workspace/MyModel/init.meta.json5");
 
         let socket_packet = session
             .recv_socket_packet(SocketPacketType::Messages, 0, || {

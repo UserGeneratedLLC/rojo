@@ -128,11 +128,7 @@ fn apply_ref_property_update() {
     intern_tree(&tree, &mut redactions);
 
     let root_id = tree.get_root_id();
-    let children: Vec<Ref> = tree
-        .get_instance(root_id)
-        .unwrap()
-        .children()
-        .to_vec();
+    let children: Vec<Ref> = tree.get_instance(root_id).unwrap().children().to_vec();
     let child_a_id = children[0];
     let child_b_id = children[1];
 
@@ -164,9 +160,10 @@ fn apply_ref_property_update() {
 }
 
 #[test]
-fn apply_nil_ref_property_update() {
-    let mut redactions = RedactionMap::default();
-
+fn apply_nil_ref_skips_in_forward_sync() {
+    // In the forward-sync path, Ref::none() is a sentinel for "unresolved ref"
+    // and apply_update_child skips it (line 281-282 of patch_apply.rs).
+    // This test verifies that behavior is preserved.
     let mut tree = RojoTree::new(
         InstanceSnapshot::new()
             .name("ROOT")
@@ -175,7 +172,6 @@ fn apply_nil_ref_property_update() {
                 .name("Model")
                 .class_name("Model")]),
     );
-    intern_tree(&tree, &mut redactions);
 
     let root_id = tree.get_root_id();
     let model_id = tree
@@ -186,7 +182,7 @@ fn apply_nil_ref_property_update() {
         .copied()
         .unwrap();
 
-    // First set PrimaryPart to something
+    // Set PrimaryPart to something
     {
         let mut model = tree.get_instance_mut(model_id).unwrap();
         model
@@ -194,7 +190,8 @@ fn apply_nil_ref_property_update() {
             .insert(ustr("PrimaryPart"), Variant::Ref(root_id));
     }
 
-    // Now apply a patch that sets PrimaryPart to nil (Ref::none())
+    // In forward-sync, Ref::none() means "unresolved" and is skipped.
+    // The property should remain unchanged.
     let patch_set = PatchSet {
         updated_instances: vec![PatchUpdate {
             id: model_id,
@@ -215,8 +212,62 @@ fn apply_nil_ref_property_update() {
     let model = tree.get_instance(model_id).unwrap();
     let pp = model.properties().get(&ustr("PrimaryPart"));
     assert!(
-        matches!(pp, Some(Variant::Ref(r)) if r.is_none()),
-        "PrimaryPart should be nil after applying null Ref"
+        matches!(pp, Some(Variant::Ref(r)) if *r == root_id),
+        "Forward-sync: PrimaryPart should remain unchanged when Ref::none() is applied"
+    );
+}
+
+#[test]
+fn apply_ref_property_removal() {
+    // In the two-way sync path, nil Refs are converted to property removals
+    // (None) in handle_api_write before reaching apply_patch_set. This test
+    // verifies that None correctly removes the property.
+    let mut tree = RojoTree::new(
+        InstanceSnapshot::new()
+            .name("ROOT")
+            .class_name("DataModel")
+            .children(vec![InstanceSnapshot::new()
+                .name("Model")
+                .class_name("Model")]),
+    );
+
+    let root_id = tree.get_root_id();
+    let model_id = tree
+        .get_instance(root_id)
+        .unwrap()
+        .children()
+        .first()
+        .copied()
+        .unwrap();
+
+    // Set PrimaryPart to something
+    {
+        let mut model = tree.get_instance_mut(model_id).unwrap();
+        model
+            .properties_mut()
+            .insert(ustr("PrimaryPart"), Variant::Ref(root_id));
+    }
+
+    // In two-way sync, nil Refs become None (property removal) before
+    // reaching the patch system. Verify that None actually removes it.
+    let patch_set = PatchSet {
+        updated_instances: vec![PatchUpdate {
+            id: model_id,
+            changed_name: None,
+            changed_class_name: None,
+            changed_properties: UstrMap::from_iter([(ustr("PrimaryPart"), None)]),
+            changed_metadata: None,
+        }],
+        ..Default::default()
+    };
+
+    let applied = apply_patch_set(&mut tree, patch_set);
+    assert_eq!(applied.updated.len(), 1);
+
+    let model = tree.get_instance(model_id).unwrap();
+    assert!(
+        model.properties().get(&ustr("PrimaryPart")).is_none(),
+        "PrimaryPart should be removed after applying None (two-way sync nil Ref)"
     );
 }
 
@@ -234,11 +285,7 @@ fn apply_multiple_ref_property_updates() {
     );
 
     let root_id = tree.get_root_id();
-    let children: Vec<Ref> = tree
-        .get_instance(root_id)
-        .unwrap()
-        .children()
-        .to_vec();
+    let children: Vec<Ref> = tree.get_instance(root_id).unwrap().children().to_vec();
     let part_a = children[0];
     let part_b = children[1];
     let model_id = children[2];

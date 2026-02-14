@@ -178,12 +178,8 @@ fn tree_with_model_and_parts() -> RojoTree {
                 .name("Model")
                 .class_name("Model")
                 .children(vec![
-                    InstanceSnapshot::new()
-                        .name("Target")
-                        .class_name("Part"),
-                    InstanceSnapshot::new()
-                        .name("OtherPart")
-                        .class_name("Part"),
+                    InstanceSnapshot::new().name("Target").class_name("Part"),
+                    InstanceSnapshot::new().name("OtherPart").class_name("Part"),
                 ])])]);
     RojoTree::new(snapshot)
 }
@@ -225,18 +221,16 @@ fn ref_attr_resolves_primary_part() {
         )]))
         .children(vec![
             InstanceSnapshot::new().name("Target").class_name("Part"),
-            InstanceSnapshot::new()
-                .name("OtherPart")
-                .class_name("Part"),
+            InstanceSnapshot::new().name("OtherPart").class_name("Part"),
         ]);
 
     let patch_set = compute_patch_set(Some(snapshot), &tree, model_id);
 
     // The patch should contain an update with PrimaryPart as a Variant::Ref
     let has_primary_part_ref = patch_set.updated_instances.iter().any(|u| {
-        u.changed_properties.get(&ustr("PrimaryPart")).map_or(false, |v| {
-            matches!(v, Some(Variant::Ref(r)) if r.is_some())
-        })
+        u.changed_properties
+            .get(&ustr("PrimaryPart"))
+            .map_or(false, |v| matches!(v, Some(Variant::Ref(r)) if r.is_some()))
     });
     assert!(
         has_primary_part_ref,
@@ -334,9 +328,7 @@ fn ref_attr_multiple_on_same_instance() {
         )]))
         .children(vec![
             InstanceSnapshot::new().name("Target").class_name("Part"),
-            InstanceSnapshot::new()
-                .name("OtherPart")
-                .class_name("Part"),
+            InstanceSnapshot::new().name("OtherPart").class_name("Part"),
         ]);
 
     let patch_set = compute_patch_set(Some(snapshot), &tree, model_id);
@@ -362,7 +354,7 @@ fn ref_attr_multiple_on_same_instance() {
 }
 
 #[test]
-fn ref_attr_nonexistent_path_resolves_to_none() {
+fn ref_attr_nonexistent_path_does_not_produce_valid_ref() {
     let tree = tree_with_workspace_part();
     let root_id = tree.get_root_id();
     let workspace_id = tree
@@ -395,15 +387,17 @@ fn ref_attr_nonexistent_path_resolves_to_none() {
 
     let patch_set = compute_patch_set(Some(snapshot), &tree, model_id);
 
-    // Non-existent path should resolve to None (nil Ref)
-    let has_nil_ref = patch_set.updated_instances.iter().any(|u| {
+    // A non-existent path should NOT produce a valid (non-nil) Ref.
+    // compute_ref_properties returns None for unresolvable paths, which
+    // means "property value not set" -- not "set to nil Ref".
+    let has_valid_ref = patch_set.updated_instances.iter().any(|u| {
         u.changed_properties
             .get(&ustr("PrimaryPart"))
-            .map_or(false, |v| matches!(v, Some(Variant::Ref(r)) if r.is_none()) || v.is_none())
+            .map_or(false, |v| matches!(v, Some(Variant::Ref(r)) if r.is_some()))
     });
     assert!(
-        has_nil_ref || patch_set.updated_instances.is_empty(),
-        "Non-existent path should not produce a valid Ref"
+        !has_valid_ref,
+        "Non-existent path should not produce a valid (non-nil) Ref"
     );
 }
 
@@ -444,9 +438,7 @@ fn ref_attr_with_regular_attributes_mixed() {
         )]))
         .children(vec![
             InstanceSnapshot::new().name("Target").class_name("Part"),
-            InstanceSnapshot::new()
-                .name("OtherPart")
-                .class_name("Part"),
+            InstanceSnapshot::new().name("OtherPart").class_name("Part"),
         ]);
 
     let patch_set = compute_patch_set(Some(snapshot), &tree, model_id);
@@ -480,10 +472,7 @@ fn ref_attr_empty_path_resolves_to_root() {
     );
 
     let mut attrs = Attributes::new();
-    attrs.insert(
-        "Rojo_Ref_PrimaryPart".into(),
-        Variant::String("".into()),
-    );
+    attrs.insert("Rojo_Ref_PrimaryPart".into(), Variant::String("".into()));
 
     let snapshot = InstanceSnapshot::new()
         .name("Model")
@@ -497,9 +486,10 @@ fn ref_attr_empty_path_resolves_to_root() {
 
     // Empty path should resolve to root (RojoTree.get_instance_by_path("") returns root)
     let has_ref = patch_set.updated_instances.iter().any(|u| {
-        u.changed_properties
-            .get(&ustr("PrimaryPart"))
-            .map_or(false, |v| matches!(v, Some(Variant::Ref(r)) if *r == root_id))
+        u.changed_properties.get(&ustr("PrimaryPart")).map_or(
+            false,
+            |v| matches!(v, Some(Variant::Ref(r)) if *r == root_id),
+        )
     });
     assert!(has_ref, "Empty path should resolve to root instance");
 }

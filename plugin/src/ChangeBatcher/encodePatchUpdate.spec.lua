@@ -145,12 +145,7 @@ return function()
 			instanceMap:insert("MODEL_ID", model)
 			instanceMap:insert("PART_ID", part)
 
-			local update = encodePatchUpdate(
-				model,
-				"MODEL_ID",
-				{ PrimaryPart = true, Name = true },
-				instanceMap
-			)
+			local update = encodePatchUpdate(model, "MODEL_ID", { PrimaryPart = true, Name = true }, instanceMap)
 
 			expect(update).to.be.ok()
 			expect(update.changedProperties.PrimaryPart).to.be.ok()
@@ -239,12 +234,7 @@ return function()
 			instanceMap:insert("PART_A", partA)
 			instanceMap:insert("PART_B", partB)
 
-			local update = encodePatchUpdate(
-				weld,
-				"WELD_ID",
-				{ Part0 = true, Part1 = true },
-				instanceMap
-			)
+			local update = encodePatchUpdate(weld, "WELD_ID", { Part0 = true, Part1 = true }, instanceMap)
 
 			expect(update).to.be.ok()
 			expect(update.changedProperties.Part0).to.be.ok()

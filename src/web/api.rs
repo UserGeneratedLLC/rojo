@@ -633,12 +633,30 @@ impl ApiService {
         let updated_instances = request
             .updated
             .into_iter()
-            .map(|update| PatchUpdate {
-                id: update.id,
-                changed_class_name: update.changed_class_name,
-                changed_name: update.changed_name,
-                changed_properties: update.changed_properties,
-                changed_metadata: None,
+            .map(|update| {
+                // Convert nil Refs (Ref::none()) to property removals (None).
+                //
+                // In the two-way sync path, Ref::none() means "user explicitly
+                // cleared this property" (e.g., set PrimaryPart to nil). But
+                // apply_update_child skips nil Refs because in the forward-sync
+                // path, Ref::none() is a sentinel for "unresolved ref."
+                //
+                // Converting to None ensures the property is actually removed
+                // from the tree, keeping it consistent with the filesystem
+                // (where the Rojo_Ref_* attribute was already removed).
+                let mut changed_properties = update.changed_properties;
+                for (_key, value) in changed_properties.iter_mut() {
+                    if matches!(value, Some(Variant::Ref(r)) if r.is_none()) {
+                        *value = None;
+                    }
+                }
+                PatchUpdate {
+                    id: update.id,
+                    changed_class_name: update.changed_class_name,
+                    changed_name: update.changed_name,
+                    changed_properties,
+                    changed_metadata: None,
+                }
             })
             .collect();
 
