@@ -68,7 +68,7 @@ $build = $LASTEXITCODE
 Record-Result "Build" $build
 
 Write-Step 8 "Run ALL Rust Tests"
-$testOutput = cargo test --locked --all-targets --all-features 2>&1
+$testOutput = cargo test --locked --all-targets --all-features -- --test-threads=16 2>&1
 $rustTests = $LASTEXITCODE
 $testOutput | Write-Host
 Record-Result "Rust Tests" $rustTests
@@ -125,9 +125,9 @@ if ($RbxDom) {
 
     Write-Step 15 "Run ALL rbx-dom Rust Tests"
     Push-Location rbx-dom
-    cargo test --verbose
+    cargo test --verbose -- --test-threads=16
     $testsRbxDom = $LASTEXITCODE
-    cargo test --all-features --verbose
+    cargo test --all-features --verbose -- --test-threads=16
     $testsRbxDomAll = $LASTEXITCODE
     Pop-Location
     Record-Result "Tests (rbx-dom)" $testsRbxDom

@@ -4,6 +4,7 @@
 //! `web/api.rs` (syncback added/removed instances) to keep meta file handling
 //! DRY and consistent.
 
+use anyhow::Context;
 use std::fs;
 use std::path::Path;
 
@@ -106,14 +107,16 @@ pub fn update_ref_paths_in_file(
         return Ok(false);
     }
 
-    let bytes = match fs::read(file_path) {
-        Ok(b) => b,
-        Err(_) => return Ok(false),
-    };
-    let mut val = match crate::json::from_slice::<serde_json::Value>(&bytes) {
-        Ok(v) if v.is_object() => v,
-        _ => return Ok(false),
-    };
+    let bytes = fs::read(file_path)
+        .with_context(|| format!("Failed to read {}", file_path.display()))?;
+    let mut val: serde_json::Value = crate::json::from_slice(&bytes)
+        .with_context(|| format!("Failed to parse JSON5 in {}", file_path.display()))?;
+    if !val.is_object() {
+        anyhow::bail!(
+            "{} is not a JSON object, cannot update Rojo_Ref_* attributes",
+            file_path.display()
+        );
+    }
 
     let mut updated = false;
     if let Some(attrs) = val.get_mut("attributes").and_then(|a| a.as_object_mut()) {

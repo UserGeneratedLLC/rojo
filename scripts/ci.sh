@@ -67,7 +67,7 @@ build_exit=$?
 record "Build" $build_exit
 
 step 8 "Run ALL Rust Tests"
-cargo test --locked --all-targets --all-features 2>&1
+cargo test --locked --all-targets --all-features -- --test-threads=16 2>&1
 rust_tests=$?
 record "Rust Tests" $rust_tests
 
@@ -116,9 +116,9 @@ if [ "$RBX_DOM" = true ]; then
     record "Build (rbx-dom all-features)" $build_rbxdom_all
 
     step 15 "Run ALL rbx-dom Rust Tests"
-    (cd rbx-dom && cargo test --verbose)
+    (cd rbx-dom && cargo test --verbose -- --test-threads=16)
     tests_rbxdom=$?
-    (cd rbx-dom && cargo test --all-features --verbose)
+    (cd rbx-dom && cargo test --all-features --verbose -- --test-threads=16)
     tests_rbxdom_all=$?
     record "Tests (rbx-dom)" $tests_rbxdom
     record "Tests (rbx-dom all-features)" $tests_rbxdom_all
