@@ -593,6 +593,32 @@ impl ApiService {
         // Log summary of any syncback issues
         stats.log_summary();
 
+        // Build a path map for instances added in this same request.
+        // This allows Ref properties in updates to reference just-added
+        // instances that aren't in the tree yet (VFS watcher is async).
+        let added_paths: HashMap<Ref, String> = {
+            let tree = self.serve_session.tree();
+            request
+                .added
+                .iter()
+                .filter_map(|(guid, added)| {
+                    let parent_ref = added.parent?;
+                    let parent_path = if tree.get_instance(parent_ref).is_some() {
+                        crate::ref_target_path(tree.inner(), parent_ref)
+                    } else {
+                        return None;
+                    };
+                    let escaped_name = crate::escape_ref_path_segment(&added.name);
+                    let path = if parent_path.is_empty() {
+                        escaped_name.into_owned()
+                    } else {
+                        format!("{}/{}", parent_path, escaped_name)
+                    };
+                    Some((*guid, path))
+                })
+                .collect()
+        };
+
         // Persist non-Source property changes to disk (meta/model files).
         // Source property changes are handled by ChangeProcessor when it
         // receives the PatchSet below.
@@ -620,7 +646,9 @@ impl ApiService {
                 }
 
                 // Write non-Source properties to meta/model files
-                if let Err(err) = self.syncback_updated_properties(update, &tree) {
+                if let Err(err) =
+                    self.syncback_updated_properties(update, &tree, &added_paths)
+                {
                     log::warn!(
                         "Failed to persist non-Source properties for instance {:?}: {}",
                         update.id,
@@ -2547,6 +2575,7 @@ impl ApiService {
         &self,
         update: &crate::web::interface::InstanceUpdate,
         tree: &crate::snapshot::RojoTree,
+        added_paths: &HashMap<Ref, String>,
     ) -> anyhow::Result<()> {
         use anyhow::Context;
 
@@ -2629,6 +2658,20 @@ impl ApiService {
                         }
 
                         ref_attributes.insert(attr_name, serde_json::Value::String(path));
+                    } else if let Some(path) = added_paths.get(target_ref) {
+                        // Target was added in the same /api/write request.
+                        // It's not in the tree yet (VFS watcher hasn't picked it up),
+                        // but we can compute the path from the AddedInstance data.
+                        log::info!(
+                            "Ref property '{}' for instance {:?}: target {:?} is a \
+                             just-added instance, using pre-computed path '{}'",
+                            key,
+                            update.id,
+                            target_ref,
+                            path
+                        );
+                        ref_attributes
+                            .insert(attr_name, serde_json::Value::String(path.clone()));
                     } else {
                         log::warn!(
                             "Cannot persist Ref property '{}' for instance {:?}: \

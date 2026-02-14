@@ -735,7 +735,18 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 						end
 					end
 					Log.info("[Pull] Update: {}", instancePath)
-					local update = encodePatchUpdate(instance, change.id, propertiesToSync, self.__instanceMap)
+					local update = encodePatchUpdate(
+						instance,
+						change.id,
+						propertiesToSync,
+						self.__instanceMap,
+						function(sourceInstance, propertyName, targetInstance)
+							-- Defer unresolved Refs for retry via ChangeBatcher.
+							-- After the pull patch is sent, the target may appear
+							-- in the InstanceMap via forward-sync reconciliation.
+							self.__changeBatcher:deferUnresolvedRef(sourceInstance, propertyName, targetInstance)
+						end
+					)
 					if update then
 						table.insert(pullPatch.updated, update)
 					end

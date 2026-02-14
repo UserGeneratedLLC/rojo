@@ -413,8 +413,12 @@ impl JobThreadContext {
         // The old and new tree path segments (last component of each path).
         // Used to map stale InstigatingSource paths to their actual on-disk
         // locations after a directory rename.
-        let old_segment = old_path.rsplit('/').next().unwrap_or(old_path);
-        let new_segment = new_path.rsplit('/').next().unwrap_or(new_path);
+        // Use split_ref_path for escape-aware splitting (handles instance
+        // names containing "/" which are escaped as "\/" in ref paths).
+        let old_segments = crate::split_ref_path(old_path);
+        let old_segment = old_segments.last().map(|s| s.as_str()).unwrap_or(old_path);
+        let new_segments = crate::split_ref_path(new_path);
+        let new_segment = new_segments.last().map(|s| s.as_str()).unwrap_or(new_path);
 
         // Collect all filesystem paths from instances in the tree.
         // We check each instance's instigating source for meta/model files.
@@ -424,11 +428,31 @@ impl JobThreadContext {
 
                 // If the InstigatingSource path contains the old segment (stale
                 // after directory rename), map it to the new segment to find the
-                // actual file on disk.
+                // actual file on disk. Use targeted path component replacement
+                // to avoid false matches on substrings (e.g., replacing "Part"
+                // inside "PartContainer").
                 let inst_path = {
-                    let p_str = inst_path.to_string_lossy();
-                    if !inst_path.exists() && p_str.contains(old_segment) {
-                        PathBuf::from(p_str.replace(old_segment, new_segment).as_str())
+                    if !inst_path.exists() {
+                        let mut components: Vec<_> = inst_path.components().collect();
+                        let mut replaced = false;
+                        for comp in &mut components {
+                            if let std::path::Component::Normal(os_str) = comp {
+                                if let Some(s) = os_str.to_str() {
+                                    if s == old_segment {
+                                        *comp = std::path::Component::Normal(
+                                            std::ffi::OsStr::new(new_segment),
+                                        );
+                                        replaced = true;
+                                        break; // Only replace the first exact match
+                                    }
+                                }
+                            }
+                        }
+                        if replaced {
+                            components.iter().collect::<PathBuf>()
+                        } else {
+                            inst_path.to_path_buf()
+                        }
                     } else {
                         inst_path.to_path_buf()
                     }
@@ -973,7 +997,7 @@ impl JobThreadContext {
                 // Capture the old path BEFORE rename for Rojo_Ref_* path updates.
                 // Must be computed before the `tree.get_instance(id)` borrow.
                 let old_ref_path = if update.changed_name.is_some() {
-                    Some(tree.inner().full_path_of(id, "/"))
+                    Some(crate::ref_target_path(tree.inner(), id))
                 } else {
                     None
                 };
@@ -1488,15 +1512,27 @@ impl JobThreadContext {
                 // NOTE: The tree name hasn't been updated yet (apply_patch_set
                 // runs after this loop), so we can't use full_path_of for the
                 // new path. Construct it by replacing the last path segment.
+                // Use split_ref_path for escape-aware splitting (handles
+                // instance names containing "/").
                 if let Some(ref old_ref_path) = old_ref_path {
                     if let Some(ref new_name) = update.changed_name {
-                        let new_ref_path =
-                            if let Some((parent, _old_name)) = old_ref_path.rsplit_once('/') {
-                                format!("{}/{}", parent, crate::escape_ref_path_segment(new_name))
-                            } else {
-                                // Root-level instance (no parent in path)
-                                crate::escape_ref_path_segment(new_name).into_owned()
-                            };
+                        let segments = crate::split_ref_path(old_ref_path);
+                        let new_ref_path = if segments.len() > 1 {
+                            // Rebuild parent path from all segments except the last,
+                            // re-escaping each segment to preserve the original format.
+                            let parent_parts: Vec<_> = segments[..segments.len() - 1]
+                                .iter()
+                                .map(|s| crate::escape_ref_path_segment(s).into_owned())
+                                .collect();
+                            format!(
+                                "{}/{}",
+                                parent_parts.join("/"),
+                                crate::escape_ref_path_segment(new_name)
+                            )
+                        } else {
+                            // Root-level instance (no parent in path)
+                            crate::escape_ref_path_segment(new_name).into_owned()
+                        };
                         if *old_ref_path != new_ref_path {
                             self.update_ref_paths_after_rename(
                                 &mut tree,

@@ -1,31 +1,39 @@
 # /audit - Production-Grade Sync Feature Audit
 
-Perform a systematic, production-grade audit of a sync feature implementation. This command is specifically designed for Atlas's bidirectional synchronization system (filesystem <-> Roblox Studio).
+**Mode:** This command runs in **Plan mode** (read-only). It does NOT directly apply code changes. The deliverable is a `.cursor/plans/*.plan.md` file containing every approved fix, ready to be executed in a subsequent Agent-mode session.
 
-## The Invariant
+**Workflow:** Analyze -> Report -> Quiz user on each fix -> Write plan file.
 
-Every audit item MUST be evaluated against this standard:
+## Prerequisites
 
-> **Round-trip identity:** Two-way sync (or syncback) writes a directory tree. Building an rbxl from that directory tree and forward-syncing it back must produce a **bit-identical instance tree** -- same names, same classes, same properties, same hierarchy, same ref targets. Any deviation is a bug.
+Before beginning the audit, read `.cursor/rules/atlas.mdc` for the project's quality standards, architecture overview, and code conventions. The two standards below are extracted from that file and govern every audit finding:
+
+### The Invariant (from `atlas.mdc` §Quality Standard)
+
+> **Round-trip identity:** Syncback (or two-way sync) writes a directory tree. Building an rbxl from that directory tree and forward-syncing it back must produce a bit-identical instance tree -- same names, same classes, same properties, same hierarchy, same ref targets. Any deviation is a bug.
 
 A "works most of the time" finding is NOT acceptable. If there is ANY code path where an instance name, property, or hierarchy relationship can be lost, mangled, or silently altered through a syncback/two-way-sync -> rebuild cycle, flag it as **critical**.
 
-## CLI Syncback Parity
+### CLI Syncback Parity (from `atlas.mdc` §Two-Way Sync Strategy)
 
-From `atlas.mdc`: "Plugin-based sync must produce **exactly the same filesystem output** that `atlas syncback` would give for the same input. Byte-for-byte identical files, identical directory structures, identical naming."
+> Plugin-based sync must produce **exactly the same filesystem output** that `atlas syncback` would give for the same input. Byte-for-byte identical files, identical directory structures, identical naming.
 
 Any divergence between the two-way sync path and the CLI syncback path is a bug until proven otherwise. The CLI syncback is the ground truth.
 
-## Code Quality
+### Code Quality (from `atlas.mdc` §Code Quality Standard)
 
-Watch for duplicated logic -- the same pattern copy-pasted across `change_processor.rs`, `api.rs`, `dir.rs`, `project.rs`, etc. If the same sequence appears in 3+ places, that's a refactor candidate.
+> Watch for duplicated logic -- the same slugify/dedup/meta-update pattern copy-pasted across `change_processor.rs`, `api.rs`, `dir.rs`, `project.rs`, etc. The goal is clean, DRY code that is easy to reason about and hard to get wrong.
 
-- **Small refactor** (helper function, 2-3 call sites): flag it AND fix it.
-- **Major rewrite** (10+ call sites, pipeline redesign): flag it in a "Deferred Refactors" section.
+- **Small refactor** (helper function, 2-3 call sites): flag it and include it in the fix plan.
+- **Major rewrite** (10+ call sites, pipeline redesign): flag it in a "Deferred Refactors" section of the plan.
 
 ---
 
 ## Instructions
+
+### 0. Read Project Standards
+
+Read `.cursor/rules/atlas.mdc` in full. This file defines architecture, conventions, and quality bars that inform every audit step. Do not proceed without reading it.
 
 ### 1. Identify the Feature Scope
 
@@ -257,46 +265,18 @@ Focus on warnings in files modified by the feature. Clippy catches: unused varia
 
 Also run `selene plugin/src` for Lua linting if plugin files were modified.
 
-### 13. Write Tests for Every Finding
+### 13. Produce the Report
 
-Tests are not optional. Every issue found during the audit must have test coverage. This applies to ALL test layers:
+Structured report with:
 
-- **Rust unit tests** (`#[cfg(test)]` blocks) -- for isolated logic (helpers, path computation, patch compute/apply)
-- **Rust integration tests** (`tests/tests/`) -- for end-to-end server behavior (serve tests, two-way sync via `/api/write`, connected mode, syncback)
-- **Lua spec tests** (`.spec.lua` files) -- for plugin-side encoding, decoding, batching, reconciliation
-- **Snapshot tests** (`insta` crate) -- for forward-sync patch output verification
-
-#### 13a. Tests for bugs found and fixed
-
-Every bug fixed during the audit MUST have a test that:
-1. Would have FAILED before the fix
-2. PASSES after the fix
-3. Prevents the bug from regressing
-
-#### 13b. Tests for missing coverage identified
-
-For each "missing test coverage" gap identified in the audit:
-1. Write the test
-2. Verify it passes against the current implementation
-3. If it fails, investigate -- it may have found another bug
-
-#### 13c. Tests for known limitations
-
-For each known limitation that violates round-trip identity:
-1. Write a test that asserts the **correct** behavior
-2. The test SHOULD FAIL against the current implementation
-3. **Leave the test failing** -- do NOT mark it `#[ignore]` or fix the implementation
-4. If a test unexpectedly PASSES, analyze why. If correct, keep it as free coverage
-5. These tests serve as acceptance criteria for future fixes
-
-#### 13d. Scope: test every affected layer
-
-For each finding, determine which test layers are affected and write tests in ALL of them:
-- Does the bug manifest at the plugin level? -> Lua spec test
-- Does it manifest at the server level? -> Rust unit test or integration test
-- Does it affect the round-trip? -> Integration test with `/api/write` + filesystem verification
-- Does it affect forward-sync? -> Serve test with `recv_socket_packet`
-- Could it regress from a different code path? -> Test that code path too
+- **Critical issues** -- data loss, incorrect values, silent corruption on round-trip
+- **Correctness concerns** -- edge cases that might not manifest immediately
+- **Missing test coverage** -- specific test cases needed, prioritized by risk
+- **Known limitations** -- for each limitation: what it is, the concrete scenario, severity, and what fixing it would require
+- **Challenged limitations** -- for each limitation: what it is, user's decision (accept/fix), and if accepted, confirmation that warnings are logged and no silent corruption occurs beyond the accepted scope
+- **Code quality items** -- DRY violations, dead code, fragile error paths
+- **Deferred refactors** -- major structural improvements too large to do inline
+- For each issue: **file path, line numbers, description, and suggested fix**
 
 ### 14. Challenge Known Limitations
 
@@ -310,14 +290,180 @@ Do NOT blindly accept "known limitations" from implementation plans. For every l
 2. **Ask the user to explicitly confirm** it's acceptable for this release, or whether it should be fixed now.
 3. **Never silently skip a round-trip violation** just because a plan document says "known limitation." Plans are written before implementation -- the user may have changed their mind, or the severity may be worse than anticipated.
 
-### 15. Produce the Report
+### 15. Quiz User on Each Planned Fix
 
-Structured report with:
+**No code changes may be applied until the user explicitly approves each one.** After producing the report and challenging limitations, present EVERY planned fix to the user for approval before writing any code.
 
-- **Critical issues** -- data loss, incorrect values, silent corruption on round-trip
-- **Correctness concerns** -- edge cases that might not manifest immediately
-- **Missing test coverage** -- specific test cases needed, prioritized by risk
-- **Challenged limitations** -- for each limitation: what it is, user's decision (accept/fix), and if accepted, confirmation that warnings are logged and no silent corruption occurs beyond the accepted scope
-- **Code quality items** -- DRY violations, dead code, fragile error paths
-- **Deferred refactors** -- major structural improvements too large to do inline
-- For each issue: **file path, line numbers, description, and suggested fix**
+For each fix identified in the report (bug fixes, refactors, test additions, etc.), use the **AskQuestion tool** to present:
+
+1. **What the fix changes** -- which file(s), what code, what behavior changes
+2. **Why it's needed** -- which audit finding it addresses (reference the report section)
+3. **Risk assessment** -- could this fix break anything else? What's the blast radius?
+4. **Options:**
+   - **Apply** -- proceed with this fix
+   - **Skip** -- do not apply this fix (document the reason)
+   - **Modify** -- the user wants a different approach (wait for their input before proceeding)
+
+**Rules:**
+- Present fixes **one at a time** so the user can evaluate each independently
+- Group closely related fixes (e.g., a bug fix + its regression test) into a single question, but never bundle unrelated fixes
+- If the user selects "Modify," wait for their revised instructions before continuing to the next fix
+- After all fixes are quizzed, summarize which were approved, skipped, and modified
+- Only proceed to step 16 with the approved and modified fixes
+
+### 16. Create the Fix Plan
+
+After all fixes have been quizzed and the user has made their decisions, write a plan file to `.cursor/plans/`. This plan is the deliverable of the audit -- do NOT directly apply any code changes.
+
+**Filename:** `.cursor/plans/<descriptive_slug>.plan.md` (e.g., `fix_ref_round_trip_issues.plan.md`)
+
+**Plan structure:**
+
+```markdown
+# <Title describing the audit scope>
+
+> This plan was generated by `/audit` from a Plan-mode session.
+> Refer to `.cursor/rules/atlas.mdc` for full project standards.
+
+## Standards
+
+These standards govern every fix in this plan. An implementer MUST read `.cursor/rules/atlas.mdc` before starting.
+
+### Round-Trip Identity (from `atlas.mdc` §Quality Standard)
+
+Syncback (or two-way sync) writes a directory tree. Building an rbxl from that directory tree and forward-syncing it back must produce a **bit-identical instance tree** -- same names, same classes, same properties, same hierarchy, same ref targets. Any deviation is a bug.
+
+### CLI Syncback Parity (from `atlas.mdc` §Two-Way Sync Strategy)
+
+Plugin-based sync must produce **exactly the same filesystem output** that `atlas syncback` would give for the same input. Byte-for-byte identical files, identical directory structures, identical naming. Any divergence is a bug until proven otherwise.
+
+### Code Quality (from `atlas.mdc` §Code Quality Standard)
+
+DRY code that is easy to reason about and hard to get wrong. The same slugify/dedup/meta-update pattern should not be copy-pasted across files. Small refactors (2-3 call sites) are included as fixes. Major rewrites (10+ call sites) are deferred.
+
+## Context
+
+<Brief summary of what was audited, which branch/feature, and the audit findings.>
+
+## Fixes
+
+Each fix below was approved by the user during the audit quiz (step 15). Implement them in order. Each fix includes its test requirements -- a fix is not complete until its tests pass.
+
+### Fix N: <Short title>
+
+- **Status:** Approved | Modified
+- **Finding:** <Which audit section identified this (e.g., "Step 2a: Round-trip identity")>
+- **Files:** <List of files to modify>
+- **Problem:** <What's wrong, with file paths and line numbers>
+- **Solution:** <Exact description of what to change -- specific enough to implement without re-reading the audit. For modified fixes, this reflects the user's revised approach.>
+- **Risk:** <Blast radius, what else could break>
+- **Verify round-trip:** <How to confirm this fix preserves round-trip identity -- specific test scenario>
+- **Verify syncback parity:** <How to confirm two-way sync output matches CLI syncback -- or "N/A" if this fix doesn't touch sync paths>
+- **Tests required:**
+  - <Specific test description, which test layer (unit/integration/spec/snapshot), expected behavior>
+
+## Skipped Fixes
+
+Documented so they aren't lost -- they may be revisited later.
+
+### Skipped: <Short title>
+
+- **Finding:** <Audit section>
+- **Problem:** <What's wrong>
+- **Reason skipped:** <User's stated reason>
+
+## Accepted Limitations
+
+For each limitation the user accepted in step 14:
+
+- **Limitation:** <What it is>
+- **Scenario:** <When data is lost/corrupted>
+- **User decision:** Accepted for this release
+- **Mitigation:** <Any warnings/logging that should be in place>
+
+## Deferred Refactors
+
+Major structural improvements flagged during the audit that are too large to include. These should be evaluated after the fixes above are complete.
+
+- <Refactor description, affected files, estimated scope>
+
+## Test Plan
+
+Tests are not optional. Every approved fix must have test coverage. A fix is not complete until its tests pass (or intentionally fail, for known limitations).
+
+Summary of ALL tests to be written across every fix, organized by layer. Each entry references back to the fix that requires it.
+
+### Rust Unit Tests (`#[cfg(test)]` blocks)
+For isolated logic: helpers, path computation, patch compute/apply.
+- <test description> (Fix N)
+
+### Rust Integration Tests (`tests/tests/`)
+For end-to-end server behavior: serve tests, two-way sync via `/api/write`, connected mode, syncback.
+- <test description> (Fix N)
+
+### Lua Spec Tests (`.spec.lua` files)
+For plugin-side encoding, decoding, batching, reconciliation.
+- <test description> (Fix N)
+
+### Snapshot Tests (`insta` crate)
+For forward-sync patch output verification.
+- <test description> (Fix N)
+
+### Failing Tests for Known Limitations
+- <test description -- these assert correct behavior and are expected to fail> (Accepted Limitation)
+
+## Test Rules
+
+The implementer MUST follow these rules when writing tests for this plan:
+
+### For bugs found and fixed
+
+Every bug fix MUST have a test that:
+1. Would have **FAILED** before the fix
+2. **PASSES** after the fix
+3. Prevents the bug from regressing
+
+### For missing coverage identified
+
+For each "missing test coverage" gap:
+1. Write the test
+2. Verify it passes against the current implementation
+3. If it fails, investigate -- it may have found another bug
+
+### For known limitations (Accepted Limitations section)
+
+For each known limitation that violates round-trip identity:
+1. Write a test that asserts the **correct** behavior
+2. The test SHOULD FAIL against the current implementation
+3. **Leave the test failing** -- do NOT mark it `#[ignore]` or fix the implementation
+4. If a test unexpectedly PASSES, analyze why. If correct, keep it as free coverage
+5. These tests serve as acceptance criteria for future fixes
+
+### Scope: test every affected layer
+
+For each finding, determine which test layers are affected and write tests in ALL of them:
+- Does the bug manifest at the plugin level? -> Lua spec test
+- Does it manifest at the server level? -> Rust unit test or integration test
+- Does it affect the round-trip? -> Integration test with `/api/write` + filesystem verification
+- Does it affect forward-sync? -> Serve test with `recv_socket_packet`
+- Could it regress from a different code path? -> Test that code path too
+
+## Final Step: Run CI
+
+After ALL fixes and tests are implemented, run the `/ci` command (see `.cursor/commands/ci.md`) to execute the full CI pipeline. Every fix must pass CI before the plan is considered complete. Do not skip this step.
+```
+
+### 17. Run CI After Plan Execution
+
+After the plan has been fully executed in Agent mode (all approved fixes applied, all tests written), run the `/ci` command (`.cursor/commands/ci.md`) as the final step. The plan is not complete until CI passes clean.
+
+**Rules for the plan file:**
+
+- The plan must be **self-contained**: an implementer should be able to execute it in Agent mode by reading only the plan file and `atlas.mdc`, without re-reading the audit chat
+- The Standards section is mandatory -- it anchors every fix to the project's quality bars
+- Every fix must include `Verify round-trip` and `Verify syncback parity` fields so the implementer knows how to validate correctness
+- Include exact file paths and line numbers (as of the current commit)
+- For each fix, list the tests that must accompany it -- a fix without a test entry is incomplete
+- Tests for known limitations must assert the **correct** behavior (they are expected to fail against the current implementation and should be left failing)
+- Skipped fixes are documented with their problem description so future audits don't rediscover them
+- The plan file is the single source of truth for post-audit work; do not leave information only in the chat

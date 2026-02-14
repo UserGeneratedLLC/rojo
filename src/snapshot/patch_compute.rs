@@ -288,25 +288,33 @@ fn compute_ref_properties(
     };
 
     for (attr_name, attr_value) in attributes.iter() {
-        // Handle legacy ID-based refs (Rojo_Target_) FIRST -- lower priority.
-        // If a Rojo_Ref_* attribute also exists for the same property, it will
-        // overwrite this entry below (path-based system has priority).
+        // Handle legacy ID-based refs (Rojo_Target_) -- lower priority.
+        // BTreeMap iterates alphabetically, so Rojo_Ref_* ('R') is visited
+        // BEFORE Rojo_Target_* ('T'). Without the contains_key guard,
+        // Rojo_Target_* would silently overwrite Rojo_Ref_*. The guard
+        // ensures path-based refs always win when both exist.
         if let Some(prop_name) = attr_name.strip_prefix(REF_POINTER_ATTRIBUTE_PREFIX) {
+            let key = ustr(prop_name);
+            // Skip if Rojo_Ref_* already set a value for this property
+            if map.contains_key(&key) {
+                continue;
+            }
             let Some(id_str) = crate::variant_as_str(attr_value, attr_name) else {
                 continue;
             };
             let rojo_ref = RojoRef::new(id_str.to_string());
             if let Some(target_id) = tree.get_specified_id(&rojo_ref) {
-                map.insert(ustr(prop_name), Some(Variant::Ref(target_id)));
+                map.insert(key, Some(Variant::Ref(target_id)));
             } else {
-                map.insert(ustr(prop_name), None);
+                map.insert(key, None);
             }
             continue;
         }
 
-        // Handle path-based refs (Rojo_Ref_) SECOND -- higher priority.
-        // Overwrites any Rojo_Target_* entry for the same property since
-        // path-based is the preferred system.
+        // Handle path-based refs (Rojo_Ref_) -- higher priority.
+        // Always inserted unconditionally; if a Rojo_Target_* for the same
+        // property was already visited (shouldn't happen due to BTreeMap
+        // ordering, but defensive), this overwrites it.
         if let Some(prop_name) = attr_name.strip_prefix(REF_PATH_ATTRIBUTE_PREFIX) {
             let Some(path) = crate::variant_as_str(attr_value, attr_name) else {
                 continue;

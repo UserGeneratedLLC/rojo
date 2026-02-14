@@ -6712,7 +6712,6 @@ fn ref_stale_path_after_parent_rename() {
 /// syncback_updated_properties runs because additions go through the VFS
 /// watcher asynchronously.
 #[test]
-#[ignore = "Known limitation: WeakDom doesn't support custom Ref IDs, so new instances aren't in the tree when Ref properties are processed in the same request"]
 fn ref_to_instance_added_in_same_request() {
     run_serve_test("ref_two_way_sync", |session, _| {
         let (session_id, _, model_id, _, _, _) = ref_test_setup(&session);
