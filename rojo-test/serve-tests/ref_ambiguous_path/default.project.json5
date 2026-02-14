@@ -1,0 +1,10 @@
+{
+  "name": "ref_ambiguous_path",
+  "tree": {
+    "$className": "DataModel",
+    "Workspace": {
+      "$className": "Workspace",
+      "$path": "src/Workspace"
+    }
+  }
+}

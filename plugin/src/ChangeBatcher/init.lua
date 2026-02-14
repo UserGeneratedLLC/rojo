@@ -32,7 +32,20 @@ function ChangeBatcher.new(instanceMap, onChangesFlushed)
 		__pendingPropertyChanges = {},
 		__syncSourceOnly = false,
 		__paused = false,
+
+		-- Map of target Instance -> list of {sourceInstance, propertyName}
+		-- for Ref properties that couldn't be encoded because the target
+		-- wasn't in the InstanceMap yet. When the target appears (via
+		-- InstanceMap.onInstanceInserted), the property changes are
+		-- re-queued into __pendingPropertyChanges.
+		__pendingUnresolvedRefs = {},
 	}, ChangeBatcher)
+
+	-- Wire up the InstanceMap callback to resolve pending Ref properties
+	-- when new instances are tracked.
+	instanceMap.onInstanceInserted = function(instance)
+		self:__onTargetInstanceInserted(instance)
+	end
 
 	return self
 end
@@ -59,6 +72,49 @@ end
 function ChangeBatcher:stop()
 	self.__renderSteppedConnection:Disconnect()
 	self.__pendingPropertyChanges = {}
+	self.__pendingUnresolvedRefs = {}
+	self.__instanceMap.onInstanceInserted = nil
+end
+
+--- Register a Ref property that couldn't be encoded because the target
+--- Instance isn't in the InstanceMap yet. When the target appears, the
+--- property change will be automatically re-queued.
+function ChangeBatcher:deferUnresolvedRef(sourceInstance, propertyName, targetInstance)
+	local pending = self.__pendingUnresolvedRefs[targetInstance]
+	if not pending then
+		pending = {}
+		self.__pendingUnresolvedRefs[targetInstance] = pending
+	end
+	table.insert(pending, { sourceInstance = sourceInstance, propertyName = propertyName })
+	Log.debug(
+		"ChangeBatcher: deferred Ref {:?}.{} until target {:?} is tracked",
+		sourceInstance,
+		propertyName,
+		targetInstance
+	)
+end
+
+--- Called when a new instance is inserted into the InstanceMap. Checks if
+--- any pending unresolved Ref properties targeted this instance and
+--- re-queues them for the next batch cycle.
+function ChangeBatcher:__onTargetInstanceInserted(instance)
+	local pending = self.__pendingUnresolvedRefs[instance]
+	if not pending then
+		return
+	end
+
+	self.__pendingUnresolvedRefs[instance] = nil
+
+	for _, entry in pending do
+		local sourceInstance = entry.sourceInstance
+		local propertyName = entry.propertyName
+
+		-- Verify the source instance is still valid and tracked
+		if sourceInstance.Parent and self.__instanceMap.fromInstances[sourceInstance] then
+			Log.info("ChangeBatcher: resolving deferred Ref {:?}.{} -> {:?}", sourceInstance, propertyName, instance)
+			self:add(sourceInstance, propertyName)
+		end
+	end
 end
 
 function ChangeBatcher:add(instance, propertyName)
@@ -100,7 +156,14 @@ function ChangeBatcher:__flush()
 		return nil
 	end
 
-	local patch = createPatchSet(self.__instanceMap, self.__pendingPropertyChanges, self.__syncSourceOnly)
+	local patch = createPatchSet(
+		self.__instanceMap,
+		self.__pendingPropertyChanges,
+		self.__syncSourceOnly,
+		function(sourceInstance, propertyName, targetInstance)
+			self:deferUnresolvedRef(sourceInstance, propertyName, targetInstance)
+		end
+	)
 	self.__pendingPropertyChanges = {}
 
 	if PatchSet.isEmpty(patch) then

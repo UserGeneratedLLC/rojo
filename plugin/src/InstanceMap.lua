@@ -31,6 +31,10 @@ function InstanceMap.new(onInstanceChanged)
 		-- Callback that's invoked whenever an instance is changed and it was
 		-- not paused.
 		onInstanceChanged = onInstanceChanged,
+
+		-- Callback invoked when a new instance is inserted into the map.
+		-- Used by ChangeBatcher to resolve pending unresolved Ref properties.
+		onInstanceInserted = nil,
 	}
 
 	return setmetatable(self, InstanceMap)
@@ -88,6 +92,12 @@ function InstanceMap:insert(id, instance)
 	self.fromIds[id] = instance
 	self.fromInstances[instance] = id
 	self:__connectSignals(instance)
+
+	-- Notify listeners that a new instance is now tracked.
+	-- ChangeBatcher uses this to resolve pending unresolved Ref properties.
+	if self.onInstanceInserted then
+		self.onInstanceInserted(instance)
+	end
 end
 
 function InstanceMap:removeId(id)

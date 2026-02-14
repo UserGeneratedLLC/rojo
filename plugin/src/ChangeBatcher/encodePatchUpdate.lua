@@ -7,7 +7,7 @@ local UNENCODABLE_DATA_TYPES = require(script.Parent.propertyFilter)
 
 local NULL_REF = "00000000000000000000000000000000"
 
-return function(instance, instanceId, properties, instanceMap)
+return function(instance, instanceId, properties, instanceMap, onUnresolvedRef)
 	local update = {
 		id = instanceId,
 		changedProperties = {},
@@ -45,12 +45,18 @@ return function(instance, instanceId, properties, instanceMap)
 					if targetId then
 						update.changedProperties[propertyName] = { Ref = targetId }
 					else
-						Log.warn(
-							"Cannot sync Ref property {:?}.{}: target {:?} is not tracked by Atlas",
-							instance,
-							propertyName,
-							readResult
-						)
+						-- Target instance not yet tracked. Defer for later
+						-- resolution when the target appears in the InstanceMap.
+						if onUnresolvedRef then
+							onUnresolvedRef(instance, propertyName, readResult)
+						else
+							Log.warn(
+								"Cannot sync Ref property {:?}.{}: target {:?} is not tracked by Atlas",
+								instance,
+								propertyName,
+								readResult
+							)
+						end
 					end
 				else
 					Log.warn("Cannot encode Ref property {:?}.{}: no InstanceMap provided", instance, propertyName)
