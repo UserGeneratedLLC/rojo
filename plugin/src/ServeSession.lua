@@ -735,7 +735,7 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 						end
 					end
 					Log.info("[Pull] Update: {}", instancePath)
-					local update = encodePatchUpdate(instance, change.id, propertiesToSync)
+					local update = encodePatchUpdate(instance, change.id, propertiesToSync, self.__instanceMap)
 					if update then
 						table.insert(pullPatch.updated, update)
 					end

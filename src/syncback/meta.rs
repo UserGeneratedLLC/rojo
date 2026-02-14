@@ -90,6 +90,54 @@ pub fn remove_model_name(model_path: &Path) -> anyhow::Result<RemoveNameOutcome>
     Ok(RemoveNameOutcome::FieldRemoved)
 }
 
+/// Update `Rojo_Ref_*` attribute paths in a meta/model JSON5 file.
+///
+/// For each attribute whose key starts with `Rojo_Ref_` and whose string
+/// value starts with `old_prefix`, replaces the prefix with `new_prefix`.
+/// Returns true if any attribute was updated.
+pub fn update_ref_paths_in_file(
+    file_path: &Path,
+    old_prefix: &str,
+    new_prefix: &str,
+) -> anyhow::Result<bool> {
+    use crate::REF_PATH_ATTRIBUTE_PREFIX;
+
+    if !file_path.exists() {
+        return Ok(false);
+    }
+
+    let bytes = match fs::read(file_path) {
+        Ok(b) => b,
+        Err(_) => return Ok(false),
+    };
+    let mut val = match crate::json::from_slice::<serde_json::Value>(&bytes) {
+        Ok(v) if v.is_object() => v,
+        _ => return Ok(false),
+    };
+
+    let mut updated = false;
+    if let Some(attrs) = val.get_mut("attributes").and_then(|a| a.as_object_mut()) {
+        for (key, value) in attrs.iter_mut() {
+            if key.starts_with(REF_PATH_ATTRIBUTE_PREFIX) {
+                if let Some(path_str) = value.as_str() {
+                    if path_str == old_prefix || path_str.starts_with(&format!("{old_prefix}/")) {
+                        let new_path = format!("{new_prefix}{}", &path_str[old_prefix.len()..]);
+                        *value = serde_json::Value::String(new_path);
+                        updated = true;
+                    }
+                }
+            }
+        }
+    }
+
+    if updated {
+        let content = crate::json::to_vec_pretty_sorted(&val)?;
+        fs::write(file_path, &content)?;
+    }
+
+    Ok(updated)
+}
+
 /// Remove the `name` field from a `.meta.json5` file.
 ///
 /// If the file becomes an empty object after removal, deletes it entirely.

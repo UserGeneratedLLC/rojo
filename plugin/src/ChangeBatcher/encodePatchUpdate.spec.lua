@@ -243,4 +243,98 @@ return function()
 			expect(update.changedProperties.Part1.Ref).to.equal("PART_B")
 		end)
 	end)
+
+	-- -------------------------------------------------------------------
+	-- Regression tests for known limitations (audit section 10)
+	--
+	-- These tests assert the CORRECT behavior. They are expected to FAIL
+	-- against the current implementation, proving the bugs are real.
+	-- DO NOT fix the implementation to make them pass.
+	-- If a test unexpectedly passes, leave it -- it's free coverage.
+	-- -------------------------------------------------------------------
+
+	describe("Known limitation: untracked Ref target (10c)", function()
+		local container2
+		local instanceMap2
+
+		beforeEach(function()
+			container2 = Instance.new("Folder")
+			container2.Name = "RefRegressionContainer"
+			container2.Parent = game:GetService("Workspace")
+			instanceMap2 = InstanceMap.new()
+		end)
+
+		afterEach(function()
+			instanceMap2:stop()
+			if container2 then
+				container2:Destroy()
+				container2 = nil
+			end
+		end)
+
+		it("should encode Ref to untracked instance (EXPECTED FAIL)", function()
+			-- The CORRECT behavior: if a Model's PrimaryPart points to a Part
+			-- that exists in Studio but isn't tracked by Atlas, the Ref should
+			-- still be encoded somehow (e.g., deferred or queued).
+			-- ACTUAL behavior: property is silently dropped with a warning.
+			local model = Instance.new("Model")
+			model.Parent = container2
+			local part = Instance.new("Part")
+			part.Parent = model
+			model.PrimaryPart = part
+
+			instanceMap2:insert("MODEL_ID", model)
+			-- Part is NOT in instanceMap
+
+			local update = encodePatchUpdate(model, "MODEL_ID", { PrimaryPart = true }, instanceMap2)
+
+			-- CORRECT: PrimaryPart should be encoded
+			-- ACTUAL: update is nil or PrimaryPart is missing
+			expect(update).to.be.ok()
+			expect(update.changedProperties.PrimaryPart).to.be.ok()
+		end)
+	end)
+
+	describe("Known limitation: missing instanceMap arg (10d)", function()
+		local container3
+		local instanceMap3
+
+		beforeEach(function()
+			container3 = Instance.new("Folder")
+			container3.Name = "RefMissingMapContainer"
+			container3.Parent = game:GetService("Workspace")
+			instanceMap3 = InstanceMap.new()
+		end)
+
+		afterEach(function()
+			instanceMap3:stop()
+			if container3 then
+				container3:Destroy()
+				container3 = nil
+			end
+		end)
+
+		it("should encode Ref when instanceMap is nil (EXPECTED FAIL)", function()
+			-- This simulates ServeSession.lua:738 which calls encodePatchUpdate
+			-- WITHOUT the 4th instanceMap argument. The CORRECT behavior is that
+			-- Ref properties should be encoded. ACTUAL: they are dropped.
+			local model = Instance.new("Model")
+			model.Parent = container3
+			local part = Instance.new("Part")
+			part.Parent = model
+			model.PrimaryPart = part
+
+			instanceMap3:insert("MODEL_ID", model)
+			instanceMap3:insert("PART_ID", part)
+
+			-- Call WITHOUT instanceMap (4th arg) -- simulates ServeSession.lua:738
+			local update = encodePatchUpdate(model, "MODEL_ID", { PrimaryPart = true })
+
+			-- CORRECT: PrimaryPart should be encoded as { Ref = "PART_ID" }
+			-- ACTUAL: PrimaryPart is dropped because instanceMap is nil
+			expect(update).to.be.ok()
+			expect(update.changedProperties.PrimaryPart).to.be.ok()
+			expect(update.changedProperties.PrimaryPart.Ref).to.equal("PART_ID")
+		end)
+	end)
 end

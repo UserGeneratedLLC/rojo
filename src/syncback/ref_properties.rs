@@ -10,8 +10,8 @@ use rbx_dom_weak::{
 };
 
 use crate::{
-    ref_attribute_name, syncback::snapshot::inst_path, REF_ID_ATTRIBUTE_NAME,
-    REF_PATH_ATTRIBUTE_PREFIX, REF_POINTER_ATTRIBUTE_PREFIX,
+    ref_attribute_name, ref_target_attribute_name, syncback::snapshot::inst_path,
+    REF_ID_ATTRIBUTE_NAME, REF_PATH_ATTRIBUTE_PREFIX, REF_POINTER_ATTRIBUTE_PREFIX,
 };
 
 pub struct RefLinks {
@@ -248,7 +248,7 @@ pub fn link_referents(links: RefLinks, dom: &mut WeakDom) -> anyhow::Result<()> 
                 let id =
                     get_existing_id(target).expect("all ID-based targets should have an ID by now");
                 id_attrs.push((
-                    format!("{REF_POINTER_ATTRIBUTE_PREFIX}{}", link.name),
+                    ref_target_attribute_name(&link.name),
                     Variant::String(id.to_owned()),
                 ));
             }

@@ -721,6 +721,41 @@ impl ApiService {
     /// Returns true if the path is unique, false if duplicates exist at any level.
     /// This is O(d) where d is the depth of the instance.
     /// Records any duplicate path issues via the stats tracker.
+    /// Check if a Ref target's path is unique (no duplicate-named siblings
+    /// at any ancestor level). Used for warning about ambiguous Rojo_Ref_* paths.
+    fn is_ref_path_unique(tree: &crate::snapshot::RojoTree, target_ref: Ref) -> bool {
+        let mut current_ref = target_ref;
+
+        loop {
+            let current = match tree.get_instance(current_ref) {
+                Some(inst) => inst,
+                None => return false,
+            };
+
+            let parent_ref = current.parent();
+            if parent_ref.is_none() {
+                // Reached root -- path is unique at all levels
+                return true;
+            }
+
+            // Check if any sibling has the same name
+            if let Some(parent) = tree.get_instance(parent_ref) {
+                let my_name = current.name();
+                let has_dup = parent.children().iter().any(|&child_ref| {
+                    child_ref != current_ref
+                        && tree
+                            .get_instance(child_ref)
+                            .is_some_and(|c| c.name() == my_name)
+                });
+                if has_dup {
+                    return false;
+                }
+            }
+
+            current_ref = parent_ref;
+        }
+    }
+
     fn is_tree_path_unique_with_cache(
         tree: &crate::snapshot::RojoTree,
         target_ref: Ref,
@@ -2303,10 +2338,11 @@ impl ApiService {
                 continue;
             }
 
-            // Skip UniqueId - internal Roblox identifiers, not meaningful for syncback.
-            // Note: Ref properties are handled upstream in syncback_updated_properties()
+            // Skip UniqueId and Ref - they don't serialize to JSON.
+            // Ref properties are handled upstream in syncback_updated_properties()
             // where they are converted to Rojo_Ref_* path-based attributes.
-            if matches!(value, Variant::UniqueId(_)) {
+            // UniqueId is internal to Roblox and not meaningful for syncback.
+            if matches!(value, Variant::UniqueId(_) | Variant::Ref(_)) {
                 continue;
             }
 
@@ -2577,6 +2613,21 @@ impl ApiService {
                     } else if tree.get_instance(*target_ref).is_some() {
                         // Valid target: compute path and add as Rojo_Ref_* attribute
                         let path = crate::ref_target_path(tree.inner(), *target_ref);
+
+                        // Warn if the path is ambiguous (duplicate-named siblings
+                        // at any ancestor level). The ref will still be written,
+                        // but may resolve to the wrong target on rebuild.
+                        if !Self::is_ref_path_unique(tree, *target_ref) {
+                            log::warn!(
+                                "Ref property '{}' for instance {:?} has an ambiguous \
+                                 path '{}' (duplicate-named siblings exist). The ref may \
+                                 resolve to the wrong target on rebuild.",
+                                key,
+                                update.id,
+                                path
+                            );
+                        }
+
                         ref_attributes.insert(attr_name, serde_json::Value::String(path));
                     } else {
                         log::warn!(

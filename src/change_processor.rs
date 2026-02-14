@@ -390,6 +390,115 @@ impl JobThreadContext {
         }
     }
 
+    /// After an instance is renamed, scan all meta/model files on disk for
+    /// `Rojo_Ref_*` attributes whose path references the old name, and update
+    /// them to the new path.
+    ///
+    /// The Rojo_Ref_* attributes only exist on the filesystem (in meta/model
+    /// JSON5 files), not in the tree's Attributes property. The tree stores
+    /// Variant::Ref properties directly by instance ID.
+    fn update_ref_paths_after_rename(
+        &self,
+        tree: &mut crate::snapshot::RojoTree,
+        old_path: &str,
+        new_path: &str,
+    ) {
+        if old_path == new_path {
+            return;
+        }
+
+        let root_id = tree.root().id();
+        let mut files_to_check: Vec<std::path::PathBuf> = Vec::new();
+
+        // The old and new tree path segments (last component of each path).
+        // Used to map stale InstigatingSource paths to their actual on-disk
+        // locations after a directory rename.
+        let old_segment = old_path.rsplit('/').next().unwrap_or(old_path);
+        let new_segment = new_path.rsplit('/').next().unwrap_or(new_path);
+
+        // Collect all filesystem paths from instances in the tree.
+        // We check each instance's instigating source for meta/model files.
+        for inst_with_meta in tree.descendants(root_id) {
+            if let Some(source) = &inst_with_meta.metadata().instigating_source {
+                let inst_path = source.path();
+
+                // If the InstigatingSource path contains the old segment (stale
+                // after directory rename), map it to the new segment to find the
+                // actual file on disk.
+                let inst_path = {
+                    let p_str = inst_path.to_string_lossy();
+                    if !inst_path.exists() && p_str.contains(old_segment) {
+                        PathBuf::from(p_str.replace(old_segment, new_segment).as_str())
+                    } else {
+                        inst_path.to_path_buf()
+                    }
+                };
+
+                // For directory-format instances, check init.meta.json5
+                if inst_path.is_dir() {
+                    let init_meta = inst_path.join("init.meta.json5");
+                    if init_meta.exists() {
+                        files_to_check.push(init_meta);
+                    }
+                } else {
+                    let file_name = inst_path.file_name().and_then(|f| f.to_str()).unwrap_or("");
+
+                    // Model files contain attributes inline
+                    if file_name.ends_with(".model.json5") || file_name.ends_with(".model.json") {
+                        files_to_check.push(inst_path.to_path_buf());
+                    }
+
+                    // Check for adjacent .meta.json5
+                    if let Some(parent) = inst_path.parent() {
+                        let stem = inst_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                        let base = stem
+                            .strip_suffix(".server")
+                            .or_else(|| stem.strip_suffix(".client"))
+                            .or_else(|| stem.strip_suffix(".plugin"))
+                            .or_else(|| stem.strip_suffix(".local"))
+                            .or_else(|| stem.strip_suffix(".legacy"))
+                            .unwrap_or(stem);
+                        let meta_path = parent.join(format!("{}.meta.json5", base));
+                        if meta_path.exists() {
+                            files_to_check.push(meta_path);
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut updated_count = 0;
+        for file_path in &files_to_check {
+            self.suppress_path(file_path);
+            match crate::syncback::meta::update_ref_paths_in_file(file_path, old_path, new_path) {
+                Ok(true) => {
+                    updated_count += 1;
+                }
+                Ok(false) => {
+                    // No stale refs in this file; undo suppression
+                    self.unsuppress_path(file_path);
+                }
+                Err(err) => {
+                    self.unsuppress_path(file_path);
+                    log::warn!(
+                        "Failed to update Rojo_Ref_* paths in {}: {}",
+                        self.display_path(file_path),
+                        err
+                    );
+                }
+            }
+        }
+
+        if updated_count > 0 {
+            log::info!(
+                "Updated Rojo_Ref_* paths in {} file(s): '{}' -> '{}'",
+                updated_count,
+                old_path,
+                new_path
+            );
+        }
+    }
+
     /// Remove the `name` field from a `.meta.json5` file, suppressing filesystem
     /// events. If the file becomes empty after removal, deletes it entirely.
     fn remove_meta_name_field(&self, meta_path: &Path) {
@@ -860,6 +969,14 @@ impl JobThreadContext {
 
             for update in &patch_set.updated_instances {
                 let id = update.id;
+
+                // Capture the old path BEFORE rename for Rojo_Ref_* path updates.
+                // Must be computed before the `tree.get_instance(id)` borrow.
+                let old_ref_path = if update.changed_name.is_some() {
+                    Some(tree.inner().full_path_of(id, "/"))
+                } else {
+                    None
+                };
 
                 if let Some(instance) = tree.get_instance(id) {
                     // Track the current source file path — rename and ClassName
@@ -1362,6 +1479,32 @@ impl JobThreadContext {
                     }
                 } else {
                     log::warn!("Cannot update instance {:?}, it does not exist.", id);
+                }
+
+                // After rename, update any Rojo_Ref_* paths that referenced the
+                // old path of this instance (or its descendants). Done outside the
+                // `if let Some(instance)` block to avoid borrow conflicts.
+                //
+                // NOTE: The tree name hasn't been updated yet (apply_patch_set
+                // runs after this loop), so we can't use full_path_of for the
+                // new path. Construct it by replacing the last path segment.
+                if let Some(ref old_ref_path) = old_ref_path {
+                    if let Some(ref new_name) = update.changed_name {
+                        let new_ref_path =
+                            if let Some((parent, _old_name)) = old_ref_path.rsplit_once('/') {
+                                format!("{}/{}", parent, crate::escape_ref_path_segment(new_name))
+                            } else {
+                                // Root-level instance (no parent in path)
+                                crate::escape_ref_path_segment(new_name).into_owned()
+                            };
+                        if *old_ref_path != new_ref_path {
+                            self.update_ref_paths_after_rename(
+                                &mut tree,
+                                old_ref_path,
+                                &new_ref_path,
+                            );
+                        }
+                    }
                 }
             }
 

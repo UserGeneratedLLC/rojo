@@ -239,7 +239,9 @@ impl RojoTree {
             return Some(self.get_root_id());
         }
 
-        let segments: Vec<&str> = path.split('/').collect();
+        // Use split_ref_path to handle escaped "/" in instance names.
+        // An instance named "A/B" is stored as "A\/B" in the path.
+        let segments = crate::split_ref_path(path);
         let mut current_ref = self.get_root_id();
 
         // The root of the tree doesn't appear in the path, so we start with
@@ -252,7 +254,7 @@ impl RojoTree {
             let mut found = false;
             for &child_ref in children {
                 let child = self.inner.get_by_ref(child_ref)?;
-                if child.name == *segment {
+                if child.name == segment.as_str() {
                     current_ref = child_ref;
                     found = true;
                     break;

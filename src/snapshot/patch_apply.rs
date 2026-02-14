@@ -330,67 +330,25 @@ fn defer_ref_properties(tree: &mut RojoTree, id: Ref, context: &mut PatchApplyCo
     let mut attr_id = None;
     for (attr_name, attr_value) in attributes.iter() {
         if attr_name == REF_ID_ATTRIBUTE_NAME {
-            if let Variant::String(specified_id) = attr_value {
-                attr_id = Some(RojoRef::new(specified_id.clone()));
-            } else if let Variant::BinaryString(specified_id) = attr_value {
-                if let Ok(str) = std::str::from_utf8(specified_id.as_ref()) {
-                    attr_id = Some(RojoRef::new(str.to_string()))
-                } else {
-                    log::error!("Specified IDs must be valid UTF-8 strings.")
-                }
-            } else {
-                log::warn!(
-                    "Attribute {attr_name} is of type {:?} when it was \
-                    expected to be a String",
-                    attr_value.ty()
-                )
+            if let Some(id_str) = crate::variant_as_str(attr_value, attr_name) {
+                attr_id = Some(RojoRef::new(id_str.to_string()));
             }
         }
         if let Some(prop_name) = attr_name.strip_prefix(REF_POINTER_ATTRIBUTE_PREFIX) {
             context.instances_needing_attr_cleanup.insert(id);
-            if let Variant::String(prop_value) = attr_value {
+            if let Some(id_str) = crate::variant_as_str(attr_value, attr_name) {
                 context
                     .attribute_refs_to_rewrite
-                    .insert(id, (ustr(prop_name), prop_value.clone()));
-            } else if let Variant::BinaryString(prop_value) = attr_value {
-                if let Ok(str) = std::str::from_utf8(prop_value.as_ref()) {
-                    context
-                        .attribute_refs_to_rewrite
-                        .insert(id, (ustr(prop_name), str.to_string()));
-                } else {
-                    log::error!("IDs specified by referent property attributes must be valid UTF-8 strings.")
-                }
-            } else {
-                log::warn!(
-                    "Attribute {attr_name} is of type {:?} when it was \
-                    expected to be a String",
-                    attr_value.ty()
-                )
+                    .insert(id, (ustr(prop_name), id_str.to_string()));
             }
         }
         // Handle path-based references (Rojo_Ref_)
         if let Some(prop_name) = attr_name.strip_prefix(REF_PATH_ATTRIBUTE_PREFIX) {
             context.instances_needing_attr_cleanup.insert(id);
-            if let Variant::String(path) = attr_value {
+            if let Some(path) = crate::variant_as_str(attr_value, attr_name) {
                 context
                     .path_refs_to_rewrite
-                    .insert(id, (ustr(prop_name), path.clone()));
-            } else if let Variant::BinaryString(path) = attr_value {
-                if let Ok(str) = std::str::from_utf8(path.as_ref()) {
-                    context
-                        .path_refs_to_rewrite
-                        .insert(id, (ustr(prop_name), str.to_string()));
-                } else {
-                    log::error!(
-                        "Paths specified by referent property attributes must be valid UTF-8 strings."
-                    )
-                }
-            } else {
-                log::warn!(
-                    "Attribute {attr_name} is of type {:?} when it was \
-                    expected to be a String",
-                    attr_value.ty()
-                )
+                    .insert(id, (ustr(prop_name), path.to_string()));
             }
         }
     }

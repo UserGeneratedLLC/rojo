@@ -239,6 +239,14 @@ encodeInstance = function(instance, parentId, _skipPathCheck)
 						continue
 					end
 
+					-- Ref properties cannot be encoded during instance addition
+					-- because the target instance has no server ID yet. They are
+					-- handled separately by encodePatchUpdate.lua during property
+					-- update encoding via the InstanceMap.
+					if descriptor.dataType == "Ref" then
+						continue
+					end
+
 					local encodeSuccess, encodeResult = encodeProperty(instance, propertyName, descriptor)
 					if encodeSuccess and encodeResult ~= nil then
 						properties[propertyName] = encodeResult
