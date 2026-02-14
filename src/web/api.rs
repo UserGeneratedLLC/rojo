@@ -2285,8 +2285,10 @@ impl ApiService {
                 continue;
             }
 
-            // Skip Ref and UniqueId - they don't serialize to JSON (matches dedicated syncback)
-            if matches!(value, Variant::Ref(_) | Variant::UniqueId(_)) {
+            // Skip UniqueId - internal Roblox identifiers, not meaningful for syncback.
+            // Note: Ref properties are handled upstream in syncback_updated_properties()
+            // where they are converted to Rojo_Ref_* path-based attributes.
+            if matches!(value, Variant::UniqueId(_)) {
                 continue;
             }
 
@@ -2537,27 +2539,58 @@ impl ApiService {
             "ModuleScript" | "Script" | "LocalScript"
         );
 
-        // Collect the non-Source properties as a HashMap<String, Variant>
-        // for reuse with filter_properties_for_meta
+        // Extract Ref properties and convert to Rojo_Ref_* attributes.
+        // Non-Ref properties are collected separately for filter_properties_for_meta.
+        let mut ref_attributes: indexmap::IndexMap<String, serde_json::Value> =
+            indexmap::IndexMap::new();
+        let mut remove_attributes: Vec<String> = Vec::new();
         let mut props: HashMap<String, Variant> = HashMap::new();
+
         for (key, value) in &update.changed_properties {
             if key == "Source" {
                 continue;
             }
-            if let Some(v) = value {
-                props.insert(key.to_string(), v.clone());
+            match value {
+                Some(Variant::Ref(target_ref)) => {
+                    let attr_name = crate::ref_attribute_name(key);
+                    if target_ref.is_none() {
+                        // Null ref: mark attribute for removal
+                        remove_attributes.push(attr_name);
+                    } else if tree.get_instance(*target_ref).is_some() {
+                        // Valid target: compute path and add as Rojo_Ref_* attribute
+                        let path = crate::ref_target_path(tree.inner(), *target_ref);
+                        ref_attributes.insert(attr_name, serde_json::Value::String(path));
+                    } else {
+                        log::warn!(
+                            "Cannot persist Ref property '{}' for instance {:?}: \
+                             target {:?} not found in tree",
+                            key,
+                            update.id,
+                            target_ref
+                        );
+                    }
+                }
+                Some(v) => {
+                    props.insert(key.to_string(), v.clone());
+                }
+                None => {}
             }
         }
 
-        if props.is_empty() {
+        if props.is_empty() && ref_attributes.is_empty() && remove_attributes.is_empty() {
             return Ok(());
         }
 
         let skip_prop = if is_script { Some("Source") } else { None };
-        let (properties, attributes) =
+        let (properties, mut attributes) =
             self.filter_properties_for_meta(class_name.as_str(), &props, skip_prop);
 
-        if properties.is_empty() && attributes.is_empty() {
+        // Merge Rojo_Ref_* attributes into the attributes map
+        for (k, v) in ref_attributes {
+            attributes.insert(k, v);
+        }
+
+        if properties.is_empty() && attributes.is_empty() && remove_attributes.is_empty() {
             return Ok(());
         }
 
@@ -2567,7 +2600,13 @@ impl ApiService {
             let meta_path = inst_path.join("init.meta.json5");
 
             // Read existing meta if present, merge with new properties
-            let meta = self.merge_or_build_meta(&meta_path, None, properties, attributes)?;
+            let meta = self.merge_or_build_meta(
+                &meta_path,
+                None,
+                properties,
+                attributes,
+                &remove_attributes,
+            )?;
             let content = crate::json::to_vec_pretty_sorted(&meta)
                 .context("Failed to serialize init.meta.json5")?;
             self.suppress_path(&meta_path);
@@ -2594,7 +2633,13 @@ impl ApiService {
                 .unwrap_or(file_stem);
             let meta_path = parent_dir.join(format!("{}.meta.json5", base_name));
 
-            let meta = self.merge_or_build_meta(&meta_path, None, properties, attributes)?;
+            let meta = self.merge_or_build_meta(
+                &meta_path,
+                None,
+                properties,
+                attributes,
+                &remove_attributes,
+            )?;
             let content = crate::json::to_vec_pretty_sorted(&meta)
                 .context("Failed to serialize meta.json5")?;
             self.suppress_path(&meta_path);
@@ -2620,6 +2665,7 @@ impl ApiService {
                     Some(class_name.as_str()),
                     properties,
                     attributes,
+                    &remove_attributes,
                 )?;
                 let content = crate::json::to_vec_pretty_sorted(&meta)
                     .context("Failed to serialize model file")?;
@@ -2637,7 +2683,13 @@ impl ApiService {
                 let file_stem = inst_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                 let meta_path = parent_dir.join(format!("{}.meta.json5", file_stem));
 
-                let meta = self.merge_or_build_meta(&meta_path, None, properties, attributes)?;
+                let meta = self.merge_or_build_meta(
+                    &meta_path,
+                    None,
+                    properties,
+                    attributes,
+                    &remove_attributes,
+                )?;
                 let content = crate::json::to_vec_pretty_sorted(&meta)
                     .context("Failed to serialize meta.json5")?;
                 self.suppress_path(&meta_path);
@@ -2656,12 +2708,17 @@ impl ApiService {
 
     /// Reads an existing meta/model JSON5 file and merges new properties into it.
     /// If the file doesn't exist, builds a fresh meta object.
+    ///
+    /// `remove_attributes` is a list of attribute keys to remove from the existing
+    /// file (used for nil Ref cleanup, e.g., removing a stale `Rojo_Ref_PrimaryPart`
+    /// when PrimaryPart is set to nil).
     fn merge_or_build_meta(
         &self,
         existing_path: &std::path::Path,
         class_name: Option<&str>,
         new_properties: indexmap::IndexMap<String, serde_json::Value>,
         new_attributes: indexmap::IndexMap<String, serde_json::Value>,
+        remove_attributes: &[String],
     ) -> anyhow::Result<serde_json::Value> {
         use anyhow::Context;
 
@@ -2687,6 +2744,17 @@ impl ApiService {
                 if let Some(props_obj) = props.as_object_mut() {
                     for (k, v) in new_properties {
                         props_obj.insert(k, v);
+                    }
+                }
+            }
+
+            // Remove attributes marked for deletion (e.g., stale Rojo_Ref_* entries)
+            if !remove_attributes.is_empty() {
+                if let Some(attrs) = obj.get_mut("attributes") {
+                    if let Some(attrs_obj) = attrs.as_object_mut() {
+                        for key in remove_attributes {
+                            attrs_obj.remove(key);
+                        }
                     }
                 }
             }

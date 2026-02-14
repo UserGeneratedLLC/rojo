@@ -779,6 +779,11 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 							local guid = HttpService:GenerateGUID(false)
 							local tempRef = string.gsub(guid, "-", ""):lower()
 							pullPatch.added[tempRef] = encoded
+							-- Note: We intentionally do NOT pre-insert into InstanceMap here.
+							-- The VFS watcher will process the written files and assign a
+							-- server-side Ref ID. Any Ref properties targeting this instance
+							-- will be deferred by the ChangeBatcher and resolved once the
+							-- server ID appears in the InstanceMap via forward-sync.
 							-- Log at info level since this is a major file creation operation
 							Log.info("[Pull] Create file: {} ({})", instancePath, instanceClass)
 						end
