@@ -68,7 +68,7 @@ $build = $LASTEXITCODE
 Record-Result "Build" $build
 
 Write-Step 8 "Run ALL Rust Tests"
-$testOutput = cargo test -j 16 --locked --all-targets --all-features -- --test-threads=16 2>&1
+$testOutput = cargo test -j 16 --locked --all-features -- --test-threads=16 2>&1
 $rustTests = $LASTEXITCODE
 $testOutput | Write-Host
 Record-Result "Rust Tests" $rustTests

@@ -29,6 +29,289 @@ Any divergence between the two-way sync path and the CLI syncback path is a bug 
 
 ---
 
+## Sync System Layout
+
+The auditor MUST read the relevant files from each pipeline when tracing round-trip identity. This section maps every file involved in both sync systems. Read these files -- do not skip any that are in the scope of the feature being audited.
+
+### CLI Syncback Pipeline (`atlas syncback`)
+
+One-shot command: reads a Roblox binary/XML file, diffs it against the existing project tree, and writes the result to the filesystem.
+
+```
+CLI Entry
+└── src/cli/syncback.rs                    Entry point. Loads project, reads .rbxl/.rbxm,
+                                            creates ServeSession for existing tree, calls
+                                            syncback_loop(), writes FsSnapshot to disk.
+
+Syncback Core
+├── src/syncback/mod.rs                    Main orchestration. syncback_loop() runs the full
+│                                           pipeline: compile ignore patterns, prune unknown
+│                                           children, filter hidden services, collect/link
+│                                           referents, hash trees, process snapshots recursively.
+├── src/syncback/snapshot.rs               SyncbackSnapshot struct. Carries instance + path +
+│                                           middleware context through the pipeline. Methods:
+│                                           with_joined_path(), get_path_filtered_properties().
+├── src/syncback/file_names.rs             Filename generation. slugify_name() replaces forbidden
+│                                           chars with '_'. deduplicate_name() appends ~1, ~2 on
+│                                           collision. name_for_inst() is the main entry point.
+│                                           adjacent_meta_path() computes .meta.json5 paths for
+│                                           scripts (strips .server/.client suffixes from stem).
+├── src/syncback/property_filter.rs        Property filtering. filter_properties() removes Name,
+│                                           Parent, Source (scripts), Value (StringValue), Contents
+│                                           (LocalizationTable), Ref/UniqueId, unscriptable props.
+├── src/syncback/ref_properties.rs         Ref property resolution. collect_referents() finds all
+│                                           Ref properties. link_referents() writes Rojo_Ref_* or
+│                                           Rojo_Target_* attributes. Path-based preferred, falls
+│                                           back to ID-based for ambiguous paths.
+├── src/syncback/hash/mod.rs               Content hashing. hash_tree() hashes entire tree bottom-
+│   └── src/syncback/hash/variant.rs       up with blake3. hash_instance() hashes class + filtered
+│                                           properties + children hashes. Ref properties hashed as
+│                                           paths, not raw Refs.
+├── src/syncback/fs_snapshot.rs            Filesystem operation buffer. FsSnapshot collects added
+│                                           files/dirs and removed files/dirs. write_to_vfs_parallel()
+│                                           creates dirs (sequential), writes files (parallel with
+│                                           retry on Windows), removes files (parallel), removes
+│                                           dirs (sequential).
+├── src/syncback/meta.rs                   Meta/model file helpers. upsert_meta_name() / remove_
+│                                           meta_name() for .meta.json5. upsert_model_name() /
+│                                           remove_model_name() for .model.json5. update_ref_paths_
+│                                           in_file() updates Rojo_Ref_* attribute paths.
+└── src/syncback/stats.rs                  Statistics tracking for syncback operations.
+
+Snapshot Middleware (syncback direction: instance → filesystem)
+├── src/snapshot_middleware/mod.rs          Dispatcher. Middleware enum routes to handler.
+│                                           get_best_middleware() selects middleware for an instance.
+│                                           Each middleware has syncback() producing SyncbackReturn
+│                                           { fs_snapshot, children }.
+├── src/snapshot_middleware/dir.rs          Directory handler. syncback_dir() processes children,
+│                                           creates init.meta.json5, handles .gitkeep for empty dirs.
+│                                           syncback_dir_no_meta() handles child dedup and recursion.
+├── src/snapshot_middleware/lua.rs          Script handler. syncback_lua() for file-based scripts,
+│                                           syncback_lua_init() for directory-based (init.luau).
+│                                           Extracts Source property into file body, remaining props
+│                                           go into adjacent .meta.json5.
+├── src/snapshot_middleware/json_model.rs   Model handler. syncback_json_model() recursively converts
+│                                           instance tree into .model.json5. Name stored inline in
+│                                           the model file, NOT adjacent meta.
+├── src/snapshot_middleware/meta_file.rs    Meta file types. AdjacentMetadata (file.meta.json5) and
+│                                           DirectoryMetadata (init.meta.json5). Handles property/
+│                                           attribute overlay, $id, name override.
+├── src/snapshot_middleware/project.rs      Project handler. syncback_project() updates .project.json5
+│                                           with instance properties. Handles nested projects.
+├── src/snapshot_middleware/csv.rs          CSV handler. Extracts Contents → .csv file.
+├── src/snapshot_middleware/txt.rs          Text handler. Extracts Value → .txt file.
+├── src/snapshot_middleware/rbxm.rs         Binary model. Serializes instance tree → .rbxm.
+├── src/snapshot_middleware/rbxmx.rs        XML model. Serializes instance tree → .rbxmx.
+├── src/snapshot_middleware/json.rs         JSON data → ModuleScript.
+├── src/snapshot_middleware/toml.rs         TOML data → ModuleScript.
+├── src/snapshot_middleware/yaml.rs         YAML data → ModuleScript.
+└── src/snapshot_middleware/util.rs         Shared utilities (PathExt).
+
+Binary/XML Parsing (rbx-dom submodule)
+├── rbx-dom/rbx_binary/                    rbx_binary::from_reader() parses .rbxl/.rbxm → WeakDom.
+│                                           rbx_binary::to_writer() serializes WeakDom → binary.
+└── rbx-dom/rbx_xml/                       rbx_xml::from_reader() / to_writer() for .rbxlx/.rbxmx.
+```
+
+### Two-Way Sync Pipeline (`atlas serve` + Studio Plugin)
+
+Live bidirectional sync. The plugin detects Studio changes and sends them to the server (Plugin → Server), and the server detects filesystem changes and pushes them to the plugin (Server → Plugin).
+
+```
+PLUGIN → SERVER (Studio changes written to filesystem)
+======================================================
+
+Change Detection (Plugin)
+├── plugin/src/InstanceMap.lua             Tracks Studio instances. __connectSignals() connects
+│                                           Changed events (or GetPropertyChangedSignal for
+│                                           ValueBase). Fires onInstanceChanged callback.
+│                                           Guards: skips if paused, if RunService:IsRunning().
+└── plugin/src/Settings.lua                User settings. oneShotSync blocks outgoing writes.
+                                            twoWaySync enables/disables the feature entirely.
+
+Change Batching (Plugin)
+├── plugin/src/ChangeBatcher/init.lua      Batches changes on 200ms interval. add() records
+│                                           property change. __cycle() runs on RenderStepped,
+│                                           __flush() converts pending → PatchSet. pause()/resume()
+│                                           prevents feedback loops during reconciliation.
+├── plugin/src/ChangeBatcher/createPatchSet.lua
+│                                           Converts pending property changes → PatchSet. Parent
+│                                           changed to nil → removed. Otherwise → encodePatchUpdate.
+│                                           syncSourceOnly mode filters to Source property only.
+├── plugin/src/ChangeBatcher/encodePatchUpdate.lua
+│                                           Encodes property updates for existing instances. Handles
+│                                           Name changes, Ref properties (with deferral for unresolved
+│                                           targets), other properties via encodeProperty.
+├── plugin/src/ChangeBatcher/encodeProperty.lua
+│                                           Encodes a single property value using RbxDom.EncodedValue.
+│                                           encode(). Maps Roblox values to wire format.
+├── plugin/src/ChangeBatcher/encodeInstance.lua
+│                                           Full instance encoding for additions. Duplicate detection
+│                                           (skips instances with duplicate-named siblings).
+│                                           Recursive children encoding. Attributes/Tags support.
+└── plugin/src/ChangeBatcher/propertyFilter.lua
+                                            Filters which properties are synced. Controls which data
+                                            types and property names are included/excluded.
+
+Session & Transport (Plugin)
+├── plugin/src/ServeSession.lua            Orchestrates the session. onInstanceChanged → guards
+│                                           __twoWaySync, calls ChangeBatcher:add(). onChangesFlushed
+│                                           → guards oneShotSync, calls ApiContext:write(). Also
+│                                           handles __confirmAndApplyInitialPatch (confirmation
+│                                           dialog flow -- a SECOND entry point for encodePatchUpdate).
+├── plugin/src/ApiContext.lua              HTTP client. write(patch) encodes PatchSet as MessagePack
+│                                           via Http.msgpackEncode(), POSTs to /api/write.
+├── plugin/src/PatchSet.lua                PatchSet data structure: { removed, added, updated }.
+│                                           Utility functions for combining and inspecting patches.
+└── plugin/src/PatchTree.lua               Tree structure for patch visualization in the UI.
+
+Server Write Processing (receives plugin writes)
+├── src/web/api.rs                         /api/write endpoint. handle_api_write() deserializes
+│                                           MessagePack → WriteRequest. Processes in order:
+│                                           (1) removals → syncback_removed_instance() deletes files.
+│                                           (2) additions → syncback_added_instance() creates files.
+│                                           (3) updates → syncback_updated_properties() writes meta/
+│                                           model files. Sends PatchSet to tree_mutation_sender.
+│                                           CRITICAL: file writes and PatchSet must stay consistent.
+├── src/change_processor.rs                handle_tree_event() receives PatchSet from api.rs.
+│                                           Processes removals (tree update), updates (Source writes,
+│                                           renames with slugify/dedup/meta lifecycle, ClassName
+│                                           transitions), additions (tree insert). Applies patch via
+│                                           apply_patch_set(). Broadcasts via message_queue.
+└── src/serve_session.rs                   Server-side session. Owns RojoTree, ChangeProcessor,
+                                            MessageQueue. Coordinates serve lifecycle.
+
+SERVER → PLUGIN (Filesystem changes pushed to Studio)
+=====================================================
+
+Filesystem Watching (Server)
+├── crates/memofs/src/lib.rs               VFS abstraction. Vfs struct with file watching,
+│                                           caching, event_receiver() for change events.
+├── crates/memofs/src/std_backend.rs       Real filesystem backend using notify crate. Debounced
+│                                           file watching, cross-platform support.
+└── src/change_processor.rs                handle_vfs_event() processes VFS events. apply_patches()
+                                            finds affected instance IDs, re-snapshots, computes
+                                            diff via compute_patch_set(). reconcile_tree() does
+                                            full re-snapshot 200ms after events to correct drift.
+                                            suppress_path() prevents echo from API writes.
+
+Snapshot Generation (Server, forward-sync direction: filesystem → instance)
+├── src/snapshot_middleware/mod.rs          snapshot_from_vfs() reads filesystem → InstanceSnapshot.
+│                                           Detects directories (checks for init.* files), applies
+│                                           user sync rules + default rules, dispatches to handler.
+├── src/snapshot_middleware/dir.rs          snapshot_dir() reads directory → Folder snapshot.
+│                                           Recurses into children, applies init.meta.json5.
+├── src/snapshot_middleware/lua.rs          snapshot_lua() reads .luau → Script snapshot. Reads
+│                                           adjacent .meta.json5 for properties/attributes.
+│                                           snapshot_lua_init() for init scripts (usurps parent dir).
+├── src/snapshot_middleware/json_model.rs   snapshot_json_model() reads .model.json5 → instance tree.
+├── src/snapshot_middleware/meta_file.rs    Parses .meta.json5 files. AdjacentMetadata and
+│                                           DirectoryMetadata types used as overlays.
+├── src/snapshot_middleware/project.rs      snapshot_project() reads .project.json5. Resolves nodes,
+│                                           infers class names for services, merges $properties.
+└── (other middleware: csv.rs, txt.rs, json.rs, toml.rs, yaml.rs, rbxm.rs, rbxmx.rs)
+
+Patch & Delivery (Server)
+├── src/snapshot/patch_compute.rs           compute_patch_set() diffs old snapshot vs tree →
+│                                           PatchSet. Matches children by name+class. Handles
+│                                           ref property rewriting (snapshot IDs → instance IDs).
+├── src/snapshot/patch_apply.rs            apply_patch_set() applies PatchSet to RojoTree →
+│                                           AppliedPatchSet. Deferred ref resolution (path-based
+│                                           and ID-based). Cleans Rojo_Ref_*/Rojo_Target_*/Rojo_Id
+│                                           from Attributes before sending to plugin.
+├── src/message_queue.rs                   MessageQueue batches and queues AppliedPatchSets.
+│                                           subscribe(cursor) returns receiver. Cursor system
+│                                           allows reconnection recovery.
+└── src/web/api.rs                         WebSocket endpoint. handle_websocket_subscription()
+                                            sends AppliedPatchSets as MessagePack SocketPackets.
+                                            Validates tree on connect, sends corrections.
+
+Patch Application (Plugin)
+├── plugin/src/ApiContext.lua              WebSocket client. connectWebSocket() connects to
+│                                           /api/socket/:cursor. Decodes MessagePack, validates
+│                                           session ID, routes to packet handlers.
+├── plugin/src/ServeSession.lua            __onWebSocketMessage() receives patches. Combines
+│                                           multiple messages into single patch. Shows confirmation
+│                                           UI if needed, pauses ChangeBatcher, applies patch.
+├── plugin/src/Reconciler/applyPatch.lua   applyPatch() applies PatchSet to Studio DOM.
+│                                           Removals → instanceMap:destroyId(). Additions →
+│                                           reifyInstance(). Updates → hydrate(). Deferred Refs
+│                                           applied last. Pauses instances during update.
+├── plugin/src/Reconciler/reify.lua        reifyInstance() creates Studio instances from virtual
+│                                           data. Recursive. Defers Ref properties. Sets Parent last.
+├── plugin/src/Reconciler/hydrate.lua      hydrate() matches existing Studio instances to server
+│                                           IDs by Name+ClassName. Recursive child matching.
+├── plugin/src/Reconciler/decodeValue.lua  decodeValue() converts encoded values → Roblox types.
+│                                           Handles Ref resolution (maps server ID → Studio instance
+│                                           via instanceMap).
+├── plugin/src/Reconciler/diff.lua         diff() compares virtual instance data against Studio.
+│                                           Used for confirmation dialog to show what will change.
+├── plugin/src/Reconciler/setProperty.lua  setProperty() applies a single property to an instance.
+│                                           Handles special cases and error recovery.
+├── plugin/src/Reconciler/getProperty.lua  getProperty() reads a property from an instance.
+│                                           Handles special cases for property access.
+└── plugin/src/Reconciler/Error.lua        Error types for reconciliation failures.
+```
+
+### Shared Infrastructure (used by both pipelines)
+
+```
+Snapshot System
+├── src/snapshot/mod.rs                    System overview and public exports.
+├── src/snapshot/instance_snapshot.rs      InstanceSnapshot struct: snapshot_id, metadata, name,
+│                                           class_name, properties, children.
+├── src/snapshot/metadata.rs               InstanceMetadata, InstanceContext (ignore/sync rules),
+│                                           InstigatingSource (Path vs ProjectNode), SyncRule.
+├── src/snapshot/tree.rs                   RojoTree: enhanced WeakDom with metadata. path_to_ids
+│                                           mapping, specified_id_to_refs tracking, get_instance_
+│                                           by_path() for path-based lookups.
+├── src/snapshot/patch.rs                  PatchSet, AppliedPatchSet, PatchAdd, PatchUpdate,
+│                                           AppliedPatchUpdate data structures.
+├── src/snapshot/patch_compute.rs          compute_patch_set(): diffs snapshot vs tree.
+└── src/snapshot/patch_apply.rs            apply_patch_set(): applies patch to tree.
+
+Project System
+└── src/project.rs                         Project loading. Project, ProjectNode, PathNode types.
+                                            load_fuzzy() / load_exact() for discovery. Parses
+                                            sync rules, syncback rules, glob ignore patterns.
+
+VFS (Virtual Filesystem)
+├── crates/memofs/src/lib.rs               Vfs interface. File watching, caching, event delivery.
+├── crates/memofs/src/std_backend.rs       Real filesystem backend (notify crate).
+├── crates/memofs/src/in_memory_fs.rs      In-memory backend (used in tests).
+├── crates/memofs/src/noop_backend.rs      No-op backend.
+└── crates/memofs/src/snapshot.rs          VFS snapshot types.
+
+rbx-dom (Roblox format libraries, git submodule)
+├── rbx-dom/rbx_dom_weak/                  WeakDom: in-memory instance tree representation.
+├── rbx-dom/rbx_binary/                    Binary format (.rbxl/.rbxm) read/write.
+├── rbx-dom/rbx_xml/                       XML format (.rbxlx/.rbxmx) read/write.
+├── rbx-dom/rbx_reflection/                Property metadata and type information.
+└── rbx-dom/rbx_reflection_database/       Reflection database (class/property/enum definitions).
+
+Plugin Shared Modules
+├── plugin/src/InstanceMap.lua             Instance ID ↔ Studio instance mapping. Signal management.
+├── plugin/src/PatchSet.lua                PatchSet data structure and utilities.
+├── plugin/src/Config.lua                  Protocol version, server version compatibility.
+├── plugin/src/Types.lua                   Shared type definitions.
+├── plugin/src/strict.lua                  Module export wrapper (strict mode enforcement).
+└── plugin/src/DiffUtil.lua                Diff utilities for comparing instance data.
+```
+
+### Audit Reading Order
+
+When auditing a feature, read files in this order to build understanding before tracing bugs:
+
+1. **Shared infrastructure first:** `src/snapshot/mod.rs`, `src/snapshot/metadata.rs`, `src/snapshot/tree.rs` -- understand the data model
+2. **Forward-sync path:** The relevant `src/snapshot_middleware/*.rs` file for the file type involved -- understand how filesystem becomes instances
+3. **Syncback path:** `src/syncback/mod.rs`, then the relevant middleware's `syncback()` function -- understand how instances become filesystem
+4. **Two-way sync server:** `src/web/api.rs` (`handle_api_write`, `syncback_*` functions), then `src/change_processor.rs` (`handle_tree_event`) -- understand how plugin writes are processed
+5. **Two-way sync plugin:** `plugin/src/ChangeBatcher/` (encoding path), then `plugin/src/Reconciler/` (decoding path) -- understand both directions in the plugin
+6. **File naming:** `src/syncback/file_names.rs` -- understand slugification, dedup, meta path computation
+7. **Ref properties:** `src/syncback/ref_properties.rs`, `src/snapshot/patch_apply.rs` (deferred ref section) -- understand cross-instance references
+
+---
+
 ## Instructions
 
 ### 0. Read Project Standards
@@ -225,13 +508,46 @@ When adding instances, `sibling_slugs` (or `taken_names`) must be seeded from ex
 - **Deletions**: Deleting a directory instance deletes the entire directory. Also clean up adjacent `DirName.meta.json5` at the grandparent level.
 - **Property writes**: Properties for directory instances go into `init.meta.json5` inside the directory, NOT an adjacent file.
 
-#### 11f. Atomicity and File Watcher Races
+#### 11f. File-to-Folder and Folder-to-File Transitions
+
+Instances can flip between single-file representation (e.g., `Script.server.luau`) and directory representation (e.g., `Script/init.server.luau` + children). This transition is one of the most fragile areas of the sync system and a persistent source of bugs. Every audit must verify:
+
+**When a file becomes a folder (child added to a file-represented instance):**
+
+- The original file is removed and replaced with a directory of the same stem
+- An `init.*` file is created inside the new directory with the original file's content
+- The meta file transitions correctly: `Script.meta.json5` (adjacent) must become `Script/init.meta.json5` (inside directory). The old adjacent meta must be removed. No duplication.
+- Existing properties, name overrides, and attributes from the old meta file are preserved in the new `init.meta.json5`
+- The directory is not duplicated (e.g., creating `Script/` when `Script/` already exists from a prior partial operation)
+
+**When a folder becomes a file (all children removed from a directory-represented instance):**
+
+- The directory is removed and replaced with a single file
+- `init.meta.json5` content migrates to an adjacent `Script.meta.json5` (or is dropped if empty). No orphaned `init.meta.json5` left behind.
+- Children are not silently lost during the collapse -- verify the child list is genuinely empty before collapsing
+- The init file's content becomes the new single file's content
+
+**Path indexing during transitions:**
+
+- `InstigatingSource` paths are updated to reflect the new location (file path vs. directory path)
+- Any in-memory path lookups (ChangeProcessor path maps, VFS entries, suppression counters) are invalidated/updated for both the old and new paths
+- Meta file path resolution (`get_meta_path`, `meta_path_of`, or equivalent) returns the correct path for the current representation -- not a stale path from the prior state
+- Model files (`.model.json5`) follow the same transition rules: inline `name` field, not adjacent meta
+
+**Round-trip identity through transitions:**
+
+- Adding a child to a file-represented instance, then removing that child, must produce a filesystem state identical to the original (same file, same meta, same content)
+- The transition must be idempotent: if the VFS watcher fires mid-transition, the snapshot system must not produce a corrupt intermediate state (e.g., both the old file and new directory existing simultaneously)
+
+This area has historically produced bugs including: incorrect meta file indexing after transitions, folder duplication when the old path isn't cleaned up, child loss when directory contents aren't migrated, and stale path references in the in-memory tree. Treat any code touching file-to-folder or folder-to-file transitions as high-risk.
+
+#### 11g. Atomicity and File Watcher Races
 
 When an operation involves multiple filesystem changes (delete old file + create new file, or rename + meta update), there is a window where the VFS watcher could fire between operations and produce incorrect intermediate state.
 
 **Verify:** Are multi-step operations ordered to minimize race windows? Does `suppress_path` cover all intermediate states? Could the ChangeProcessor snapshot an inconsistent state?
 
-#### 11g. Determinism
+#### 11h. Determinism
 
 Given the same instance tree, does the feature ALWAYS produce the same filesystem output?
 
@@ -239,11 +555,11 @@ Given the same instance tree, does the feature ALWAYS produce the same filesyste
 - Are generated identifiers (dedup suffixes, IDs) deterministic?
 - Non-determinism = different builds from the same source = git churn = invariant violation.
 
-#### 11h. Syncback Idempotency
+#### 11i. Syncback Idempotency
 
 Running the operation twice should produce zero changes on the second run. If re-running writes the same files again (even with identical content), something is unstable.
 
-#### 11i. Edge Cases
+#### 11j. Edge Cases
 
 - **ProjectNode instances**: Can the feature interact with instances defined in project files? Is there a guard?
 - **Nested projects**: Does data span project boundaries correctly?

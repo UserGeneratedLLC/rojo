@@ -212,9 +212,9 @@ impl RefPathIndex {
     }
 
     /// Remove `meta_file` from ALL entries in the index.
-    /// Used when a Rojo_Ref_* attribute is removed and we don't know the old
-    /// path value.
-    pub fn remove_file(&mut self, meta_file: &Path, _attr_name: &str) {
+    /// Used when re-indexing a file: first remove all old entries, then
+    /// re-add entries for the attributes that remain.
+    pub fn remove_all_for_file(&mut self, meta_file: &Path) {
         let mut empty_keys = Vec::new();
         for (path, files) in &mut self.paths_to_files {
             files.remove(meta_file);
@@ -516,14 +516,36 @@ mod tests {
     }
 
     #[test]
-    fn ref_path_index_remove_file() {
+    fn ref_path_index_remove_all_for_file() {
         let mut index = RefPathIndex::new();
         let file = Path::new("/a.meta.json5");
         index.add("Workspace/Part1", file);
         index.add("Workspace/Part2", file);
 
-        index.remove_file(file, "Rojo_Ref_PrimaryPart");
+        index.remove_all_for_file(file);
         assert!(index.find_by_prefix("Workspace/Part1").is_empty());
+        assert!(index.find_by_prefix("Workspace/Part2").is_empty());
+    }
+
+    #[test]
+    fn ref_path_index_remove_all_for_file_preserves_other_files() {
+        let mut index = RefPathIndex::new();
+        let file_a = Path::new("/a.meta.json5");
+        let file_b = Path::new("/b.meta.json5");
+        // Both files share the same ref path entry
+        index.add("Workspace/Part1", file_a);
+        index.add("Workspace/Part1", file_b);
+        // file_a also has another ref
+        index.add("Workspace/Part2", file_a);
+
+        index.remove_all_for_file(file_a);
+
+        // file_b's entry should be preserved
+        let results = index.find_by_prefix("Workspace/Part1");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0], PathBuf::from("/b.meta.json5"));
+
+        // file_a's other entry should be gone
         assert!(index.find_by_prefix("Workspace/Part2").is_empty());
     }
 

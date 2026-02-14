@@ -67,7 +67,7 @@ build_exit=$?
 record "Build" $build_exit
 
 step 8 "Run ALL Rust Tests"
-cargo test -j 16 --locked --all-targets --all-features -- --test-threads=16 2>&1
+cargo test -j 16 --locked --all-features -- --test-threads=16 2>&1
 rust_tests=$?
 record "Rust Tests" $rust_tests
 

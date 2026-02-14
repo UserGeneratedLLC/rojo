@@ -6587,7 +6587,7 @@ fn ref_mixed_valid_and_invalid() {
 
 /// 10a: After setting PrimaryPart and then renaming the TARGET Part,
 /// the Rojo_Ref_PrimaryPart attribute should update to the new path.
-/// EXPECTED: FAIL -- stored path becomes stale after rename.
+/// `update_ref_paths_after_rename` in ChangeProcessor handles this.
 #[test]
 fn ref_stale_path_after_target_rename() {
     run_serve_test("ref_two_way_sync", |session, _| {
@@ -6634,7 +6634,6 @@ fn ref_stale_path_after_target_rename() {
         thread::sleep(Duration::from_millis(500));
 
         // Step 3: The stored path should be updated to reflect the rename
-        // This SHOULD FAIL because the stored path is stale
         assert_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
@@ -6645,7 +6644,7 @@ fn ref_stale_path_after_target_rename() {
 
 /// 10a variation: After setting PrimaryPart and then renaming the MODEL
 /// (parent), the stored path should update.
-/// EXPECTED: FAIL -- stored path becomes stale after parent rename.
+/// `update_ref_paths_after_rename` in ChangeProcessor handles this.
 #[test]
 fn ref_stale_path_after_parent_rename() {
     run_serve_test("ref_two_way_sync", |session, _| {
@@ -6698,7 +6697,6 @@ fn ref_stale_path_after_parent_rename() {
         poll_file_exists(&new_meta_path, "Meta file should exist at new location");
 
         // The stored path should reflect the new parent name
-        // This SHOULD FAIL because the stored path still says TestModel
         assert_meta_has_ref_attr(
             &new_meta_path,
             "Rojo_Ref_PrimaryPart",
@@ -6900,6 +6898,206 @@ fn ref_ambiguous_target_no_crash() {
         assert!(
             has_ref,
             "Rojo_Ref_PrimaryPart should be written even for ambiguous paths"
+        );
+    });
+}
+
+// ===========================================================================
+// RefPathIndex startup population and precise removal tests
+// ===========================================================================
+
+/// Fix 1 test: Pre-existing Rojo_Ref_* attributes in meta files should be
+/// indexed at server startup. Renaming a target instance without any prior
+/// two-way sync writes should still update the stored path.
+///
+/// The ref_two_way_sync fixture has Rojo_Ref_PrimaryPart = "Workspace/TestModel/Part1"
+/// in init.meta.json5. This test renames Part1 WITHOUT first writing a Ref via
+/// /api/write, proving the startup index population catches it.
+#[test]
+fn ref_startup_index_rename_updates_preexisting_attr() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, _, _, part1_id, _, _) = ref_test_setup(&session);
+
+        let meta_path = session
+            .path()
+            .join("src/Workspace/TestModel/init.meta.json5");
+
+        // Verify the fixture has the pre-existing Rojo_Ref_PrimaryPart attribute
+        assert_meta_has_ref_attr(
+            &meta_path,
+            "Rojo_Ref_PrimaryPart",
+            "Workspace/TestModel/Part1",
+        );
+
+        // Rename Part1 to IndexTestPart WITHOUT any prior /api/write for Refs.
+        // The RefPathIndex should have been populated at server startup from the
+        // fixture's meta file, so update_ref_paths_after_rename should find it.
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: part1_id,
+                changed_name: Some("IndexTestPart".to_string()),
+                changed_class_name: None,
+                changed_properties: UstrMap::default(),
+                changed_metadata: None,
+            },
+        );
+
+        // Wait for rename to process
+        thread::sleep(Duration::from_millis(500));
+
+        // The stored path should be updated via the startup-populated index
+        assert_meta_has_ref_attr(
+            &meta_path,
+            "Rojo_Ref_PrimaryPart",
+            "Workspace/TestModel/IndexTestPart",
+        );
+    });
+}
+
+/// Fix 2 test: Setting two Rojo_Ref_* attrs on the same instance, removing
+/// one, and then renaming the target of the remaining one should still update
+/// the remaining ref path. This tests that the RefPathIndex correctly re-indexes
+/// after partial attribute removal (not overbroad deletion).
+#[test]
+fn ref_partial_removal_preserves_remaining_index_entry() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, _, model_id, part1_id, part2_id, _) = ref_test_setup(&session);
+
+        // Step 1: Set PrimaryPart to Part1 AND a second Ref (Adornee) to Part2
+        let mut props = UstrMap::default();
+        props.insert(ustr("PrimaryPart"), Some(Variant::Ref(part1_id)));
+        props.insert(ustr("Adornee"), Some(Variant::Ref(part2_id)));
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: model_id,
+                changed_name: None,
+                changed_class_name: None,
+                changed_properties: props,
+                changed_metadata: None,
+            },
+        );
+
+        let meta_path = session
+            .path()
+            .join("src/Workspace/TestModel/init.meta.json5");
+        poll_meta_has_ref_attr(
+            &meta_path,
+            "Rojo_Ref_PrimaryPart",
+            "Workspace/TestModel/Part1",
+        );
+        // Verify second ref is there too
+        assert_meta_has_ref_attr(&meta_path, "Rojo_Ref_Adornee", "Workspace/TestModel/Part2");
+
+        // Step 2: Remove PrimaryPart (set to nil), keep Adornee
+        let mut props2 = UstrMap::default();
+        props2.insert(ustr("PrimaryPart"), Some(Variant::Ref(Ref::none())));
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: model_id,
+                changed_name: None,
+                changed_class_name: None,
+                changed_properties: props2,
+                changed_metadata: None,
+            },
+        );
+
+        thread::sleep(Duration::from_millis(300));
+        assert_meta_no_ref_attr(&meta_path, "Rojo_Ref_PrimaryPart");
+        // Adornee should still be there
+        assert_meta_has_ref_attr(&meta_path, "Rojo_Ref_Adornee", "Workspace/TestModel/Part2");
+
+        // Step 3: Rename Part2. The RefPathIndex should still have the entry
+        // for Adornee (not overbroad-removed when PrimaryPart was deleted).
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: part2_id,
+                changed_name: Some("RenamedPart2".to_string()),
+                changed_class_name: None,
+                changed_properties: UstrMap::default(),
+                changed_metadata: None,
+            },
+        );
+
+        thread::sleep(Duration::from_millis(500));
+
+        // The Adornee path should have been updated
+        assert_meta_has_ref_attr(
+            &meta_path,
+            "Rojo_Ref_Adornee",
+            "Workspace/TestModel/RenamedPart2",
+        );
+    });
+}
+
+/// Fix 3 test: Renaming an instance to a name with forbidden filesystem
+/// characters (which gets slugified on disk) should still correctly update
+/// Rojo_Ref_* paths in meta files inside the renamed directory.
+#[test]
+fn ref_rename_to_slugified_name_updates_ref_paths() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, _, model_id, part1_id, _, _) = ref_test_setup(&session);
+
+        // Set PrimaryPart to Part1 first
+        let mut props = UstrMap::default();
+        props.insert(ustr("PrimaryPart"), Some(Variant::Ref(part1_id)));
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: model_id,
+                changed_name: None,
+                changed_class_name: None,
+                changed_properties: props,
+                changed_metadata: None,
+            },
+        );
+
+        let meta_path = session
+            .path()
+            .join("src/Workspace/TestModel/init.meta.json5");
+        poll_meta_has_ref_attr(
+            &meta_path,
+            "Rojo_Ref_PrimaryPart",
+            "Workspace/TestModel/Part1",
+        );
+
+        // Rename Model to a name with forbidden characters.
+        // The directory on disk will be slugified: "Slug:Model" -> "Slug_Model"
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: model_id,
+                changed_name: Some("Slug:Model".to_string()),
+                changed_class_name: None,
+                changed_properties: UstrMap::default(),
+                changed_metadata: None,
+            },
+        );
+
+        // Wait for rename to process
+        thread::sleep(Duration::from_millis(500));
+
+        // The directory should be slugified on disk
+        let new_meta_path = session
+            .path()
+            .join("src/Workspace/Slug_Model/init.meta.json5");
+        poll_file_exists(&new_meta_path, "Slugified directory should exist");
+
+        // The stored Rojo_Ref_* path should use the tree name (not slugified)
+        // because ref paths are tree-based, not filesystem-based
+        assert_meta_has_ref_attr(
+            &new_meta_path,
+            "Rojo_Ref_PrimaryPart",
+            "Workspace/Slug:Model/Part1",
         );
     });
 }

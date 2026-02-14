@@ -101,6 +101,11 @@ impl ChangeProcessor {
             .spawn(move || {
                 log::trace!("ChangeProcessor thread started");
 
+                // Populate the RefPathIndex from existing meta/model files
+                // so that renames of instances with pre-existing Rojo_Ref_*
+                // attributes are handled correctly from the first rename.
+                task.populate_initial_ref_path_index();
+
                 // Tracks when to run the next reconciliation pass. Set to
                 // Some(future_instant) after VFS events arrive, cleared
                 // after reconcile_tree() runs. This ensures we only do the
@@ -239,6 +244,61 @@ impl JobThreadContext {
     /// Returns a display wrapper that shows `path` relative to the project root.
     fn display_path<'a>(&'a self, path: &'a Path) -> RelPath<'a> {
         rel_path(path, &self.project_root)
+    }
+
+    /// Scan all `.meta.json5`, `.model.json5`, `.meta.json`, `.model.json`
+    /// files under the project root for existing `Rojo_Ref_*` attributes
+    /// and populate the `RefPathIndex`. This ensures pre-existing ref
+    /// attributes (from CLI syncback, manual edits, or previous sessions)
+    /// are indexed so rename path updates work from the first rename.
+    fn populate_initial_ref_path_index(&self) {
+        let mut count = 0;
+        let mut dirs_to_visit = vec![self.project_root.clone()];
+        while let Some(dir) = dirs_to_visit.pop() {
+            let entries = match fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(_) => continue,
+            };
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path.is_dir() {
+                    dirs_to_visit.push(path);
+                    continue;
+                }
+                let name = match path.file_name().and_then(|n| n.to_str()) {
+                    Some(n) => n,
+                    None => continue,
+                };
+                if !(name.ends_with(".meta.json5")
+                    || name.ends_with(".model.json5")
+                    || name.ends_with(".meta.json")
+                    || name.ends_with(".model.json"))
+                {
+                    continue;
+                }
+                if let Ok(bytes) = fs::read(&path) {
+                    if let Ok(val) = crate::json::from_slice::<serde_json::Value>(&bytes) {
+                        if let Some(attrs) = val.get("attributes").and_then(|a| a.as_object()) {
+                            let mut index = self.ref_path_index.lock().unwrap();
+                            for (key, value) in attrs {
+                                if key.starts_with(crate::REF_PATH_ATTRIBUTE_PREFIX) {
+                                    if let Some(path_str) = value.as_str() {
+                                        index.add(path_str, &path);
+                                        count += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if count > 0 {
+            log::info!(
+                "RefPathIndex: populated {} Rojo_Ref_* entries from existing meta/model files",
+                count
+            );
+        }
     }
 
     /// Find the init file inside a directory-format script folder.
@@ -403,12 +463,7 @@ impl JobThreadContext {
     /// Uses the `RefPathIndex` for O(affected_files) lookup instead of
     /// scanning the full tree. After updating files, also updates the index
     /// keys and filesystem paths so future renames remain efficient.
-    fn update_ref_paths_after_rename(
-        &self,
-        _tree: &mut crate::snapshot::RojoTree,
-        old_path: &str,
-        new_path: &str,
-    ) {
+    fn update_ref_paths_after_rename(&self, old_path: &str, new_path: &str) {
         if old_path == new_path {
             return;
         }
@@ -458,7 +513,7 @@ impl JobThreadContext {
                         if let std::path::Component::Normal(os_str) = comp {
                             if let Some(s) = os_str.to_str() {
                                 if s == old_segment {
-                                    result.push(new_segment);
+                                    result.push(slugified_new());
                                     replaced = true;
                                     continue;
                                 }
@@ -1535,11 +1590,7 @@ impl JobThreadContext {
                             crate::escape_ref_path_segment(new_name).into_owned()
                         };
                         if *old_ref_path != new_ref_path {
-                            self.update_ref_paths_after_rename(
-                                &mut tree,
-                                old_ref_path,
-                                &new_ref_path,
-                            );
+                            self.update_ref_paths_after_rename(old_ref_path, &new_ref_path);
                         }
                     }
                 }

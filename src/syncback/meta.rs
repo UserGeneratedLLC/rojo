@@ -107,8 +107,8 @@ pub fn update_ref_paths_in_file(
         return Ok(false);
     }
 
-    let bytes = fs::read(file_path)
-        .with_context(|| format!("Failed to read {}", file_path.display()))?;
+    let bytes =
+        fs::read(file_path).with_context(|| format!("Failed to read {}", file_path.display()))?;
     let mut val: serde_json::Value = crate::json::from_slice(&bytes)
         .with_context(|| format!("Failed to parse JSON5 in {}", file_path.display()))?;
     if !val.is_object() {

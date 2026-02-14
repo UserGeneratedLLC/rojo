@@ -2748,17 +2748,6 @@ impl ApiService {
         let (properties, mut attributes) =
             self.filter_properties_for_meta(class_name.as_str(), &props, skip_prop);
 
-        // Collect Rojo_Ref_* path values for index maintenance.
-        let ref_path_values: Vec<String> = ref_attributes
-            .iter()
-            .filter_map(|(_, v)| v.as_str().map(|s| s.to_string()))
-            .collect();
-        let removed_ref_values: Vec<String> = remove_attributes
-            .iter()
-            .filter(|a| a.starts_with(crate::REF_PATH_ATTRIBUTE_PREFIX))
-            .cloned()
-            .collect();
-
         // Merge Rojo_Ref_* attributes into the attributes map
         for (k, v) in ref_attributes {
             attributes.insert(k, v);
@@ -2884,22 +2873,27 @@ impl ApiService {
             }
         }
 
-        // Update the RefPathIndex with the new/removed Rojo_Ref_* entries.
+        // Re-index the written meta file: remove all old entries for this
+        // file, then add entries for all remaining Rojo_Ref_* attributes.
+        // This is simpler and more correct than tracking individual
+        // additions/removals (which can miss remaining attrs when one is
+        // removed from a file that has multiple).
         {
             let mut index = self.ref_path_index.lock().unwrap();
+            index.remove_all_for_file(&written_meta_path);
 
-            // Remove entries for attributes that were deleted
-            for attr_name in &removed_ref_values {
-                // We don't know the old path value here, but we can read
-                // it from the file before removal. Since merge_or_build_meta
-                // already removed them, we need to remove ALL entries that
-                // point to this meta file. Scan the index for this file.
-                index.remove_file(&written_meta_path, attr_name);
-            }
-
-            // Add entries for new/updated Rojo_Ref_* attributes
-            for path_value in &ref_path_values {
-                index.add(path_value, &written_meta_path);
+            if let Ok(bytes) = std::fs::read(&written_meta_path) {
+                if let Ok(val) = crate::json::from_slice::<serde_json::Value>(&bytes) {
+                    if let Some(attrs) = val.get("attributes").and_then(|a| a.as_object()) {
+                        for (key, value) in attrs {
+                            if key.starts_with(crate::REF_PATH_ATTRIBUTE_PREFIX) {
+                                if let Some(path_str) = value.as_str() {
+                                    index.add(path_str, &written_meta_path);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
