@@ -66,14 +66,14 @@ Also grep for any OTHER callers of `encodePatchUpdate` that may be missing the 4
 
 ## Issue 2: Stale Rojo_Ref_* Paths After Rename (CRITICAL)
 
-When an instance is renamed, all `Rojo_Ref_*` attributes across the tree that reference the old path must be updated to the new path.
+When an instance is renamed, all `Rojo_Ref_`* attributes across the tree that reference the old path must be updated to the new path.
 
 ### Design
 
 When `handle_tree_event` processes a rename:
 
 1. Compute the **old path** and **new path** of the renamed instance (using `full_path_of` before and after rename)
-2. Scan ALL descendants of the tree root for `Rojo_Ref_*` attributes
+2. Scan ALL descendants of the tree root for `Rojo_Ref_`* attributes
 3. For each attribute whose path **starts with** the old path (prefix match handles children too), replace the old prefix with the new prefix
 4. Update the in-memory tree's Attributes property
 5. Write the updated meta/model file to disk (with `suppress_path`)
@@ -89,7 +89,7 @@ Add a new method `update_ref_paths_after_rename(&self, tree, old_path, new_path)
 - For each attribute starting with `REF_PATH_ATTRIBUTE_PREFIX`, checks if the path value starts with `old_path`
 - If match: replaces the prefix with `new_path`
 - Updates the instance's Attributes property in the tree
-- Finds the instance's meta/model file via `InstigatingSource::Path` and rewrites the `Rojo_Ref_*` attribute on disk
+- Finds the instance's meta/model file via `InstigatingSource::Path` and rewrites the `Rojo_Ref_`* attribute on disk
 
 Call this method from the rename handler, AFTER the filesystem rename is complete and the tree path has been updated. Both the directory-format rename path (line ~885) and the regular file rename path (line ~973) need it.
 
@@ -208,13 +208,13 @@ pub fn split_ref_path(path: &str) -> Vec<String> {
 
 ## Issue 4: compute_ref_properties Priority Conflict (CRITICAL)
 
-If both `Rojo_Ref_PrimaryPart` and `Rojo_Target_PrimaryPart` exist, `Rojo_Target_*` silently overwrites `Rojo_Ref_*` because it's processed second.
+If both `Rojo_Ref_PrimaryPart` and `Rojo_Target_PrimaryPart` exist, `Rojo_Target_`* silently overwrites `Rojo_Ref_*` because it's processed second.
 
 ### Fix
 
 **File:** [patch_compute.rs](src/snapshot/patch_compute.rs) `compute_ref_properties`
 
-Swap the processing order: process `Rojo_Target_*` FIRST, then `Rojo_Ref_*`. Since `map.insert` overwrites, the last insert wins. Processing `Rojo_Ref_*` second means the path-based system has priority (which is correct since it's the preferred system).
+Swap the processing order: process `Rojo_Target_`* FIRST, then `Rojo_Ref_*`. Since `map.insert` overwrites, the last insert wins. Processing `Rojo_Ref_*` second means the path-based system has priority (which is correct since it's the preferred system).
 
 ```rust
 for (attr_name, attr_value) in attributes.iter() {
@@ -301,7 +301,7 @@ Add a helper `is_ref_path_unique(tree, target_ref)` that walks ancestors checkin
 
 **File:** [ref_properties.rs](src/syncback/ref_properties.rs) line 251
 
-The ID-based `Rojo_Target_*` system uses inline `format!("{REF_POINTER_ATTRIBUTE_PREFIX}{}", link.name)` while the path-based system uses the shared `ref_attribute_name()` helper. Add a matching helper:
+The ID-based `Rojo_Target_`* system uses inline `format!("{REF_POINTER_ATTRIBUTE_PREFIX}{}", link.name)` while the path-based system uses the shared `ref_attribute_name()` helper. Add a matching helper:
 
 ```rust
 // In rojo_ref.rs:

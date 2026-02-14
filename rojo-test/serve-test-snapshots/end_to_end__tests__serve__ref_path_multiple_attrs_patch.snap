@@ -1,5 +1,6 @@
 ---
 source: tests/tests/serve.rs
+assertion_line: 988
 expression: redacted
 ---
 body:
@@ -14,8 +15,12 @@ body:
           changedProperties:
             Attributes:
               "!Attributes":
+                Rojo_Ref_CustomRef:
+                  "!String": Workspace/MyModel/OtherPart
                 Rojo_Ref_PrimaryPart:
                   "!String": Workspace/MyModel/Target
+            CustomRef:
+              "!Ref": id-4
           id: id-3
 packetType: messages
 sessionId: id-1

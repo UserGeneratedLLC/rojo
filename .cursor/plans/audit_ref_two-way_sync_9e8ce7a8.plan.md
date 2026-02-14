@@ -63,13 +63,13 @@ isProject: false
 
 ## Quality Standard
 
-> **Round-trip identity**: Two-way sync writes a `Rojo_Ref_*` attribute to a meta/model file. Building an rbxl from that directory tree and forward-syncing it back must produce a **bit-identical Ref target** -- same property name, same target instance. Any deviation is a bug.
+> **Round-trip identity**: Two-way sync writes a `Rojo_Ref_`* attribute to a meta/model file. Building an rbxl from that directory tree and forward-syncing it back must produce a **bit-identical Ref target** -- same property name, same target instance. Any deviation is a bug.
 
 Every audit item below must be evaluated against this standard. If there is ANY code path where a Ref property can be lost, point to the wrong target, or silently become nil through a two-way-sync + rebuild cycle, flag it as **critical**.
 
 ## Code Quality Standard
 
-Watch for duplicated logic between [ref_properties.rs](src/syncback/ref_properties.rs) (CLI syncback bulk mode) and [api.rs](src/web/api.rs) (two-way sync per-instance mode). Both compute paths and format `Rojo_Ref_*` attributes. The shared helpers in [rojo_ref.rs](src/rojo_ref.rs) should be the single source of truth.
+Watch for duplicated logic between [ref_properties.rs](src/syncback/ref_properties.rs) (CLI syncback bulk mode) and [api.rs](src/web/api.rs) (two-way sync per-instance mode). Both compute paths and format `Rojo_Ref_`* attributes. The shared helpers in [rojo_ref.rs](src/rojo_ref.rs) should be the single source of truth.
 
 ---
 
@@ -183,7 +183,7 @@ Every code path in [api.rs](src/web/api.rs) that handles Ref properties must cor
 The forward-sync direction (filesystem -> server -> plugin) must correctly resolve `Rojo_Ref_*` attributes.
 
 - [patch_compute.rs](src/snapshot/patch_compute.rs) `compute_ref_properties`:
-  - Correctly strips `Rojo_Ref_` prefix to get property name?
+  - Correctly strips `Rojo_Ref`_ prefix to get property name?
   - Handles both `Variant::String` and `Variant::BinaryString` attribute values?
   - Logs warning for non-string attribute types?
   - `tree.get_instance_by_path(path)` returns `None` for invalid paths without crashing?
@@ -219,10 +219,10 @@ The new `Rojo_Ref_*` system coexists with the legacy `Rojo_Target_*` + `Rojo_Id`
 Ref attributes add a new dimension to meta file management.
 
 - **Creation**: When the first Ref is set on an instance with no meta file -> meta file created with just `attributes: { Rojo_Ref_PropertyName: "path" }`? Does `build_meta_object` handle this (called when file doesn't exist)?
-- **Merge**: When Ref attribute is added to an existing meta file with `className`, `properties`, other `attributes` -> existing content preserved? `Rojo_Ref_*` merged into attributes alongside user attributes?
+- **Merge**: When Ref attribute is added to an existing meta file with `className`, `properties`, other `attributes` -> existing content preserved? `Rojo_Ref_`* merged into attributes alongside user attributes?
 - **Update**: When Ref target changes -> attribute value overwritten? Old value not left alongside new?
 - **Deletion**: When Ref set to nil -> attribute removed from file? If no other content remains in `attributes`, is the empty `attributes: {}` section left or cleaned up? If meta file has no remaining content at all (no className, no properties, no attributes), should the file be deleted?
-- **Orphaned Rojo_Ref_***: If an instance is deleted, its meta file is deleted too (existing behavior). No orphaned `Rojo_Ref_*` attributes should remain. Verify this path.
+- **Orphaned Rojo_Ref_***: If an instance is deleted, its meta file is deleted too (existing behavior). No orphaned `Rojo_Ref_`* attributes should remain. Verify this path.
 
 ---
 
@@ -302,7 +302,7 @@ These are all updates to existing instances (not additions), so suppression is c
 
 Verify that the two-way sync Ref output matches CLI syncback (`ref_properties.rs`) output for equivalent scenarios:
 
-- Same `Rojo_Ref_*` attribute name format
+- Same `Rojo_Ref_`* attribute name format
 - Same path format (slash-separated, root excluded)
 - Same JSON5 attribute placement (in `attributes` section, not `properties`)
 - Same handling of nil Refs (attribute absent, not present with empty value)
@@ -399,11 +399,11 @@ Evaluate existing tests against the audit areas above. For each gap, flag as mis
 
 - **Round-trip tests**: Do integration tests verify that setting a Ref via `/api/write`, then building from filesystem, produces the same Ref?
 - **Nil Ref cleanup**: Is the nil Ref -> attribute removal -> property removal chain tested end-to-end?
-- **Forward-sync resolution**: Are there serve tests that verify `Rojo_Ref_*` attributes resolve to `Variant::Ref` in the tree?
+- **Forward-sync resolution**: Are there serve tests that verify `Rojo_Ref_`* attributes resolve to `Variant::Ref` in the tree?
 - **Path edge cases**: Instance names with `/` in them? Deep nesting? Root-level Ref targets?
 - **Concurrent changes**: Multiple Ref changes in one batch?
 - **Error paths**: Ref to non-existent instance? Ref on ProjectNode instance?
-- **CLI syncback parity**: Does the test suite verify that two-way sync and CLI syncback produce identical `Rojo_Ref_*` output for the same input?
+- **CLI syncback parity**: Does the test suite verify that two-way sync and CLI syncback produce identical `Rojo_Ref_`* output for the same input?
 
 ---
 

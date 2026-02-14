@@ -1,5 +1,6 @@
 ---
 source: tests/tests/serve.rs
+assertion_line: 897
 expression: redacted
 ---
 body:
@@ -12,10 +13,8 @@ body:
           changedMetadata: ~
           changedName: ~
           changedProperties:
-            Attributes:
-              "!Attributes":
-                Rojo_Ref_PrimaryPart:
-                  "!String": Workspace/MyModel/Target
+            Attributes: ~
+            PrimaryPart: ~
           id: id-3
 packetType: messages
 sessionId: id-1

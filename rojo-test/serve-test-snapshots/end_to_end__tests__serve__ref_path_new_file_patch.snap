@@ -1,11 +1,25 @@
 ---
 source: tests/tests/serve.rs
+assertion_line: 928
 expression: redacted
 ---
 body:
   messageCursor: 1
   messages:
-    - added: {}
+    - added:
+        id-4:
+          Children: []
+          ClassName: ObjectValue
+          Id: id-4
+          Metadata:
+            ignoreUnknownInstances: false
+          Name: RefValue
+          Parent: id-3
+          Properties:
+            Attributes:
+              "!Attributes": {}
+            Value:
+              "!Ref": id-5
       removed: []
       updated:
         - changedClassName: ~

@@ -1,5 +1,6 @@
 ---
 source: tests/tests/serve.rs
+assertion_line: 959
 expression: redacted
 ---
 body:
@@ -15,7 +16,8 @@ body:
             Attributes:
               "!Attributes":
                 Rojo_Ref_PrimaryPart:
-                  "!String": Workspace/MyModel/Target
+                  "!String": Workspace/NonExistent/Part
+            PrimaryPart: ~
           id: id-3
 packetType: messages
 sessionId: id-1
