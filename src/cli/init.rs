@@ -18,7 +18,6 @@ use memofs::{InMemoryFs, Vfs, VfsSnapshot};
 use super::resolve_path;
 
 const GIT_IGNORE_PLACEHOLDER: &str = "gitignore.txt";
-const GIT_CONFIG_PLACEHOLDER: &str = "gitconfig.txt";
 
 static TEMPLATE_BINCODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/templates.bincode"));
 
@@ -107,12 +106,6 @@ impl InitCommand {
                         } else {
                             path.set_file_name(".gitignore");
                         }
-                    } else if file_stem == GIT_CONFIG_PLACEHOLDER {
-                        if self.skip_git {
-                            continue;
-                        } else {
-                            path.set_file_name(".gitconfig");
-                        }
                     }
                 }
                 write_if_not_exists(
@@ -133,6 +126,21 @@ impl InitCommand {
             if !status.success() {
                 bail!("git init failed: status code {:?}", status.code());
             }
+
+            for (key, value) in [
+                ("core.autocrlf", "false"),
+                ("core.eol", "lf"),
+                ("core.safecrlf", "false"),
+            ] {
+                let _ = Command::new("git")
+                    .args(["config", "--local", key, value])
+                    .current_dir(&base_path)
+                    .stdin(Stdio::null())
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status();
+            }
+
             true
         } else {
             !self.skip_git

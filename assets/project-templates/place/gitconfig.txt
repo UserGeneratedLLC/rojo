@@ -1,5 +1,0 @@
-[core]
-	autocrlf = false
-	excludesFile = ~/.gitignore
-	eol = lf
-	safecrlf = false
