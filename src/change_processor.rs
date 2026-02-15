@@ -86,6 +86,9 @@ impl ChangeProcessor {
         // (non-serve commands). never() blocks forever without selecting.
         let critical_error_receiver =
             critical_error_receiver.unwrap_or_else(crossbeam_channel::never);
+        // Canonicalize project_root so path comparisons work with the
+        // \\?\ prefix that std::fs::canonicalize adds on Windows.
+        let project_root = std::fs::canonicalize(&project_root).unwrap_or(project_root);
         let task = JobThreadContext {
             tree,
             vfs,
@@ -644,8 +647,11 @@ impl JobThreadContext {
                 self.display_path(current_path)
             );
             match current_path.parent() {
-                Some(parent) => current_path = parent,
-                None => break Vec::new(),
+                // Stop walking if we've reached or passed the project root.
+                Some(parent) if parent.starts_with(&self.project_root) => {
+                    current_path = parent;
+                }
+                _ => break Vec::new(),
             }
         };
 
