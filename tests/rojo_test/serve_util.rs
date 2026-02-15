@@ -244,7 +244,9 @@ impl TestServeSession {
         // After receiving the first message, keep collecting for this duration
         // after the LAST received message. This handles split events on Windows
         // where rename = REMOVE + CREATE may produce separate messages.
-        let settle = Duration::from_millis(300);
+        // Must be shorter than the 200ms reconciliation timer to avoid
+        // capturing tree-correction messages as part of the same batch.
+        let settle = Duration::from_millis(100);
 
         loop {
             // Hard timeout: no messages at all within 10 seconds
