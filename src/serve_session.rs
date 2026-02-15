@@ -58,9 +58,12 @@ pub struct ServeSession {
     /// before dropping the ChangeProcessor, its thread will panic with a
     /// RecvError, causing the main thread to panic on drop.
     ///
+    /// `None` for oneshot sessions (syncback, upload, plugin install) that
+    /// don't need live filesystem monitoring.
+    ///
     /// Allowed to be unused because it has side effects when dropped.
     #[allow(unused)]
-    change_processor: ChangeProcessor,
+    change_processor: Option<ChangeProcessor>,
 
     /// When the serve session was started. Used only for user-facing
     /// diagnostics.
@@ -99,22 +102,49 @@ pub struct ServeSession {
 
     /// A channel to send mutation requests on. These will be handled by the
     /// ChangeProcessor and trigger changes in the tree.
-    tree_mutation_sender: Sender<PatchSet>,
+    /// `None` for oneshot sessions.
+    tree_mutation_sender: Option<Sender<PatchSet>>,
 
     /// Paths recently written by the API's syncback. The ChangeProcessor
     /// checks this map and suppresses the file watcher echo for these paths
     /// to avoid redundant re-snapshots and WebSocket messages.
     /// Values are `(remove_count, create_write_count)` — each API write increments
     /// the appropriate counter, each suppressed VFS event decrements it.
+    /// `None` for oneshot sessions.
     #[allow(dead_code)]
-    suppressed_paths: Arc<Mutex<std::collections::HashMap<std::path::PathBuf, (usize, usize)>>>,
+    suppressed_paths:
+        Option<Arc<Mutex<std::collections::HashMap<std::path::PathBuf, (usize, usize)>>>>,
 
     /// Index of meta/model files that contain `Rojo_Ref_*` attributes.
     /// Shared between ApiService (writes) and ChangeProcessor (rename updates).
-    ref_path_index: Arc<Mutex<crate::RefPathIndex>>,
+    /// `None` for oneshot sessions.
+    ref_path_index: Option<Arc<Mutex<crate::RefPathIndex>>>,
 }
 
 impl ServeSession {
+    /// Shared initialization: loads the project and builds the initial
+    /// snapshot tree. Used by both `new()` and `new_oneshot()`.
+    fn init_tree(vfs: &Vfs, start_path: &Path) -> Result<(Project, RojoTree), ServeSessionError> {
+        log::trace!("Starting new ServeSession at path {}", start_path.display());
+
+        let root_project = Project::load_initial_project(vfs, start_path)?;
+
+        let mut tree = RojoTree::new(InstanceSnapshot::new());
+        let root_id = tree.get_root_id();
+        let instance_context = InstanceContext::new();
+
+        log::trace!("Generating snapshot of instances from VFS");
+        let snapshot = snapshot_from_vfs(&instance_context, vfs, start_path)?;
+
+        log::trace!("Computing initial patch set");
+        let patch_set = compute_patch_set(snapshot, &tree, root_id);
+
+        log::trace!("Applying initial patch set");
+        apply_patch_set(&mut tree, patch_set);
+
+        Ok((root_project, tree))
+    }
+
     /// Start a new serve session from the given in-memory filesystem and start
     /// path.
     ///
@@ -129,24 +159,7 @@ impl ServeSession {
         let start_path = start_path.as_ref();
         let start_time = Instant::now();
 
-        log::trace!("Starting new ServeSession at path {}", start_path.display());
-
-        let root_project = Project::load_initial_project(&vfs, start_path)?;
-
-        let mut tree = RojoTree::new(InstanceSnapshot::new());
-
-        let root_id = tree.get_root_id();
-
-        let instance_context = InstanceContext::new();
-
-        log::trace!("Generating snapshot of instances from VFS");
-        let snapshot = snapshot_from_vfs(&instance_context, &vfs, start_path)?;
-
-        log::trace!("Computing initial patch set");
-        let patch_set = compute_patch_set(snapshot, &tree, root_id);
-
-        log::trace!("Applying initial patch set");
-        apply_patch_set(&mut tree, patch_set);
+        let (root_project, tree) = Self::init_tree(&vfs, start_path)?;
 
         let session_id = SessionId::new();
         let message_queue = MessageQueue::new();
@@ -172,16 +185,41 @@ impl ServeSession {
         );
 
         Ok(Self {
-            change_processor,
+            change_processor: Some(change_processor),
             start_time,
             session_id,
             root_project,
             tree,
             message_queue,
-            tree_mutation_sender,
+            tree_mutation_sender: Some(tree_mutation_sender),
             vfs,
-            suppressed_paths,
-            ref_path_index,
+            suppressed_paths: Some(suppressed_paths),
+            ref_path_index: Some(ref_path_index),
+        })
+    }
+
+    /// Create a lightweight oneshot session that builds the project tree
+    /// but does NOT start a ChangeProcessor thread or filesystem watcher.
+    ///
+    /// Use this for commands that only need a snapshot of the tree and
+    /// don't require live updates (syncback, upload, plugin install).
+    pub fn new_oneshot<P: AsRef<Path>>(vfs: Vfs, start_path: P) -> Result<Self, ServeSessionError> {
+        let start_path = start_path.as_ref();
+        let start_time = Instant::now();
+
+        let (root_project, tree) = Self::init_tree(&vfs, start_path)?;
+
+        Ok(Self {
+            change_processor: None,
+            start_time,
+            session_id: SessionId::new(),
+            root_project,
+            tree: Arc::new(Mutex::new(tree)),
+            message_queue: Arc::new(MessageQueue::new()),
+            tree_mutation_sender: None,
+            vfs: Arc::new(vfs),
+            suppressed_paths: None,
+            ref_path_index: None,
         })
     }
 
@@ -194,7 +232,9 @@ impl ServeSession {
     }
 
     pub fn tree_mutation_sender(&self) -> Sender<PatchSet> {
-        self.tree_mutation_sender.clone()
+        self.tree_mutation_sender
+            .clone()
+            .expect("tree_mutation_sender is not available on oneshot sessions")
     }
 
     /// Returns a handle to the suppressed paths map, used to avoid
@@ -203,13 +243,21 @@ impl ServeSession {
     pub fn suppressed_paths(
         &self,
     ) -> Arc<Mutex<std::collections::HashMap<std::path::PathBuf, (usize, usize)>>> {
-        Arc::clone(&self.suppressed_paths)
+        Arc::clone(
+            self.suppressed_paths
+                .as_ref()
+                .expect("suppressed_paths is not available on oneshot sessions"),
+        )
     }
 
     /// Returns a handle to the Ref path index, shared between ApiService
     /// and ChangeProcessor for efficient rename path updates.
     pub fn ref_path_index(&self) -> Arc<Mutex<crate::RefPathIndex>> {
-        Arc::clone(&self.ref_path_index)
+        Arc::clone(
+            self.ref_path_index
+                .as_ref()
+                .expect("ref_path_index is not available on oneshot sessions"),
+        )
     }
 
     #[allow(unused)]
