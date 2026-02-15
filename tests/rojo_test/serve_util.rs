@@ -53,10 +53,14 @@ pub fn run_serve_test(test_name: &str, callback: impl FnOnce(TestServeSession, R
     settings.set_snapshot_path(snapshot_path);
     settings.set_sort_maps(true);
     settings.add_redaction(".serverVersion", "[server-version]");
-    // messageCursor is non-deterministic: on macOS kqueue delivers extra
-    // per-file vnode events that can bump the cursor beyond what the test
-    // expects. The exact cursor value is irrelevant to snapshot correctness.
+    // messageCursor is non-deterministic: event batching varies across
+    // platforms (macOS kqueue, Windows ReadDirectoryChanges) and can bump
+    // the cursor beyond what the test expects. The exact cursor value is
+    // irrelevant to snapshot correctness.
+    // .messageCursor covers ReadResponse (root level), .body.messageCursor
+    // covers SocketPacket (nested under body).
     settings.add_redaction(".messageCursor", "[message-cursor]");
+    settings.add_redaction(".body.messageCursor", "[message-cursor]");
     settings.bind(move || callback(session, redactions));
 }
 
@@ -205,6 +209,11 @@ impl TestServeSession {
     /// This avoids race conditions where the file watcher hasn't processed a
     /// change before the WebSocket connects: by connecting first, the listener
     /// is guaranteed to be in place when the change is detected.
+    ///
+    /// After receiving the first matching packet, continues collecting for a
+    /// short settle period to handle cases where a single filesystem operation
+    /// (e.g., rename + meta write) produces multiple WebSocket messages on
+    /// platforms where events aren't batched (notably Windows).
     pub fn recv_socket_packet(
         &self,
         packet_type: SocketPacketType,
@@ -229,10 +238,27 @@ impl TestServeSession {
         action();
 
         let start = std::time::Instant::now();
+        let mut collected: Option<SocketPacket<'static>> = None;
+        let mut last_received: Option<std::time::Instant> = None;
+
+        // After receiving the first message, keep collecting for this duration
+        // after the LAST received message. This handles split events on Windows
+        // where rename = REMOVE + CREATE may produce separate messages.
+        let settle = Duration::from_millis(300);
 
         loop {
-            if start.elapsed() > timeout {
+            // Hard timeout: no messages at all within 10 seconds
+            if start.elapsed() > timeout && collected.is_none() {
                 return Err("Timeout waiting for packet from WebSocket".into());
+            }
+
+            // Settle timeout: we have at least one message, and no new
+            // messages arrived for `settle` duration — return collected.
+            if let Some(last) = last_received {
+                if last.elapsed() >= settle {
+                    let _ = socket.close(None);
+                    return Ok(collected.unwrap());
+                }
             }
 
             match socket.read() {
@@ -242,11 +268,20 @@ impl TestServeSession {
                         continue;
                     }
 
-                    // Close the WebSocket connection now that we got what we were waiting for
-                    let _ = socket.close(None);
-                    return Ok(packet);
+                    match collected.as_mut() {
+                        Some(existing) => {
+                            merge_socket_packets(existing, packet);
+                        }
+                        None => {
+                            collected = Some(packet);
+                        }
+                    }
+                    last_received = Some(std::time::Instant::now());
                 }
                 Ok(Message::Close(_)) => {
+                    if let Some(packet) = collected {
+                        return Ok(packet);
+                    }
                     return Err("WebSocket closed before receiving messages".into());
                 }
                 Ok(_) => {
@@ -523,6 +558,29 @@ pub fn assert_round_trip(session: &TestServeSession, root_id: Ref) {
         "Round-trip identity violation: live tree and fresh rebuild differ. \
          The filesystem state does not faithfully represent the instance tree."
     );
+}
+
+/// Merge a second SocketPacket's messages into the first packet.
+///
+/// Used to combine multiple WebSocket messages from split filesystem events
+/// (e.g., rename = REMOVE + CREATE on Windows) into a single logical packet
+/// for snapshot comparison. Takes the highest message cursor and combines
+/// all added/removed/updated entries into one message.
+fn merge_socket_packets(base: &mut SocketPacket<'static>, other: SocketPacket<'static>) {
+    match (&mut base.body, other.body) {
+        (SocketPacketBody::Messages(base_msgs), SocketPacketBody::Messages(other_msgs)) => {
+            base_msgs.message_cursor = base_msgs.message_cursor.max(other_msgs.message_cursor);
+            for msg in other_msgs.messages {
+                if let Some(last) = base_msgs.messages.last_mut() {
+                    last.removed.extend(msg.removed);
+                    last.added.extend(msg.added);
+                    last.updated.extend(msg.updated);
+                } else {
+                    base_msgs.messages.push(msg);
+                }
+            }
+        }
+    }
 }
 
 /// Takes a SerializeResponse and creates an XML model out of the response.

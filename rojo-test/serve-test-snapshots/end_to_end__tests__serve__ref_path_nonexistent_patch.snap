@@ -1,10 +1,9 @@
 ---
 source: tests/tests/serve.rs
-assertion_line: 959
 expression: redacted
 ---
 body:
-  messageCursor: 1
+  messageCursor: "[message-cursor]"
   messages:
     - added: {}
       removed: []

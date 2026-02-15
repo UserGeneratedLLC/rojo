@@ -3,7 +3,7 @@ source: tests/tests/serve.rs
 expression: "socket_packet.intern_and_redact(&mut redactions, ())"
 ---
 body:
-  messageCursor: 1
+  messageCursor: "[message-cursor]"
   messages:
     - added:
         id-6:
