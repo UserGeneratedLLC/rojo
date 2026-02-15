@@ -4,6 +4,7 @@
 //! `web/api.rs` (syncback added/removed instances) to keep meta file handling
 //! DRY and consistent.
 
+use anyhow::Context;
 use std::fs;
 use std::path::Path;
 
@@ -88,6 +89,56 @@ pub fn remove_model_name(model_path: &Path) -> anyhow::Result<RemoveNameOutcome>
     let content = crate::json::to_vec_pretty_sorted(&serde_json::Value::Object(obj))?;
     fs::write(model_path, &content)?;
     Ok(RemoveNameOutcome::FieldRemoved)
+}
+
+/// Update `Rojo_Ref_*` attribute paths in a meta/model JSON5 file.
+///
+/// For each attribute whose key starts with `Rojo_Ref_` and whose string
+/// value starts with `old_prefix`, replaces the prefix with `new_prefix`.
+/// Returns true if any attribute was updated.
+pub fn update_ref_paths_in_file(
+    file_path: &Path,
+    old_prefix: &str,
+    new_prefix: &str,
+) -> anyhow::Result<bool> {
+    use crate::REF_PATH_ATTRIBUTE_PREFIX;
+
+    if !file_path.exists() {
+        return Ok(false);
+    }
+
+    let bytes =
+        fs::read(file_path).with_context(|| format!("Failed to read {}", file_path.display()))?;
+    let mut val: serde_json::Value = crate::json::from_slice(&bytes)
+        .with_context(|| format!("Failed to parse JSON5 in {}", file_path.display()))?;
+    if !val.is_object() {
+        anyhow::bail!(
+            "{} is not a JSON object, cannot update Rojo_Ref_* attributes",
+            file_path.display()
+        );
+    }
+
+    let mut updated = false;
+    if let Some(attrs) = val.get_mut("attributes").and_then(|a| a.as_object_mut()) {
+        for (key, value) in attrs.iter_mut() {
+            if key.starts_with(REF_PATH_ATTRIBUTE_PREFIX) {
+                if let Some(path_str) = value.as_str() {
+                    if path_str == old_prefix || path_str.starts_with(&format!("{old_prefix}/")) {
+                        let new_path = format!("{new_prefix}{}", &path_str[old_prefix.len()..]);
+                        *value = serde_json::Value::String(new_path);
+                        updated = true;
+                    }
+                }
+            }
+        }
+    }
+
+    if updated {
+        let content = crate::json::to_vec_pretty_sorted(&val)?;
+        fs::write(file_path, &content)?;
+    }
+
+    Ok(updated)
 }
 
 /// Remove the `name` field from a `.meta.json5` file.

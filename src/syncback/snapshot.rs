@@ -373,7 +373,8 @@ pub fn filter_out_property(inst: &Instance, prop_name: &str) -> bool {
 }
 
 pub fn inst_path(dom: &WeakDom, referent: Ref) -> String {
-    dom.full_path_of(referent, "/")
+    // Use ref_target_path which handles escaping "/" in instance names
+    crate::ref_target_path(dom, referent)
 }
 
 #[cfg(test)]

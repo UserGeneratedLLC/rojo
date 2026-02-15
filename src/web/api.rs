@@ -22,7 +22,9 @@ use rbx_dom_weak::{
 
 use crate::{
     serve_session::ServeSession,
-    snapshot::{InstanceWithMeta, InstigatingSource, PatchSet, PatchUpdate},
+    snapshot::{
+        InstanceSnapshot, InstanceWithMeta, InstigatingSource, PatchAdd, PatchSet, PatchUpdate,
+    },
     syncback::{slugify_name, VISIBLE_SERVICES},
     web::{
         interface::{
@@ -163,6 +165,7 @@ pub async fn call(
 pub struct ApiService {
     serve_session: Arc<ServeSession>,
     suppressed_paths: Arc<Mutex<HashMap<PathBuf, (usize, usize)>>>,
+    ref_path_index: Arc<Mutex<crate::RefPathIndex>>,
 }
 
 /// Derives the directory name from a standalone script's filesystem path.
@@ -218,9 +221,11 @@ fn dir_name_from_instance_path(standalone_path: &Path) -> &str {
 impl ApiService {
     pub fn new(serve_session: Arc<ServeSession>) -> Self {
         let suppressed_paths = serve_session.suppressed_paths();
+        let ref_path_index = serve_session.ref_path_index();
         ApiService {
             serve_session,
             suppressed_paths,
+            ref_path_index,
         }
     }
 
@@ -593,6 +598,32 @@ impl ApiService {
         // Log summary of any syncback issues
         stats.log_summary();
 
+        // Build a path map for instances added in this same request.
+        // This allows Ref properties in updates to reference just-added
+        // instances that aren't in the tree yet (VFS watcher is async).
+        let added_paths: HashMap<Ref, String> = {
+            let tree = self.serve_session.tree();
+            request
+                .added
+                .iter()
+                .filter_map(|(guid, added)| {
+                    let parent_ref = added.parent?;
+                    let parent_path = if tree.get_instance(parent_ref).is_some() {
+                        crate::ref_target_path(tree.inner(), parent_ref)
+                    } else {
+                        return None;
+                    };
+                    let escaped_name = crate::escape_ref_path_segment(&added.name);
+                    let path = if parent_path.is_empty() {
+                        escaped_name.into_owned()
+                    } else {
+                        format!("{}/{}", parent_path, escaped_name)
+                    };
+                    Some((*guid, path))
+                })
+                .collect()
+        };
+
         // Persist non-Source property changes to disk (meta/model files).
         // Source property changes are handled by ChangeProcessor when it
         // receives the PatchSet below.
@@ -620,7 +651,7 @@ impl ApiService {
                 }
 
                 // Write non-Source properties to meta/model files
-                if let Err(err) = self.syncback_updated_properties(update, &tree) {
+                if let Err(err) = self.syncback_updated_properties(update, &tree, &added_paths) {
                     log::warn!(
                         "Failed to persist non-Source properties for instance {:?}: {}",
                         update.id,
@@ -633,24 +664,91 @@ impl ApiService {
         let updated_instances = request
             .updated
             .into_iter()
-            .map(|update| PatchUpdate {
-                id: update.id,
-                changed_class_name: update.changed_class_name,
-                changed_name: update.changed_name,
-                changed_properties: update.changed_properties,
-                changed_metadata: None,
+            .map(|update| {
+                // Convert nil Refs (Ref::none()) to property removals (None).
+                //
+                // In the two-way sync path, Ref::none() means "user explicitly
+                // cleared this property" (e.g., set PrimaryPart to nil). But
+                // apply_update_child skips nil Refs because in the forward-sync
+                // path, Ref::none() is a sentinel for "unresolved ref."
+                //
+                // Converting to None ensures the property is actually removed
+                // from the tree, keeping it consistent with the filesystem
+                // (where the Rojo_Ref_* attribute was already removed).
+                let mut changed_properties = update.changed_properties;
+                for (_key, value) in changed_properties.iter_mut() {
+                    if matches!(value, Some(Variant::Ref(r)) if r.is_none()) {
+                        *value = None;
+                    }
+                }
+                PatchUpdate {
+                    id: update.id,
+                    changed_class_name: update.changed_class_name,
+                    changed_name: update.changed_name,
+                    changed_properties,
+                    changed_metadata: None,
+                }
+            })
+            .collect();
+
+        // Build InstanceSnapshots from added instances so the tree gets
+        // them immediately (instead of waiting for the VFS watcher). The
+        // plugin's GUID is used as the snapshot_id so that apply_patch_set's
+        // snapshot_id_to_instance_id map rewrites Ref properties in
+        // updated_instances to point to the correct tree IDs.
+        let added_instances: Vec<PatchAdd> = request
+            .added
+            .iter()
+            .filter_map(|(guid, added)| {
+                let parent_ref = added.parent?;
+                Some(PatchAdd {
+                    parent_id: parent_ref,
+                    instance: Self::added_instance_to_snapshot(*guid, added),
+                })
             })
             .collect();
 
         tree_mutation_sender
             .send(PatchSet {
                 removed_instances: actually_removed,
-                added_instances: Vec::new(),
+                added_instances,
                 updated_instances,
             })
             .unwrap();
 
         msgpack_ok(WriteResponse { session_id })
+    }
+
+    /// Convert an `AddedInstance` (from the plugin's write request) to an
+    /// `InstanceSnapshot` suitable for inclusion in a PatchSet. The plugin's
+    /// GUID is used as the `snapshot_id` so that `apply_patch_set` can map
+    /// it to the tree ID assigned during insertion. This allows Ref properties
+    /// in the same request to reference newly-added instances immediately.
+    fn added_instance_to_snapshot(
+        guid: Ref,
+        added: &crate::web::interface::AddedInstance,
+    ) -> InstanceSnapshot {
+        use rbx_dom_weak::ustr;
+        use std::borrow::Cow;
+
+        let properties: UstrMap<Variant> = added
+            .properties
+            .iter()
+            .map(|(k, v)| (ustr(k), v.clone()))
+            .collect();
+
+        InstanceSnapshot {
+            snapshot_id: guid,
+            name: Cow::Owned(added.name.clone()),
+            class_name: ustr(&added.class_name),
+            properties,
+            children: added
+                .children
+                .iter()
+                .map(|child| Self::added_instance_to_snapshot(Ref::new(), child))
+                .collect(),
+            metadata: Default::default(),
+        }
     }
 
     /// Syncback an added instance by creating a file in the filesystem.
@@ -703,6 +801,41 @@ impl ApiService {
     /// Returns true if the path is unique, false if duplicates exist at any level.
     /// This is O(d) where d is the depth of the instance.
     /// Records any duplicate path issues via the stats tracker.
+    /// Check if a Ref target's path is unique (no duplicate-named siblings
+    /// at any ancestor level). Used for warning about ambiguous Rojo_Ref_* paths.
+    fn is_ref_path_unique(tree: &crate::snapshot::RojoTree, target_ref: Ref) -> bool {
+        let mut current_ref = target_ref;
+
+        loop {
+            let current = match tree.get_instance(current_ref) {
+                Some(inst) => inst,
+                None => return false,
+            };
+
+            let parent_ref = current.parent();
+            if parent_ref.is_none() {
+                // Reached root -- path is unique at all levels
+                return true;
+            }
+
+            // Check if any sibling has the same name
+            if let Some(parent) = tree.get_instance(parent_ref) {
+                let my_name = current.name();
+                let has_dup = parent.children().iter().any(|&child_ref| {
+                    child_ref != current_ref
+                        && tree
+                            .get_instance(child_ref)
+                            .is_some_and(|c| c.name() == my_name)
+                });
+                if has_dup {
+                    return false;
+                }
+            }
+
+            current_ref = parent_ref;
+        }
+    }
+
     fn is_tree_path_unique_with_cache(
         tree: &crate::snapshot::RojoTree,
         target_ref: Ref,
@@ -2285,8 +2418,11 @@ impl ApiService {
                 continue;
             }
 
-            // Skip Ref and UniqueId - they don't serialize to JSON (matches dedicated syncback)
-            if matches!(value, Variant::Ref(_) | Variant::UniqueId(_)) {
+            // Skip UniqueId and Ref - they don't serialize to JSON.
+            // Ref properties are handled upstream in syncback_updated_properties()
+            // where they are converted to Rojo_Ref_* path-based attributes.
+            // UniqueId is internal to Roblox and not meaningful for syncback.
+            if matches!(value, Variant::UniqueId(_) | Variant::Ref(_)) {
                 continue;
             }
 
@@ -2491,6 +2627,7 @@ impl ApiService {
         &self,
         update: &crate::web::interface::InstanceUpdate,
         tree: &crate::snapshot::RojoTree,
+        added_paths: &HashMap<Ref, String>,
     ) -> anyhow::Result<()> {
         use anyhow::Context;
 
@@ -2537,29 +2674,91 @@ impl ApiService {
             "ModuleScript" | "Script" | "LocalScript"
         );
 
-        // Collect the non-Source properties as a HashMap<String, Variant>
-        // for reuse with filter_properties_for_meta
+        // Extract Ref properties and convert to Rojo_Ref_* attributes.
+        // Non-Ref properties are collected separately for filter_properties_for_meta.
+        let mut ref_attributes: indexmap::IndexMap<String, serde_json::Value> =
+            indexmap::IndexMap::new();
+        let mut remove_attributes: Vec<String> = Vec::new();
         let mut props: HashMap<String, Variant> = HashMap::new();
+
         for (key, value) in &update.changed_properties {
             if key == "Source" {
                 continue;
             }
-            if let Some(v) = value {
-                props.insert(key.to_string(), v.clone());
+            match value {
+                Some(Variant::Ref(target_ref)) => {
+                    let attr_name = crate::ref_attribute_name(key);
+                    if target_ref.is_none() {
+                        // Null ref: mark attribute for removal
+                        remove_attributes.push(attr_name);
+                    } else if tree.get_instance(*target_ref).is_some() {
+                        // Valid target: compute path and add as Rojo_Ref_* attribute
+                        let path = crate::ref_target_path(tree.inner(), *target_ref);
+
+                        // Warn if the path is ambiguous (duplicate-named siblings
+                        // at any ancestor level). The ref will still be written,
+                        // but may resolve to the wrong target on rebuild.
+                        if !Self::is_ref_path_unique(tree, *target_ref) {
+                            log::warn!(
+                                "Ref property '{}' for instance {:?} has an ambiguous \
+                                 path '{}' (duplicate-named siblings exist). The ref may \
+                                 resolve to the wrong target on rebuild.",
+                                key,
+                                update.id,
+                                path
+                            );
+                        }
+
+                        ref_attributes.insert(attr_name, serde_json::Value::String(path));
+                    } else if let Some(path) = added_paths.get(target_ref) {
+                        // Target was added in the same /api/write request.
+                        // It's not in the tree yet (VFS watcher hasn't picked it up),
+                        // but we can compute the path from the AddedInstance data.
+                        log::info!(
+                            "Ref property '{}' for instance {:?}: target {:?} is a \
+                             just-added instance, using pre-computed path '{}'",
+                            key,
+                            update.id,
+                            target_ref,
+                            path
+                        );
+                        ref_attributes.insert(attr_name, serde_json::Value::String(path.clone()));
+                    } else {
+                        log::warn!(
+                            "Cannot persist Ref property '{}' for instance {:?}: \
+                             target {:?} not found in tree",
+                            key,
+                            update.id,
+                            target_ref
+                        );
+                    }
+                }
+                Some(v) => {
+                    props.insert(key.to_string(), v.clone());
+                }
+                None => {}
             }
         }
 
-        if props.is_empty() {
+        if props.is_empty() && ref_attributes.is_empty() && remove_attributes.is_empty() {
             return Ok(());
         }
 
         let skip_prop = if is_script { Some("Source") } else { None };
-        let (properties, attributes) =
+        let (properties, mut attributes) =
             self.filter_properties_for_meta(class_name.as_str(), &props, skip_prop);
 
-        if properties.is_empty() && attributes.is_empty() {
+        // Merge Rojo_Ref_* attributes into the attributes map
+        for (k, v) in ref_attributes {
+            attributes.insert(k, v);
+        }
+
+        if properties.is_empty() && attributes.is_empty() && remove_attributes.is_empty() {
             return Ok(());
         }
+
+        // Track which meta file was written for index maintenance.
+        let written_meta_path: PathBuf;
 
         // Determine which meta file to write based on file structure
         if inst_path.is_dir() {
@@ -2567,7 +2766,13 @@ impl ApiService {
             let meta_path = inst_path.join("init.meta.json5");
 
             // Read existing meta if present, merge with new properties
-            let meta = self.merge_or_build_meta(&meta_path, None, properties, attributes)?;
+            let meta = self.merge_or_build_meta(
+                &meta_path,
+                None,
+                properties,
+                attributes,
+                &remove_attributes,
+            )?;
             let content = crate::json::to_vec_pretty_sorted(&meta)
                 .context("Failed to serialize init.meta.json5")?;
             self.suppress_path(&meta_path);
@@ -2578,6 +2783,7 @@ impl ApiService {
                 "Syncback: Persisted non-Source properties to {}",
                 meta_path.display()
             );
+            written_meta_path = meta_path;
         } else if is_script {
             // Standalone script: write to adjacent Name.meta.json5
             // Derive the base name from the filesystem path (not instance.name())
@@ -2594,7 +2800,13 @@ impl ApiService {
                 .unwrap_or(file_stem);
             let meta_path = parent_dir.join(format!("{}.meta.json5", base_name));
 
-            let meta = self.merge_or_build_meta(&meta_path, None, properties, attributes)?;
+            let meta = self.merge_or_build_meta(
+                &meta_path,
+                None,
+                properties,
+                attributes,
+                &remove_attributes,
+            )?;
             let content = crate::json::to_vec_pretty_sorted(&meta)
                 .context("Failed to serialize meta.json5")?;
             self.suppress_path(&meta_path);
@@ -2605,6 +2817,7 @@ impl ApiService {
                 "Syncback: Persisted non-Source properties to {}",
                 meta_path.display()
             );
+            written_meta_path = meta_path;
         } else {
             // Non-script standalone file. Only .model.json5/.model.json support
             // in-place JSON property updates. Other file types (.txt, .csv, .toml,
@@ -2620,6 +2833,7 @@ impl ApiService {
                     Some(class_name.as_str()),
                     properties,
                     attributes,
+                    &remove_attributes,
                 )?;
                 let content = crate::json::to_vec_pretty_sorted(&meta)
                     .context("Failed to serialize model file")?;
@@ -2631,13 +2845,20 @@ impl ApiService {
                     "Syncback: Persisted non-Source properties to {}",
                     inst_path.display()
                 );
+                written_meta_path = inst_path.to_path_buf();
             } else {
                 // For .txt, .csv, .toml, .yaml, etc. — use adjacent meta file
                 let parent_dir = inst_path.parent().context("No parent directory")?;
                 let file_stem = inst_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
                 let meta_path = parent_dir.join(format!("{}.meta.json5", file_stem));
 
-                let meta = self.merge_or_build_meta(&meta_path, None, properties, attributes)?;
+                let meta = self.merge_or_build_meta(
+                    &meta_path,
+                    None,
+                    properties,
+                    attributes,
+                    &remove_attributes,
+                )?;
                 let content = crate::json::to_vec_pretty_sorted(&meta)
                     .context("Failed to serialize meta.json5")?;
                 self.suppress_path(&meta_path);
@@ -2648,6 +2869,31 @@ impl ApiService {
                     "Syncback: Persisted non-Source properties to {}",
                     meta_path.display()
                 );
+                written_meta_path = meta_path;
+            }
+        }
+
+        // Re-index the written meta file: remove all old entries for this
+        // file, then add entries for all remaining Rojo_Ref_* attributes.
+        // This is simpler and more correct than tracking individual
+        // additions/removals (which can miss remaining attrs when one is
+        // removed from a file that has multiple).
+        {
+            let mut index = self.ref_path_index.lock().unwrap();
+            index.remove_all_for_file(&written_meta_path);
+
+            if let Ok(bytes) = std::fs::read(&written_meta_path) {
+                if let Ok(val) = crate::json::from_slice::<serde_json::Value>(&bytes) {
+                    if let Some(attrs) = val.get("attributes").and_then(|a| a.as_object()) {
+                        for (key, value) in attrs {
+                            if key.starts_with(crate::REF_PATH_ATTRIBUTE_PREFIX) {
+                                if let Some(path_str) = value.as_str() {
+                                    index.add(path_str, &written_meta_path);
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -2656,12 +2902,17 @@ impl ApiService {
 
     /// Reads an existing meta/model JSON5 file and merges new properties into it.
     /// If the file doesn't exist, builds a fresh meta object.
+    ///
+    /// `remove_attributes` is a list of attribute keys to remove from the existing
+    /// file (used for nil Ref cleanup, e.g., removing a stale `Rojo_Ref_PrimaryPart`
+    /// when PrimaryPart is set to nil).
     fn merge_or_build_meta(
         &self,
         existing_path: &std::path::Path,
         class_name: Option<&str>,
         new_properties: indexmap::IndexMap<String, serde_json::Value>,
         new_attributes: indexmap::IndexMap<String, serde_json::Value>,
+        remove_attributes: &[String],
     ) -> anyhow::Result<serde_json::Value> {
         use anyhow::Context;
 
@@ -2687,6 +2938,17 @@ impl ApiService {
                 if let Some(props_obj) = props.as_object_mut() {
                     for (k, v) in new_properties {
                         props_obj.insert(k, v);
+                    }
+                }
+            }
+
+            // Remove attributes marked for deletion (e.g., stale Rojo_Ref_* entries)
+            if !remove_attributes.is_empty() {
+                if let Some(attrs) = obj.get_mut("attributes") {
+                    if let Some(attrs_obj) = attrs.as_object_mut() {
+                        for key in remove_attributes {
+                            attrs_obj.remove(key);
+                        }
                     }
                 }
             }

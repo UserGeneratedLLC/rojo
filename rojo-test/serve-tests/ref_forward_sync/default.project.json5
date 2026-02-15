@@ -1,0 +1,10 @@
+{
+  "name": "ref_forward_sync",
+  "tree": {
+    "$className": "DataModel",
+    "Workspace": {
+      "$className": "Workspace",
+      "$path": "src/Workspace"
+    }
+  }
+}

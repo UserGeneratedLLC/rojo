@@ -1,0 +1,10 @@
+{
+  "name": "ref_two_way_sync",
+  "tree": {
+    "$className": "DataModel",
+    "Workspace": {
+      "$className": "Workspace",
+      "$path": "src/Workspace"
+    }
+  }
+}

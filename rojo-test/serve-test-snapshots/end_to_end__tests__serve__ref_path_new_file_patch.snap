@@ -1,0 +1,34 @@
+---
+source: tests/tests/serve.rs
+expression: redacted
+---
+body:
+  messageCursor: "[message-cursor]"
+  messages:
+    - added:
+        id-4:
+          Children: []
+          ClassName: ObjectValue
+          Id: id-4
+          Metadata:
+            ignoreUnknownInstances: false
+          Name: RefValue
+          Parent: id-3
+          Properties:
+            Attributes:
+              "!Attributes": {}
+            Value:
+              "!Ref": id-5
+      removed: []
+      updated:
+        - changedClassName: ~
+          changedMetadata: ~
+          changedName: ~
+          changedProperties:
+            Attributes:
+              "!Attributes":
+                Rojo_Ref_PrimaryPart:
+                  "!String": Workspace/MyModel/Target
+          id: id-3
+packetType: messages
+sessionId: id-1

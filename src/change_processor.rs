@@ -76,6 +76,7 @@ impl ChangeProcessor {
         message_queue: Arc<MessageQueue<AppliedPatchSet>>,
         tree_mutation_receiver: Receiver<PatchSet>,
         suppressed_paths: Arc<Mutex<std::collections::HashMap<PathBuf, (usize, usize)>>>,
+        ref_path_index: Arc<Mutex<crate::RefPathIndex>>,
         project_root: PathBuf,
         critical_error_receiver: Option<Receiver<memofs::WatcherCriticalError>>,
     ) -> Self {
@@ -92,12 +93,18 @@ impl ChangeProcessor {
             pending_recovery: Mutex::new(Vec::new()),
             suppressed_paths,
             project_root,
+            ref_path_index,
         };
 
         let job_thread = jod_thread::Builder::new()
             .name("ChangeProcessor thread".to_owned())
             .spawn(move || {
                 log::trace!("ChangeProcessor thread started");
+
+                // Populate the RefPathIndex from existing meta/model files
+                // so that renames of instances with pre-existing Rojo_Ref_*
+                // attributes are handled correctly from the first rename.
+                task.populate_initial_ref_path_index();
 
                 // Tracks when to run the next reconciliation pass. Set to
                 // Some(future_instant) after VFS events arrive, cleared
@@ -227,12 +234,71 @@ struct JobThreadContext {
 
     /// Root directory of the project, used to display relative paths in logs.
     project_root: PathBuf,
+
+    /// Index of meta/model files that contain `Rojo_Ref_*` attributes.
+    /// Shared with ApiService for efficient rename path updates.
+    ref_path_index: Arc<Mutex<crate::RefPathIndex>>,
 }
 
 impl JobThreadContext {
     /// Returns a display wrapper that shows `path` relative to the project root.
     fn display_path<'a>(&'a self, path: &'a Path) -> RelPath<'a> {
         rel_path(path, &self.project_root)
+    }
+
+    /// Scan all `.meta.json5`, `.model.json5`, `.meta.json`, `.model.json`
+    /// files under the project root for existing `Rojo_Ref_*` attributes
+    /// and populate the `RefPathIndex`. This ensures pre-existing ref
+    /// attributes (from CLI syncback, manual edits, or previous sessions)
+    /// are indexed so rename path updates work from the first rename.
+    fn populate_initial_ref_path_index(&self) {
+        let mut count = 0;
+        let mut dirs_to_visit = vec![self.project_root.clone()];
+        while let Some(dir) = dirs_to_visit.pop() {
+            let entries = match fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(_) => continue,
+            };
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path.is_dir() {
+                    dirs_to_visit.push(path);
+                    continue;
+                }
+                let name = match path.file_name().and_then(|n| n.to_str()) {
+                    Some(n) => n,
+                    None => continue,
+                };
+                if !(name.ends_with(".meta.json5")
+                    || name.ends_with(".model.json5")
+                    || name.ends_with(".meta.json")
+                    || name.ends_with(".model.json"))
+                {
+                    continue;
+                }
+                if let Ok(bytes) = fs::read(&path) {
+                    if let Ok(val) = crate::json::from_slice::<serde_json::Value>(&bytes) {
+                        if let Some(attrs) = val.get("attributes").and_then(|a| a.as_object()) {
+                            let mut index = self.ref_path_index.lock().unwrap();
+                            for (key, value) in attrs {
+                                if key.starts_with(crate::REF_PATH_ATTRIBUTE_PREFIX) {
+                                    if let Some(path_str) = value.as_str() {
+                                        index.add(path_str, &path);
+                                        count += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if count > 0 {
+            log::info!(
+                "RefPathIndex: populated {} Rojo_Ref_* entries from existing meta/model files",
+                count
+            );
+        }
     }
 
     /// Find the init file inside a directory-format script folder.
@@ -387,6 +453,129 @@ impl JobThreadContext {
                     err
                 );
             }
+        }
+    }
+
+    /// After an instance is renamed, update all `Rojo_Ref_*` attributes on
+    /// disk that reference the old path prefix, replacing it with the new
+    /// prefix.
+    ///
+    /// Uses the `RefPathIndex` for O(affected_files) lookup instead of
+    /// scanning the full tree. After updating files, also updates the index
+    /// keys and filesystem paths so future renames remain efficient.
+    fn update_ref_paths_after_rename(&self, old_path: &str, new_path: &str) {
+        if old_path == new_path {
+            return;
+        }
+
+        // Look up affected files via the pre-computed index.
+        let files_from_index = self.ref_path_index.lock().unwrap().find_by_prefix(old_path);
+
+        if files_from_index.is_empty() {
+            return;
+        }
+
+        // The directory may have already been renamed on disk by the time
+        // this function is called. The index still stores old filesystem
+        // paths. Remap them: replace the old directory segment with the
+        // new one so we can find the actual files.
+        let old_segments = crate::split_ref_path(old_path);
+        let old_segment = old_segments.last().map(|s| s.as_str()).unwrap_or(old_path);
+        let new_segments = crate::split_ref_path(new_path);
+        let new_segment = new_segments.last().map(|s| s.as_str()).unwrap_or(new_path);
+
+        // Pre-compute slugified forms for fallback comparison.
+        let slugified_old = if name_needs_slugify(old_segment) {
+            Some(slugify_name(old_segment))
+        } else {
+            None
+        };
+        let slugified_new = || -> String {
+            if name_needs_slugify(new_segment) {
+                slugify_name(new_segment)
+            } else {
+                new_segment.to_string()
+            }
+        };
+
+        let original_paths = files_from_index.clone();
+        let files_to_check: Vec<PathBuf> = files_from_index
+            .into_iter()
+            .map(|file_path| {
+                if file_path.exists() {
+                    return file_path;
+                }
+                // File doesn't exist at old path — remap directory component.
+                let mut result = PathBuf::new();
+                let mut replaced = false;
+                for comp in file_path.components() {
+                    if !replaced {
+                        if let std::path::Component::Normal(os_str) = comp {
+                            if let Some(s) = os_str.to_str() {
+                                if s == old_segment {
+                                    result.push(slugified_new());
+                                    replaced = true;
+                                    continue;
+                                }
+                                if let Some(ref slug) = slugified_old {
+                                    if s == slug.as_str() {
+                                        result.push(slugified_new());
+                                        replaced = true;
+                                        continue;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    result.push(comp);
+                }
+                if replaced {
+                    result
+                } else {
+                    file_path
+                }
+            })
+            .collect();
+
+        let mut updated_count = 0;
+        for file_path in &files_to_check {
+            self.suppress_path(file_path);
+            match crate::syncback::meta::update_ref_paths_in_file(file_path, old_path, new_path) {
+                Ok(true) => {
+                    updated_count += 1;
+                }
+                Ok(false) => {
+                    // No stale refs in this file; undo suppression
+                    self.unsuppress_path(file_path);
+                }
+                Err(err) => {
+                    self.unsuppress_path(file_path);
+                    log::warn!(
+                        "Failed to update Rojo_Ref_* paths in {}: {}",
+                        self.display_path(file_path),
+                        err
+                    );
+                }
+            }
+        }
+
+        // Update the index: both the path keys AND the filesystem paths.
+        if updated_count > 0 {
+            let mut index = self.ref_path_index.lock().unwrap();
+            index.update_prefix(old_path, new_path);
+            // Also update filesystem paths in the index entries
+            for (old_file, new_file) in original_paths.iter().zip(files_to_check.iter()) {
+                if old_file != new_file {
+                    index.rename_file(old_file, new_file);
+                }
+            }
+
+            log::info!(
+                "Updated Rojo_Ref_* paths in {} file(s): '{}' -> '{}'",
+                updated_count,
+                old_path,
+                new_path
+            );
         }
     }
 
@@ -559,6 +748,27 @@ impl JobThreadContext {
         self.vfs
             .commit_event(&event)
             .expect("Error applying VFS change");
+
+        // On Windows, ReadDirectoryChangesW fires a directory-level WRITE event
+        // when a file inside the directory is modified, in addition to the
+        // file-level WRITE event. The directory event arrives first, but at that
+        // point the VFS cache still has the old file content (only the directory
+        // entry was committed, not the file). Re-snapshotting from the directory
+        // event reads stale data and produces incorrect patches. The file-level
+        // event that follows will correctly invalidate the cache and re-snapshot.
+        // Skip WRITE events for directories on Windows only -- macOS kqueue uses
+        // directory WRITE events meaningfully (e.g., file creation/deletion
+        // notifications) so they must be processed there.
+        #[cfg(target_os = "windows")]
+        if let VfsEvent::Write(ref path) = event {
+            if path.is_dir() {
+                log::info!(
+                    "VFS event SKIPPED (directory WRITE, deferring to file events): {}",
+                    self.display_path(path)
+                );
+                return Vec::new();
+            }
+        }
 
         // For a given VFS event, we might have many changes to different parts
         // of the tree. Calculate and apply all of these changes.
@@ -860,6 +1070,14 @@ impl JobThreadContext {
 
             for update in &patch_set.updated_instances {
                 let id = update.id;
+
+                // Capture the old path BEFORE rename for Rojo_Ref_* path updates.
+                // Must be computed before the `tree.get_instance(id)` borrow.
+                let old_ref_path = if update.changed_name.is_some() {
+                    Some(crate::ref_target_path(tree.inner(), id))
+                } else {
+                    None
+                };
 
                 if let Some(instance) = tree.get_instance(id) {
                     // Track the current source file path — rename and ClassName
@@ -1362,6 +1580,40 @@ impl JobThreadContext {
                     }
                 } else {
                     log::warn!("Cannot update instance {:?}, it does not exist.", id);
+                }
+
+                // After rename, update any Rojo_Ref_* paths that referenced the
+                // old path of this instance (or its descendants). Done outside the
+                // `if let Some(instance)` block to avoid borrow conflicts.
+                //
+                // NOTE: The tree name hasn't been updated yet (apply_patch_set
+                // runs after this loop), so we can't use full_path_of for the
+                // new path. Construct it by replacing the last path segment.
+                // Use split_ref_path for escape-aware splitting (handles
+                // instance names containing "/").
+                if let Some(ref old_ref_path) = old_ref_path {
+                    if let Some(ref new_name) = update.changed_name {
+                        let segments = crate::split_ref_path(old_ref_path);
+                        let new_ref_path = if segments.len() > 1 {
+                            // Rebuild parent path from all segments except the last,
+                            // re-escaping each segment to preserve the original format.
+                            let parent_parts: Vec<_> = segments[..segments.len() - 1]
+                                .iter()
+                                .map(|s| crate::escape_ref_path_segment(s).into_owned())
+                                .collect();
+                            format!(
+                                "{}/{}",
+                                parent_parts.join("/"),
+                                crate::escape_ref_path_segment(new_name)
+                            )
+                        } else {
+                            // Root-level instance (no parent in path)
+                            crate::escape_ref_path_segment(new_name).into_owned()
+                        };
+                        if *old_ref_path != new_ref_path {
+                            self.update_ref_paths_after_rename(old_ref_path, &new_ref_path);
+                        }
+                    }
                 }
             }
 

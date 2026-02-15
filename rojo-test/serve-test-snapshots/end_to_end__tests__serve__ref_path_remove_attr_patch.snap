@@ -1,0 +1,19 @@
+---
+source: tests/tests/serve.rs
+expression: redacted
+---
+body:
+  messageCursor: "[message-cursor]"
+  messages:
+    - added: {}
+      removed: []
+      updated:
+        - changedClassName: ~
+          changedMetadata: ~
+          changedName: ~
+          changedProperties:
+            Attributes: ~
+            PrimaryPart: ~
+          id: id-3
+packetType: messages
+sessionId: id-1

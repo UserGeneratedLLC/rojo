@@ -31,6 +31,36 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+* Add two-way sync support for Ref properties via `Rojo_Ref_*` attributes. The plugin now detects Ref property changes in Studio and encodes them as path-based attributes; the server resolves paths back to instance Refs. ([#2])
+* Implement `RefPathIndex` for efficient resolution of `Rojo_Ref_*` attributes during forward sync, including ambiguous-path detection and graceful fallback for nonexistent targets.
+* Extend `ChangeProcessor` to handle `Rojo_Ref_*` attributes in filesystem writes during live two-way sync sessions.
+* Extend `ChangeBatcher` and `encodePatchUpdate` in the plugin to encode, filter, and batch Ref property changes for the server.
+* Add `InstanceMap:getIdByInstance` to the plugin for reverse instance-to-ID lookups needed by Ref encoding.
+* Add comprehensive integration tests for Ref forward sync, two-way sync, and ambiguous-path edge cases.
+* Optimize CI scripts for parallel Rust task execution.
+
+<details>
+<summary>Full commit log</summary>
+
+- `bf65d8bf` initial work
+- `bbd9c0e0` test fixtures
+- `c1811724` Refactor test cases and improve snapshot handling
+- `4070b483` Add audit documentation and enhance two-way sync handling
+- `8f0df692` Enhance InstanceMap and ChangeBatcher for unresolved Ref properties
+- `ca2a9389` Enhance audit documentation and address critical Ref property issues
+- `faa12dc5` Implement RefPathIndex for efficient handling of Rojo_Ref_* attributes
+- `075cca4c` Add audit plan for Ref property fixes and enhance CI test execution
+- `c3efb0e5` Optimize CI scripts for Rust tasks by adding parallel execution
+- `e617e8fc` Enhance audit documentation and improve Ref property handling
+- `012c20b1` Add audit plan for Fix Ref Audit Round 3 addressing correctness and code quality issues
+- `699fe60b` Add integration tests for Ref properties in standalone file formats
+- `f28ee843` Update audit plans and documentation for Rojo_Ref_* attributes
+- `6da94696` Update Luau LSP sourcemap setting to disable autogeneration
+
+</details>
+
+[#2]: https://github.com/UserGeneratedLLC/rojo/pull/2
+
 ## [8.2.0] (February 12th, 2026)
 
 * Fix tree drift caused by echo suppression eating VFS events for newly added instances. New-instance file writes no longer suppress watcher events, allowing the tree to pick them up correctly.

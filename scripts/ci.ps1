@@ -56,19 +56,19 @@ $selene = $LASTEXITCODE
 Record-Result "Selene" $selene
 
 Write-Step 6 "Rust Linting (Clippy) - Auto-fix"
-cargo clippy --fix --allow-dirty --allow-staged 2>&1 | Out-Null
+cargo clippy -j 16 --fix --allow-dirty --allow-staged 2>&1 | Out-Null
 Write-Host "Verifying..." -ForegroundColor Yellow
-cargo clippy --all-targets --all-features 2>&1
+cargo clippy -j 16 --all-targets --all-features 2>&1
 $clippy = $LASTEXITCODE
 Record-Result "Clippy" $clippy
 
 Write-Step 7 "Build Everything"
-cargo build --locked --all-targets --all-features
+cargo build -j 16 --locked --all-targets --all-features
 $build = $LASTEXITCODE
 Record-Result "Build" $build
 
 Write-Step 8 "Run ALL Rust Tests"
-$testOutput = cargo test --locked --all-targets --all-features 2>&1
+$testOutput = cargo test -j 16 --locked --all-features -- --test-threads=16 2>&1
 $rustTests = $LASTEXITCODE
 $testOutput | Write-Host
 Record-Result "Rust Tests" $rustTests
@@ -106,18 +106,18 @@ if ($RbxDom) {
 
     Write-Step 13 "Rust Linting (Clippy) for rbx-dom - Auto-fix"
     Push-Location rbx-dom
-    cargo clippy --fix --allow-dirty --allow-staged 2>&1 | Out-Null
+    cargo clippy -j 16 --fix --allow-dirty --allow-staged 2>&1 | Out-Null
     Write-Host "Verifying..." -ForegroundColor Yellow
-    cargo clippy --all-targets --all-features -- -D warnings 2>&1
+    cargo clippy -j 16 --all-targets --all-features -- -D warnings 2>&1
     $clippyRbxDom = $LASTEXITCODE
     Pop-Location
     Record-Result "Clippy (rbx-dom)" $clippyRbxDom
 
     Write-Step 14 "Build rbx-dom"
     Push-Location rbx-dom
-    cargo build --verbose
+    cargo build -j 16 --verbose
     $buildRbxDom = $LASTEXITCODE
-    cargo build --all-features --verbose
+    cargo build -j 16 --all-features --verbose
     $buildRbxDomAll = $LASTEXITCODE
     Pop-Location
     Record-Result "Build (rbx-dom)" $buildRbxDom
@@ -125,9 +125,9 @@ if ($RbxDom) {
 
     Write-Step 15 "Run ALL rbx-dom Rust Tests"
     Push-Location rbx-dom
-    cargo test --verbose
+    cargo test -j 16 --verbose -- --test-threads=16
     $testsRbxDom = $LASTEXITCODE
-    cargo test --all-features --verbose
+    cargo test -j 16 --all-features --verbose -- --test-threads=16
     $testsRbxDomAll = $LASTEXITCODE
     Pop-Location
     Record-Result "Tests (rbx-dom)" $testsRbxDom

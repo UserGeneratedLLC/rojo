@@ -1,0 +1,23 @@
+---
+source: tests/tests/serve.rs
+expression: redacted
+---
+body:
+  messageCursor: "[message-cursor]"
+  messages:
+    - added: {}
+      removed: []
+      updated:
+        - changedClassName: ~
+          changedMetadata: ~
+          changedName: ~
+          changedProperties:
+            Attributes:
+              "!Attributes":
+                Rojo_Ref_PrimaryPart:
+                  "!String": Workspace/MyModel/OtherPart
+            PrimaryPart:
+              "!Ref": id-4
+          id: id-3
+packetType: messages
+sessionId: id-1

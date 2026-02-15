@@ -12,7 +12,7 @@ local PatchSet = require(script.Parent.Parent.PatchSet)
 
 local encodePatchUpdate = require(script.Parent.encodePatchUpdate)
 
-return function(instanceMap, propertyChanges, syncSourceOnly)
+return function(instanceMap, propertyChanges, syncSourceOnly, onUnresolvedRef)
 	local patch = PatchSet.newEmpty()
 
 	for instance, properties in propertyChanges do
@@ -33,13 +33,14 @@ return function(instanceMap, propertyChanges, syncSourceOnly)
 			if syncSourceOnly then
 				-- Filter to only Source property when server is in source-only mode
 				if properties.Source then
-					local update = encodePatchUpdate(instance, instanceId, { Source = true })
+					local update =
+						encodePatchUpdate(instance, instanceId, { Source = true }, instanceMap, onUnresolvedRef)
 					if update then
 						table.insert(patch.updated, update)
 					end
 				end
 			else
-				local update = encodePatchUpdate(instance, instanceId, properties)
+				local update = encodePatchUpdate(instance, instanceId, properties, instanceMap, onUnresolvedRef)
 				if update then
 					table.insert(patch.updated, update)
 				end

@@ -3,7 +3,7 @@ source: tests/tests/connected_mode.rs
 expression: "socket_packet.intern_and_redact(&mut redactions, ())"
 ---
 body:
-  messageCursor: 1
+  messageCursor: "[message-cursor]"
   messages:
     - added: {}
       removed: []
@@ -15,5 +15,12 @@ body:
             Source:
               "!String": "-- api write\nreturn {}"
           id: id-3
+        - changedClassName: ~
+          changedMetadata: ~
+          changedName: ~
+          changedProperties:
+            Source:
+              "!String": "-- fs change\nprint('fs')"
+          id: id-4
 packetType: messages
 sessionId: id-1
