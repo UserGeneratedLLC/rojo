@@ -36,5 +36,5 @@ pub use snapshot::{
     RojoDescendants, RojoTree,
 };
 pub use snapshot_middleware::{snapshot_from_vfs, Middleware, ScriptType};
-pub use syncback::{syncback_loop, FsSnapshot, SyncbackData, SyncbackSnapshot};
+pub use syncback::{syncback_loop, FsSnapshot, SyncbackData, SyncbackResult, SyncbackSnapshot};
 pub use web::interface as web_api;

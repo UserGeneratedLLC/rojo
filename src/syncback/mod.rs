@@ -43,6 +43,19 @@ pub use property_filter::{
 pub use snapshot::{inst_path, SyncbackData, SyncbackSnapshot};
 pub use stats::SyncbackStats;
 
+/// Result of a syncback operation, containing everything needed for
+/// post-processing (file writes, sourcemap generation, etc.).
+pub struct SyncbackResult {
+    /// Filesystem operations to perform (file writes, directory creation, removals).
+    pub fs_snapshot: FsSnapshot,
+    /// The new instance tree from the Roblox file, after pruning and filtering.
+    /// Returned so callers can build sourcemaps without re-reading from disk.
+    pub new_tree: WeakDom,
+    /// Maps each instance Ref (in `new_tree`) to the file paths written for it.
+    /// Used to generate sourcemaps from in-memory data.
+    pub instance_paths: HashMap<Ref, Vec<PathBuf>>,
+}
+
 /// The name of an enviroment variable to use to override the behavior of
 /// syncback on model files.
 /// By default, syncback will use `Rbxm` for model files.
@@ -81,7 +94,7 @@ pub fn syncback_loop(
     new_tree: WeakDom,
     project: &Project,
     incremental: bool,
-) -> anyhow::Result<FsSnapshot> {
+) -> anyhow::Result<SyncbackResult> {
     syncback_loop_with_stats(vfs, old_tree, new_tree, project, incremental, None)
 }
 
@@ -94,7 +107,7 @@ pub fn syncback_loop_with_stats(
     project: &Project,
     incremental: bool,
     external_stats: Option<&SyncbackStats>,
-) -> anyhow::Result<FsSnapshot> {
+) -> anyhow::Result<SyncbackResult> {
     // Create internal stats if not provided externally
     let internal_stats = SyncbackStats::new();
     let stats = external_stats.unwrap_or(&internal_stats);
@@ -457,6 +470,7 @@ pub fn syncback_loop_with_stats(
     }];
 
     let mut fs_snapshot = FsSnapshot::new();
+    let mut instance_paths: HashMap<Ref, Vec<PathBuf>> = HashMap::new();
 
     'syncback: while let Some(snapshot) = snapshots.pop() {
         let inst_path = snapshot.get_new_inst_path(snapshot.new);
@@ -573,6 +587,18 @@ pub fn syncback_loop_with_stats(
         }
 
         // TODO provide replacement snapshots for e.g. two way sync
+
+        // Collect file paths for this instance before merging into the main snapshot.
+        // This builds the instance-to-path map used for sourcemap generation.
+        let files_for_instance: Vec<PathBuf> = syncback
+            .fs_snapshot
+            .added_files()
+            .into_iter()
+            .map(|p| p.to_path_buf())
+            .collect();
+        if !files_for_instance.is_empty() {
+            instance_paths.insert(snapshot.new, files_for_instance);
+        }
 
         fs_snapshot.merge_with_filter(syncback.fs_snapshot, |path| {
             is_valid_path(&ignore_patterns, project_path, path)
@@ -895,7 +921,11 @@ pub fn syncback_loop_with_stats(
         stats.log_summary();
     }
 
-    Ok(fs_snapshot)
+    Ok(SyncbackResult {
+        fs_snapshot,
+        new_tree,
+        instance_paths,
+    })
 }
 
 pub struct SyncbackReturn<'sync> {

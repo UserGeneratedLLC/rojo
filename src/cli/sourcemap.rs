@@ -276,6 +276,70 @@ pub(crate) fn write_sourcemap(
     Ok(())
 }
 
+/// Generates a sourcemap directly from a WeakDom and instance-to-path map,
+/// without creating a ServeSession or re-reading the filesystem.
+///
+/// Used by syncback to build the sourcemap from in-memory data in parallel
+/// with file writes.
+pub(crate) fn write_sourcemap_from_syncback(
+    dom: &rbx_dom_weak::WeakDom,
+    instance_paths: &std::collections::HashMap<Ref, Vec<PathBuf>>,
+    project_dir: &Path,
+    output: &Path,
+) -> anyhow::Result<()> {
+    let canonical_project_dir =
+        std::fs::canonicalize(project_dir).unwrap_or_else(|_| project_dir.to_path_buf());
+
+    let root_node =
+        recurse_create_node_from_dom(dom, dom.root_ref(), instance_paths, &canonical_project_dir);
+
+    let json_output = serde_json::to_string(&root_node)?;
+    write_atomic(output, json_output.as_bytes())?;
+
+    Ok(())
+}
+
+fn recurse_create_node_from_dom<'a>(
+    dom: &'a rbx_dom_weak::WeakDom,
+    referent: Ref,
+    instance_paths: &std::collections::HashMap<Ref, Vec<PathBuf>>,
+    project_dir: &Path,
+) -> Option<SourcemapNode<'a>> {
+    let instance = dom.get_by_ref(referent)?;
+
+    let children: Vec<_> = instance
+        .children()
+        .iter()
+        .filter_map(|&child_ref| {
+            recurse_create_node_from_dom(dom, child_ref, instance_paths, project_dir)
+        })
+        .collect();
+
+    if children.is_empty() && instance.class.as_str() == "DataModel" {
+        return None;
+    }
+
+    let file_paths: Vec<Cow<'a, Path>> = instance_paths
+        .get(&referent)
+        .map(|paths| {
+            paths
+                .iter()
+                .filter_map(|p| {
+                    let canonical = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
+                    pathdiff::diff_paths(&canonical, project_dir).map(Cow::Owned)
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    Some(SourcemapNode {
+        name: &instance.name,
+        class_name: instance.class,
+        file_paths,
+        children,
+    })
+}
+
 /// Writes data to a file atomically by writing to a temporary file first,
 /// then renaming it to the target path. This ensures file watchers never
 /// see partial file contents.

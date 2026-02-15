@@ -22,11 +22,7 @@ use crate::{
     syncback::{syncback_loop, FsSnapshot},
 };
 
-use super::{
-    resolve_path,
-    sourcemap::{filter_nothing, write_sourcemap},
-    GlobalOptions,
-};
+use super::{resolve_path, sourcemap::write_sourcemap_from_syncback, GlobalOptions};
 
 const UNKNOWN_INPUT_KIND_ERR: &str = "Could not detect what kind of file was inputted. \
                                        Expected input file to end in .rbxl, .rbxlx, .rbxm, or .rbxmx.";
@@ -195,7 +191,7 @@ impl SyncbackCommand {
         } else {
             log::info!("Beginning syncback (clean mode)...");
         }
-        let snapshot = syncback_loop(
+        let result = syncback_loop(
             session_old.vfs(),
             &mut dom_old,
             dom_new,
@@ -209,19 +205,17 @@ impl SyncbackCommand {
 
         let base_path = session_old.root_project().folder_location();
         if self.list {
-            list_files(&snapshot, global.color.into(), base_path)?;
+            list_files(&result.fs_snapshot, global.color.into(), base_path)?;
         }
 
-        // Drop dom_old early to release the mutex - we don't need it anymore
-        // and write_sourcemap needs to acquire the same lock
         drop(dom_old);
 
         if !self.dry_run {
             if self.interactive {
                 eprintln!(
                     "Would write {} files/folders and remove {} files/folders.",
-                    snapshot.added_paths().len(),
-                    snapshot.removed_paths().len()
+                    result.fs_snapshot.added_paths().len(),
+                    result.fs_snapshot.removed_paths().len()
                 );
                 eprint!("Is this okay? (Y/N): ");
                 io::stderr().flush()?;
@@ -233,45 +227,45 @@ impl SyncbackCommand {
                     return Ok(());
                 }
             }
+
             log::info!("Writing to the file system...");
-            snapshot.write_to_vfs_parallel(base_path, session_old.vfs())?;
+            let sourcemap_path = base_path.join("sourcemap.json");
+
+            // Run file writes and sourcemap generation in parallel.
+            // The sourcemap is built entirely from in-memory data (WeakDom + path map),
+            // so it doesn't need to wait for files to be on disk.
+            let (write_result, sourcemap_result) = std::thread::scope(|s| {
+                let write_handle = s.spawn(|| {
+                    result
+                        .fs_snapshot
+                        .write_to_vfs_parallel(base_path, session_old.vfs())
+                });
+
+                let sourcemap_handle = s.spawn(|| {
+                    write_sourcemap_from_syncback(
+                        &result.new_tree,
+                        &result.instance_paths,
+                        base_path,
+                        &sourcemap_path,
+                    )
+                });
+
+                (
+                    write_handle.join().unwrap(),
+                    sourcemap_handle.join().unwrap(),
+                )
+            });
+
+            write_result?;
             log::info!(
                 "Finished syncback: wrote {} files/folders, removed {}.",
-                snapshot.added_paths().len(),
-                snapshot.removed_paths().len()
+                result.fs_snapshot.added_paths().len(),
+                result.fs_snapshot.removed_paths().len()
             );
 
-            // Generate sourcemap after successful syncback.
-            // We need a fresh session that reads the post-syncback filesystem state,
-            // since session_old contains the pre-syncback tree.
-            //
-            // Note: This may fail if clean mode removed directories that the project
-            // references. This is expected for projects that have meta-only directories
-            // (e.g., `$path` pointing to a folder with only init.meta.json5). In such
-            // cases, we log a warning but don't fail the syncback.
-            let sourcemap_path = base_path.join("sourcemap.json");
-            let sourcemap_vfs = Vfs::new_oneshot();
-            match ServeSession::new_oneshot(sourcemap_vfs, path_old.clone()) {
-                Ok(sourcemap_session) => {
-                    write_sourcemap(
-                        &sourcemap_session,
-                        Some(&sourcemap_path),
-                        filter_nothing,
-                        false,
-                        true,
-                    )?;
-                    log::info!("Generated sourcemap at {}", sourcemap_path.display());
-                    // Avoid expensive drop
-                    forget(sourcemap_session);
-                }
-                Err(e) => {
-                    log::warn!(
-                        "Could not generate sourcemap after syncback: {}. \
-                        This can happen when clean mode removes directories that \
-                        only contain meta files.",
-                        e
-                    );
-                }
+            match sourcemap_result {
+                Ok(()) => log::info!("Generated sourcemap at {}", sourcemap_path.display()),
+                Err(e) => log::warn!("Could not generate sourcemap: {}", e),
             }
 
             // Refresh git index if in a git repository
@@ -291,8 +285,8 @@ impl SyncbackCommand {
         } else {
             log::info!(
                 "Would write {} files/folders and remove {} files/folders.",
-                snapshot.added_paths().len(),
-                snapshot.removed_paths().len()
+                result.fs_snapshot.added_paths().len(),
+                result.fs_snapshot.removed_paths().len()
             );
             log::info!("Aborting before writing to file system due to `--dry-run`");
         }
