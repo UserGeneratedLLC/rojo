@@ -31,6 +31,8 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+## [8.3.0] (February 15th, 2026)
+
 * Add two-way sync support for Ref properties via `Rojo_Ref_*` attributes. The plugin now detects Ref property changes in Studio and encodes them as path-based attributes; the server resolves paths back to instance Refs. ([#2])
 * Implement `RefPathIndex` for efficient resolution of `Rojo_Ref_*` attributes during forward sync, including ambiguous-path detection and graceful fallback for nonexistent targets.
 * Extend `ChangeProcessor` to handle `Rojo_Ref_*` attributes in filesystem writes during live two-way sync sessions.
@@ -59,6 +61,7 @@ Making a new release? Simply add the new header with the version and date undern
 
 </details>
 
+[8.3.0]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.3.0
 [#2]: https://github.com/UserGeneratedLLC/rojo/pull/2
 
 ## [8.2.0] (February 12th, 2026)

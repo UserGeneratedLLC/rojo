@@ -1,6 +1,6 @@
 [package]
 name = "atlas"
-version = "8.2.0"
+version = "8.3.0"
 rust-version = "1.88"
 authors = [
     "Lucien Greathouse <me@lpghatguy.com>",
@@ -62,7 +62,7 @@ crossbeam-channel = "0.5.15"
 csv = "1.4.0"
 env_logger = "0.11"
 fs-err = "3"
-futures = "0.3.31"
+futures = "0.3.32"
 globset = "0.4.18"
 humantime = "2.3.0"
 hyper = { version = "1", features = ["server", "http1"] }
@@ -96,7 +96,7 @@ toml = "0.9"
 termcolor = "1.4.1"
 thiserror = "2"
 tokio = { version = "1.49.0", features = ["rt", "rt-multi-thread", "macros"] }
-uuid = { version = "1.20.0", features = ["v4", "serde"] }
+uuid = { version = "1.21.0", features = ["v4", "serde"] }
 clap = { version = "4", features = ["derive"] }
 profiling = "1.0.17"
 yaml-rust2 = "0.11.0"
