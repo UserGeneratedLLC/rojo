@@ -749,6 +749,27 @@ impl JobThreadContext {
             .commit_event(&event)
             .expect("Error applying VFS change");
 
+        // On Windows, ReadDirectoryChangesW fires a directory-level WRITE event
+        // when a file inside the directory is modified, in addition to the
+        // file-level WRITE event. The directory event arrives first, but at that
+        // point the VFS cache still has the old file content (only the directory
+        // entry was committed, not the file). Re-snapshotting from the directory
+        // event reads stale data and produces incorrect patches. The file-level
+        // event that follows will correctly invalidate the cache and re-snapshot.
+        // Skip WRITE events for directories on Windows only -- macOS kqueue uses
+        // directory WRITE events meaningfully (e.g., file creation/deletion
+        // notifications) so they must be processed there.
+        #[cfg(target_os = "windows")]
+        if let VfsEvent::Write(ref path) = event {
+            if path.is_dir() {
+                log::info!(
+                    "VFS event SKIPPED (directory WRITE, deferring to file events): {}",
+                    self.display_path(path)
+                );
+                return Vec::new();
+            }
+        }
+
         // For a given VFS event, we might have many changes to different parts
         // of the tree. Calculate and apply all of these changes.
         let applied_patches = match event {
