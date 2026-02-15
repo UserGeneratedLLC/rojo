@@ -84,6 +84,7 @@ impl CloneCommand {
             dry_run: false,
             interactive: false,
             incremental: false,
+            sourcemap: false,
             working_dir: path.clone(),
         };
 

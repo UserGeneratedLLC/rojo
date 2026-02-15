@@ -71,6 +71,10 @@ pub struct SyncbackCommand {
     #[clap(long, short = 'n')]
     pub incremental: bool,
 
+    /// Generate a sourcemap.json file after syncback.
+    #[clap(long)]
+    pub sourcemap: bool,
+
     /// Base directory for resolving relative paths (project, input).
     /// Defaults to the current working directory.
     #[clap(long, hide = true, default_value = ".")]
@@ -229,44 +233,52 @@ impl SyncbackCommand {
             }
 
             log::info!("Writing to the file system...");
-            let sourcemap_path = base_path.join("sourcemap.json");
 
-            // Run file writes and sourcemap generation in parallel.
-            // The sourcemap is built entirely from in-memory data (WeakDom + path map),
-            // so it doesn't need to wait for files to be on disk.
-            let (write_result, sourcemap_result) = std::thread::scope(|s| {
-                let write_handle = s.spawn(|| {
-                    result
-                        .fs_snapshot
-                        .write_to_vfs_parallel(base_path, session_old.vfs())
-                });
+            if self.sourcemap {
+                let sourcemap_path = base_path.join("sourcemap.json");
 
-                let sourcemap_handle = s.spawn(|| {
-                    write_sourcemap_from_syncback(
-                        &result.new_tree,
-                        &result.instance_paths,
-                        base_path,
-                        &sourcemap_path,
+                // Run file writes and sourcemap generation in parallel.
+                // The sourcemap is built entirely from in-memory data (WeakDom + path map),
+                // so it doesn't need to wait for files to be on disk.
+                let (write_result, sourcemap_result) = std::thread::scope(|s| {
+                    let write_handle = s.spawn(|| {
+                        result
+                            .fs_snapshot
+                            .write_to_vfs_parallel(base_path, session_old.vfs())
+                    });
+
+                    let sourcemap_handle = s.spawn(|| {
+                        write_sourcemap_from_syncback(
+                            &result.new_tree,
+                            &result.instance_paths,
+                            base_path,
+                            &sourcemap_path,
+                        )
+                    });
+
+                    (
+                        write_handle.join().unwrap(),
+                        sourcemap_handle.join().unwrap(),
                     )
                 });
 
-                (
-                    write_handle.join().unwrap(),
-                    sourcemap_handle.join().unwrap(),
-                )
-            });
+                write_result?;
 
-            write_result?;
+                match sourcemap_result {
+                    Ok(()) => log::info!("Generated sourcemap at {}", sourcemap_path.display()),
+                    Err(e) => log::warn!("Could not generate sourcemap: {}", e),
+                }
+            } else {
+                result
+                    .fs_snapshot
+                    .write_to_vfs_parallel(base_path, session_old.vfs())?;
+            }
+
             log::info!(
                 "Finished syncback: wrote {} files/folders, removed {}.",
                 result.fs_snapshot.added_paths().len(),
                 result.fs_snapshot.removed_paths().len()
             );
-
-            match sourcemap_result {
-                Ok(()) => log::info!("Generated sourcemap at {}", sourcemap_path.display()),
-                Err(e) => log::warn!("Could not generate sourcemap: {}", e),
-            }
 
             // Refresh git index if in a git repository
             refresh_git_index(base_path);

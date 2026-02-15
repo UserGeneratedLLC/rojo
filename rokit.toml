@@ -2,5 +2,5 @@
 selene = "Kampfkarren/selene@0.30.0"
 stylua = "JohnnyMorganz/stylua@2.3.1"
 luau = "luau-lang/luau@0.708"
-luau-lsp = "JohnnyMorganz/luau-lsp@1.61.0"
+luau-lsp = "JohnnyMorganz/luau-lsp@1.62.0"
 run-in-roblox = "rojo-rbx/run-in-roblox@0.3.0"

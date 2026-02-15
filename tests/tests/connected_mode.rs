@@ -853,9 +853,18 @@ fn api_write_then_filesystem_change() {
         session.post_api_write(&write_request).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(500));
 
-        // Now make a filesystem change to a DIFFERENT file
-        let socket_packet = session
-            .recv_socket_packet(SocketPacketType::Messages, 0, || {
+        // Drain the API write's patch message first. Subscribing at cursor 0
+        // gets it immediately, which on macOS would start the settle timer
+        // before the filesystem event arrives (FSEvents latency > 100ms).
+        let api_packet = session
+            .get_api_socket_packet(SocketPacketType::Messages, 0)
+            .unwrap();
+        let api_cursor = crate::rojo_test::serve_util::get_message_cursor(&api_packet);
+
+        // Now subscribe at the post-API cursor and make the filesystem change.
+        // The settle timer won't start until this new event actually arrives.
+        let fs_packet = session
+            .recv_socket_packet(SocketPacketType::Messages, api_cursor, || {
                 fs::write(
                     session.path().join("src/server.server.luau"),
                     "-- fs change\nprint('fs')",
@@ -863,9 +872,13 @@ fn api_write_then_filesystem_change() {
                 .unwrap();
             })
             .unwrap();
+
+        // Merge both packets for the combined snapshot assertion
+        let mut combined = api_packet;
+        crate::rojo_test::serve_util::merge_socket_packets(&mut combined, fs_packet);
         assert_yaml_snapshot!(
             "connected_api_then_fs_patch",
-            socket_packet.intern_and_redact(&mut redactions, ())
+            combined.intern_and_redact(&mut redactions, ())
         );
 
         assert_round_trip(&session, root_id);

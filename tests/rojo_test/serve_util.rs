@@ -568,7 +568,7 @@ pub fn assert_round_trip(session: &TestServeSession, root_id: Ref) {
 /// (e.g., rename = REMOVE + CREATE on Windows) into a single logical packet
 /// for snapshot comparison. Takes the highest message cursor and combines
 /// all added/removed/updated entries into one message.
-fn merge_socket_packets(base: &mut SocketPacket<'static>, other: SocketPacket<'static>) {
+pub fn merge_socket_packets(base: &mut SocketPacket<'static>, other: SocketPacket<'static>) {
     match (&mut base.body, other.body) {
         (SocketPacketBody::Messages(base_msgs), SocketPacketBody::Messages(other_msgs)) => {
             base_msgs.message_cursor = base_msgs.message_cursor.max(other_msgs.message_cursor);
