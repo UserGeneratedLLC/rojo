@@ -39,6 +39,11 @@ pub struct AdjacentMetadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
 
+    /// Whether this instance was serialized as an rbxm because it had
+    /// duplicate-named children (an "ambiguous container").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ambiguous_container: Option<bool>,
+
     #[serde(skip)]
     pub path: PathBuf,
 }
@@ -96,6 +101,11 @@ impl AdjacentMetadata {
 
         meta.path = path;
         Ok(meta)
+    }
+
+    /// Public wrapper for constructing an `AdjacentMetadata` from bytes and a path.
+    pub fn from_slice_with_path(slice: &[u8], path: PathBuf) -> anyhow::Result<Self> {
+        Self::from_slice(slice, path)
     }
 
     /// Constructs an `AdjacentMetadata` from the provided snapshot, assuming it
@@ -181,6 +191,7 @@ impl AdjacentMetadata {
             properties,
             attributes,
             name,
+            ambiguous_container: None,
             path,
             id: None,
             schema,
@@ -262,6 +273,7 @@ impl AdjacentMetadata {
         self.apply_id(snapshot)?;
         self.apply_schema(snapshot)?;
         self.apply_name(snapshot)?;
+        self.apply_ambiguous_container(snapshot);
         Ok(())
     }
 
@@ -271,12 +283,20 @@ impl AdjacentMetadata {
     /// - The number of properties and attributes is 0
     /// - `ignore_unknown_instances` is None
     /// - `name` is None
+    /// - `ambiguous_container` is None
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.attributes.is_empty()
             && self.properties.is_empty()
             && self.ignore_unknown_instances.is_none()
             && self.name.is_none()
+            && self.ambiguous_container.is_none()
+    }
+
+    fn apply_ambiguous_container(&mut self, snapshot: &mut InstanceSnapshot) {
+        if let Some(ambiguous) = self.ambiguous_container.take() {
+            snapshot.metadata.ambiguous_container = ambiguous;
+        }
     }
 
     // TODO: Add method to allow selectively applying parts of metadata and

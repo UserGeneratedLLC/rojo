@@ -3,6 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use anyhow::Context;
 use rbx_dom_weak::{
     types::{Ref, Variant},
     ustr, Instance, InstanceBuilder, Ustr, UstrMap, WeakDom,
@@ -10,7 +11,7 @@ use rbx_dom_weak::{
 
 use crate::{multimap::MultiMap, RojoRef};
 
-use super::{InstanceMetadata, InstanceSnapshot};
+use super::{InstigatingSource, InstanceMetadata, InstanceSnapshot};
 
 /// An expanded variant of rbx_dom_weak's `WeakDom` that tracks additional
 /// metadata per instance that's Rojo-specific.
@@ -267,6 +268,77 @@ impl RojoTree {
         }
 
         Some(current_ref)
+    }
+
+    /// Walks up from `instance_id` to find the nearest ancestor whose
+    /// `instigating_source` is a `.rbxm` file. Returns the ancestor's Ref
+    /// and the rbxm path. Returns `None` if a non-rbxm InstigatingSource
+    /// is found first, or if the root is reached.
+    pub fn find_rbxm_container(&self, instance_id: Ref) -> Option<(Ref, PathBuf)> {
+        let mut current = instance_id;
+        loop {
+            let metadata = self.metadata_map.get(&current)?;
+            if let Some(ref source) = metadata.instigating_source {
+                match source {
+                    InstigatingSource::Path(path) => {
+                        if path.extension().is_some_and(|ext| ext == "rbxm") {
+                            return Some((current, path.clone()));
+                        }
+                        return None;
+                    }
+                    InstigatingSource::ProjectNode { .. } => {
+                        return None;
+                    }
+                }
+            }
+            let instance = self.inner.get_by_ref(current)?;
+            let parent = instance.parent();
+            if !parent.is_some() || parent == self.inner.root_ref() {
+                return None;
+            }
+            current = parent;
+        }
+    }
+
+    /// Re-serializes the subtree rooted at `container_ref` as rbxm binary data.
+    pub fn reserialize_rbxm_container(&self, container_ref: Ref) -> anyhow::Result<Vec<u8>> {
+        let mut buffer = Vec::new();
+        rbx_binary::to_writer(&mut buffer, &self.inner, &[container_ref])
+            .context("failed to re-serialize rbxm container")?;
+        Ok(buffer)
+    }
+
+    /// Clears the `instigating_source` and `relevant_paths` for all descendants
+    /// of the given instance (not including the instance itself). This is used
+    /// when converting a directory to an rbxm container, where descendants no
+    /// longer have their own filesystem paths.
+    pub fn clear_descendant_sources(&mut self, id: Ref) {
+        let instance = match self.inner.get_by_ref(id) {
+            Some(inst) => inst,
+            None => return,
+        };
+        let children: Vec<Ref> = instance.children().to_vec();
+        for child_ref in children {
+            self.clear_sources_recursive(child_ref);
+        }
+    }
+
+    fn clear_sources_recursive(&mut self, id: Ref) {
+        if let Some(metadata) = self.metadata_map.get_mut(&id) {
+            for path in &metadata.relevant_paths {
+                self.path_to_ids.remove(path, id);
+            }
+            metadata.relevant_paths.clear();
+            metadata.instigating_source = None;
+        }
+        let children: Vec<Ref> = self
+            .inner
+            .get_by_ref(id)
+            .map(|inst| inst.children().to_vec())
+            .unwrap_or_default();
+        for child_ref in children {
+            self.clear_sources_recursive(child_ref);
+        }
     }
 
     fn insert_metadata(&mut self, id: Ref, metadata: InstanceMetadata) {

@@ -1,12 +1,13 @@
 use std::path::Path;
 
 use anyhow::Context;
-use memofs::Vfs;
+use memofs::{IoResultExt as _, Vfs};
 use rbx_dom_weak::{types::Ref, InstanceBuilder, WeakDom};
 
 use crate::{
     glob::Glob,
     snapshot::{InstanceContext, InstanceMetadata, InstanceSnapshot},
+    snapshot_middleware::meta_file::AdjacentMetadata,
     syncback::{inst_path, FsSnapshot, SyncbackReturn, SyncbackSnapshot},
 };
 
@@ -25,7 +26,7 @@ pub fn snapshot_rbxm(
 
     if children.len() == 1 {
         let child = children[0];
-        let snapshot = InstanceSnapshot::from_tree(temp_tree, child)
+        let mut snapshot = InstanceSnapshot::from_tree(temp_tree, child)
             .name(name)
             .metadata(
                 InstanceMetadata::new()
@@ -33,6 +34,22 @@ pub fn snapshot_rbxm(
                     .relevant_paths(vec![vfs.canonicalize(path)?])
                     .context(context),
             );
+
+        // Check for adjacent .meta.json5 file which may contain an
+        // ambiguousContainer flag and/or a name override for this rbxm.
+        let meta_path = path.with_extension("meta.json5");
+        if let Some(meta_contents) = vfs.read(&meta_path).with_not_found()? {
+            let mut meta = AdjacentMetadata::from_slice_with_path(
+                &meta_contents,
+                meta_path.clone(),
+            )?;
+            meta.apply_all(&mut snapshot)?;
+            snapshot.metadata.relevant_paths.push(meta_path);
+        } else {
+            // Even if the meta file doesn't exist, add it to relevant_paths
+            // so that creating one later triggers re-snapshotting.
+            snapshot.metadata.relevant_paths.push(meta_path);
+        }
 
         Ok(Some(snapshot))
     } else {

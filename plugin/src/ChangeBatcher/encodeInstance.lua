@@ -160,18 +160,14 @@ local function encodeTags(instance, properties)
 end
 
 encodeInstance = function(instance, parentId, _skipPathCheck)
-	-- Check if the entire path to this instance is unique (unless we're in a recursive call)
-	-- For top-level instances, we check the entire ancestor chain for duplicates
-	-- For children, the parent already verified the path is unique up to that point,
-	-- so we only need to check siblings at each level (done in the recursion below)
+	-- Log duplicate-named siblings as a warning (server handles them via
+	-- rbxm container serialization) but do NOT skip encoding.
 	if not _skipPathCheck and not isPathUnique(instance) then
-		skippedDuplicateCount += 1
-		Log.warn(
-			"Skipped instance '{}' ({}) - path contains duplicate-named siblings (cannot reliably sync)",
+		Log.debug(
+			"Instance '{}' ({}) has duplicate-named siblings in path (server will handle via rbxm container)",
 			instance:GetFullName(),
 			instance.ClassName
 		)
-		return nil
 	end
 
 	-- Log encoding at trace level (very detailed)
@@ -256,24 +252,12 @@ encodeInstance = function(instance, parentId, _skipPathCheck)
 		end
 	end
 
-	-- Recursively encode children, skipping those with duplicate names
+	-- Recursively encode children (including those with duplicate names;
+	-- the server handles duplicates via rbxm container serialization)
 	local children = {}
 	local childInstances = instance:GetChildren()
-	local childDuplicates = findDuplicateNames(childInstances)
 
 	for _, child in ipairs(childInstances) do
-		-- Skip children with duplicate names
-		if childDuplicates[child.Name] then
-			skippedDuplicateCount += 1
-			Log.warn(
-				"Skipped child instance '{}' ({}) - has duplicate-named siblings (cannot reliably sync)",
-				child:GetFullName(),
-				child.ClassName
-			)
-			continue
-		end
-
-		-- Pass true to skip duplicate check since we already checked above
 		local encodedChild = encodeInstance(child, nil, true)
 		if encodedChild then
 			table.insert(children, encodedChild)

@@ -190,86 +190,9 @@ local function diff(instanceMap, virtualInstances, rootId, serverInfo)
 		end
 	end
 
-	-- Count of locations with duplicate-named siblings
-	local skippedDuplicateCount = 0
-
-	-- Pre-scan to find ALL instances that are in an ambiguous path
-	-- (i.e., they or any of their ancestors have duplicate-named siblings)
-	local ambiguousIds: { [string]: boolean } = {}
-
-	local function markSubtreeAmbiguous(id)
-		if ambiguousIds[id] then
-			return
-		end
-		ambiguousIds[id] = true
-
-		local virtualInstance = virtualInstances[id]
-		if virtualInstance then
-			for _, childId in ipairs(virtualInstance.Children) do
-				markSubtreeAmbiguous(childId)
-			end
-		end
-	end
-
-	-- Recursively scan for duplicates and mark ambiguous subtrees
-	local function scanForDuplicates(id)
-		local virtualInstance = virtualInstances[id]
-		if not virtualInstance then
-			return
-		end
-
-		local instance = instanceMap.fromIds[id]
-
-		-- Detect duplicate names among real DOM children (if instance exists)
-		local realDuplicates: { [string]: boolean } = {}
-		if instance then
-			local realChildren = instance:GetChildren()
-			realDuplicates = findDuplicateNames(realChildren)
-
-			-- Count locations with duplicates
-			if next(realDuplicates) then
-				skippedDuplicateCount += 1
-			end
-		end
-
-		-- Detect duplicate names among virtual DOM children
-		local virtualDuplicates = findDuplicateNames(virtualInstance.Children, virtualInstances)
-
-		-- Merge duplicates from both sides
-		local allDuplicates: { [string]: boolean } = {}
-		for name in realDuplicates do
-			allDuplicates[name] = true
-		end
-		for name in virtualDuplicates do
-			allDuplicates[name] = true
-		end
-
-		-- Mark all children with duplicate names (and their entire subtrees) as ambiguous
-		for _, childId in ipairs(virtualInstance.Children) do
-			local virtualChild = virtualInstances[childId]
-			if virtualChild and allDuplicates[virtualChild.Name] then
-				markSubtreeAmbiguous(childId)
-			end
-		end
-
-		-- Recurse into non-ambiguous children to find deeper duplicates
-		for _, childId in ipairs(virtualInstance.Children) do
-			if not ambiguousIds[childId] then
-				scanForDuplicates(childId)
-			end
-		end
-	end
-
-	-- First pass: scan entire tree to find all ambiguous paths
-	scanForDuplicates(rootId)
-
 	-- Add a virtual instance and all of its descendants to the patch, marked as
-	-- being added. Skip ambiguous instances.
+	-- being added.
 	local function markIdAdded(id)
-		if ambiguousIds[id] then
-			return
-		end
-
 		local virtualInstance = virtualInstances[id]
 		patch.added[id] = virtualInstance
 
@@ -280,11 +203,6 @@ local function diff(instanceMap, virtualInstances, rootId, serverInfo)
 
 	-- Internal recursive kernel for diffing an instance with the given ID.
 	local function diffInternal(id)
-		-- Skip entirely if this instance is in an ambiguous path
-		if ambiguousIds[id] then
-			return true
-		end
-
 		local virtualInstance = virtualInstances[id]
 		local instance = instanceMap.fromIds[id]
 
@@ -387,11 +305,6 @@ local function diff(instanceMap, virtualInstances, rootId, serverInfo)
 
 			local childId = instanceMap.fromInstances[childInstance]
 
-			-- Skip children in ambiguous paths
-			if childId and ambiguousIds[childId] then
-				continue
-			end
-
 			if childId == nil then
 				-- pcall to avoid security permission errors
 				local success, skip = pcall(function()
@@ -400,14 +313,6 @@ local function diff(instanceMap, virtualInstances, rootId, serverInfo)
 					return childInstance.Archivable == false
 				end)
 				if success and skip then
-					continue
-				end
-
-				-- Check if this unmapped child has a duplicate name among siblings
-				-- If so, skip it (we can't reliably determine what to do with it)
-				local siblings = instance:GetChildren()
-				local siblingDuplicates = findDuplicateNames(siblings)
-				if siblingDuplicates[childInstance.Name] then
 					continue
 				end
 
@@ -441,11 +346,6 @@ local function diff(instanceMap, virtualInstances, rootId, serverInfo)
 		-- Traverse the list of children in the virtual DOM. Any virtual
 		-- instance that has no corresponding real instance should be created.
 		for _, childId in ipairs(virtualInstance.Children) do
-			-- Skip children in ambiguous paths
-			if ambiguousIds[childId] then
-				continue
-			end
-
 			local childInstance = instanceMap.fromIds[childId]
 
 			if childInstance == nil then
@@ -459,11 +359,6 @@ local function diff(instanceMap, virtualInstances, rootId, serverInfo)
 	end
 
 	local diffSuccess, err = diffInternal(rootId)
-
-	-- Log count of skipped duplicates
-	if skippedDuplicateCount > 0 then
-		Log.warn("Skipped {} location(s) with duplicate-named siblings (cannot reliably sync)", skippedDuplicateCount)
-	end
 
 	if not diffSuccess then
 		return false, err

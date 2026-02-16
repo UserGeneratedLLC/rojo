@@ -34,7 +34,7 @@ isProject: false
 
 **New system (slugify + dedup + metadata name):** Two layers working together:
 
-1. `**slugify_name()**` -- pure, stateless. Replaces forbidden chars with `_`. Identical inputs produce identical outputs.
+1. `**slugify_name()`** -- pure, stateless. Replaces forbidden chars with `_`. Identical inputs produce identical outputs.
 2. `**deduplicate_name()**` -- stateful, called at write sites. Takes a slug and a set of already-claimed names, appends `~1`, `~2`, etc. on collision. The filesystem name is just an opaque identifier.
 3. **Metadata `name` field** -- the authoritative instance name, stored in `.meta.json` / `.model.json`. Always written when the slug differs from the real name (including when `~N` suffix is appended).
 

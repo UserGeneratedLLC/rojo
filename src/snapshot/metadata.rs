@@ -72,6 +72,12 @@ pub struct InstanceMetadata {
     /// be slugified to remove illegal characters.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub specified_name: Option<String>,
+
+    /// Whether this instance was serialized as an rbxm container because it
+    /// had duplicate-named children. When true, the instance may be expanded
+    /// back to a directory if the duplicates are resolved.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub ambiguous_container: bool,
 }
 
 impl InstanceMetadata {
@@ -85,6 +91,7 @@ impl InstanceMetadata {
             middleware: None,
             schema: None,
             specified_name: None,
+            ambiguous_container: false,
         }
     }
 
@@ -137,6 +144,13 @@ impl InstanceMetadata {
     pub fn specified_name(self, specified_name: Option<String>) -> Self {
         Self {
             specified_name,
+            ..self
+        }
+    }
+
+    pub fn ambiguous_container(self, ambiguous_container: bool) -> Self {
+        Self {
+            ambiguous_container,
             ..self
         }
     }

@@ -924,16 +924,6 @@ impl ApiService {
             .get_instance(parent_ref)
             .context("Parent instance not found in Rojo tree")?;
 
-        // Check if the parent path is unique (no duplicate-named siblings at any level)
-        // Uses pre-computed cache for O(d) instead of O(d × s) complexity
-        if !Self::is_tree_path_unique_with_cache(tree, parent_ref, duplicate_siblings_cache, stats)
-        {
-            anyhow::bail!(
-                "Cannot sync instance '{}' - parent path contains duplicate-named siblings",
-                added.name
-            );
-        }
-
         // CRITICAL: Check if instance already exists in tree before creating new files.
         // This prevents duplicate file creation when the plugin sends an instance
         // that already exists (e.g., user "pulls" an instance that appeared as
@@ -1654,46 +1644,16 @@ impl ApiService {
         true
     }
 
-    /// Check for duplicate names among children and return the set of unique children
-    /// that should be synced. Records skipped instances via stats tracker.
+    /// Returns all children for syncing. Previously filtered out duplicates,
+    /// but now the server handles duplicate-named children via rbxm container
+    /// serialization.
     fn filter_duplicate_children<'a>(
         &self,
         children: &'a [crate::web::interface::AddedInstance],
-        parent_path: &str,
-        stats: &crate::syncback::SyncbackStats,
+        _parent_path: &str,
+        _stats: &crate::syncback::SyncbackStats,
     ) -> Vec<&'a crate::web::interface::AddedInstance> {
-        use std::collections::HashMap;
-
-        // Count occurrences of each name
-        let mut name_counts: HashMap<&str, usize> = HashMap::new();
-        for child in children {
-            *name_counts.entry(&child.name).or_insert(0) += 1;
-        }
-
-        // Find duplicates
-        let duplicates: std::collections::HashSet<&str> = name_counts
-            .iter()
-            .filter(|(_, &count)| count > 1)
-            .map(|(&name, _)| name)
-            .collect();
-
-        // Record skipped duplicates in stats
-        if !duplicates.is_empty() {
-            let mut skipped_count = 0;
-            for child in children {
-                if duplicates.contains(child.name.as_str()) {
-                    skipped_count += 1;
-                }
-            }
-            let duplicate_list: Vec<&str> = duplicates.iter().copied().collect();
-            stats.record_duplicate_names_batch(parent_path, &duplicate_list, skipped_count);
-        }
-
-        // Return only non-duplicate children
-        children
-            .iter()
-            .filter(|child| !duplicates.contains(child.name.as_str()))
-            .collect()
+        children.iter().collect()
     }
 
     /// Detects what file format currently exists on disk for a given instance.
@@ -2646,11 +2606,25 @@ impl ApiService {
             .get_instance(update.id)
             .context("Instance not found in tree for property persistence")?;
 
-        let instigating_source = instance
-            .metadata()
-            .instigating_source
-            .as_ref()
-            .context("Instance has no filesystem path")?;
+        let instigating_source = instance.metadata().instigating_source.as_ref();
+
+        // If the instance has no instigating_source, it may be inside an rbxm
+        // container. In that case, property writes are handled by re-serializing
+        // the container in the change_processor after the tree is updated.
+        let instigating_source = match instigating_source {
+            Some(source) => source,
+            None => {
+                if tree.find_rbxm_container(update.id).is_some() {
+                    log::debug!(
+                        "Instance {:?} is inside an rbxm container; \
+                         property write deferred to change_processor",
+                        update.id
+                    );
+                    return Ok(());
+                }
+                anyhow::bail!("Instance has no filesystem path");
+            }
+        };
 
         // ProjectNode instances are defined in the project file. Writing meta
         // JSON to the project file path would corrupt it. Only filesystem-backed

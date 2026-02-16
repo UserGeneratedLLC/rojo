@@ -43,6 +43,30 @@ pub use property_filter::{
 pub use snapshot::{inst_path, SyncbackData, SyncbackSnapshot};
 pub use stats::SyncbackStats;
 
+/// Returns `true` if the given instance has two or more children with the
+/// same name (case-insensitive). Used to detect "ambiguous containers" that
+/// need to be serialized as rbxm files.
+pub fn has_duplicate_children(dom: &WeakDom, inst_ref: Ref) -> bool {
+    let inst = match dom.get_by_ref(inst_ref) {
+        Some(inst) => inst,
+        None => return false,
+    };
+    let children = inst.children();
+    if children.len() < 2 {
+        return false;
+    }
+    let mut seen: HashSet<String> = HashSet::with_capacity(children.len());
+    for &child_ref in children {
+        if let Some(child) = dom.get_by_ref(child_ref) {
+            let lower_name = child.name.to_lowercase();
+            if !seen.insert(lower_name) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Result of a syncback operation, containing everything needed for
 /// post-processing (file writes, sourcemap generation, etc.).
 pub struct SyncbackResult {
@@ -507,7 +531,20 @@ pub fn syncback_loop_with_stats(
             }
         }
 
+        // Check if this instance is an ambiguous container that should expand back
+        let old_was_ambiguous_rbxm = snapshot
+            .old_inst()
+            .map(|inst| {
+                inst.metadata().middleware == Some(Middleware::Rbxm)
+                    && inst.metadata().ambiguous_container
+            })
+            .unwrap_or(false);
+
         let middleware = get_best_middleware(&snapshot);
+
+        // Expansion resolved if old was ambiguous rbxm but new middleware is no longer Rbxm
+        let expansion_resolved =
+            old_was_ambiguous_rbxm && !matches!(middleware, Middleware::Rbxm);
 
         log::trace!(
             "Middleware for {inst_path} is {:?} (path is {})",
@@ -522,7 +559,7 @@ pub fn syncback_loop_with_stats(
 
         let syncback = match middleware.syncback(&snapshot) {
             Ok(syncback) => syncback,
-            Err(err) if middleware == Middleware::Dir => {
+            Err(err) if is_dir_middleware(middleware) => {
                 let new_middleware = match env::var(DEBUG_MODEL_FORMAT_VAR) {
                     Ok(value) if value == "1" => Middleware::Rbxmx,
                     Ok(value) if value == "2" => Middleware::JsonModel,
@@ -538,21 +575,62 @@ pub fn syncback_loop_with_stats(
                     "{file_name}.{}",
                     extension_for_middleware(new_middleware)
                 ));
-                let new_snapshot = snapshot.with_new_path(path, snapshot.new, snapshot.old);
+                let new_snapshot = snapshot.with_new_path(path.clone(), snapshot.new, snapshot.old);
                 // Record the fallback in stats instead of warning directly
                 stats.record_rbxm_fallback(&inst_path, &err.to_string());
-                let new_syncback_result = new_middleware
+                let mut new_syncback_result = new_middleware
                     .syncback(&new_snapshot)
                     .with_context(|| format!("Failed to syncback {inst_path}"));
-                if new_syncback_result.is_ok() && snapshot.old_inst().is_some() {
-                    // We need to remove the old FS representation if we're
-                    // reserializing it as an rbxm.
-                    fs_snapshot.remove_dir(&snapshot.path);
+                if let Ok(ref mut syncback_return) = new_syncback_result {
+                    if snapshot.old_inst().is_some() {
+                        // Remove the old FS representation since we're
+                        // reserializing it as an rbxm container.
+                        fs_snapshot.remove_dir(&snapshot.path);
+                    }
+                    // Write adjacent .meta.json5 with ambiguousContainer flag
+                    // so that forward sync can detect this is an auto-created
+                    // rbxm and expansion can occur when duplicates are resolved.
+                    let is_ambiguous =
+                        has_duplicate_children(snapshot.new_tree(), snapshot.new);
+                    if is_ambiguous {
+                        let meta_path = path.with_extension("meta.json5");
+                        let inst_name = snapshot.new_inst().name.clone();
+                        let name_field = if snapshot.needs_meta_name {
+                            Some(inst_name)
+                        } else {
+                            None
+                        };
+                        let meta_json = if let Some(ref name) = name_field {
+                            let escaped_name =
+                                name.replace('\\', "\\\\").replace('"', "\\\"");
+                            format!(
+                                "{{\n  ambiguousContainer: true,\n  name: \"{escaped_name}\",\n}}\n"
+                            )
+                        } else {
+                            "{\n  ambiguousContainer: true,\n}\n".to_string()
+                        };
+                        syncback_return
+                            .fs_snapshot
+                            .add_file(&meta_path, meta_json.into_bytes());
+                    }
                 }
                 new_syncback_result?
             }
             Err(err) => anyhow::bail!("Failed to syncback {inst_path} because {err}"),
         };
+
+        // Handle expansion: if old middleware was Rbxm (ambiguous container)
+        // and we're now using a Dir middleware, remove the old rbxm + meta files.
+        if expansion_resolved {
+            if let Some(old_inst) = snapshot.old_inst() {
+                if let Some(ref source) = old_inst.metadata().instigating_source {
+                    let rbxm_path = source.path();
+                    fs_snapshot.remove_file(rbxm_path);
+                    let meta_path = rbxm_path.with_extension("meta.json5");
+                    fs_snapshot.remove_file(&meta_path);
+                }
+            }
+        }
 
         if !syncback.removed_children.is_empty() {
             log::debug!(
@@ -934,21 +1012,58 @@ pub struct SyncbackReturn<'sync> {
     pub removed_children: Vec<InstanceWithMeta<'sync>>,
 }
 
+/// Returns `true` if the given middleware is a directory-like variant that
+/// processes children and may encounter duplicate-named children.
+pub fn is_dir_middleware(m: Middleware) -> bool {
+    matches!(
+        m,
+        Middleware::Dir
+            | Middleware::ServerScriptDir
+            | Middleware::ClientScriptDir
+            | Middleware::ModuleScriptDir
+            | Middleware::PluginScriptDir
+            | Middleware::LegacyScriptDir
+            | Middleware::LocalScriptDir
+            | Middleware::CsvDir
+    )
+}
+
 pub fn get_best_middleware(snapshot: &SyncbackSnapshot) -> Middleware {
     let old_middleware = snapshot
         .old_inst()
         .and_then(|inst| inst.metadata().middleware);
     let inst = snapshot.new_inst();
 
+    // Check if an old Rbxm middleware was created due to ambiguous children
+    // and whether the duplicates have since been resolved. If so, recalculate
+    // from scratch as if there was no old middleware.
+    let expansion_resolved = old_middleware == Some(Middleware::Rbxm)
+        && snapshot
+            .old_inst()
+            .map(|i| i.metadata().ambiguous_container)
+            .unwrap_or(false)
+        && !has_duplicate_children(snapshot.new_tree(), snapshot.new);
+
+    if expansion_resolved {
+        log::info!(
+            "Ambiguous container resolved for {}, expanding back to directory",
+            inst.name,
+        );
+    }
+
     let mut middleware;
 
     if let Some(override_middleware) = snapshot.middleware {
         return override_middleware;
-    } else if let Some(old_middleware) = old_middleware {
+    }
+
+    let use_old_middleware = old_middleware.is_some() && !expansion_resolved;
+
+    if use_old_middleware {
         // Use old middleware, but upgrade to *Dir variant if new instance has children
         // This handles cases where the old file was a single file (e.g., Csv)
         // but the new instance has children (needs CsvDir)
-        middleware = old_middleware;
+        middleware = old_middleware.unwrap();
     } else {
         // Specific classes that need special middleware, everything else defaults to JsonModel
         middleware = match inst.class.as_str() {

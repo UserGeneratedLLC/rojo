@@ -2,6 +2,7 @@ use crossbeam_channel::{select, Receiver, RecvError, Sender};
 use jod_thread::JoinHandle;
 use memofs::{IoResultExt, Vfs, VfsEvent};
 use rbx_dom_weak::types::{Ref, Variant};
+use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -1040,6 +1041,9 @@ impl JobThreadContext {
             //
             // The PatchSet removal only needs to update the DOM tree (handled
             // by apply_patch_set below).
+            // Track rbxm containers that need re-serialization after removals
+            let mut rbxm_removal_containers: HashMap<Ref, PathBuf> = HashMap::new();
+
             for &id in &patch_set.removed_instances {
                 if let Some(instance) = tree.get_instance(id) {
                     if let Some(instigating_source) = &instance.metadata().instigating_source {
@@ -1058,6 +1062,16 @@ impl JobThreadContext {
                                 );
                             }
                         }
+                    } else if let Some((container_ref, rbxm_path)) =
+                        tree.find_rbxm_container(id)
+                    {
+                        log::info!(
+                            "Two-way sync: Removing instance {:?} from rbxm container",
+                            id
+                        );
+                        rbxm_removal_containers
+                            .entry(container_ref)
+                            .or_insert(rbxm_path);
                     } else {
                         log::warn!(
                             "Cannot remove instance {:?}, it is not an instigating source.",
@@ -1073,6 +1087,7 @@ impl JobThreadContext {
             // filesystem path changed (rename / ClassName transition).
             // Applied after the PatchSet to keep metadata in sync.
             let mut metadata_updates: Vec<(Ref, PathBuf)> = Vec::new();
+            let mut rbxm_containers_to_reserialize: HashMap<Ref, PathBuf> = HashMap::new();
 
             for update in &patch_set.updated_instances {
                 let id = update.id;
@@ -1526,56 +1541,75 @@ impl JobThreadContext {
                         log::warn!("Cannot change metadata yet.");
                     }
 
-                    for (key, changed_value) in &update.changed_properties {
-                        if key == "Source" {
-                            // If a rename or ClassName change moved the file
-                            // earlier in this update, write to the new location
-                            // instead of the stale instigating_source path.
-                            let source_path = if let Some(ref overridden) = overridden_source_path {
-                                Some(overridden.clone())
-                            } else if let Some(instigating_source) =
-                                &instance.metadata().instigating_source
-                            {
-                                match instigating_source {
-                                    InstigatingSource::Path(path) => Some(path.clone()),
-                                    InstigatingSource::ProjectNode { .. } => {
+                    // Check if this instance is inside an rbxm container.
+                    // If so, all property changes (including Source) are handled
+                    // by re-serializing the container after tree updates.
+                    let inside_rbxm = instance.metadata().instigating_source.is_none()
+                        && tree.find_rbxm_container(id).is_some();
+
+                    if inside_rbxm {
+                        // Mark this instance's rbxm container for re-serialization.
+                        // The actual write happens after apply_patch_set below.
+                        if let Some((container_ref, rbxm_path)) =
+                            tree.find_rbxm_container(id)
+                        {
+                            rbxm_containers_to_reserialize
+                                .entry(container_ref)
+                                .or_insert_with(|| rbxm_path);
+                        }
+                    } else {
+                        for (key, changed_value) in &update.changed_properties {
+                            if key == "Source" {
+                                // If a rename or ClassName change moved the file
+                                // earlier in this update, write to the new location
+                                // instead of the stale instigating_source path.
+                                let source_path =
+                                    if let Some(ref overridden) = overridden_source_path {
+                                        Some(overridden.clone())
+                                    } else if let Some(instigating_source) =
+                                        &instance.metadata().instigating_source
+                                    {
+                                        match instigating_source {
+                                            InstigatingSource::Path(path) => Some(path.clone()),
+                                            InstigatingSource::ProjectNode { .. } => {
+                                                log::warn!(
+                                                    "Cannot update instance {:?}, it's from a project file",
+                                                    id
+                                                );
+                                                None
+                                            }
+                                        }
+                                    } else {
                                         log::warn!(
-                                            "Cannot update instance {:?}, it's from a project file",
+                                            "Cannot update instance {:?}, it is not an instigating source.",
                                             id
                                         );
                                         None
+                                    };
+
+                                if let Some(ref write_path) = source_path {
+                                    if let Some(Variant::String(value)) = changed_value {
+                                        log::info!(
+                                            "Two-way sync: Writing Source to {}",
+                                            self.display_path(write_path)
+                                        );
+                                        self.suppress_path(write_path);
+                                        if let Err(err) = fs::write(write_path, value) {
+                                            self.unsuppress_path(write_path);
+                                            log::error!(
+                                                "Failed to write Source to {:?} for instance {:?}: {}",
+                                                write_path,
+                                                id,
+                                                err
+                                            );
+                                        }
+                                    } else {
+                                        log::warn!("Cannot change Source to non-string value.");
                                     }
                                 }
                             } else {
-                                log::warn!(
-                                    "Cannot update instance {:?}, it is not an instigating source.",
-                                    id
-                                );
-                                None
-                            };
-
-                            if let Some(ref write_path) = source_path {
-                                if let Some(Variant::String(value)) = changed_value {
-                                    log::info!(
-                                        "Two-way sync: Writing Source to {}",
-                                        self.display_path(write_path)
-                                    );
-                                    self.suppress_path(write_path);
-                                    if let Err(err) = fs::write(write_path, value) {
-                                        self.unsuppress_path(write_path);
-                                        log::error!(
-                                            "Failed to write Source to {:?} for instance {:?}: {}",
-                                            write_path,
-                                            id,
-                                            err
-                                        );
-                                    }
-                                } else {
-                                    log::warn!("Cannot change Source to non-string value.");
-                                }
+                                log::trace!("Skipping non-Source property change: {}", key);
                             }
-                        } else {
-                            log::trace!("Skipping non-Source property change: {}", key);
                         }
                     }
 
@@ -1636,6 +1670,41 @@ impl JobThreadContext {
                         Some(InstigatingSource::Path(new_instigating_source.clone()));
                     new_metadata.relevant_paths = rebuild_relevant_paths(&new_instigating_source);
                     tree.update_metadata(id, new_metadata);
+                }
+            }
+
+            // Merge rbxm containers from removals into the re-serialization set.
+            for (container_ref, rbxm_path) in rbxm_removal_containers {
+                rbxm_containers_to_reserialize
+                    .entry(container_ref)
+                    .or_insert(rbxm_path);
+            }
+
+            // Re-serialize any rbxm containers that had instances modified.
+            // The tree has already been updated by apply_patch_set, so the
+            // serialization captures the new property values.
+            for (container_ref, rbxm_path) in &rbxm_containers_to_reserialize {
+                match tree.reserialize_rbxm_container(*container_ref) {
+                    Ok(data) => {
+                        log::info!(
+                            "Two-way sync: Re-serializing rbxm container at {}",
+                            self.display_path(rbxm_path)
+                        );
+                        self.suppress_path(rbxm_path);
+                        if let Err(err) = fs::write(rbxm_path, data) {
+                            self.unsuppress_path(rbxm_path);
+                            log::error!(
+                                "Failed to write rbxm container {:?}: {}",
+                                rbxm_path, err
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        log::error!(
+                            "Failed to re-serialize rbxm container {:?}: {}",
+                            rbxm_path, err
+                        );
+                    }
                 }
             }
 
