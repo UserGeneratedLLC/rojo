@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     env,
+    fmt::Write,
     path::{Path, PathBuf},
     sync::OnceLock,
 };
@@ -637,7 +638,7 @@ pub fn syncback_loop_with_stats(
                             None
                         };
                         let meta_json = if let Some(ref name) = name_field {
-                            let escaped_name = name.replace('\\', "\\\\").replace('"', "\\\"");
+                            let escaped_name = escape_json5_string(name);
                             format!(
                                 "{{\n  ambiguousContainer: true,\n  name: \"{escaped_name}\",\n}}\n"
                             )
@@ -1250,6 +1251,25 @@ impl SyncbackRules {
     }
 }
 
+/// Escapes a string for use inside a JSON5 double-quoted string literal.
+/// Handles backslash, double quote, and all control characters.
+fn escape_json5_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            '\0' => out.push_str("\\0"),
+            c if c.is_control() => write!(out, "\\x{:02x}", c as u32).unwrap(),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn is_valid_path(globs: &Option<Vec<Glob>>, base_path: &Path, path: &Path) -> bool {
     let git_glob = GIT_IGNORE_GLOB.get_or_init(|| Glob::new(".git/**").unwrap());
     let test_path = match path.strip_prefix(base_path) {
@@ -1469,5 +1489,55 @@ mod tests {
         assert!(!is_dir_middleware(Middleware::ServerScript));
         assert!(!is_dir_middleware(Middleware::ModuleScript));
         assert!(!is_dir_middleware(Middleware::Text));
+    }
+
+    #[test]
+    fn escape_json5_string_plain() {
+        assert_eq!(escape_json5_string("hello"), "hello");
+    }
+
+    #[test]
+    fn escape_json5_string_backslash_and_quote() {
+        assert_eq!(escape_json5_string(r#"a\"b"#), r#"a\\\"b"#);
+    }
+
+    #[test]
+    fn escape_json5_string_control_chars() {
+        assert_eq!(escape_json5_string("Line1\nLine2"), r"Line1\nLine2");
+        assert_eq!(escape_json5_string("A\rB"), r"A\rB");
+        assert_eq!(escape_json5_string("A\tB"), r"A\tB");
+        assert_eq!(escape_json5_string("A\0B"), r"A\0B");
+    }
+
+    #[test]
+    fn escape_json5_string_other_control_chars() {
+        // BEL (U+0007) should become \x07
+        assert_eq!(escape_json5_string("A\x07B"), r"A\x07B");
+        // ESC (U+001B)
+        assert_eq!(escape_json5_string("A\x1bB"), r"A\x1bB");
+    }
+
+    #[test]
+    fn escape_json5_string_roundtrips_through_json5_parse() {
+        let names = [
+            "Line1\nLine2",
+            "Tab\there",
+            "CR\rLF",
+            "Null\0Byte",
+            "Back\\slash",
+            "Quo\"te",
+            "Bell\x07Ring",
+            "Mix\n\r\t\\\"\0",
+        ];
+        for name in &names {
+            let escaped = escape_json5_string(name);
+            let json5_doc = format!(
+                "{{ ambiguousContainer: true, name: \"{escaped}\" }}"
+            );
+            let parsed: serde_json::Value = json5::from_str(&json5_doc)
+                .unwrap_or_else(|e| panic!("Failed to parse JSON5 for name {:?}: {e}", name));
+            let parsed_name = parsed["name"].as_str().unwrap();
+            assert_eq!(parsed_name, *name, "Round-trip failed for {:?}", name);
+        }
     }
 }
