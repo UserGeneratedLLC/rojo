@@ -31,33 +31,40 @@ local function XXH32(Message: buffer, Seed: number?): number
 
 			local Temp1 = bit32.lrotate(Accumulator1 + Mult1, 13)
 			local AHigh1_2, ALow1_2 = bit32.rshift(Temp1, 16), bit32.band(Temp1, 65535)
-			Accumulator1 = bit32.lshift((AHigh1_2 * PRIME_1_LOW) + (ALow1_2 * PRIME_1_HIGH), 16) + (ALow1_2 * PRIME_1_LOW)
+			Accumulator1 = bit32.lshift((AHigh1_2 * PRIME_1_LOW) + (ALow1_2 * PRIME_1_HIGH), 16)
+				+ (ALow1_2 * PRIME_1_LOW)
 
 			local AHigh2, ALow2 = bit32.rshift(Word2, 16), bit32.band(Word2, 65535)
 			local Mult2 = bit32.lshift((AHigh2 * PRIME_2_LOW) + (ALow2 * PRIME_2_HIGH), 16) + (ALow2 * PRIME_2_LOW)
 
 			local Temp2 = bit32.lrotate(Accumulator2 + Mult2, 13)
 			local AHigh2_2, ALow2_2 = bit32.rshift(Temp2, 16), bit32.band(Temp2, 65535)
-			Accumulator2 = bit32.lshift((AHigh2_2 * PRIME_1_LOW) + (ALow2_2 * PRIME_1_HIGH), 16) + (ALow2_2 * PRIME_1_LOW)
+			Accumulator2 = bit32.lshift((AHigh2_2 * PRIME_1_LOW) + (ALow2_2 * PRIME_1_HIGH), 16)
+				+ (ALow2_2 * PRIME_1_LOW)
 
 			local AHigh3, ALow3 = bit32.rshift(Word3, 16), bit32.band(Word3, 65535)
 			local Mult3 = bit32.lshift((AHigh3 * PRIME_2_LOW) + (ALow3 * PRIME_2_HIGH), 16) + (ALow3 * PRIME_2_LOW)
 
 			local Temp3 = bit32.lrotate(Accumulator3 + Mult3, 13)
 			local AHigh3_2, ALow3_2 = bit32.rshift(Temp3, 16), bit32.band(Temp3, 65535)
-			Accumulator3 = bit32.lshift((AHigh3_2 * PRIME_1_LOW) + (ALow3_2 * PRIME_1_HIGH), 16) + (ALow3_2 * PRIME_1_LOW)
+			Accumulator3 = bit32.lshift((AHigh3_2 * PRIME_1_LOW) + (ALow3_2 * PRIME_1_HIGH), 16)
+				+ (ALow3_2 * PRIME_1_LOW)
 
 			local AHigh4, ALow4 = bit32.rshift(Word4, 16), bit32.band(Word4, 65535)
 			local Mult4 = bit32.lshift((AHigh4 * PRIME_2_LOW) + (ALow4 * PRIME_2_HIGH), 16) + (ALow4 * PRIME_2_LOW)
 
 			local Temp4 = bit32.lrotate(Accumulator4 + Mult4, 13)
 			local AHigh4_2, ALow4_2 = bit32.rshift(Temp4, 16), bit32.band(Temp4, 65535)
-			Accumulator4 = bit32.lshift((AHigh4_2 * PRIME_1_LOW) + (ALow4_2 * PRIME_1_HIGH), 16) + (ALow4_2 * PRIME_1_LOW)
+			Accumulator4 = bit32.lshift((AHigh4_2 * PRIME_1_LOW) + (ALow4_2 * PRIME_1_HIGH), 16)
+				+ (ALow4_2 * PRIME_1_LOW)
 
 			CurrentOffset += 16
 		end
 
-		Digest = bit32.lrotate(Accumulator1, 1) + bit32.lrotate(Accumulator2, 7) + bit32.lrotate(Accumulator3, 12) + bit32.lrotate(Accumulator4, 18)
+		Digest = bit32.lrotate(Accumulator1, 1)
+			+ bit32.lrotate(Accumulator2, 7)
+			+ bit32.lrotate(Accumulator3, 12)
+			+ bit32.lrotate(Accumulator4, 18)
 	else
 		Digest = UsedSeed + PRIME_5
 	end

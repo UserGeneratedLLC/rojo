@@ -2,10 +2,9 @@
 	Defines the process of "hydration" -- matching up a virtual DOM with
 	concrete instances and assigning them IDs.
 
-	Uses the 3-pass matching algorithm to handle duplicate-named instances:
-	Pass 1: unique name + ClassName narrowing
-	Pass 2: Ref property discriminators (using pre-matched UIDs)
-	Pass 3: structural fingerprinting + pairwise similarity
+	Uses the change-count matching algorithm to handle duplicate-named
+	instances: groups by (Name, ClassName), then greedy-assigns pairs
+	by fewest total reconciler changes (recursive into subtrees).
 ]]
 
 local Packages = script.Parent.Parent.Parent.Packages
@@ -42,12 +41,7 @@ local function hydrate(instanceMap, virtualInstances, rootId, rootInstance)
 	end
 
 	-- Use the 3-pass matching algorithm to pair virtual ↔ studio children
-	local result = Matching.matchChildren(
-		validVirtualIds,
-		existingChildren,
-		virtualInstances,
-		instanceMap
-	)
+	local result = Matching.matchChildren(validVirtualIds, existingChildren, virtualInstances, instanceMap)
 
 	-- Recursively hydrate matched pairs
 	for _, pair in result.matched do

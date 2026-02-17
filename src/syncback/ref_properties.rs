@@ -66,13 +66,7 @@ fn tentative_fs_name(inst: &Instance) -> String {
     // Directory-style classes never get extensions
     let is_container = matches!(
         inst.class.as_str(),
-        "Folder"
-            | "Configuration"
-            | "Tool"
-            | "ScreenGui"
-            | "SurfaceGui"
-            | "BillboardGui"
-            | "AdGui"
+        "Folder" | "Configuration" | "Tool" | "ScreenGui" | "SurfaceGui" | "BillboardGui" | "AdGui"
     );
 
     if is_container || (has_children && is_script_class(inst.class.as_str())) {
@@ -132,10 +126,7 @@ fn tentative_fs_name(inst: &Instance) -> String {
 }
 
 fn is_script_class(class: &str) -> bool {
-    matches!(
-        class,
-        "Script" | "LocalScript" | "ModuleScript"
-    )
+    matches!(class, "Script" | "LocalScript" | "ModuleScript")
 }
 
 pub struct RefLinks {

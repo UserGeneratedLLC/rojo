@@ -251,11 +251,8 @@ pub fn syncback_dir_no_meta<'sync>(
 
         // Process matched pairs: preserve existing filesystem assignment.
         for (new_ref, old_ref) in &sorted_matched {
-            let (child_snap, _needs_meta, dedup_key) = snapshot.with_joined_path(
-                *new_ref,
-                Some(*old_ref),
-                &taken_names,
-            )?;
+            let (child_snap, _needs_meta, dedup_key) =
+                snapshot.with_joined_path(*new_ref, Some(*old_ref), &taken_names)?;
             taken_names.insert(dedup_key.to_lowercase());
             children.push(child_snap);
         }

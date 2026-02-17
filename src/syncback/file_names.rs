@@ -75,8 +75,7 @@ pub fn name_for_inst<'a>(
             Some(extension_for_middleware(middleware))
         };
 
-        let (deduped_slug, full_fs_name) =
-            deduplicate_name_with_ext(&base, extension, taken_names);
+        let (deduped_slug, full_fs_name) = deduplicate_name_with_ext(&base, extension, taken_names);
         let needs_meta = needs_slugify || deduped_slug != base;
 
         let filename = full_fs_name.clone();

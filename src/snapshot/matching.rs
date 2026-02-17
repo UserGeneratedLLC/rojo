@@ -1,17 +1,24 @@
-//! 3-pass instance matching algorithm for forward sync.
+//! Instance matching algorithm for forward sync.
 //!
 //! Pairs snapshot children (from filesystem re-snapshot) to tree children
-//! (existing RojoTree instances). Same algorithm pattern as
-//! `syncback::matching` but operating on different data types:
+//! (existing RojoTree instances) by minimizing total reconciler changes.
 //!
-//! - **Snapshot side**: `InstanceSnapshot` with name, class_name, properties
-//! - **Tree side**: `RojoTree` instances with name(), class_name(), properties()
+//! Algorithm per parent:
+//!   1. Group by (Name, ClassName) -- 1:1 groups instant-match
+//!   2. Ambiguous groups: recursive change-count scoring + greedy assignment
+//!
+//! The change count = how many things the reconciler would need to touch
+//! to turn instance A into instance B, including the entire subtree.
 
 use std::collections::HashMap;
 
 use rbx_dom_weak::types::Ref;
 
+use crate::variant_eq::variant_eq;
+
 use super::{InstanceSnapshot, InstanceWithMeta, RojoTree};
+
+const UNMATCHED_PENALTY: u32 = 10_000;
 
 /// Result of the forward sync matching algorithm.
 pub struct ForwardMatchResult {
@@ -23,10 +30,7 @@ pub struct ForwardMatchResult {
     pub unmatched_tree: Vec<Ref>,
 }
 
-/// Run the 3-pass matching algorithm for forward sync.
-///
-/// Takes ownership of `snapshot_children` since matched snapshots are moved
-/// into the result.
+/// Match snapshot children to tree children, minimizing total changes.
 pub fn match_forward(
     snapshot_children: Vec<InstanceSnapshot>,
     tree_children: &[Ref],
@@ -40,51 +44,125 @@ pub fn match_forward(
         };
     }
 
-    // Index snapshot children for later consumption.
-    let mut snap_available: Vec<Option<InstanceSnapshot>> =
+    let snap_available: Vec<Option<InstanceSnapshot>> =
         snapshot_children.into_iter().map(Some).collect();
-    // Track which indices are matched (separate from snap_available to avoid
-    // consuming snapshots before build_result).
     let mut snap_matched: Vec<bool> = vec![false; snap_available.len()];
     let mut tree_available: Vec<bool> = vec![true; tree_children.len()];
+    let mut matched: Vec<(usize, usize)> = Vec::new();
 
-    let mut matched: Vec<(usize, usize)> = Vec::new(); // (snap_idx, tree_idx)
-
-    // ---- Pass 1: unique name matching + ClassName narrowing ----
-    pass1_name_and_class(
-        &snap_available,
-        tree_children,
-        &tree_available,
-        tree,
-        &mut matched,
-    );
-
-    // Mark matched items as unavailable for subsequent passes.
-    for &(si, ti) in &matched {
-        snap_matched[si] = true;
-        tree_available[ti] = false;
+    // ================================================================
+    // Fast-path: Group by (Name, ClassName) -- 1:1 groups instant-match
+    // ================================================================
+    let mut snap_by_key: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    for (i, snap_opt) in snap_available.iter().enumerate() {
+        if let Some(snap) = snap_opt {
+            snap_by_key
+                .entry((snap.name.to_string(), snap.class_name.to_string()))
+                .or_default()
+                .push(i);
+        }
     }
 
-    // Fast path: if nothing remains on either side, skip Passes 2 and 3.
+    let mut tree_by_key: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    for (i, &child_ref) in tree_children.iter().enumerate() {
+        if let Some(inst) = tree.get_instance(child_ref) {
+            tree_by_key
+                .entry((inst.name().to_string(), inst.class_name().to_string()))
+                .or_default()
+                .push(i);
+        }
+    }
+
+    // 1:1 groups: instant match
+    for (key, snap_indices) in &snap_by_key {
+        if let Some(tree_indices) = tree_by_key.get(key) {
+            if snap_indices.len() == 1 && tree_indices.len() == 1 {
+                let si = snap_indices[0];
+                let ti = tree_indices[0];
+                matched.push((si, ti));
+                snap_matched[si] = true;
+                tree_available[ti] = false;
+            }
+        }
+    }
+
+    // Early exit if nothing remains
     let snap_remaining = snap_matched.iter().filter(|&&m| !m).count();
     let tree_remaining = tree_available.iter().filter(|&&a| a).count();
     if snap_remaining == 0 || tree_remaining == 0 {
         return build_result(snap_available, tree_children, &tree_available, matched);
     }
 
-    // ---- Pass 2: Ref property discriminators (placeholder) ----
-    // TODO: Implement ref-based matching using Rojo_Ref_* attributes on
-    // snapshot side and resolved Refs on tree side.
+    // ================================================================
+    // Ambiguous groups: change-count scoring + greedy assignment
+    // ================================================================
+    for (key, snap_indices) in &snap_by_key {
+        let Some(tree_indices) = tree_by_key.get(key) else {
+            continue;
+        };
 
-    // ---- Pass 3: similarity scoring ----
-    pass3_similarity(
-        &snap_available,
-        tree_children,
-        &mut tree_available,
-        &snap_matched,
-        tree,
-        &mut matched,
-    );
+        // Collect unmatched indices in this group
+        let avail_snap: Vec<usize> = snap_indices
+            .iter()
+            .filter(|&&si| !snap_matched[si])
+            .copied()
+            .collect();
+        let avail_tree: Vec<usize> = tree_indices
+            .iter()
+            .filter(|&&ti| tree_available[ti])
+            .copied()
+            .collect();
+
+        if avail_snap.is_empty() || avail_tree.is_empty() {
+            continue;
+        }
+        // 1:1 already handled above; skip if not truly ambiguous
+        if avail_snap.len() <= 1 && avail_tree.len() <= 1 {
+            if avail_snap.len() == 1 && avail_tree.len() == 1 {
+                let si = avail_snap[0];
+                let ti = avail_tree[0];
+                matched.push((si, ti));
+                snap_matched[si] = true;
+                tree_available[ti] = false;
+            }
+            continue;
+        }
+
+        // Score all (A, B) pairs in child order
+        let mut pairs: Vec<(u32, usize, usize)> = Vec::new();
+        let mut best_so_far = u32::MAX;
+        for &si in &avail_snap {
+            let snap = match &snap_available[si] {
+                Some(s) => s,
+                None => continue,
+            };
+            for &ti in &avail_tree {
+                let inst = match tree.get_instance(tree_children[ti]) {
+                    Some(i) => i,
+                    None => continue,
+                };
+                let cost = count_own_diffs(snap, &inst);
+                // Children count diff included in count_own_diffs
+                pairs.push((cost, si, ti));
+                if cost < best_so_far {
+                    best_so_far = cost;
+                }
+            }
+        }
+
+        // Stable sort by cost ascending (slice::sort_by is stable in Rust)
+        pairs.sort_by_key(|&(cost, _, _)| cost);
+
+        // Greedy assign
+        for &(_, si, ti) in &pairs {
+            if snap_matched[si] || !tree_available[ti] {
+                continue;
+            }
+            matched.push((si, ti));
+            snap_matched[si] = true;
+            tree_available[ti] = false;
+        }
+    }
 
     build_result(snap_available, tree_children, &tree_available, matched)
 }
@@ -103,8 +181,7 @@ fn build_result(
         }
     }
 
-    let unmatched_snapshot: Vec<InstanceSnapshot> =
-        snap_available.into_iter().flatten().collect();
+    let unmatched_snapshot: Vec<InstanceSnapshot> = snap_available.into_iter().flatten().collect();
 
     let unmatched_tree: Vec<Ref> = tree_children
         .iter()
@@ -120,184 +197,46 @@ fn build_result(
     }
 }
 
-/// Pass 1: Match instances with unique names, then narrow by ClassName.
-fn pass1_name_and_class(
-    snap_available: &[Option<InstanceSnapshot>],
-    tree_children: &[Ref],
-    tree_available: &[bool],
-    tree: &RojoTree,
-    matched: &mut Vec<(usize, usize)>,
-) {
-    // Build name→indices maps for both sides.
-    let mut snap_by_name: HashMap<&str, Vec<usize>> = HashMap::new();
-    for (i, snap_opt) in snap_available.iter().enumerate() {
-        if let Some(snap) = snap_opt {
-            snap_by_name.entry(&snap.name).or_default().push(i);
+/// Count own property diffs between a snapshot and a tree instance.
+/// Each differing property = +1. Tags and Attributes counted granularly.
+/// Children count diff = +1.
+fn count_own_diffs(snap: &InstanceSnapshot, inst: &InstanceWithMeta) -> u32 {
+    let mut cost: u32 = 0;
+
+    let snap_props = &snap.properties;
+    let inst_props = inst.properties();
+
+    // Properties present on the snapshot side
+    for (key, snap_val) in snap_props.iter() {
+        if let Some(inst_val) = inst_props.get(key) {
+            if !variant_eq(snap_val, inst_val) {
+                cost += 1;
+            }
+        } else {
+            cost += 1; // Missing on tree side
         }
     }
 
-    let mut tree_by_name: HashMap<String, Vec<usize>> = HashMap::new();
-    for (i, &child_ref) in tree_children.iter().enumerate() {
-        if !tree_available[i] {
-            continue;
-        }
-        if let Some(inst) = tree.get_instance(child_ref) {
-            tree_by_name
-                .entry(inst.name().to_string())
-                .or_default()
-                .push(i);
+    // Properties present only on the tree side
+    for key in inst_props.keys() {
+        if !snap_props.contains_key(key) {
+            cost += 1;
         }
     }
 
-    for (name, snap_indices) in &snap_by_name {
-        let Some(tree_indices) = tree_by_name.get(*name) else {
-            continue;
-        };
-
-        // Case 1: exactly one on each side → instant match.
-        if snap_indices.len() == 1 && tree_indices.len() == 1 {
-            matched.push((snap_indices[0], tree_indices[0]));
-            continue;
-        }
-
-        // Case 2: try ClassName narrowing.
-        let mut snap_by_class: HashMap<&str, Vec<usize>> = HashMap::new();
-        for &si in snap_indices {
-            if let Some(snap) = &snap_available[si] {
-                snap_by_class.entry(&snap.class_name).or_default().push(si);
-            }
-        }
-
-        let mut tree_by_class: HashMap<String, Vec<usize>> = HashMap::new();
-        for &ti in tree_indices {
-            if let Some(inst) = tree.get_instance(tree_children[ti]) {
-                tree_by_class
-                    .entry(inst.class_name().to_string())
-                    .or_default()
-                    .push(ti);
-            }
-        }
-
-        for (class, snap_class_indices) in &snap_by_class {
-            if let Some(tree_class_indices) = tree_by_class.get(*class) {
-                if snap_class_indices.len() == 1 && tree_class_indices.len() == 1 {
-                    matched.push((snap_class_indices[0], tree_class_indices[0]));
-                }
-            }
-        }
-    }
-}
-
-/// Pass 3: Pairwise similarity scoring within same-name groups.
-fn pass3_similarity(
-    snap_available: &[Option<InstanceSnapshot>],
-    tree_children: &[Ref],
-    tree_available: &mut [bool],
-    already_matched_snap: &[bool],
-    tree: &RojoTree,
-    matched: &mut Vec<(usize, usize)>,
-) {
-    // Inherit pass1 match state and extend with pass3 matches.
-    let mut snap_matched: Vec<bool> = already_matched_snap.to_vec();
-
-    // Group remaining (unmatched) by name.
-    let mut snap_by_name: HashMap<&str, Vec<usize>> = HashMap::new();
-    for (i, snap_opt) in snap_available.iter().enumerate() {
-        if snap_matched[i] {
-            continue;
-        }
-        if let Some(snap) = snap_opt {
-            snap_by_name.entry(&snap.name).or_default().push(i);
-        }
+    // Children count diff
+    if snap.children.len() != inst.children().len() {
+        cost += 1;
     }
 
-    let mut tree_by_name: HashMap<String, Vec<usize>> = HashMap::new();
-    for (i, &child_ref) in tree_children.iter().enumerate() {
-        if !tree_available[i] {
-            continue;
-        }
-        if let Some(inst) = tree.get_instance(child_ref) {
-            tree_by_name
-                .entry(inst.name().to_string())
-                .or_default()
-                .push(i);
-        }
-    }
-
-    for (name, snap_indices) in &snap_by_name {
-        let Some(tree_indices) = tree_by_name.get(*name) else {
-            continue;
-        };
-
-        // Narrow by ClassName within this name group.
-        let mut snap_by_class: HashMap<&str, Vec<usize>> = HashMap::new();
-        for &si in snap_indices {
-            if snap_matched[si] {
-                continue;
-            }
-            if let Some(snap) = &snap_available[si] {
-                snap_by_class
-                    .entry(&snap.class_name)
-                    .or_default()
-                    .push(si);
-            }
-        }
-        let mut tree_by_class: HashMap<String, Vec<usize>> = HashMap::new();
-        for &ti in tree_indices {
-            if !tree_available[ti] {
-                continue;
-            }
-            if let Some(inst) = tree.get_instance(tree_children[ti]) {
-                tree_by_class
-                    .entry(inst.class_name().to_string())
-                    .or_default()
-                    .push(ti);
-            }
-        }
-
-        // Within same-name+class sub-groups, use POSITIONAL matching.
-        // The Nth snapshot child matches the Nth tree child within each
-        // sub-group. This preserves child ordering, which is the strongest
-        // signal for duplicate-named instances (e.g., Parts in a Model).
-        for (class, snap_class_indices) in &snap_by_class {
-            let Some(tree_class_indices) = tree_by_class.get(*class) else {
-                continue;
-            };
-            let match_count = snap_class_indices.len().min(tree_class_indices.len());
-            for idx in 0..match_count {
-                let si = snap_class_indices[idx];
-                let ti = tree_class_indices[idx];
-                if !snap_matched[si] && tree_available[ti] {
-                    matched.push((si, ti));
-                    snap_matched[si] = true;
-                    tree_available[ti] = false;
-                }
-            }
-        }
-    }
-}
-
-/// Compute similarity between a snapshot child and a tree child.
-fn compute_forward_similarity(snap: &InstanceSnapshot, inst: &InstanceWithMeta) -> u32 {
-    let mut score: u32 = 0;
-
-    if snap.class_name.as_str() == inst.class_name().as_str() {
-        score += 100;
-    }
-
-    // Children count similarity.
-    if snap.children.len() == inst.children().len() {
-        score += 20;
-    }
-
-    score
+    cost
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::snapshot::{InstanceMetadata, InstanceSnapshot, RojoTree};
-    use rbx_dom_weak::ustr;
+    use rbx_dom_weak::{ustr, HashMapExt as _};
     use std::borrow::Cow;
 
     fn make_snapshot(name: &str, class: &str) -> InstanceSnapshot {
@@ -332,7 +271,10 @@ mod tests {
 
     #[test]
     fn unique_names_match() {
-        let snaps = vec![make_snapshot("Alpha", "Folder"), make_snapshot("Beta", "Script")];
+        let snaps = vec![
+            make_snapshot("Alpha", "Folder"),
+            make_snapshot("Beta", "Script"),
+        ];
         let (tree, children) = make_tree_with_children(&[("Alpha", "Folder"), ("Beta", "Script")]);
 
         let result = match_forward(snaps, &children, &tree);
@@ -361,7 +303,10 @@ mod tests {
 
     #[test]
     fn unmatched_both_sides() {
-        let snaps = vec![make_snapshot("A", "Folder"), make_snapshot("NewOnly", "Folder")];
+        let snaps = vec![
+            make_snapshot("A", "Folder"),
+            make_snapshot("NewOnly", "Folder"),
+        ];
         let (tree, children) = make_tree_with_children(&[("A", "Folder"), ("OldOnly", "Folder")]);
 
         let result = match_forward(snaps, &children, &tree);
@@ -392,5 +337,102 @@ mod tests {
 
         let result = match_forward(snaps, &children, &tree);
         assert!(result.matched.is_empty());
+    }
+
+    fn make_snapshot_with_props(
+        name: &str,
+        class: &str,
+        props: Vec<(&str, rbx_dom_weak::types::Variant)>,
+    ) -> InstanceSnapshot {
+        let mut properties = rbx_dom_weak::UstrMap::new();
+        for (key, val) in props {
+            properties.insert(ustr(key), val);
+        }
+        InstanceSnapshot {
+            snapshot_id: Ref::none(),
+            metadata: InstanceMetadata::default(),
+            name: Cow::Owned(name.to_string()),
+            class_name: ustr(class),
+            properties,
+            children: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn many_same_name_parts_matched_by_properties() {
+        // Simulate a Ladder model with 10 "Line" Parts, each with a different
+        // Anchored value (as a simple distinguishing property).
+        // The matching should pair each to its correct counterpart.
+        use rbx_dom_weak::types::Variant;
+
+        let count = 10;
+        let snaps: Vec<InstanceSnapshot> = (0..count)
+            .map(|i| {
+                make_snapshot_with_props(
+                    "Line",
+                    "Part",
+                    vec![("Transparency", Variant::Float32(i as f32 * 0.1))],
+                )
+            })
+            .collect();
+
+        // Build tree with same parts but in reversed order -- the matching
+        // should still pair them correctly by property content, not position.
+        let child_snapshots: Vec<InstanceSnapshot> = (0..count)
+            .rev()
+            .map(|i| {
+                make_snapshot_with_props(
+                    "Line",
+                    "Part",
+                    vec![("Transparency", Variant::Float32(i as f32 * 0.1))],
+                )
+            })
+            .collect();
+        let root_snap = InstanceSnapshot {
+            snapshot_id: Ref::none(),
+            metadata: InstanceMetadata::default(),
+            name: Cow::Borrowed("DataModel"),
+            class_name: ustr("DataModel"),
+            properties: Default::default(),
+            children: child_snapshots,
+        };
+        let tree = RojoTree::new(root_snap);
+        let root_id = tree.get_root_id();
+        let tree_children: Vec<Ref> = tree.get_instance(root_id).unwrap().children().to_vec();
+
+        let result = match_forward(snaps, &tree_children, &tree);
+
+        assert_eq!(result.matched.len(), count);
+        assert!(result.unmatched_snapshot.is_empty());
+        assert!(result.unmatched_tree.is_empty());
+
+        // Verify each pair has matching Transparency values (correct pairing)
+        for (snap, tree_ref) in &result.matched {
+            let inst = tree.get_instance(*tree_ref).unwrap();
+            let snap_val = snap.properties.get(&ustr("Transparency"));
+            let tree_val = inst.properties().get(&ustr("Transparency"));
+            assert_eq!(
+                snap_val, tree_val,
+                "Mismatched Transparency: snap has {:?}, tree has {:?}",
+                snap_val, tree_val
+            );
+        }
+    }
+
+    #[test]
+    fn fifteen_same_name_identical_parts() {
+        // 15 Parts all named "Line" with identical properties.
+        // All pairs score the same -- greedy picks by stable child order.
+        // Should match all 15 without panicking or cross-matching.
+        let count = 15;
+        let snaps: Vec<InstanceSnapshot> =
+            (0..count).map(|_| make_snapshot("Line", "Part")).collect();
+        let (tree, children) =
+            make_tree_with_children(&(0..count).map(|_| ("Line", "Part")).collect::<Vec<_>>());
+
+        let result = match_forward(snaps, &children, &tree);
+        assert_eq!(result.matched.len(), count);
+        assert!(result.unmatched_snapshot.is_empty());
+        assert!(result.unmatched_tree.is_empty());
     }
 }

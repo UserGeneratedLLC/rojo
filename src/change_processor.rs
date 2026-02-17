@@ -1118,10 +1118,7 @@ impl JobThreadContext {
                         continue;
                     }
                     let sibling_fs = tree.filesystem_name_for(sibling_ref);
-                    let sibling_stem = sibling_fs
-                        .split('.')
-                        .next()
-                        .unwrap_or(&sibling_fs);
+                    let sibling_stem = sibling_fs.split('.').next().unwrap_or(&sibling_fs);
                     let sibling_base = match parse_dedup_suffix(sibling_stem) {
                         Some((b, _)) => b,
                         None => sibling_stem,
@@ -1136,9 +1133,7 @@ impl JobThreadContext {
                 }
 
                 // Determine extension from the removed instance's FS name
-                let extension = removed_fs_name
-                    .find('.')
-                    .map(|i| &removed_fs_name[i + 1..]);
+                let extension = removed_fs_name.find('.').map(|i| &removed_fs_name[i + 1..]);
 
                 // Get the parent directory path
                 let parent_dir = {
@@ -1180,26 +1175,17 @@ impl JobThreadContext {
                             self.unsuppress_path(&to);
                         } else {
                             // Update ref paths if the renamed instance has refs
-                            let old_ref_segment = from
-                                .file_name()
-                                .and_then(|f| f.to_str())
-                                .unwrap_or("");
-                            let new_ref_segment = to
-                                .file_name()
-                                .and_then(|f| f.to_str())
-                                .unwrap_or("");
+                            let old_ref_segment =
+                                from.file_name().and_then(|f| f.to_str()).unwrap_or("");
+                            let new_ref_segment =
+                                to.file_name().and_then(|f| f.to_str()).unwrap_or("");
                             if old_ref_segment != new_ref_segment {
                                 // Build the old and new ref path prefixes
                                 let parent_path =
                                     crate::ref_target_path_from_tree(&tree, parent_ref);
-                                let old_prefix =
-                                    format!("{}/{}", parent_path, old_ref_segment);
-                                let new_prefix =
-                                    format!("{}/{}", parent_path, new_ref_segment);
-                                self.update_ref_paths_after_rename(
-                                    &old_prefix,
-                                    &new_prefix,
-                                );
+                                let old_prefix = format!("{}/{}", parent_path, old_ref_segment);
+                                let new_prefix = format!("{}/{}", parent_path, new_ref_segment);
+                                self.update_ref_paths_after_rename(&old_prefix, &new_prefix);
                             }
                         }
                     }

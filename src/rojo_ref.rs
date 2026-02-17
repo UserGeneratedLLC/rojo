@@ -142,10 +142,7 @@ pub fn ref_target_path(dom: &WeakDom, target_ref: Ref) -> String {
 ///
 /// Since filesystem names can't contain `/` (slugified to `_`), path splitting
 /// is a simple `split('/')` -- no escaping needed.
-pub fn ref_target_path_from_tree(
-    tree: &crate::snapshot::RojoTree,
-    target_ref: Ref,
-) -> String {
+pub fn ref_target_path_from_tree(tree: &crate::snapshot::RojoTree, target_ref: Ref) -> String {
     let dom = tree.inner();
     let root_ref = dom.root_ref();
 

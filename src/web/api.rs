@@ -1647,7 +1647,6 @@ impl ApiService {
         true
     }
 
-
     /// Detects what file format currently exists on disk for a given instance.
     /// This is used to preserve the existing format during partial updates.
     ///
@@ -5407,7 +5406,6 @@ mod tests {
             );
         }
     }
-
 
     // Tests for syncback_removed_instance
     mod syncback_removed_tests {

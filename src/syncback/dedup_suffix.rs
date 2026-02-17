@@ -197,10 +197,7 @@ mod tests {
             build_dedup_name("Foo", Some(1), Some("server.luau")),
             "Foo~1.server.luau"
         );
-        assert_eq!(
-            build_dedup_name("Foo", Some(2), Some("luau")),
-            "Foo~2.luau"
-        );
+        assert_eq!(build_dedup_name("Foo", Some(2), Some("luau")), "Foo~2.luau");
     }
 
     #[test]
