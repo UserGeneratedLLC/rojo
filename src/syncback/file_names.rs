@@ -15,10 +15,13 @@ use crate::{snapshot::InstanceWithMeta, snapshot_middleware::Middleware};
 /// - `filename`: The full filesystem name (including extension for file middleware).
 /// - `needs_meta_name`: `true` when the filesystem name differs from the instance
 ///   name (meaning a `name` field must be written in metadata).
-/// - `dedup_key`: The bare slug (without extension) that callers must insert into
-///   `taken_names`. This is the name-level identifier used for collision detection.
-///   Callers should **always** use `dedup_key` (not `filename`) when accumulating
-///   into `taken_names`.
+/// - `dedup_key`: The **full filesystem name component** (slug + extension for
+///   files, directory name for dirs). Callers should insert
+///   `dedup_key.to_lowercase()` into `taken_names`.
+///
+///   This means `Folder "Foo"` (key `"Foo"`) and `Script "Foo"` (key
+///   `"Foo.server.luau"`) do NOT collide, while two `Folder "Foo"` instances
+///   (both key `"Foo"`) DO collide and receive dedup suffixes.
 ///
 /// If `old_inst` exists, its existing path is preserved (incremental mode).
 /// For new instances, names with forbidden chars are slugified and deduplicated
@@ -35,10 +38,9 @@ pub fn name_for_inst<'a>(
                 .file_name()
                 .and_then(|s| s.to_str())
                 .context("sources on the file system should be valid unicode and not be stubs")?;
-            // Derive dedup_key by stripping the middleware extension from the
-            // filename. For Dir middleware the extension is empty so this is a
-            // no-op. This keeps extension logic inside this function.
-            let dedup_key = strip_middleware_extension(name, middleware);
+            // dedup_key is the full filesystem name (including extension).
+            // For Dir middleware the filename IS the directory name (no extension).
+            let dedup_key = name.to_string();
             Ok((Cow::Borrowed(name), false, dedup_key))
         } else {
             anyhow::bail!(
@@ -55,32 +57,30 @@ pub fn name_for_inst<'a>(
             new_inst.name.clone()
         };
 
-        match middleware {
+        let is_dir = matches!(
+            middleware,
             Middleware::Dir
-            | Middleware::CsvDir
-            | Middleware::ServerScriptDir
-            | Middleware::ClientScriptDir
-            | Middleware::ModuleScriptDir
-            | Middleware::PluginScriptDir
-            | Middleware::LocalScriptDir
-            | Middleware::LegacyScriptDir => {
-                let deduped = deduplicate_name(&base, taken_names);
-                let needs_meta = needs_slugify || deduped != base;
-                let dedup_key = deduped.clone();
-                Ok((Cow::Owned(deduped), needs_meta, dedup_key))
-            }
-            _ => {
-                let extension = extension_for_middleware(middleware);
-                let deduped = deduplicate_name(&base, taken_names);
-                let needs_meta = needs_slugify || deduped != base;
-                let dedup_key = deduped.clone();
-                Ok((
-                    Cow::Owned(format!("{deduped}.{extension}")),
-                    needs_meta,
-                    dedup_key,
-                ))
-            }
-        }
+                | Middleware::CsvDir
+                | Middleware::ServerScriptDir
+                | Middleware::ClientScriptDir
+                | Middleware::ModuleScriptDir
+                | Middleware::PluginScriptDir
+                | Middleware::LocalScriptDir
+                | Middleware::LegacyScriptDir
+        );
+
+        let extension = if is_dir {
+            None
+        } else {
+            Some(extension_for_middleware(middleware))
+        };
+
+        let (deduped_slug, full_fs_name) =
+            deduplicate_name_with_ext(&base, extension, taken_names);
+        let needs_meta = needs_slugify || deduped_slug != base;
+
+        let filename = full_fs_name.clone();
+        Ok((Cow::Owned(filename), needs_meta, full_fs_name))
     }
 }
 
@@ -268,12 +268,46 @@ pub fn slugify_name(name: &str) -> String {
     result
 }
 
-/// Appends ~1, ~2, etc. to avoid collisions. Returns the name as-is if
-/// unclaimed.
+/// Appends ~1, ~2, etc. to the slug to avoid filesystem-level collisions.
+/// Returns `(deduped_slug, full_fs_name)`.
+///
+/// `extension` is `None` for directory middleware, `Some("server.luau")` etc.
+/// for file middleware. The collision check uses the full filesystem name
+/// (slug + extension) so that `Folder "Foo"` (key `"foo"`) and `Script "Foo"`
+/// (key `"foo.server.luau"`) do NOT collide.
 ///
 /// Comparisons are **case-insensitive** because Windows and macOS have
 /// case-insensitive filesystems. `taken_names` must contain **lowercased**
-/// entries for this to work correctly.
+/// full filesystem name entries for this to work correctly.
+pub fn deduplicate_name_with_ext(
+    base: &str,
+    extension: Option<&str>,
+    taken_names: &std::collections::HashSet<String>,
+) -> (String, String) {
+    let build_full = |slug: &str| -> String {
+        match extension {
+            Some(ext) => format!("{slug}.{ext}"),
+            None => slug.to_string(),
+        }
+    };
+
+    let full_name = build_full(base);
+    if !taken_names.contains(&full_name.to_lowercase()) {
+        return (base.to_string(), full_name);
+    }
+    for i in 1.. {
+        let candidate_slug = format!("{base}~{i}");
+        let candidate_full = build_full(&candidate_slug);
+        if !taken_names.contains(&candidate_full.to_lowercase()) {
+            return (candidate_slug, candidate_full);
+        }
+    }
+    unreachable!()
+}
+
+/// Legacy wrapper: appends ~1, ~2, etc. to avoid collisions using bare slug
+/// as the collision key. Used by callers that don't yet use full filesystem
+/// name dedup (e.g., change_processor.rs renames).
 pub fn deduplicate_name(base: &str, taken_names: &std::collections::HashSet<String>) -> String {
     let base_lower = base.to_lowercase();
     if !taken_names.contains(&base_lower) {
@@ -794,7 +828,7 @@ mod tests {
         let dom = make_inst("Foo", "ModuleScript");
         let child_ref = dom.root().children()[0];
         let child = dom.get_by_ref(child_ref).unwrap();
-        let taken: HashSet<String> = ["foo".to_string()].into_iter().collect();
+        let taken: HashSet<String> = ["foo.luau".to_string()].into_iter().collect();
 
         let (filename, needs_meta, _dk) =
             name_for_inst(Middleware::ModuleScript, child, None, &taken).unwrap();
@@ -817,11 +851,11 @@ mod tests {
 
     #[test]
     fn name_for_inst_slug_plus_dedup() {
-        // Name with forbidden chars AND collision with existing slug
+        // Name with forbidden chars AND collision with existing full filesystem name
         let dom = make_inst("Hey/Bro", "ModuleScript");
         let child_ref = dom.root().children()[0];
         let child = dom.get_by_ref(child_ref).unwrap();
-        let taken: HashSet<String> = ["hey_bro".to_string()].into_iter().collect();
+        let taken: HashSet<String> = ["hey_bro.luau".to_string()].into_iter().collect();
 
         let (filename, needs_meta, _dk) =
             name_for_inst(Middleware::ModuleScript, child, None, &taken).unwrap();
@@ -1158,9 +1192,8 @@ mod tests {
 
     #[test]
     fn nfi_slug_collision_file_middleware() {
-        // For file middleware, dedup compares bare slug against taken.
-        // Using bare names to verify the dedup logic works.
-        let (f, m) = nfi("Hey/Bro", Middleware::ModuleScript, &["hey_bro"]);
+        // For file middleware, dedup compares full filesystem name against taken.
+        let (f, m) = nfi("Hey/Bro", Middleware::ModuleScript, &["hey_bro.luau"]);
         assert_eq!(f, "Hey_Bro~1.luau");
         assert!(m);
     }
@@ -1581,10 +1614,11 @@ mod tests {
 
     #[test]
     fn disk_seed_file_middleware_collides_with_bare_slug() {
-        // taken_names now uses bare slugs (dedup_keys), so file-format
-        // dedup works correctly. "mymodule" in taken matches slug "MyModule".
+        // taken_names stores full filesystem names (lowercased).
+        // A bare directory name "mymodule" does NOT collide with "mymodule.luau".
+        // Seed with "mymodule.luau" to test file-file collision.
         let r = process_new_children_with_disk_seed(
-            &["mymodule"],
+            &["mymodule.luau"],
             &[("MyModule", Middleware::ModuleScript)],
         );
         assert_eq!(r[0].1, "MyModule~1.luau");
@@ -1920,10 +1954,9 @@ mod tests {
 
     #[test]
     fn nightmare_mixed_middleware_dir_then_file() {
-        // "Shared" as Dir (filename "Shared") then ModuleScript.
-        // Dir filename "Shared" → taken gets "shared".
-        // ModuleScript dedup checks "shared" → MATCH → dedup to "Shared~1".
-        // Then final filename becomes "Shared~1.luau".
+        // "Shared" as Dir (filename "Shared", dedup_key "Shared") then ModuleScript.
+        // Dir dedup_key "shared" in taken does NOT collide with "shared.luau".
+        // Dir and file with same base name occupy different filesystem namespaces.
         let r = process_new_children_with_disk_seed(
             &[],
             &[
@@ -1933,17 +1966,16 @@ mod tests {
         );
         assert_eq!(r[0].1, "Shared");
         assert!(!r[0].2);
-        // File middleware bare slug "Shared" matches dir entry "shared" in taken.
-        assert_eq!(r[1].1, "Shared~1.luau");
-        assert!(r[1].2);
+        assert_eq!(r[1].1, "Shared.luau");
+        assert!(!r[1].2);
     }
 
     #[test]
     fn nightmare_mixed_middleware_file_then_dir() {
         // Reverse order: ModuleScript first, Dir second.
-        // ModuleScript "Shared" → dedup_key "shared" → taken gets "shared"
-        // Dir "Shared" → slug "Shared" → dedup checks "shared" → MATCH
-        // (dedup_key-based taken catches this correctly) → "Shared~1"
+        // ModuleScript "Shared" → dedup_key "shared.luau" in taken.
+        // Dir "Shared" → full_name "Shared", checks "shared" against taken.
+        // "shared" != "shared.luau" → no collision. Dir and file coexist.
         let r = process_new_children_with_disk_seed(
             &[],
             &[
@@ -1953,9 +1985,8 @@ mod tests {
         );
         assert_eq!(r[0].1, "Shared.luau");
         assert!(!r[0].2);
-        // Dir slug "Shared" collides with dedup_key "shared" from the ModuleScript
-        assert_eq!(r[1].1, "Shared~1");
-        assert!(r[1].2, "dedup suffix means different from instance name");
+        assert_eq!(r[1].1, "Shared");
+        assert!(!r[1].2);
     }
 
     #[test]
@@ -2393,14 +2424,9 @@ mod tests {
         assert_eq!(name1.as_ref(), "Hey_Bro.luau");
         assert!(meta1);
 
-        // On the old-inst path the existing filename is preserved,
-        // so a second syncback (incremental) should not change the name.
-        // We can't easily test the full old-inst path here since it
-        // requires InstanceWithMeta, but we verify the dedup_key is
-        // stable: calling strip_middleware_extension on the result gives
-        // the same dedup_key.
-        let dk_from_filename = strip_middleware_extension(&name1, Middleware::ModuleScript);
-        assert_eq!(dk_from_filename.to_lowercase(), dk1.to_lowercase());
+        // dedup_key is now the full filesystem name (including extension).
+        // For file middleware, dedup_key == filename.
+        assert_eq!(dk1.to_lowercase(), name1.as_ref().to_lowercase());
     }
 
     #[test]
@@ -2424,7 +2450,7 @@ mod tests {
         .unwrap();
         assert_eq!(filename.as_ref(), "Hey_Bro.luau");
         assert!(needs_meta);
-        assert_eq!(dedup_key, "Hey_Bro");
+        assert_eq!(dedup_key, "Hey_Bro.luau");
     }
 
     #[test]

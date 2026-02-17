@@ -117,9 +117,6 @@ end
 -- Forward declaration for recursion
 local encodeInstance
 
--- Track skipped duplicates for logging
-local skippedDuplicateCount = 0
-
 -- Encode Attributes if present on any instance
 local function encodeAttributes(instance, properties)
 	-- Try to get Attributes - this works for all instance types
@@ -160,18 +157,14 @@ local function encodeTags(instance, properties)
 end
 
 encodeInstance = function(instance, parentId, _skipPathCheck)
-	-- Check if the entire path to this instance is unique (unless we're in a recursive call)
-	-- For top-level instances, we check the entire ancestor chain for duplicates
-	-- For children, the parent already verified the path is unique up to that point,
-	-- so we only need to check siblings at each level (done in the recursion below)
+	-- Log duplicate-named siblings as a debug message (server handles them via
+	-- dedup suffixes) but do NOT skip encoding.
 	if not _skipPathCheck and not isPathUnique(instance) then
-		skippedDuplicateCount += 1
-		Log.warn(
-			"Skipped instance '{}' ({}) - path contains duplicate-named siblings (cannot reliably sync)",
+		Log.debug(
+			"Instance '{}' ({}) has duplicate-named siblings in path (server will handle via dedup)",
 			instance:GetFullName(),
 			instance.ClassName
 		)
-		return nil
 	end
 
 	-- Log encoding at trace level (very detailed)
@@ -256,24 +249,12 @@ encodeInstance = function(instance, parentId, _skipPathCheck)
 		end
 	end
 
-	-- Recursively encode children, skipping those with duplicate names
+	-- Recursively encode children (including those with duplicate names;
+	-- the server handles duplicates via dedup suffix system)
 	local children = {}
 	local childInstances = instance:GetChildren()
-	local childDuplicates = findDuplicateNames(childInstances)
 
 	for _, child in ipairs(childInstances) do
-		-- Skip children with duplicate names
-		if childDuplicates[child.Name] then
-			skippedDuplicateCount += 1
-			Log.warn(
-				"Skipped child instance '{}' ({}) - has duplicate-named siblings (cannot reliably sync)",
-				child:GetFullName(),
-				child.ClassName
-			)
-			continue
-		end
-
-		-- Pass true to skip duplicate check since we already checked above
 		local encodedChild = encodeInstance(child, nil, true)
 		if encodedChild then
 			table.insert(children, encodedChild)
@@ -296,20 +277,6 @@ encodeInstance = function(instance, parentId, _skipPathCheck)
 	}
 end
 
--- Wrapper function that resets the duplicate count and returns the final count
-local function encodeInstanceWithDuplicateTracking(instance, parentId)
-	skippedDuplicateCount = 0
-	local result = encodeInstance(instance, parentId, false)
-
-	-- Log summary if any duplicates were skipped
-	if skippedDuplicateCount > 0 then
-		Log.warn(
-			"Skipped {} location(s) with duplicate-named siblings during pull (cannot reliably sync)",
-			skippedDuplicateCount
-		)
-	end
-
-	return result, skippedDuplicateCount
+return function(instance, parentId)
+	return encodeInstance(instance, parentId, false)
 end
-
-return encodeInstanceWithDuplicateTracking

@@ -609,7 +609,7 @@ impl ApiService {
                 .filter_map(|(guid, added)| {
                     let parent_ref = added.parent?;
                     let parent_path = if tree.get_instance(parent_ref).is_some() {
-                        crate::ref_target_path(tree.inner(), parent_ref)
+                        crate::ref_target_path_from_tree(&tree, parent_ref)
                     } else {
                         return None;
                     };
@@ -1197,14 +1197,10 @@ impl ApiService {
                         new_dir
                     };
 
-                    // Filter duplicate children
-                    let inst_path = format!("{}", existing_path.display());
-                    let unique_children =
-                        self.filter_duplicate_children(&added.children, &inst_path, stats);
-
                     // Process children using normal syncback path
                     // This will use detect_existing_script_format to check existing files
-                    self.process_children_incremental(&unique_children, &children_dir, stats)?;
+                    let children_refs: Vec<_> = added.children.iter().collect();
+                    self.process_children_incremental(&children_refs, &children_dir, stats)?;
                 }
             }
 
@@ -1234,11 +1230,8 @@ impl ApiService {
 
                     // Handle children
                     if !added.children.is_empty() {
-                        let inst_path = format!("{}", existing_path.display());
-                        let unique_children =
-                            self.filter_duplicate_children(&added.children, &inst_path, stats);
-
-                        self.process_children_incremental(&unique_children, existing_path, stats)?;
+                        let children_refs: Vec<_> = added.children.iter().collect();
+                        self.process_children_incremental(&children_refs, existing_path, stats)?;
                     }
                 } else {
                     // It's a standalone file (e.g., .model.json5)
@@ -1654,47 +1647,6 @@ impl ApiService {
         true
     }
 
-    /// Check for duplicate names among children and return the set of unique children
-    /// that should be synced. Records skipped instances via stats tracker.
-    fn filter_duplicate_children<'a>(
-        &self,
-        children: &'a [crate::web::interface::AddedInstance],
-        parent_path: &str,
-        stats: &crate::syncback::SyncbackStats,
-    ) -> Vec<&'a crate::web::interface::AddedInstance> {
-        use std::collections::HashMap;
-
-        // Count occurrences of each name
-        let mut name_counts: HashMap<&str, usize> = HashMap::new();
-        for child in children {
-            *name_counts.entry(&child.name).or_insert(0) += 1;
-        }
-
-        // Find duplicates
-        let duplicates: std::collections::HashSet<&str> = name_counts
-            .iter()
-            .filter(|(_, &count)| count > 1)
-            .map(|(&name, _)| name)
-            .collect();
-
-        // Record skipped duplicates in stats
-        if !duplicates.is_empty() {
-            let mut skipped_count = 0;
-            for child in children {
-                if duplicates.contains(child.name.as_str()) {
-                    skipped_count += 1;
-                }
-            }
-            let duplicate_list: Vec<&str> = duplicates.iter().copied().collect();
-            stats.record_duplicate_names_batch(parent_path, &duplicate_list, skipped_count);
-        }
-
-        // Return only non-duplicate children
-        children
-            .iter()
-            .filter(|child| !duplicates.contains(child.name.as_str()))
-            .collect()
-    }
 
     /// Detects what file format currently exists on disk for a given instance.
     /// This is used to preserve the existing format during partial updates.
@@ -1826,12 +1778,8 @@ impl ApiService {
             None
         };
 
-        // Build path string for stats
-        let inst_path = format!("{}/{}", parent_dir.display(), added.name);
-
-        // Filter out children with duplicate names (cannot reliably sync)
-        let unique_children = self.filter_duplicate_children(&added.children, &inst_path, stats);
-        let has_children = !unique_children.is_empty();
+        let children_refs: Vec<_> = added.children.iter().collect();
+        let has_children = !children_refs.is_empty();
 
         // Determine the appropriate middleware/file format based on class name.
         // This matches the logic in src/syncback/mod.rs::get_best_middleware.
@@ -1887,7 +1835,7 @@ impl ApiService {
                     })?;
                     self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated ModuleScript at {}", init_path.display());
-                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                    self.process_children_incremental(&children_refs, &dir_path, stats)?;
                 } else {
                     let file_path = parent_dir.join(format!("{}.luau", encoded_name));
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
@@ -1937,7 +1885,7 @@ impl ApiService {
                     })?;
                     self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated Script at {}", init_path.display());
-                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                    self.process_children_incremental(&children_refs, &dir_path, stats)?;
                 } else {
                     let file_path =
                         parent_dir.join(format!("{}.{}.luau", encoded_name, script_suffix));
@@ -1987,7 +1935,7 @@ impl ApiService {
                     })?;
                     self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated LocalScript at {}", init_path.display());
-                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                    self.process_children_incremental(&children_refs, &dir_path, stats)?;
                 } else {
                     let file_path = parent_dir.join(format!("{}.local.luau", encoded_name));
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
@@ -2033,7 +1981,7 @@ impl ApiService {
                 );
 
                 // Recursively process children
-                self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                self.process_children_incremental(&children_refs, &dir_path, stats)?;
             }
 
             // StringValue: .txt file if no children, directory with init.meta.json5 if has children
@@ -2049,7 +1997,7 @@ impl ApiService {
                         "Syncback: Created StringValue directory at {}",
                         dir_path.display()
                     );
-                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                    self.process_children_incremental(&children_refs, &dir_path, stats)?;
                 } else {
                     let value = added
                         .properties
@@ -2103,7 +2051,7 @@ impl ApiService {
                         "Syncback: Created LocalizationTable directory at {}",
                         dir_path.display()
                     );
-                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                    self.process_children_incremental(&children_refs, &dir_path, stats)?;
                 } else {
                     let file_path = parent_dir.join(format!("{}.csv", encoded_name));
                     fs::write(&file_path, content.as_bytes()).with_context(|| {
@@ -2167,7 +2115,7 @@ impl ApiService {
                     );
 
                     // Recursively process children
-                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                    self.process_children_incremental(&children_refs, &dir_path, stats)?;
                 } else {
                     let content = self.serialize_instance_to_model_json(added, meta_name_field)?;
                     // Use the detected file path if available (preserves .model.json
@@ -2693,7 +2641,7 @@ impl ApiService {
                         remove_attributes.push(attr_name);
                     } else if tree.get_instance(*target_ref).is_some() {
                         // Valid target: compute path and add as Rojo_Ref_* attribute
-                        let path = crate::ref_target_path(tree.inner(), *target_ref);
+                        let path = crate::ref_target_path_from_tree(&tree, *target_ref);
 
                         // Warn if the path is ambiguous (duplicate-named siblings
                         // at any ancestor level). The ref will still be written,
@@ -5460,114 +5408,6 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // Duplicate Path Detection - Integration Scenarios
-    // =========================================================================
-    mod duplicate_path_integration_tests {
-
-        #[test]
-        fn test_syncback_skips_duplicate_children() {
-            // When syncing back children, duplicates should be skipped
-            // This test verifies the filter_duplicate_children logic
-
-            let children_names = ["ChildA", "ChildB", "ChildA", "ChildC"];
-            let unique: Vec<_> = children_names
-                .iter()
-                .filter(|&&name| children_names.iter().filter(|&&n| n == name).count() == 1)
-                .collect();
-
-            assert_eq!(unique.len(), 2, "ChildB and ChildC should be kept");
-            assert!(unique.contains(&&"ChildB"));
-            assert!(unique.contains(&&"ChildC"));
-        }
-
-        #[test]
-        fn test_recursive_duplicate_handling() {
-            // Test that duplicates at any level are handled
-            //
-            // Parent/
-            //   ├─ Child1/
-            //   │    ├─ GrandChild (duplicate)
-            //   │    └─ GrandChild (duplicate)
-            //   └─ Child2/
-            //        └─ GrandChild (unique within its parent)
-
-            let child1_grandchildren = ["GrandChild", "GrandChild"];
-            let child2_grandchildren = ["GrandChild"];
-
-            // Child1's grandchildren have duplicates
-            let child1_filtered: Vec<_> = child1_grandchildren
-                .iter()
-                .filter(|&&name| child1_grandchildren.iter().filter(|&&n| n == name).count() == 1)
-                .collect();
-            assert_eq!(
-                child1_filtered.len(),
-                0,
-                "Child1's duplicate grandchildren filtered"
-            );
-
-            // Child2's grandchild is unique
-            let child2_filtered: Vec<_> = child2_grandchildren
-                .iter()
-                .filter(|&&name| child2_grandchildren.iter().filter(|&&n| n == name).count() == 1)
-                .collect();
-            assert_eq!(child2_filtered.len(), 1, "Child2's unique grandchild kept");
-        }
-
-        #[test]
-        fn test_duplicate_log_message_format() {
-            // Verify the expected log message format for skipped duplicates
-            let class_name = "ModuleScript";
-            let full_name = "game.ReplicatedStorage.DuplicateScript";
-
-            let expected_msg = format!(
-                "Skipped instance '{}' ({}) - path contains duplicate-named siblings (cannot reliably sync)",
-                full_name, class_name
-            );
-
-            assert!(expected_msg.contains(full_name));
-            assert!(expected_msg.contains(class_name));
-            assert!(expected_msg.contains("duplicate-named siblings"));
-        }
-
-        #[test]
-        fn test_parent_path_validation() {
-            // When pulling an instance, we must verify the parent path is unique
-            // This simulates the is_tree_path_unique check
-
-            // Scenario: Trying to add a script under a folder that has duplicate siblings
-            let parent_path_levels = [
-                ("Root", vec!["FolderA", "FolderA"]), // Duplicate at this level!
-            ];
-
-            let path_unique = parent_path_levels
-                .iter()
-                .all(|(target, siblings)| siblings.iter().filter(|&&s| s == *target).count() == 1);
-
-            assert!(
-                !path_unique,
-                "Parent path with duplicates should fail validation"
-            );
-        }
-
-        #[test]
-        fn test_valid_parent_path() {
-            // Valid parent path with no duplicates at any level
-            let parent_path_levels = [
-                (
-                    "ReplicatedStorage",
-                    vec!["Workspace", "ReplicatedStorage", "ServerStorage"],
-                ),
-                ("Shared", vec!["Shared", "Client", "Server"]),
-            ];
-
-            let path_unique = parent_path_levels
-                .iter()
-                .all(|(target, siblings)| siblings.iter().filter(|&&s| s == *target).count() == 1);
-
-            assert!(path_unique, "Valid parent path should pass validation");
-        }
-    }
 
     // Tests for syncback_removed_instance
     mod syncback_removed_tests {

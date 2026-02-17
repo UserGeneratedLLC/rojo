@@ -132,15 +132,14 @@ fn is_path_unique_with_cache(
 /// the sync tree to be preserved as path-based attributes.
 pub fn collect_referents(dom: &WeakDom, pre_prune_paths: &HashMap<Ref, String>) -> RefLinks {
     let mut path_links: HashMap<Ref, Vec<PathRefLink>> = HashMap::new();
-    let mut id_links: HashMap<Ref, Vec<IdRefLink>> = HashMap::new();
-    let mut targets_needing_id: HashSet<Ref> = HashSet::new();
+    let id_links: HashMap<Ref, Vec<IdRefLink>> = HashMap::new();
+    let targets_needing_id: HashSet<Ref> = HashSet::new();
 
-    // Pre-compute duplicate sibling info in O(N) - this makes all subsequent
-    // path uniqueness checks O(d) instead of O(d × s) where d=depth, s=siblings
-    let has_duplicate_siblings = compute_refs_with_duplicate_siblings(dom);
-
-    // Cache path uniqueness results to avoid re-checking the same target
-    let mut path_unique_cache: HashMap<Ref, bool> = HashMap::new();
+    // With the dedup system, ALL filesystem paths are unique (filesystem names
+    // are unique among siblings by definition). Always use path-based linking.
+    // ID-based fallback ($id/Rojo_Target_*) is only for instances without
+    // filesystem backing (inside .rbxm files), which will be handled when the
+    // syncback flow is restructured to pass filesystem name info.
 
     let mut queue = VecDeque::new();
     queue.push_back(dom.root_ref());
@@ -157,35 +156,16 @@ pub fn collect_referents(dom: &WeakDom, pre_prune_paths: &HashMap<Ref, String>) 
                 continue;
             }
 
-            // Check if target exists in current DOM
-            if let Some(_target) = dom.get_by_ref(*target_ref) {
-                // Target exists - check if path is unique (with caching)
-                let is_unique = *path_unique_cache.entry(*target_ref).or_insert_with(|| {
-                    is_path_unique_with_cache(dom, *target_ref, &has_duplicate_siblings)
+            if dom.get_by_ref(*target_ref).is_some() {
+                // Target exists in DOM -- always use path-based system.
+                // With dedup suffixes, paths are always unique.
+                let target_path = inst_path(dom, *target_ref);
+                path_links.entry(inst_ref).or_default().push(PathRefLink {
+                    name: *prop_name,
+                    path: target_path,
                 });
-
-                if is_unique {
-                    // Path is unique - use path-based system
-                    let target_path = inst_path(dom, *target_ref);
-                    path_links.entry(inst_ref).or_default().push(PathRefLink {
-                        name: *prop_name,
-                        path: target_path,
-                    });
-                } else {
-                    // Path is NOT unique - fall back to ID-based system
-                    log::debug!(
-                        "Property {}.{} uses ID-based reference because target has duplicate-named siblings",
-                        inst_path(dom, inst_ref),
-                        prop_name
-                    );
-                    id_links.entry(inst_ref).or_default().push(IdRefLink {
-                        name: *prop_name,
-                        target: *target_ref,
-                    });
-                    targets_needing_id.insert(*target_ref);
-                }
             } else if let Some(external_path) = pre_prune_paths.get(target_ref) {
-                // Target was pruned - use path (we can't check uniqueness, assume it's fine)
+                // Target was pruned -- use pre-prune path
                 log::debug!(
                     "Property {}.{} points to pruned instance at '{}', storing as path reference",
                     inst_path(dom, inst_ref),
@@ -197,7 +177,6 @@ pub fn collect_referents(dom: &WeakDom, pre_prune_paths: &HashMap<Ref, String>) 
                     path: external_path.clone(),
                 });
             } else {
-                // Truly dangling reference
                 log::warn!(
                     "Property {}.{} will be `nil` on disk because the referenced instance does not exist",
                     inst_path(dom, inst_ref),

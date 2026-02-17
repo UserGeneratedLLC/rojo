@@ -89,6 +89,10 @@ fn assert_rbx_equal(file_a: &Path, file_b: &Path, test_name: &str) {
 }
 
 /// Recursively compare children of two instances.
+///
+/// Uses sorted Vec-based comparison (not HashMap) so that duplicate-named
+/// children are correctly handled. HashMap would silently overwrite entries
+/// sharing a name, making the test blind to lost duplicates.
 fn compare_children(
     dom_a: &WeakDom,
     ref_a: rbx_dom_weak::types::Ref,
@@ -102,73 +106,63 @@ fn compare_children(
     let children_a = inst_a.children();
     let children_b = inst_b.children();
 
-    // Build maps of children by name for comparison
-    let mut map_a: std::collections::HashMap<&str, &rbx_dom_weak::Instance> =
-        std::collections::HashMap::new();
-    let mut map_b: std::collections::HashMap<&str, &rbx_dom_weak::Instance> =
-        std::collections::HashMap::new();
-
-    for &child_ref in children_a {
-        if let Some(child) = dom_a.get_by_ref(child_ref) {
-            map_a.insert(&child.name, child);
-        }
-    }
-
-    for &child_ref in children_b {
-        if let Some(child) = dom_b.get_by_ref(child_ref) {
-            map_b.insert(&child.name, child);
-        }
-    }
-
-    // Check that both have the same children
-    let names_a: std::collections::HashSet<&str> = map_a.keys().copied().collect();
-    let names_b: std::collections::HashSet<&str> = map_b.keys().copied().collect();
-
-    let only_in_a: Vec<_> = names_a.difference(&names_b).collect();
-    let only_in_b: Vec<_> = names_b.difference(&names_a).collect();
-
-    if !only_in_a.is_empty() || !only_in_b.is_empty() {
+    if children_a.len() != children_b.len() {
+        let names_a: Vec<&str> = children_a
+            .iter()
+            .filter_map(|r| dom_a.get_by_ref(*r).map(|i| i.name.as_str()))
+            .collect();
+        let names_b: Vec<&str> = children_b
+            .iter()
+            .filter_map(|r| dom_b.get_by_ref(*r).map(|i| i.name.as_str()))
+            .collect();
         panic!(
-            "[{}] Children differ under '{}':\n  Only in original: {:?}\n  Only in roundtrip: {:?}",
-            test_name, inst_a.name, only_in_a, only_in_b
+            "[{}] Child count mismatch under '{}': original has {} children {:?}, \
+             roundtrip has {} children {:?}",
+            test_name,
+            inst_a.name,
+            children_a.len(),
+            names_a,
+            children_b.len(),
+            names_b,
         );
     }
 
-    // Compare each child
-    for name in names_a {
-        let child_a = map_a[name];
-        let child_b = map_b[name];
+    let mut pairs_a: Vec<(&str, rbx_dom_weak::types::Ref)> = children_a
+        .iter()
+        .filter_map(|&r| dom_a.get_by_ref(r).map(|i| (i.name.as_str(), r)))
+        .collect();
+    let mut pairs_b: Vec<(&str, rbx_dom_weak::types::Ref)> = children_b
+        .iter()
+        .filter_map(|&r| dom_b.get_by_ref(r).map(|i| (i.name.as_str(), r)))
+        .collect();
 
-        // Check class name matches
-        if child_a.class != child_b.class {
+    pairs_a.sort_by_key(|(name, _)| *name);
+    pairs_b.sort_by_key(|(name, _)| *name);
+
+    for (i, ((name_a, ref_child_a), (name_b, ref_child_b))) in
+        pairs_a.iter().zip(pairs_b.iter()).enumerate()
+    {
+        if name_a != name_b {
             panic!(
-                "[{}] Class mismatch for '{}': original={}, roundtrip={}",
-                test_name, name, child_a.class, child_b.class
+                "[{}] Child name mismatch under '{}' at sorted index {}: \
+                 original='{}', roundtrip='{}'",
+                test_name, inst_a.name, i, name_a, name_b,
             );
         }
 
-        // Compare important properties (Source for scripts, Value for value types)
+        let child_a = dom_a.get_by_ref(*ref_child_a).unwrap();
+        let child_b = dom_b.get_by_ref(*ref_child_b).unwrap();
+
+        if child_a.class != child_b.class {
+            panic!(
+                "[{}] Class mismatch for '{}' (sorted index {}): original={}, roundtrip={}",
+                test_name, name_a, i, child_a.class, child_b.class
+            );
+        }
+
         compare_properties(child_a, child_b, test_name);
 
-        // Recurse into children
-        let child_ref_a = dom_a
-            .get_by_ref(ref_a)
-            .unwrap()
-            .children()
-            .iter()
-            .find(|&&r| dom_a.get_by_ref(r).map(|i| i.name.as_str()) == Some(name))
-            .copied()
-            .unwrap();
-        let child_ref_b = dom_b
-            .get_by_ref(ref_b)
-            .unwrap()
-            .children()
-            .iter()
-            .find(|&&r| dom_b.get_by_ref(r).map(|i| i.name.as_str()) == Some(name))
-            .copied()
-            .unwrap();
-
-        compare_children(dom_a, child_ref_a, dom_b, child_ref_b, test_name);
+        compare_children(dom_a, *ref_child_a, dom_b, *ref_child_b, test_name);
     }
 }
 
@@ -218,6 +212,19 @@ fn compare_properties(
             panic!(
                 "[{}] Attributes differ for '{}' ({}):\nOriginal: {:?}\nRoundtrip: {:?}",
                 test_name, inst_a.name, inst_a.class, attrs_a, attrs_b
+            );
+        }
+    }
+
+    // Check Tags if present
+    if let (Some(tags_a), Some(tags_b)) = (
+        inst_a.properties.get(&ustr("Tags")),
+        inst_b.properties.get(&ustr("Tags")),
+    ) {
+        if tags_a != tags_b {
+            panic!(
+                "[{}] Tags differ for '{}' ({}):\nOriginal: {:?}\nRoundtrip: {:?}",
+                test_name, inst_a.name, inst_a.class, tags_a, tags_b
             );
         }
     }

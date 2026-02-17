@@ -49,6 +49,7 @@
 #![allow(dead_code)]
 
 mod instance_snapshot;
+pub mod matching;
 mod metadata;
 mod patch;
 mod patch_apply;

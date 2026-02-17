@@ -231,33 +231,48 @@ impl RojoTree {
         self.specified_id_to_refs.insert(specified, id);
     }
 
-    /// Looks up an instance by its path in the tree (e.g., "SoundService/MySoundGroup").
-    /// The path is relative to the root of the tree, with segments separated by "/".
-    /// Returns the Ref if found, None otherwise.
+    /// Looks up an instance by its filesystem-name path in the tree.
+    ///
+    /// Each segment is matched against the **filesystem name** of child
+    /// instances (derived from `instigating_source` path), falling back to
+    /// the instance name for instances without filesystem backing.
+    ///
+    /// Path format: `"Workspace/Model.model.json5/Attachment~1.luau"`
+    /// Segments are separated by `/` (no escaping needed since filesystem
+    /// names can't contain `/`).
     pub fn get_instance_by_path(&self, path: &str) -> Option<Ref> {
         if path.is_empty() {
             return Some(self.get_root_id());
         }
 
-        // Use split_ref_path to handle escaped "/" in instance names.
-        // An instance named "A/B" is stored as "A\/B" in the path.
-        let segments = crate::split_ref_path(path);
+        let segments: Vec<&str> = path.split('/').collect();
         let mut current_ref = self.get_root_id();
 
-        // The root of the tree doesn't appear in the path, so we start with
-        // the root's children.
-        for segment in segments.iter() {
+        for segment in &segments {
             let current = self.inner.get_by_ref(current_ref)?;
-
             let children = current.children();
 
             let mut found = false;
             for &child_ref in children {
-                let child = self.inner.get_by_ref(child_ref)?;
-                if child.name == segment.as_str() {
+                let fs_name = self.filesystem_name_for(child_ref);
+                if fs_name.eq_ignore_ascii_case(segment) {
                     current_ref = child_ref;
                     found = true;
                     break;
+                }
+            }
+
+            if !found {
+                // Fallback: try matching by instance name (for backward
+                // compatibility with legacy ref paths and instances without
+                // filesystem backing).
+                for &child_ref in children {
+                    let child = self.inner.get_by_ref(child_ref)?;
+                    if child.name == *segment {
+                        current_ref = child_ref;
+                        found = true;
+                        break;
+                    }
                 }
             }
 
@@ -267,6 +282,24 @@ impl RojoTree {
         }
 
         Some(current_ref)
+    }
+
+    /// Returns the filesystem name for an instance (the filename or directory
+    /// name on disk). Derived from `instigating_source` if available, otherwise
+    /// falls back to the instance name.
+    pub fn filesystem_name_for(&self, id: Ref) -> String {
+        if let Some(meta) = self.metadata_map.get(&id) {
+            if let Some(source) = &meta.instigating_source {
+                if let Some(name) = source.path().file_name().and_then(|f| f.to_str()) {
+                    return name.to_string();
+                }
+            }
+        }
+        // Fallback: use instance name
+        self.inner
+            .get_by_ref(id)
+            .map(|inst| inst.name.clone())
+            .unwrap_or_default()
     }
 
     fn insert_metadata(&mut self, id: Ref, metadata: InstanceMetadata) {

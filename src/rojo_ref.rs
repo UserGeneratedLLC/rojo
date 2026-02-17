@@ -111,6 +111,9 @@ pub fn split_ref_path(path: &str) -> Vec<String> {
 /// Returns the slash-separated path from the root (root name excluded).
 /// Instance names containing "/" are escaped as "\/" to prevent ambiguity.
 ///
+/// **Legacy version:** Uses raw instance names with escaping. New code should
+/// use `ref_target_path_from_tree()` which uses filesystem names.
+///
 /// Example: an instance at `DataModel > Workspace > Part1` returns `"Workspace/Part1"`.
 /// An instance named `"A/B"` at Workspace returns `"Workspace/A\/B"`.
 pub fn ref_target_path(dom: &WeakDom, target_ref: Ref) -> String {
@@ -120,6 +123,68 @@ pub fn ref_target_path(dom: &WeakDom, target_ref: Ref) -> String {
         .filter(|inst| inst.referent() != root_ref)
         .map(|inst| escape_ref_path_segment(&inst.name))
         .collect();
+    components.reverse();
+    components.join("/")
+}
+
+/// Compute the filesystem-name-based path to a target instance for use in
+/// `Rojo_Ref_*` attributes.
+///
+/// Each path segment is the **full filesystem name** of the instance:
+/// - `Folder "Foo"` → `"Foo"` (directory name)
+/// - `ModuleScript "Foo"` → `"Foo.luau"` (slug + extension)
+/// - `Script "Foo"` (server) → `"Foo.server.luau"`
+/// - Dedup'd `ModuleScript "Foo"` → `"Foo~1.luau"`
+///
+/// Filesystem names are derived from `instigating_source` paths (the actual
+/// file/dir on disk). For instances without filesystem backing (inside .rbxm
+/// files, newly added), falls back to the instance name.
+///
+/// Since filesystem names can't contain `/` (slugified to `_`), path splitting
+/// is a simple `split('/')` -- no escaping needed.
+pub fn ref_target_path_from_tree(
+    tree: &crate::snapshot::RojoTree,
+    target_ref: Ref,
+) -> String {
+    let dom = tree.inner();
+    let root_ref = dom.root_ref();
+
+    let mut components: Vec<String> = Vec::new();
+    let mut current = target_ref;
+
+    loop {
+        if current == root_ref || current.is_none() {
+            break;
+        }
+
+        let inst = match dom.get_by_ref(current) {
+            Some(i) => i,
+            None => break,
+        };
+
+        // Derive the filesystem name for this instance.
+        let fs_name = if let Some(meta) = tree.get_metadata(current) {
+            if let Some(source) = &meta.instigating_source {
+                // Use the filename from the instigating source path.
+                source
+                    .path()
+                    .file_name()
+                    .and_then(|f| f.to_str())
+                    .unwrap_or(&inst.name)
+                    .to_string()
+            } else {
+                // No instigating source (project node, newly added) -- use name.
+                inst.name.clone()
+            }
+        } else {
+            // No metadata at all -- use instance name.
+            inst.name.clone()
+        };
+
+        components.push(fs_name);
+        current = inst.parent();
+    }
+
     components.reverse();
     components.join("/")
 }

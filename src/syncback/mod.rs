@@ -1,6 +1,8 @@
+pub mod dedup_suffix;
 mod file_names;
 mod fs_snapshot;
 mod hash;
+pub mod matching;
 pub mod meta;
 mod property_filter;
 mod ref_properties;

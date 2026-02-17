@@ -5,14 +5,11 @@ use std::{
 
 use anyhow::Context;
 use memofs::{DirEntry, Vfs};
+use rbx_dom_weak::types::Ref;
 
 use crate::{
     snapshot::{InstanceContext, InstanceMetadata, InstanceSnapshot, InstigatingSource},
-    snapshot_middleware::Middleware,
-    syncback::{
-        hash_instance, name_needs_slugify, slugify_name, strip_middleware_extension, FsSnapshot,
-        SyncbackReturn, SyncbackSnapshot,
-    },
+    syncback::{hash_instance, FsSnapshot, SyncbackReturn, SyncbackSnapshot},
 };
 
 use super::{meta_file::DirectoryMetadata, snapshot_from_vfs};
@@ -137,205 +134,174 @@ pub fn syncback_dir<'sync>(
 pub fn syncback_dir_no_meta<'sync>(
     snapshot: &SyncbackSnapshot<'sync>,
 ) -> anyhow::Result<SyncbackReturn<'sync>> {
+    use crate::syncback::matching::match_children;
+
     let new_inst = snapshot.new_inst();
 
     let mut children = Vec::new();
     let mut removed_children = Vec::new();
 
-    // taken_names tracks claimed bare slugs (without extensions) for dedup.
-    // Pre-seeded from old tree children's slugified instance names so that
-    // new-only children correctly dedup against existing siblings, regardless
-    // of iteration order (see plan: fix_stem-level_dedup §2).
+    // taken_names tracks claimed full filesystem name components (slug +
+    // extension for files, directory name for dirs), lowercased.
     let mut taken_names: HashSet<String> = HashSet::new();
 
-    // Detect duplicate child names (case-insensitive for file system safety).
-    // We skip duplicates instead of failing, tracking them in stats.
-    let mut child_name_counts: HashMap<String, usize> = HashMap::new();
-    for child_ref in new_inst.children() {
-        let child = snapshot.get_new_instance(*child_ref).unwrap();
-        let lower_name = child.name.to_lowercase();
-        *child_name_counts.entry(lower_name).or_insert(0) += 1;
-    }
-
-    let duplicate_names: HashSet<String> = child_name_counts
-        .into_iter()
-        .filter(|(_, count)| *count > 1)
-        .map(|(name, _)| name)
-        .collect();
-
-    // Record duplicate names in stats tracker
-    if !duplicate_names.is_empty() {
-        let inst_path = crate::syncback::inst_path(snapshot.new_tree(), snapshot.new);
-        // Count total instances being skipped (sum of all duplicates)
-        let mut total_skipped = 0;
-        for child_ref in new_inst.children() {
-            let child = snapshot.get_new_instance(*child_ref).unwrap();
-            if duplicate_names.contains(&child.name.to_lowercase()) {
-                total_skipped += 1;
-            }
-        }
-        let duplicate_list: Vec<&str> = duplicate_names.iter().map(|s| s.as_str()).collect();
-        snapshot
-            .stats()
-            .record_duplicate_names_batch(&inst_path, &duplicate_list, total_skipped);
-    }
-
-    if let Some(old_inst) = snapshot.old_inst() {
-        let mut old_child_map = HashMap::with_capacity(old_inst.children().len());
-        for child in old_inst.children() {
-            let inst = snapshot.get_old_instance(*child).unwrap();
-            old_child_map.insert(inst.name(), inst);
-        }
-
-        // Pre-seed taken_names from old children's actual filesystem dedup keys
-        // so that new-only children correctly dedup against existing siblings.
-        // We derive keys from relevant_paths (the real filename on disk) rather
-        // than slugifying instance names, because an old instance may already
-        // have a tilde suffix (e.g. A_B~1.luau from prior dedup) that the bare
-        // slug wouldn't capture.
-        // Only in incremental mode: in clean mode, old_ref is forced to None
-        // for all children, so every child is treated as new and pre-seeding
-        // would cause false collisions (spurious ~1 suffixes).
-        if snapshot.data.is_incremental() {
-            for inst in old_child_map.values() {
-                if let Some(path) = inst.metadata().relevant_paths.first() {
-                    if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
-                        let middleware = inst.metadata().middleware.unwrap_or(Middleware::Dir);
-                        let dedup_key =
-                            strip_middleware_extension(filename, middleware).to_lowercase();
-                        taken_names.insert(dedup_key);
-                    }
-                } else {
-                    // Fallback (shouldn't happen for old instances with disk presence)
-                    let name = inst.name();
-                    let slug = if name_needs_slugify(name) {
-                        slugify_name(name).to_lowercase()
-                    } else {
-                        name.to_lowercase()
-                    };
-                    taken_names.insert(slug);
-                }
-            }
-        }
-
-        // Sort children alphabetically for deterministic dedup ordering.
-        // Without this, DOM iteration order determines which sibling gets
-        // the base slug vs ~1, causing non-deterministic output across
-        // different serializations of the same place.
-        let mut sorted_children: Vec<_> = new_inst
-            .children()
-            .iter()
-            .map(|r| (*r, snapshot.get_new_instance(*r).unwrap().name.clone()))
-            .collect();
-        sorted_children.sort_by(|(_, a), (_, b)| a.cmp(b));
-
-        for (new_child_ref, _) in &sorted_children {
-            let new_child = snapshot.get_new_instance(*new_child_ref).unwrap();
-
-            // Skip children with duplicate names - cannot reliably sync them
-            if duplicate_names.contains(&new_child.name.to_lowercase()) {
-                old_child_map.remove(new_child.name.as_str());
-                continue;
-            }
-
-            // Skip instances of ignored classes
-            if snapshot.should_ignore_class(&new_child.class) {
-                // Also remove from old_child_map so it won't be marked as removed
-                old_child_map.remove(new_child.name.as_str());
+    // Filter new children: exclude ignored classes and ignoreTrees.
+    let eligible_new: Vec<Ref> = new_inst
+        .children()
+        .iter()
+        .copied()
+        .filter(|r| {
+            let child = snapshot.get_new_instance(*r).unwrap();
+            if snapshot.should_ignore_class(&child.class) {
                 log::debug!(
                     "Skipping instance {} because its class {} is ignored",
-                    new_child.name,
-                    new_child.class
+                    child.name,
+                    child.class
                 );
-                continue;
+                return false;
             }
-            // Skip instances matching ignoreTrees
-            if snapshot.should_ignore_tree(*new_child_ref) {
-                old_child_map.remove(new_child.name.as_str());
-                continue;
+            if snapshot.should_ignore_tree(*r) {
+                return false;
             }
-            if let Some(old_child) = old_child_map.remove(new_child.name.as_str()) {
-                if old_child.metadata().relevant_paths.is_empty() {
+            true
+        })
+        .collect();
+
+    if let Some(old_inst) = snapshot.old_inst() {
+        // Build old_ref → InstanceWithMeta lookup for metadata access.
+        let mut old_meta_map: HashMap<Ref, _> = HashMap::new();
+        for &child_ref in old_inst.children() {
+            let inst = snapshot.get_old_instance(child_ref).unwrap();
+            old_meta_map.insert(child_ref, inst);
+        }
+
+        // Filter old children: exclude those without disk presence, from
+        // project files, or with ignored classes.
+        let eligible_old: Vec<Ref> = old_inst
+            .children()
+            .iter()
+            .copied()
+            .filter(|r| {
+                let inst = old_meta_map.get(r).unwrap();
+                if inst.metadata().relevant_paths.is_empty() {
                     log::debug!(
-                        "Skipping instance {} because it doesn't exist on the disk",
-                        old_child.name()
+                        "Excluding old instance {} from matching (no disk presence)",
+                        inst.name()
                     );
-                    continue;
-                } else if matches!(
-                    old_child.metadata().instigating_source,
+                    return false;
+                }
+                if matches!(
+                    inst.metadata().instigating_source,
                     Some(InstigatingSource::ProjectNode { .. })
                 ) {
                     log::debug!(
-                        "Skipping instance {} because it originates in a project file",
-                        old_child.name()
+                        "Excluding old instance {} from matching (project file)",
+                        inst.name()
                     );
-                    continue;
+                    return false;
                 }
-                // This child exists in both doms. Pass it on.
-                let (child_snap, _needs_meta, dedup_key) = snapshot.with_joined_path(
-                    *new_child_ref,
-                    Some(old_child.id()),
-                    &taken_names,
-                )?;
-                taken_names.insert(dedup_key.to_lowercase());
-                children.push(child_snap);
-            } else {
-                // The child only exists in the the new dom
-                let (child_snap, _needs_meta, dedup_key) =
-                    snapshot.with_joined_path(*new_child_ref, None, &taken_names)?;
-                taken_names.insert(dedup_key.to_lowercase());
-                children.push(child_snap);
+                if snapshot.should_ignore_class(inst.class_name().as_str()) {
+                    return false;
+                }
+                true
+            })
+            .collect();
+
+        // Run the 3-pass matching algorithm to pair new ↔ old children.
+        let match_result = match_children(
+            &eligible_new,
+            &eligible_old,
+            snapshot.new_tree(),
+            snapshot.old_tree(),
+            None, // TODO: pass precomputed hashes for better similarity
+            None,
+        );
+
+        // Pre-seed taken_names from ALL matched old children's filesystem
+        // names so that unmatched new children correctly dedup.
+        if snapshot.data.is_incremental() {
+            for &(_, old_ref) in &match_result.matched {
+                if let Some(inst) = old_meta_map.get(&old_ref) {
+                    if let Some(path) = inst.metadata().relevant_paths.first() {
+                        if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
+                            taken_names.insert(filename.to_lowercase());
+                        }
+                    }
+                }
+            }
+            // Also seed from unmatched old (they still occupy filesystem names).
+            for &old_ref in &match_result.unmatched_old {
+                if let Some(inst) = old_meta_map.get(&old_ref) {
+                    if let Some(path) = inst.metadata().relevant_paths.first() {
+                        if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
+                            taken_names.insert(filename.to_lowercase());
+                        }
+                    }
+                }
             }
         }
-        // Any children that are in the old dom but not the new one are removed.
-        // Filter out instances of ignored classes and duplicates from removal.
-        removed_children.extend(old_child_map.into_values().filter(|inst| {
-            // Don't remove duplicates - we're skipping them entirely
-            if duplicate_names.contains(&inst.name().to_lowercase()) {
-                return false;
+
+        // Sort matched pairs by new child name for deterministic ordering.
+        let mut sorted_matched = match_result.matched;
+        sorted_matched.sort_by(|(a, _), (b, _)| {
+            let a_name = &snapshot.get_new_instance(*a).unwrap().name;
+            let b_name = &snapshot.get_new_instance(*b).unwrap().name;
+            a_name.cmp(b_name)
+        });
+
+        // Process matched pairs: preserve existing filesystem assignment.
+        for (new_ref, old_ref) in &sorted_matched {
+            let (child_snap, _needs_meta, dedup_key) = snapshot.with_joined_path(
+                *new_ref,
+                Some(*old_ref),
+                &taken_names,
+            )?;
+            taken_names.insert(dedup_key.to_lowercase());
+            children.push(child_snap);
+        }
+
+        // Sort unmatched new by name for deterministic dedup ordering.
+        let mut sorted_unmatched_new = match_result.unmatched_new;
+        sorted_unmatched_new.sort_by(|a, b| {
+            let a_name = &snapshot.get_new_instance(*a).unwrap().name;
+            let b_name = &snapshot.get_new_instance(*b).unwrap().name;
+            a_name.cmp(b_name)
+        });
+
+        // Process unmatched new children: generate new filenames.
+        for new_ref in &sorted_unmatched_new {
+            let (child_snap, _needs_meta, dedup_key) =
+                snapshot.with_joined_path(*new_ref, None, &taken_names)?;
+            taken_names.insert(dedup_key.to_lowercase());
+            children.push(child_snap);
+        }
+
+        // Unmatched old children are removed (instance was deleted).
+        // Filter out ignored classes from removal.
+        for old_ref in match_result.unmatched_old {
+            if let Some(inst) = old_meta_map.get(&old_ref) {
+                if !snapshot.should_ignore_class(inst.class_name().as_str()) {
+                    removed_children.push(*inst);
+                } else {
+                    log::debug!(
+                        "Not removing instance {} because its class {} is ignored",
+                        inst.name(),
+                        inst.class_name()
+                    );
+                }
             }
-            if snapshot.should_ignore_class(inst.class_name().as_str()) {
-                log::debug!(
-                    "Not removing instance {} because its class {} is ignored",
-                    inst.name(),
-                    inst.class_name()
-                );
-                false
-            } else {
-                true
-            }
-        }));
+        }
     } else {
-        // There is no old instance. Just add every child.
+        // No old instance (clean mode). All children are new.
         // Sort alphabetically for deterministic dedup ordering.
-        let mut sorted_children: Vec<_> = new_inst
-            .children()
-            .iter()
-            .map(|r| (*r, snapshot.get_new_instance(*r).unwrap().name.clone()))
-            .collect();
-        sorted_children.sort_by(|(_, a), (_, b)| a.cmp(b));
+        let mut sorted_new = eligible_new;
+        sorted_new.sort_by(|a, b| {
+            let a_name = &snapshot.get_new_instance(*a).unwrap().name;
+            let b_name = &snapshot.get_new_instance(*b).unwrap().name;
+            a_name.cmp(b_name)
+        });
 
-        for (new_child_ref, _) in &sorted_children {
-            let new_child = snapshot.get_new_instance(*new_child_ref).unwrap();
-
-            // Skip children with duplicate names - cannot reliably sync them
-            if duplicate_names.contains(&new_child.name.to_lowercase()) {
-                continue;
-            }
-
-            // Skip instances of ignored classes
-            if snapshot.should_ignore_class(&new_child.class) {
-                log::debug!(
-                    "Skipping instance {} because its class {} is ignored",
-                    new_child.name,
-                    new_child.class
-                );
-                continue;
-            }
-            // Skip instances matching ignoreTrees
-            if snapshot.should_ignore_tree(*new_child_ref) {
-                continue;
-            }
+        for new_child_ref in &sorted_new {
             let (child_snap, _needs_meta, dedup_key) =
                 snapshot.with_joined_path(*new_child_ref, None, &taken_names)?;
             taken_names.insert(dedup_key.to_lowercase());

@@ -4,67 +4,67 @@ overview: "Replace the current duplicate-name blacklist/skip system with a full 
 todos:
   - id: phase1a-remove-blacklist-rust
     content: Remove duplicate-skip blacklist from Rust side (dir.rs, project.rs, syncback/mod.rs)
-    status: pending
+    status: completed
   - id: phase1b-remove-blacklist-plugin
     content: Cherry-pick plugin relaxations from rbxm-ambiguous (diff.lua, encodeInstance.lua)
-    status: pending
+    status: completed
   - id: phase1c-two-pass-syncback
     content: Restructure syncback_dir_no_meta to two-pass child processing (tentative names, then collision grouping)
-    status: pending
+    status: completed
   - id: phase1d-dedup-key-semantics
     content: Change dedup key in file_names.rs from bare slug to full filesystem name component
-    status: pending
+    status: completed
   - id: phase1e-suffix-cleanup
     content: Implement suffix cleanup rules (gap-tolerant, base-name promotion, group-to-1)
-    status: pending
+    status: completed
   - id: phase2a-matching-syncback
     content: Implement 3-pass matching algorithm for syncback (src/syncback/matching.rs)
-    status: pending
+    status: completed
   - id: phase2b-integrate-syncback
     content: Integrate matching into syncback_dir_no_meta (dir.rs)
-    status: pending
+    status: completed
   - id: phase2c-matching-forward
     content: Implement 3-pass matching algorithm for forward sync (src/snapshot/matching.rs)
-    status: pending
+    status: completed
   - id: phase2d-integrate-forward
     content: Integrate matching into compute_children_patches (patch_compute.rs)
-    status: pending
+    status: completed
   - id: phase2e-matching-cache
     content: Add optional matching cache (parent_ref -> match_assignments) with invalidation
     status: pending
   - id: phase3a-fs-name-ref-paths
     content: Switch ref_target_path() to filesystem-name-based paths in rojo_ref.rs
-    status: pending
+    status: completed
   - id: phase3b-tree-resolution
     content: Update get_instance_by_path() in tree.rs to resolve filesystem-name segments
-    status: pending
+    status: completed
   - id: phase3c-ref-properties
     content: Update ref_properties.rs for filesystem-name-based linking
-    status: pending
+    status: completed
   - id: phase3d-patch-apply
     content: Update patch_apply.rs ref resolution for new path format
-    status: pending
+    status: completed
   - id: phase3e-ref-update-infra
     content: Extend RefPathIndex and ref update infrastructure for all rename/dedup cases
-    status: pending
+    status: completed
   - id: phase4a-change-processor
     content: Update change_processor.rs for VFS echo prevention on dedup renames and suffix cleanup
-    status: pending
+    status: completed
   - id: phase4b-api-write
     content: Update api.rs for two-pass write, dedup in all 4 branches, dual write consistency
-    status: pending
+    status: completed
   - id: phase5a-lua-matching
     content: Implement 3-pass matching algorithm in Lua (hydrate.lua + matching.lua + XXH32.luau)
-    status: pending
+    status: completed
   - id: phase5b-plugin-integration
     content: Update ChangeBatcher and confirmation dialog for duplicate-named instances
-    status: pending
+    status: completed
   - id: phase6-cherry-picks
     content: Cherry-pick roundtrip test improvements and macOS test ignore from rbxm-ambiguous
-    status: pending
+    status: completed
   - id: phase7-testing
     content: "Implement comprehensive test suite: shared test vectors, all spec scenarios, roundtrip tests"
-    status: pending
+    status: completed
 isProject: false
 ---
 

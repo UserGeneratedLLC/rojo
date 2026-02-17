@@ -217,63 +217,34 @@ fn compute_children_patches(
     id: Ref,
     patch_set: &mut PatchSet,
 ) {
+    use super::matching::match_forward;
+
     let instance = tree
         .get_instance(id)
         .expect("Instance did not exist in tree");
 
-    let instance_children = instance.children();
+    let instance_children = instance.children().to_vec();
+    let snapshot_children = take(&mut snapshot.children);
 
-    let mut paired_instances = vec![false; instance_children.len()];
+    // Use the 3-pass matching algorithm instead of greedy name+class.
+    let match_result = match_forward(snapshot_children, &instance_children, tree);
 
-    for snapshot_child in take(&mut snapshot.children) {
-        let matching_instance =
-            instance_children
-                .iter()
-                .enumerate()
-                .find(|(instance_index, instance_child_id)| {
-                    if paired_instances[*instance_index] {
-                        return false;
-                    }
-
-                    let instance_child = tree
-                        .get_instance(**instance_child_id)
-                        .expect("Instance did not exist in tree");
-
-                    if snapshot_child.name == instance_child.name()
-                        && snapshot_child.class_name == instance_child.class_name()
-                    {
-                        paired_instances[*instance_index] = true;
-                        return true;
-                    }
-
-                    false
-                });
-
-        match matching_instance {
-            Some((_, instance_child_id)) => {
-                compute_patch_set_internal(
-                    context,
-                    snapshot_child,
-                    tree,
-                    *instance_child_id,
-                    patch_set,
-                );
-            }
-            None => {
-                patch_set.added_instances.push(PatchAdd {
-                    parent_id: id,
-                    instance: snapshot_child,
-                });
-            }
-        }
+    // Matched pairs: recursively compute patches.
+    for (snapshot_child, tree_child_id) in match_result.matched {
+        compute_patch_set_internal(context, snapshot_child, tree, tree_child_id, patch_set);
     }
 
-    for (instance_index, instance_child_id) in instance_children.iter().enumerate() {
-        if paired_instances[instance_index] {
-            continue;
-        }
+    // Unmatched snapshots: new instances to be added.
+    for snapshot_child in match_result.unmatched_snapshot {
+        patch_set.added_instances.push(PatchAdd {
+            parent_id: id,
+            instance: snapshot_child,
+        });
+    }
 
-        patch_set.removed_instances.push(*instance_child_id);
+    // Unmatched tree children: instances to be removed.
+    for tree_child_id in match_result.unmatched_tree {
+        patch_set.removed_instances.push(tree_child_id);
     }
 }
 

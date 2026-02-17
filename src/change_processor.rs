@@ -1080,7 +1080,7 @@ impl JobThreadContext {
                 // Capture the old path BEFORE rename for Rojo_Ref_* path updates.
                 // Must be computed before the `tree.get_instance(id)` borrow.
                 let old_ref_path = if update.changed_name.is_some() {
-                    Some(crate::ref_target_path(tree.inner(), id))
+                    Some(crate::ref_target_path_from_tree(&tree, id))
                 } else {
                     None
                 };
