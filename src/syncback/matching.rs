@@ -13,7 +13,7 @@
 //! The algorithm is designed for the syncback context where both "new" and
 //! "old" sides are WeakDom instances.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use blake3::Hash;
 use rbx_dom_weak::{
@@ -144,8 +144,8 @@ fn pass1_name_and_class(
         }
     }
 
-    let mut matched_new: Vec<Ref> = Vec::new();
-    let mut matched_old: Vec<Ref> = Vec::new();
+    let mut matched_new: HashSet<Ref> = HashSet::new();
+    let mut matched_old: HashSet<Ref> = HashSet::new();
 
     // Sort names for deterministic iteration order.
     let mut sorted_names: Vec<&String> = new_by_name.keys().collect();
@@ -160,13 +160,12 @@ fn pass1_name_and_class(
         // Case 1: exactly one on each side → instant match.
         if new_refs.len() == 1 && old_refs.len() == 1 {
             matched.push((new_refs[0], old_refs[0]));
-            matched_new.push(new_refs[0]);
-            matched_old.push(old_refs[0]);
+            matched_new.insert(new_refs[0]);
+            matched_old.insert(old_refs[0]);
             continue;
         }
 
         // Case 2: multiple on at least one side → try ClassName narrowing.
-        // Build (Name, ClassName) → refs maps within this name group.
         let mut new_by_class: HashMap<&str, Vec<Ref>> = HashMap::new();
         for &r in new_refs {
             if let Some(inst) = new_dom.get_by_ref(r) {
@@ -180,19 +179,17 @@ fn pass1_name_and_class(
             }
         }
 
-        // Match (Name, ClassName) pairs that are unique on both sides.
         for (class_name, new_class_refs) in &new_by_class {
             if let Some(old_class_refs) = old_by_class.get(class_name) {
                 if new_class_refs.len() == 1 && old_class_refs.len() == 1 {
                     matched.push((new_class_refs[0], old_class_refs[0]));
-                    matched_new.push(new_class_refs[0]);
-                    matched_old.push(old_class_refs[0]);
+                    matched_new.insert(new_class_refs[0]);
+                    matched_old.insert(old_class_refs[0]);
                 }
             }
         }
     }
 
-    // Remove matched refs from remaining lists.
     remaining_new.retain(|r| !matched_new.contains(r));
     remaining_old.retain(|r| !matched_old.contains(r));
 }
@@ -248,16 +245,14 @@ fn pass2_ref_discriminators(
         }
     }
 
-    let mut matched_new: Vec<Ref> = Vec::new();
-    let mut matched_old: Vec<Ref> = Vec::new();
+    let mut matched_new: HashSet<Ref> = HashSet::new();
+    let mut matched_old: HashSet<Ref> = HashSet::new();
 
     for (name, new_refs) in &new_by_name {
         let Some(old_refs) = old_by_name.get(name) else {
             continue;
         };
 
-        // For each new instance in this group, compute a "ref signature":
-        // the set of matched counterparts its Ref targets point to.
         for &new_ref in new_refs {
             if matched_new.contains(&new_ref) {
                 continue;
@@ -266,7 +261,6 @@ fn pass2_ref_discriminators(
             if new_targets.is_empty() {
                 continue;
             }
-            // Map new targets through the match map to get "translated" targets.
             let translated: Vec<Ref> = new_targets
                 .iter()
                 .filter_map(|t| new_to_old.get(t).copied())
@@ -275,7 +269,6 @@ fn pass2_ref_discriminators(
                 continue;
             }
 
-            // Find old candidates that have Ref targets matching the translated set.
             let mut candidates: Vec<Ref> = Vec::new();
             for &old_ref in old_refs {
                 if matched_old.contains(&old_ref) {
@@ -287,7 +280,6 @@ fn pass2_ref_discriminators(
                     .filter_map(|t| old_to_new.get(t).copied())
                     .collect();
 
-                // Check if the ref signatures overlap.
                 if translated.iter().any(|t| old_targets.contains(t))
                     || old_translated.iter().any(|t| new_targets.contains(t))
                 {
@@ -297,8 +289,8 @@ fn pass2_ref_discriminators(
 
             if candidates.len() == 1 {
                 matched.push((new_ref, candidates[0]));
-                matched_new.push(new_ref);
-                matched_old.push(candidates[0]);
+                matched_new.insert(new_ref);
+                matched_old.insert(candidates[0]);
             }
         }
     }
@@ -344,15 +336,14 @@ fn pass3_similarity(
         }
     }
 
-    let mut matched_new: Vec<Ref> = Vec::new();
-    let mut matched_old: Vec<Ref> = Vec::new();
+    let mut matched_new: HashSet<Ref> = HashSet::new();
+    let mut matched_old: HashSet<Ref> = HashSet::new();
 
     for (name, new_refs) in &new_by_name {
         let Some(old_refs) = old_by_name.get(name) else {
             continue;
         };
 
-        // Build all candidate pairs with their similarity scores.
         let mut pairs: Vec<(Ref, Ref, u32)> = Vec::new();
         for &new_ref in new_refs {
             if matched_new.contains(&new_ref) {
@@ -369,8 +360,6 @@ fn pass3_similarity(
             }
         }
 
-        // Sort by score descending. Tiebreaker: original DOM child order
-        // (lower index = earlier in children list = preferred).
         pairs.sort_by(|a, b| {
             b.2.cmp(&a.2).then_with(|| {
                 let a_new_idx = original_new_children
@@ -395,14 +384,13 @@ fn pass3_similarity(
             })
         });
 
-        // Greedy assignment: pick highest-scored pair, remove both, repeat.
         for (new_ref, old_ref, _score) in &pairs {
             if matched_new.contains(new_ref) || matched_old.contains(old_ref) {
                 continue;
             }
             matched.push((*new_ref, *old_ref));
-            matched_new.push(*new_ref);
-            matched_old.push(*old_ref);
+            matched_new.insert(*new_ref);
+            matched_old.insert(*old_ref);
         }
     }
 

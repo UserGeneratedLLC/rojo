@@ -265,10 +265,11 @@ impl RojoTree {
             if !found {
                 // Fallback: try matching by instance name (for backward
                 // compatibility with legacy ref paths and instances without
-                // filesystem backing).
+                // filesystem backing). Case-insensitive to match the primary
+                // lookup semantics.
                 for &child_ref in children {
                     let child = self.inner.get_by_ref(child_ref)?;
-                    if child.name == *segment {
+                    if child.name.eq_ignore_ascii_case(segment) {
                         current_ref = child_ref;
                         found = true;
                         break;

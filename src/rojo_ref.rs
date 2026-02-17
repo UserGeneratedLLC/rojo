@@ -165,15 +165,24 @@ pub fn ref_target_path_from_tree(
         // Derive the filesystem name for this instance.
         let fs_name = if let Some(meta) = tree.get_metadata(current) {
             if let Some(source) = &meta.instigating_source {
-                // Use the filename from the instigating source path.
-                source
-                    .path()
-                    .file_name()
-                    .and_then(|f| f.to_str())
-                    .unwrap_or(&inst.name)
-                    .to_string()
+                match source {
+                    crate::snapshot::InstigatingSource::Path(_) => {
+                        // File-backed instance: use the filename from disk.
+                        source
+                            .path()
+                            .file_name()
+                            .and_then(|f| f.to_str())
+                            .unwrap_or(&inst.name)
+                            .to_string()
+                    }
+                    crate::snapshot::InstigatingSource::ProjectNode { .. } => {
+                        // Project-sourced instance: use instance name, not the
+                        // project file path (which would be e.g. "default.project.json5").
+                        inst.name.clone()
+                    }
+                }
             } else {
-                // No instigating source (project node, newly added) -- use name.
+                // No instigating source (newly added) -- use name.
                 inst.name.clone()
             }
         } else {

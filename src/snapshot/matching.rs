@@ -81,6 +81,7 @@ pub fn match_forward(
         &snap_available,
         tree_children,
         &mut tree_available,
+        &snap_matched,
         tree,
         &mut matched,
     );
@@ -192,15 +193,19 @@ fn pass3_similarity(
     snap_available: &[Option<InstanceSnapshot>],
     tree_children: &[Ref],
     tree_available: &mut [bool],
+    already_matched_snap: &[bool],
     tree: &RojoTree,
     matched: &mut Vec<(usize, usize)>,
 ) {
-    // Track which snap indices have been matched in this pass.
-    let mut snap_matched: Vec<bool> = vec![false; snap_available.len()];
+    // Inherit pass1 match state and extend with pass3 matches.
+    let mut snap_matched: Vec<bool> = already_matched_snap.to_vec();
 
-    // Group remaining by name.
+    // Group remaining (unmatched) by name.
     let mut snap_by_name: HashMap<&str, Vec<usize>> = HashMap::new();
     for (i, snap_opt) in snap_available.iter().enumerate() {
+        if snap_matched[i] {
+            continue;
+        }
         if let Some(snap) = snap_opt {
             snap_by_name.entry(&snap.name).or_default().push(i);
         }

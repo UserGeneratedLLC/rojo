@@ -13,8 +13,6 @@
 	         unmatchedStudio (array of studioInstance)
 ]]
 
-local Log = require(script.Parent.Parent.Log)
-
 local Matching = {}
 
 --[[
