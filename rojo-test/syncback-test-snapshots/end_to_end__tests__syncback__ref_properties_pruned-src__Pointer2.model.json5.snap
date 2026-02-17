@@ -4,7 +4,7 @@ expression: src/Pointer2.model.json5
 ---
 {
   attributes: {
-    Rojo_Ref_Value: "ReplicatedStorage/Target2"
+    Rojo_Ref_Value: "ReplicatedStorage/Target2.model.json5"
   },
   className: "ObjectValue"
 }

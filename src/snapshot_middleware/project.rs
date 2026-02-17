@@ -628,6 +628,17 @@ pub fn syncback_project<'sync>(
             }
         }
 
+        // Project children with $path are expected in the old DOM (loaded
+        // from their own path) AND may also appear as filesystem children of
+        // the parent's scanned directory. Exclude them from duplicate
+        // detection so the project child loop below can match them.
+        let project_path_child_names: HashSet<String> = node
+            .children
+            .iter()
+            .filter(|(_, child_node)| child_node.path.is_some())
+            .map(|(name, _)| name.to_lowercase())
+            .collect();
+
         let mut old_duplicate_names: HashSet<String> = HashSet::new();
         {
             let mut seen: HashSet<String> = HashSet::new();
@@ -636,6 +647,9 @@ pub fn syncback_project<'sync>(
                     .get_old_instance(*child_ref)
                     .expect("all children of Instances should be in old DOM");
                 let lower = child.name().to_lowercase();
+                if project_path_child_names.contains(&lower) {
+                    continue;
+                }
                 if !seen.insert(lower.clone()) {
                     old_duplicate_names.insert(lower);
                 }

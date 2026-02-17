@@ -239,9 +239,8 @@ return function()
 			local ok, patch = diff(instanceMap, virtualInstances, rootId)
 
 			expect(ok).to.equal(true)
-			-- Duplicates should NOT be marked for removal
-			-- Only if they had unique names would they be candidates
-			expect(#patch.removed).to.equal(0)
+			-- Duplicates should be marked for removal (matching handles pairing)
+			expect(#patch.removed).to.equal(2)
 
 			instanceMap:stop()
 		end)
@@ -290,9 +289,9 @@ return function()
 			local ok, patch = diff(instanceMap, virtualInstances, rootId)
 
 			expect(ok).to.equal(true)
-			-- Neither duplicate should be added since the path is ambiguous
-			expect(patch.added[dup1Id]).to.equal(nil)
-			expect(patch.added[dup2Id]).to.equal(nil)
+			-- Both duplicates should be added (matching handles pairing)
+			expect(patch.added[dup1Id]).to.be.ok()
+			expect(patch.added[dup2Id]).to.be.ok()
 
 			instanceMap:stop()
 		end)
@@ -350,8 +349,8 @@ return function()
 			local ok, patch = diff(instanceMap, virtualInstances, rootId)
 
 			expect(ok).to.equal(true)
-			-- Grandchild should also NOT be added since its parent is ambiguous
-			expect(patch.added[grandchildId]).to.equal(nil)
+			-- Grandchild should be added along with its parent (matching handles pairing)
+			expect(patch.added[grandchildId]).to.be.ok()
 
 			instanceMap:stop()
 		end)

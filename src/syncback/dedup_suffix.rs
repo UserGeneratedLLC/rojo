@@ -58,11 +58,6 @@ pub fn parse_dedup_suffix(stem: &str) -> Option<(&str, u32)> {
     None
 }
 
-/// Checks whether a filename stem has a dedup suffix.
-pub fn has_dedup_suffix(stem: &str) -> bool {
-    parse_dedup_suffix(stem).is_some()
-}
-
 /// Builds a dedup'd filename from a base stem, optional suffix number, and
 /// extension.
 ///
@@ -178,13 +173,6 @@ mod tests {
     fn parse_suffix_complex_stems() {
         assert_eq!(parse_dedup_suffix("A_B~3"), Some(("A_B", 3)));
         assert_eq!(parse_dedup_suffix("My Script~1"), Some(("My Script", 1)));
-    }
-
-    #[test]
-    fn has_suffix() {
-        assert!(has_dedup_suffix("Foo~1"));
-        assert!(!has_dedup_suffix("Foo"));
-        assert!(!has_dedup_suffix("Foo~abc"));
     }
 
     #[test]

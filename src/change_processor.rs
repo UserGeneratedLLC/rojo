@@ -485,10 +485,8 @@ impl JobThreadContext {
         // this function is called. The index still stores old filesystem
         // paths. Remap them: replace the old directory segment with the
         // new one so we can find the actual files.
-        let old_segments = crate::split_ref_path(old_path);
-        let old_segment = old_segments.last().map(|s| s.as_str()).unwrap_or(old_path);
-        let new_segments = crate::split_ref_path(new_path);
-        let new_segment = new_segments.last().map(|s| s.as_str()).unwrap_or(new_path);
+        let old_segment = old_path.rsplit('/').next().unwrap_or(old_path);
+        let new_segment = new_path.rsplit('/').next().unwrap_or(new_path);
 
         // Pre-compute slugified forms for fallback comparison.
         let slugified_old = if name_needs_slugify(old_segment) {
@@ -1202,11 +1200,17 @@ impl JobThreadContext {
 
                 // Capture the old path BEFORE rename for Rojo_Ref_* path updates.
                 // Must be computed before the `tree.get_instance(id)` borrow.
-                let old_ref_path = if update.changed_name.is_some() {
-                    Some(crate::ref_target_path_from_tree(&tree, id))
-                } else {
-                    None
-                };
+                let old_ref_path =
+                    if update.changed_name.is_some() || update.changed_class_name.is_some() {
+                        Some(crate::ref_target_path_from_tree(&tree, id))
+                    } else {
+                        None
+                    };
+
+                // The new filesystem name segment after a rename. Set during
+                // rename handling and used by the ref path update code to build
+                // the correct filesystem-name-based ref path.
+                let mut new_ref_segment: Option<String> = None;
 
                 if let Some(instance) = tree.get_instance(id) {
                     // Track the current source file path — rename and ClassName
@@ -1278,6 +1282,8 @@ impl JobThreadContext {
                                                         // The init file moved with the directory.
                                                         overridden_source_path =
                                                             Some(new_dir_path.join(file_name));
+                                                        new_ref_segment =
+                                                            Some(slugified_new_name.clone());
                                                         let old_meta = grandparent.join(format!(
                                                             "{}.meta.json5",
                                                             dir_name
@@ -1438,6 +1444,8 @@ impl JobThreadContext {
                                                     effective_meta_base = old_base;
                                                 } else {
                                                     overridden_source_path = Some(new_path.clone());
+                                                    new_ref_segment =
+                                                        Some(new_file_name.clone());
                                                     let old_meta = parent
                                                         .join(format!("{}.meta.json5", old_base));
                                                     let new_meta = parent.join(format!(
@@ -1616,6 +1624,14 @@ impl JobThreadContext {
                                                     );
                                                 } else {
                                                     overridden_source_path = Some(new_path.clone());
+                                                    // For standalone files, the ref path
+                                                    // segment changes with the extension.
+                                                    // For init files, the directory name
+                                                    // (ref segment) is unchanged.
+                                                    if !is_init {
+                                                        new_ref_segment =
+                                                            Some(new_file_name.clone());
+                                                    }
                                                 }
                                             }
                                         } else {
@@ -1717,31 +1733,32 @@ impl JobThreadContext {
                 //
                 // NOTE: The tree name hasn't been updated yet (apply_patch_set
                 // runs after this loop), so we can't use full_path_of for the
-                // new path. Construct it by replacing the last path segment.
-                // Use split_ref_path for escape-aware splitting (handles
-                // instance names containing "/").
+                // new path. Construct it by replacing the last path segment
+                // with the NEW filesystem name (set during rename handling).
                 if let Some(ref old_ref_path) = old_ref_path {
-                    if let Some(ref new_name) = update.changed_name {
-                        let segments = crate::split_ref_path(old_ref_path);
+                    if let Some(ref segment) = new_ref_segment {
+                        // Use the filesystem name computed during rename handling
+                        let segments: Vec<&str> = old_ref_path.split('/').collect();
                         let new_ref_path = if segments.len() > 1 {
-                            // Rebuild parent path from all segments except the last,
-                            // re-escaping each segment to preserve the original format.
-                            let parent_parts: Vec<_> = segments[..segments.len() - 1]
-                                .iter()
-                                .map(|s| crate::escape_ref_path_segment(s).into_owned())
-                                .collect();
-                            format!(
-                                "{}/{}",
-                                parent_parts.join("/"),
-                                crate::escape_ref_path_segment(new_name)
-                            )
+                            let parent = segments[..segments.len() - 1].join("/");
+                            format!("{}/{}", parent, segment)
                         } else {
-                            // Root-level instance (no parent in path)
-                            crate::escape_ref_path_segment(new_name).into_owned()
+                            segment.clone()
                         };
                         if *old_ref_path != new_ref_path {
                             self.update_ref_paths_after_rename(old_ref_path, &new_ref_path);
                         }
+                    } else if update.changed_name.is_some()
+                        || update.changed_class_name.is_some()
+                    {
+                        // Rename or class change was requested but no filesystem
+                        // rename happened (e.g., ProjectNode, init-file class
+                        // change where directory name stays the same). No ref
+                        // path update needed.
+                        log::trace!(
+                            "Skipping ref path update for {:?}: no filesystem rename",
+                            id
+                        );
                     }
                 }
             }

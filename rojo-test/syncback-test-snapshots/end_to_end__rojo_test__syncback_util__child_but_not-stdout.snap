@@ -3,6 +3,8 @@ source: tests/rojo_test/syncback_util.rs
 expression: normalized_stdout
 ---
 Writing OnlyOneCopy/child_of_one.luau
+Writing ReplicatedStorage/OnlyOneCopy/child_of_one.luau
 Writing ReplicatedStorage/child_replicated_storage.luau
+Writing ReplicatedStorage/OnlyOneCopy
 Removing OnlyOneCopy/.gitkeep
 Removing ReplicatedStorage/.gitkeep

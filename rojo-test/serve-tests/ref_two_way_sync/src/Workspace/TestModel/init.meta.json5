@@ -1,6 +1,6 @@
 {
   "className": "Model",
   "attributes": {
-    "Rojo_Ref_PrimaryPart": "Workspace/TestModel/Part1"
+    "Rojo_Ref_PrimaryPart": "Workspace/TestModel/Part1.model.json5"
   }
 }

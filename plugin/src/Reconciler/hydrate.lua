@@ -41,7 +41,7 @@ local function hydrate(instanceMap, virtualInstances, rootId, rootInstance)
 	end
 
 	-- Use the 3-pass matching algorithm to pair virtual ↔ studio children
-	local result = Matching.matchChildren(validVirtualIds, existingChildren, virtualInstances, instanceMap)
+	local result = Matching.matchChildren(validVirtualIds, existingChildren, virtualInstances)
 
 	-- Recursively hydrate matched pairs
 	for _, pair in result.matched do

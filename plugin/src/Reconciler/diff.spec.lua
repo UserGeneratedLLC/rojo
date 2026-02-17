@@ -276,7 +276,7 @@ return function()
 	end)
 
 	describe("duplicate-named siblings", function()
-		it("should skip real DOM children with duplicate names", function()
+		it("should remove real DOM children with duplicate names when not in virtual DOM", function()
 			local knownInstances = InstanceMap.new()
 			local virtualInstances = {
 				ROOT = {
@@ -305,11 +305,11 @@ return function()
 
 			assert(ok, tostring(patch))
 
-			-- Duplicate-named children should be skipped (not removed)
-			assert(isEmpty(patch.removed))
+			-- Duplicate-named children should be removed (matching handles pairing)
+			expect(#patch.removed).to.equal(2)
 		end)
 
-		it("should skip virtual children with duplicate names among siblings", function()
+		it("should add virtual children with duplicate names among siblings", function()
 			local knownInstances = InstanceMap.new()
 			local virtualInstances = {
 				ROOT = {
@@ -340,8 +340,8 @@ return function()
 
 			assert(ok, tostring(patch))
 
-			-- Duplicate-named virtual children should not be added
-			assert(isEmpty(patch.added))
+			-- Duplicate-named virtual children should be added (matching handles pairing)
+			expect(size(patch.added)).to.equal(2)
 		end)
 	end)
 

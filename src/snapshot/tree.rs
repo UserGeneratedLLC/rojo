@@ -10,7 +10,7 @@ use rbx_dom_weak::{
 
 use crate::{multimap::MultiMap, RojoRef};
 
-use super::{InstanceMetadata, InstanceSnapshot};
+use super::{InstigatingSource, InstanceMetadata, InstanceSnapshot};
 
 /// An expanded variant of rbx_dom_weak's `WeakDom` that tracks additional
 /// metadata per instance that's Rojo-specific.
@@ -291,8 +291,19 @@ impl RojoTree {
     pub fn filesystem_name_for(&self, id: Ref) -> String {
         if let Some(meta) = self.metadata_map.get(&id) {
             if let Some(source) = &meta.instigating_source {
-                if let Some(name) = source.path().file_name().and_then(|f| f.to_str()) {
-                    return name.to_string();
+                match source {
+                    InstigatingSource::Path(_) => {
+                        if let Some(name) = source.path().file_name().and_then(|f| f.to_str()) {
+                            return name.to_string();
+                        }
+                    }
+                    InstigatingSource::ProjectNode { .. } => {
+                        // Project-sourced instance: use instance name, not the
+                        // project file path (which would be e.g. "default.project.json5").
+                        if let Some(inst) = self.inner.get_by_ref(id) {
+                            return inst.name.clone();
+                        }
+                    }
                 }
             }
         }

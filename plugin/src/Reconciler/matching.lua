@@ -114,8 +114,7 @@ local Matching = {}
 function Matching.matchChildren(
 	virtualChildren: { string },
 	studioChildren: { Instance },
-	virtualInstances: { [string]: any },
-	instanceMap: any
+	virtualInstances: { [string]: any }
 )
 	local matched: { { virtualId: string, studioInstance: Instance } } = {}
 	local remainingVirtual: { string } = table.clone(virtualChildren)
@@ -344,7 +343,7 @@ function Matching._computeChangeCount(
 	end
 
 	-- Recursive: match children and sum costs
-	local childResult = Matching.matchChildren(validVChildren, studioKids, virtualInstances, nil)
+	local childResult = Matching.matchChildren(validVChildren, studioKids, virtualInstances)
 
 	-- Matched children: recursively score each pair
 	for _, pair in childResult.matched do

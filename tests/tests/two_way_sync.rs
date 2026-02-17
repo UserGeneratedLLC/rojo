@@ -6127,7 +6127,7 @@ fn ref_set_primary_part() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "Workspace/TestModel/Part1.model.json5",
         );
     });
 }
@@ -6156,7 +6156,7 @@ fn ref_set_object_value() {
         let model_path = session
             .path()
             .join("src/Workspace/TestObjectValue.model.json5");
-        poll_meta_has_ref_attr(&model_path, "Rojo_Ref_Value", "Workspace/TestModel/Part1");
+        poll_meta_has_ref_attr(&model_path, "Rojo_Ref_Value", "Workspace/TestModel/Part1.model.json5");
     });
 }
 
@@ -6190,7 +6190,7 @@ fn ref_set_primary_part_to_nil() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "Workspace/TestModel/Part1.model.json5",
         );
 
         // Now set PrimaryPart to nil
@@ -6273,7 +6273,7 @@ fn ref_change_target() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "Workspace/TestModel/Part1.model.json5",
         );
 
         // Change PrimaryPart to Part2
@@ -6294,7 +6294,7 @@ fn ref_change_target() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part2",
+            "Workspace/TestModel/Part2.model.json5",
         );
     });
 }
@@ -6324,7 +6324,7 @@ fn ref_set_nil_then_set_again() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "Workspace/TestModel/Part1.model.json5",
         );
 
         let mut props2 = UstrMap::default();
@@ -6359,7 +6359,7 @@ fn ref_set_nil_then_set_again() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "Workspace/TestModel/Part1.model.json5",
         );
     });
 }
@@ -6402,7 +6402,7 @@ fn ref_with_name_change() {
         assert_meta_has_ref_attr(
             &new_meta,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/RenamedModel/Part1",
+            "Workspace/RenamedModel/Part1.model.json5",
         );
     });
 }
@@ -6433,7 +6433,7 @@ fn ref_only_change_creates_meta() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "Workspace/TestModel/Part1.model.json5",
         );
     });
 }
@@ -6467,7 +6467,7 @@ fn ref_on_model_json5_instance() {
         let model_path = session
             .path()
             .join("src/Workspace/TestObjectValue.model.json5");
-        poll_meta_has_ref_attr(&model_path, "Rojo_Ref_Value", "Workspace/TestModel/Part1");
+        poll_meta_has_ref_attr(&model_path, "Rojo_Ref_Value", "Workspace/TestModel/Part1.model.json5");
     });
 }
 
@@ -6498,7 +6498,7 @@ fn ref_existing_meta_preserved() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "Workspace/TestModel/Part1.model.json5",
         );
 
         // Verify existing content wasn't clobbered
@@ -6571,7 +6571,7 @@ fn ref_mixed_valid_and_invalid() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "Workspace/TestModel/Part1.model.json5",
         );
     });
 }
@@ -6614,7 +6614,7 @@ fn ref_stale_path_after_target_rename() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "Workspace/TestModel/Part1.model.json5",
         );
 
         // Step 2: Rename Part1 to RenamedPart
@@ -6637,7 +6637,7 @@ fn ref_stale_path_after_target_rename() {
         assert_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/RenamedPart",
+            "Workspace/TestModel/RenamedPart.model.json5",
         );
     });
 }
@@ -6671,7 +6671,7 @@ fn ref_stale_path_after_parent_rename() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "Workspace/TestModel/Part1.model.json5",
         );
 
         // Step 2: Rename the MODEL (parent) from TestModel to RenamedModel
@@ -6700,7 +6700,7 @@ fn ref_stale_path_after_parent_rename() {
         assert_meta_has_ref_attr(
             &new_meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/RenamedModel/Part1",
+            "Workspace/RenamedModel/Part1.model.json5",
         );
     });
 }
@@ -6829,7 +6829,7 @@ fn ref_ambiguous_path_no_crash() {
         let meta_path = session
             .path()
             .join("src/Workspace/DupParent/init.meta.json5");
-        poll_meta_has_ref_attr(&meta_path, "Rojo_Ref_PrimaryPart", "Workspace/Target");
+        poll_meta_has_ref_attr(&meta_path, "Rojo_Ref_PrimaryPart", "Workspace/Target.model.json5");
     });
 }
 
@@ -6926,7 +6926,7 @@ fn ref_startup_index_rename_updates_preexisting_attr() {
         assert_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "Workspace/TestModel/Part1.model.json5",
         );
 
         // Rename Part1 to IndexTestPart WITHOUT any prior /api/write for Refs.
@@ -6951,7 +6951,7 @@ fn ref_startup_index_rename_updates_preexisting_attr() {
         assert_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/IndexTestPart",
+            "Workspace/TestModel/IndexTestPart.model.json5",
         );
     });
 }
@@ -6987,10 +6987,10 @@ fn ref_partial_removal_preserves_remaining_index_entry() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "Workspace/TestModel/Part1.model.json5",
         );
         // Verify second ref is there too
-        assert_meta_has_ref_attr(&meta_path, "Rojo_Ref_Adornee", "Workspace/TestModel/Part2");
+        assert_meta_has_ref_attr(&meta_path, "Rojo_Ref_Adornee", "Workspace/TestModel/Part2.model.json5");
 
         // Step 2: Remove PrimaryPart (set to nil), keep Adornee
         let mut props2 = UstrMap::default();
@@ -7010,7 +7010,7 @@ fn ref_partial_removal_preserves_remaining_index_entry() {
         thread::sleep(Duration::from_millis(300));
         assert_meta_no_ref_attr(&meta_path, "Rojo_Ref_PrimaryPart");
         // Adornee should still be there
-        assert_meta_has_ref_attr(&meta_path, "Rojo_Ref_Adornee", "Workspace/TestModel/Part2");
+        assert_meta_has_ref_attr(&meta_path, "Rojo_Ref_Adornee", "Workspace/TestModel/Part2.model.json5");
 
         // Step 3: Rename Part2. The RefPathIndex should still have the entry
         // for Adornee (not overbroad-removed when PrimaryPart was deleted).
@@ -7032,7 +7032,7 @@ fn ref_partial_removal_preserves_remaining_index_entry() {
         assert_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_Adornee",
-            "Workspace/TestModel/RenamedPart2",
+            "Workspace/TestModel/RenamedPart2.model.json5",
         );
     });
 }
@@ -7066,7 +7066,7 @@ fn ref_rename_to_slugified_name_updates_ref_paths() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "Workspace/TestModel/Part1.model.json5",
         );
 
         // Rename Model to a name with forbidden characters.
@@ -7097,7 +7097,7 @@ fn ref_rename_to_slugified_name_updates_ref_paths() {
         assert_meta_has_ref_attr(
             &new_meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/Slug:Model/Part1",
+            "Workspace/Slug_Model/Part1.model.json5",
         );
     });
 }
@@ -7145,7 +7145,7 @@ fn ref_on_standalone_script() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "Workspace/TestModel/Part1.model.json5",
         );
 
         // Verify the wrong path does NOT have the attribute
@@ -7191,7 +7191,7 @@ fn ref_on_txt_file_instance() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "Workspace/TestModel/Part1.model.json5",
         );
     });
 }

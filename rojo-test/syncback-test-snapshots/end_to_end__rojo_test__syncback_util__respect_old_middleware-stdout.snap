@@ -4,5 +4,6 @@ expression: normalized_stdout
 ---
 Writing default.project.json5
 Writing src/model_json.model.json5
+Writing src/project_node.model.json5
 Writing src/rbxm.rbxm
 Writing src/rbxmx.rbxmx
