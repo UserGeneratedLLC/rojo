@@ -2,6 +2,7 @@ mod build;
 mod clean_mode;
 mod clean_mode_stress;
 mod connected_mode;
+mod matching_fixtures;
 mod serve;
 mod syncback;
 mod syncback_format_transitions;
