@@ -3574,13 +3574,7 @@ fn added_instance_fs_segment(added: &crate::web::interface::AddedInstance) -> St
 
     let is_container = matches!(
         added.class_name.as_str(),
-        "Folder"
-            | "Configuration"
-            | "Tool"
-            | "ScreenGui"
-            | "SurfaceGui"
-            | "BillboardGui"
-            | "AdGui"
+        "Folder" | "Configuration" | "Tool" | "ScreenGui" | "SurfaceGui" | "BillboardGui" | "AdGui"
     );
 
     let is_script = matches!(

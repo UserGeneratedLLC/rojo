@@ -538,7 +538,12 @@ mod tests {
         let substitutions = vec![("Workspace/Foo".to_string(), "Workspace/Foo~1".to_string())];
         snap.fix_ref_paths(&substitutions);
 
-        let result = std::str::from_utf8(snap.added_files.get(Path::new("/test/init.meta.json5")).unwrap()).unwrap();
+        let result = std::str::from_utf8(
+            snap.added_files
+                .get(Path::new("/test/init.meta.json5"))
+                .unwrap(),
+        )
+        .unwrap();
 
         assert!(
             result.contains(r#""Rojo_Ref_PrimaryPart": "Workspace/Foo~1""#),
@@ -564,7 +569,12 @@ mod tests {
         let substitutions = vec![("Workspace/Foo".to_string(), "Workspace/Foo~1".to_string())];
         snap.fix_ref_paths(&substitutions);
 
-        let result = std::str::from_utf8(snap.added_files.get(Path::new("/test/script.luau")).unwrap()).unwrap();
+        let result = std::str::from_utf8(
+            snap.added_files
+                .get(Path::new("/test/script.luau"))
+                .unwrap(),
+        )
+        .unwrap();
         assert!(
             result.contains("Workspace/Foo"),
             "Non-meta file should not be touched. Got: {}",

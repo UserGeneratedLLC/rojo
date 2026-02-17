@@ -7374,10 +7374,6 @@ fn ref_same_batch_add_folder_target_no_extension() {
         let meta_path = session
             .path()
             .join("src/Workspace/TestModel/init.meta.json5");
-        poll_meta_has_ref_attr(
-            &meta_path,
-            "Rojo_Ref_PrimaryPart",
-            "Workspace/FolderTarget",
-        );
+        poll_meta_has_ref_attr(&meta_path, "Rojo_Ref_PrimaryPart", "Workspace/FolderTarget");
     });
 }

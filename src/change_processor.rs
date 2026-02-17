@@ -1236,19 +1236,15 @@ impl JobThreadContext {
                                                 // is dir/init.luau; the dir was
                                                 // renamed so update the dir
                                                 // portion.
-                                                let init_name = old_path
-                                                    .file_name()
-                                                    .unwrap()
-                                                    .to_str()
-                                                    .unwrap();
+                                                let init_name =
+                                                    old_path.file_name().unwrap().to_str().unwrap();
                                                 to.join(init_name)
                                             } else {
                                                 // Standalone file: new source
                                                 // IS the `to` path.
                                                 to.clone()
                                             };
-                                            dedup_metadata_updates
-                                                .push((sibling_ref, new_source));
+                                            dedup_metadata_updates.push((sibling_ref, new_source));
                                         }
                                     }
                                     break;
