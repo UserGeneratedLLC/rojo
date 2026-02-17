@@ -1074,6 +1074,15 @@ impl JobThreadContext {
             // groups need suffix renames (base-name promotion, group-to-1).
             // Must run BEFORE apply_patch_set removes the instances from
             // the tree, because we need parent/sibling relationships.
+            //
+            // Build a set of ALL removed Refs so the sibling enumeration
+            // skips co-removed instances (Fix 2: batch-removal awareness).
+            let removed_set: std::collections::HashSet<Ref> =
+                patch_set.removed_instances.iter().copied().collect();
+            // Collect metadata updates for survivors whose filesystem path
+            // changed due to dedup cleanup renames (Fix 1: metadata drift).
+            let mut dedup_metadata_updates: Vec<(Ref, PathBuf)> = Vec::new();
+
             for &removed_id in &patch_set.removed_instances {
                 let (parent_ref, removed_fs_name) = {
                     let Some(inst) = tree.get_instance(removed_id) else {
@@ -1118,7 +1127,10 @@ impl JobThreadContext {
                 let deleted_was_base = parse_dedup_suffix(removed_stem).is_none();
 
                 for &sibling_ref in parent_inst.children() {
-                    if sibling_ref == removed_id {
+                    // Skip ALL instances being removed in this patch, not just
+                    // the current one. This prevents co-removed siblings from
+                    // inflating the remaining count and defeating cleanup rules.
+                    if removed_set.contains(&sibling_ref) {
                         continue;
                     }
                     let sibling_fs = tree.filesystem_name_for(sibling_ref);
@@ -1190,12 +1202,57 @@ impl JobThreadContext {
                             let new_ref_segment =
                                 to.file_name().and_then(|f| f.to_str()).unwrap_or("");
                             if old_ref_segment != new_ref_segment {
-                                // Build the old and new ref path prefixes
                                 let parent_path =
                                     crate::ref_target_path_from_tree(&tree, parent_ref);
                                 let old_prefix = format!("{}/{}", parent_path, old_ref_segment);
                                 let new_prefix = format!("{}/{}", parent_path, new_ref_segment);
                                 self.update_ref_paths_after_rename(&old_prefix, &new_prefix);
+                            }
+
+                            // Fix 1: Update the renamed survivor's in-memory
+                            // metadata so InstigatingSource::Path and
+                            // relevant_paths point to the new filesystem path.
+                            let old_from_name =
+                                from.file_name().and_then(|f| f.to_str()).unwrap_or("");
+                            for &sibling_ref in parent_inst.children() {
+                                if removed_set.contains(&sibling_ref) {
+                                    continue;
+                                }
+                                let sibling_fs = tree.filesystem_name_for(sibling_ref);
+                                if sibling_fs == old_from_name {
+                                    // This is the survivor being renamed.
+                                    // Compute its new instigating source path.
+                                    if let Some(meta) = tree.get_metadata(sibling_ref) {
+                                        if let Some(InstigatingSource::Path(old_path)) =
+                                            &meta.instigating_source
+                                        {
+                                            let new_source = if old_path
+                                                .file_name()
+                                                .and_then(|f| f.to_str())
+                                                .map(|f| f.starts_with("init."))
+                                                .unwrap_or(false)
+                                            {
+                                                // Directory-format: old source
+                                                // is dir/init.luau; the dir was
+                                                // renamed so update the dir
+                                                // portion.
+                                                let init_name = old_path
+                                                    .file_name()
+                                                    .unwrap()
+                                                    .to_str()
+                                                    .unwrap();
+                                                to.join(init_name)
+                                            } else {
+                                                // Standalone file: new source
+                                                // IS the `to` path.
+                                                to.clone()
+                                            };
+                                            dedup_metadata_updates
+                                                .push((sibling_ref, new_source));
+                                        }
+                                    }
+                                    break;
+                                }
                             }
                         }
                     }
@@ -1778,7 +1835,9 @@ impl JobThreadContext {
             // This keeps instigating_source and path_to_ids in sync so that
             // subsequent VFS events (and future renames) target the correct
             // instance and path.
-            for (id, new_instigating_source) in metadata_updates {
+            for (id, new_instigating_source) in
+                metadata_updates.into_iter().chain(dedup_metadata_updates)
+            {
                 if let Some(old_metadata) = tree.get_metadata(id).cloned() {
                     let mut new_metadata = old_metadata;
                     new_metadata.instigating_source =

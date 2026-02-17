@@ -451,8 +451,10 @@ impl FsSnapshot {
     ///
     /// For each entry in `substitutions` (old_path → new_path), finds all
     /// `.meta.json5` and `.model.json5` files in the snapshot and replaces
-    /// occurrences of the old path with the new path. This fixes tentative
-    /// ref paths that didn't include dedup suffixes.
+    /// occurrences of the old path with the new path **only on lines that
+    /// contain a `Rojo_Ref_` key**. This prevents unrelated string values
+    /// (property values, comments, etc.) from being altered by the
+    /// substitution.
     pub fn fix_ref_paths(&mut self, substitutions: &[(String, String)]) {
         if substitutions.is_empty() {
             return;
@@ -482,18 +484,95 @@ impl FsSnapshot {
                 continue;
             }
 
-            let mut modified = text.to_string();
-            for (old_path, new_path) in substitutions {
-                if old_path == new_path {
-                    continue;
+            // Attribute-scoped replacement: only apply substitutions on
+            // lines that contain a Rojo_Ref_ key. This prevents accidental
+            // mutation of unrelated string values in the same file.
+            let mut modified_lines: Vec<String> = Vec::new();
+            let mut any_changed = false;
+            for line in text.split('\n') {
+                if line.contains("Rojo_Ref_") {
+                    let mut new_line = line.to_string();
+                    for (old_path, new_path) in substitutions {
+                        if old_path == new_path {
+                            continue;
+                        }
+                        new_line = new_line.replace(old_path.as_str(), new_path.as_str());
+                    }
+                    if new_line != line {
+                        any_changed = true;
+                    }
+                    modified_lines.push(new_line);
+                } else {
+                    modified_lines.push(line.to_string());
                 }
-                // Replace exact path matches and prefix matches (path + "/")
-                modified = modified.replace(old_path.as_str(), new_path.as_str());
             }
 
-            if modified != text {
-                *contents = modified.into_bytes();
+            if any_changed {
+                *contents = modified_lines.join("\n").into_bytes();
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fix_ref_paths_only_touches_ref_lines() {
+        let mut snap = FsSnapshot::new();
+
+        let meta_content = r#"{
+  "properties": {
+    "Description": "Path is Workspace/Foo"
+  },
+  "attributes": {
+    "Rojo_Ref_PrimaryPart": "Workspace/Foo"
+  }
+}"#;
+        snap.added_files.insert(
+            PathBuf::from("/test/init.meta.json5"),
+            meta_content.as_bytes().to_vec(),
+        );
+
+        let substitutions = vec![("Workspace/Foo".to_string(), "Workspace/Foo~1".to_string())];
+        snap.fix_ref_paths(&substitutions);
+
+        let result = std::str::from_utf8(snap.added_files.get(Path::new("/test/init.meta.json5")).unwrap()).unwrap();
+
+        assert!(
+            result.contains(r#""Rojo_Ref_PrimaryPart": "Workspace/Foo~1""#),
+            "Rojo_Ref line should be updated. Got:\n{}",
+            result
+        );
+        assert!(
+            result.contains(r#""Description": "Path is Workspace/Foo""#),
+            "Non-ref property line should NOT be changed. Got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn fix_ref_paths_ignores_non_meta_files() {
+        let mut snap = FsSnapshot::new();
+
+        snap.added_files.insert(
+            PathBuf::from("/test/script.luau"),
+            b"-- Rojo_Ref_PrimaryPart Workspace/Foo".to_vec(),
+        );
+
+        let substitutions = vec![("Workspace/Foo".to_string(), "Workspace/Foo~1".to_string())];
+        snap.fix_ref_paths(&substitutions);
+
+        let result = std::str::from_utf8(snap.added_files.get(Path::new("/test/script.luau")).unwrap()).unwrap();
+        assert!(
+            result.contains("Workspace/Foo"),
+            "Non-meta file should not be touched. Got: {}",
+            result
+        );
+        assert!(
+            !result.contains("Workspace/Foo~1"),
+            "Non-meta file should not have substitution applied"
+        );
     }
 }

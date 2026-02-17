@@ -256,6 +256,8 @@ Add metadata to file-based instances. Meta files use **camelCase keys** (no `$` 
 
 **`name` field (slugify support):** When an instance name contains forbidden filesystem characters (`: / ? * < > | " \`), syncback slugifies the filename (forbidden chars → `_`) and stores the real name in the `name` field. On forward sync, `name` overrides the filename-derived instance name. On collisions (e.g. `A/B` and `A_B` both slugify to `A_B`), `~1`, `~2` suffixes are appended and meta `name` fields distinguish them.
 
+**`Rojo_Ref_*` attributes:** Meta files may also contain `Rojo_Ref_PropertyName` attributes written by syncback/two-way sync for Ref property linking. These are managed automatically and should not be hand-edited.
+
 **Meta files CAN'T:** Set `$path`, have children.
 
 ## Model.json5 Format
@@ -331,6 +333,27 @@ Same format as properties. Limitations: no Ref, no NumberSequence/ColorSequence,
 
 ## Ref Property Linking
 
+Two systems for linking instance references, both supported:
+
+### Path-Based: `Rojo_Ref_*` (preferred, written by syncback/two-way sync)
+
+Uses filesystem-name paths (slugified, dedup'd) to reference target instances:
+
+```json5
+// In meta file for an instance with PrimaryPart pointing to Handle
+{
+  "attributes": {
+    "Rojo_Ref_PrimaryPart": "Workspace/MyModel/Handle.model.json5"
+  }
+}
+```
+
+**Attribute format:** `Rojo_Ref_<PropertyName> = "<filesystem-name path>"`
+
+Path segments use full filesystem names (slug + extension + dedup suffix). Resolved during forward sync via `get_instance_by_path()` (case-insensitive filesystem name matching with instance name fallback).
+
+### ID-Based: `Rojo_Target_*` + `$id` (legacy, still read by forward sync)
+
 Link instances via `$id` and special attributes:
 
 ```json5
@@ -346,6 +369,8 @@ Link instances via `$id` and special attributes:
 ```
 
 **Attribute format:** `Rojo_Target_<PropertyName>`
+
+**Priority:** When both `Rojo_Ref_*` and `Rojo_Target_*` exist for the same property, `Rojo_Ref_*` takes precedence.
 
 ## Property Types
 

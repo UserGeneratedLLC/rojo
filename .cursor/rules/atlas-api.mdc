@@ -177,7 +177,7 @@ for id, data in patch.added do instanceMap:insert(id, Reconciler.reify(data)) en
 for _, update in patch.updated do Reconciler.hydrate(instanceMap:fromId(update.id), update) end
 ```
 
-## Two-Way Sync (Experimental)
+## Two-Way Sync
 
 **Setting:** `twoWaySync` (default: true) | Syncs Studio changes → filesystem in real-time
 
@@ -229,13 +229,21 @@ for _, update in patch.updated do Reconciler.hydrate(instanceMap:fromId(update.i
 │       │ Looks up InstigatingSource::Path → fs::remove_file()                │
 │       ▼                                                                     │
 │  For each added: syncback_added_instance()                                  │
+│       │ Groups by parent, pre-seeds sibling_slugs, dedup on collision       │
 │       │ Determines file format, writes to filesystem                        │
+│       ▼                                                                     │
+│  Build added_paths map (for same-batch Ref resolution)                      │
+│       │ Maps Ref → filesystem path via added_instance_fs_segment()          │
+│       ▼                                                                     │
+│  For each updated: syncback_updated_properties()                            │
+│       │ Extracts Ref props → Rojo_Ref_* attrs (path from tree/added_paths) │
+│       │ merge_or_build_meta() writes props/attrs (supports attr removal)    │
 │       ▼                                                                     │
 │  Sends PatchSet to tree_mutation_sender channel                             │
 │       ▼                                                                     │
 │  ChangeProcessor::handle_tree_event() [src/change_processor.rs]             │
-│       │ For removed: fs::remove_file(path) + remove meta                    │
-│       │ For updated: Source writes, renames, ClassName changes, properties  │
+│       │ For removed: dedup cleanup (gap-tolerant, base-name promotion)      │
+│       │ For updated: Source writes, renames, ClassName changes, ref paths   │
 │       ▼                                                                     │
 │  apply_patch_set() → Updates RojoTree                                       │
 │       ▼                                                                     │
@@ -293,17 +301,19 @@ end
 
 | File | Purpose |
 |------|---------|
-| `init.lua` | Main batcher: accumulator, RenderStepped loop, pause/resume |
-| `createPatchSet.lua` | Converts pending changes → PatchSet |
-| `encodePatchUpdate.lua` | Encodes property updates for existing instances |
+| `init.lua` | Main batcher: accumulator, RenderStepped loop, pause/resume, deferred refs |
+| `createPatchSet.lua` | Converts pending changes → PatchSet (passes instanceMap for Ref resolution) |
+| `encodePatchUpdate.lua` | Encodes property updates including Ref properties via InstanceMap |
 | `encodeInstance.lua` | Full instance encoding (for additions/syncback) |
 | `encodeProperty.lua` | Single property value encoding via RbxDom |
+| `propertyFilter.lua` | Property type filtering (only `UniqueId` blocked; `Ref` is allowed) |
 
 **Core State:**
 ```lua
 ChangeBatcher = {
     __accumulator = 0,                    -- Time since last flush
     __pendingPropertyChanges = {},        -- Instance → { PropertyName → true }
+    __pendingUnresolvedRefs = {},         -- targetInstance → [{sourceInstance, propertyName}]
     __syncSourceOnly = false,             -- Only sync Source property
     __paused = false,                     -- Pause during confirmation
     __renderSteppedConnection = conn,     -- Frame loop connection
@@ -338,10 +348,20 @@ end
 - Reduces server load and WebSocket traffic
 - Still feels responsive to users
 
+**Deferred Ref Mechanism:**
+
+When a Ref property targets an instance not yet in the InstanceMap (e.g., newly pulled instance whose server ID hasn't arrived), the property is deferred:
+
+```lua
+-- In encodePatchUpdate: onUnresolvedRef callback defers the property
+-- In ChangeBatcher: __pendingUnresolvedRefs[targetInstance] = {sourceInstance, propertyName}
+-- When target appears (onInstanceInserted), re-queues the property change for next batch
+```
+
 ### createPatchSet.lua: Patch Generation
 
 ```lua
-function createPatchSet(instanceMap, propertyChanges, syncSourceOnly)
+function createPatchSet(instanceMap, propertyChanges, syncSourceOnly, onUnresolvedRef)
     local patch = PatchSet.newEmpty()
     
     for instance, properties in propertyChanges do
@@ -353,20 +373,18 @@ function createPatchSet(instanceMap, propertyChanges, syncSourceOnly)
         
         if properties.Parent then
             if instance.Parent == nil then
-                -- Instance was deleted in Studio
                 table.insert(patch.removed, instanceId)
             else
-                Log.warn("Cannot sync non-nil Parent changes yet")  -- Reparenting not supported
+                Log.warn("Cannot sync non-nil Parent changes yet")
             end
         else
             if syncSourceOnly then
-                -- Server in source-only mode: only sync Source property
                 if properties.Source then
-                    local update = encodePatchUpdate(instance, instanceId, { Source = true })
+                    local update = encodePatchUpdate(instance, instanceId, { Source = true }, instanceMap, onUnresolvedRef)
                     if update then table.insert(patch.updated, update) end
                 end
             else
-                local update = encodePatchUpdate(instance, instanceId, properties)
+                local update = encodePatchUpdate(instance, instanceId, properties, instanceMap, onUnresolvedRef)
                 if update then table.insert(patch.updated, update) end
             end
         end
@@ -378,8 +396,10 @@ end
 
 ### encodePatchUpdate.lua: Update Encoding
 
+Encodes property updates for existing instances. Now handles Ref properties via InstanceMap lookup.
+
 ```lua
-function encodePatchUpdate(instance, instanceId, properties)
+function encodePatchUpdate(instance, instanceId, properties, instanceMap, onUnresolvedRef)
     local update = {
         id = instanceId,
         changedProperties = {},
@@ -392,15 +412,30 @@ function encodePatchUpdate(instance, instanceId, properties)
             local descriptor = RbxDom.findCanonicalPropertyDescriptor(instance.ClassName, propertyName)
             if not descriptor then continue end
             
-            local success, encoded = encodeProperty(instance, propertyName, descriptor)
-            if success then
-                update.changedProperties[propertyName] = encoded
+            if descriptor.dataType == "Ref" then
+                -- Ref property: resolve target via InstanceMap
+                local target = instance[propertyName]
+                if target == nil then
+                    update.changedProperties[propertyName] = { Ref = NULL_REF }
+                else
+                    local targetId = instanceMap.fromInstances[target]
+                    if targetId then
+                        update.changedProperties[propertyName] = { Ref = targetId }
+                    elseif onUnresolvedRef then
+                        onUnresolvedRef(target, instance, propertyName)
+                    end
+                end
+            else
+                local success, encoded = encodeProperty(instance, propertyName, descriptor)
+                if success then
+                    update.changedProperties[propertyName] = encoded
+                end
             end
         end
     end
     
     if next(update.changedProperties) == nil and update.changedName == nil then
-        return nil  -- No actual changes
+        return nil
     end
     
     return update
@@ -409,47 +444,25 @@ end
 
 ### encodeInstance.lua: Full Instance Encoding (Syncback/Additions)
 
-Used when pulling new instances from Studio to filesystem. **Critical: handles duplicate detection.**
+Used when pulling new instances from Studio to filesystem. Duplicate-named instances are encoded and sent to the server; the server handles filesystem collisions via the dedup suffix system (`~N`).
 
 ```lua
--- Duplicate handling (matches server's ref_properties.rs::is_path_unique)
-local function isPathUnique(instance)
-    local current = instance
-    while current do
-        if hasDuplicateSiblings(current) then
-            return false  -- Any duplicate in ancestor chain = ambiguous path
-        end
-        current = current.Parent
-        if current == game then break end
-    end
-    return true
-end
-
 function encodeInstance(instance, parentId, _skipPathCheck)
-    -- Skip instances with ambiguous paths (duplicate-named siblings)
-    if not _skipPathCheck and not isPathUnique(instance) then
-        Log.warn("Skipped '{}' - path contains duplicate-named siblings", instance:GetFullName())
-        return nil
-    end
-    
     local properties = {}
     
-    -- Encode Attributes and Tags (work on all instance types)
     encodeAttributes(instance, properties)
     encodeTags(instance, properties)
     
-    -- For scripts, Source is required
     if SCRIPT_CLASS_NAMES[instance.ClassName] then
         local success, encoded = encodeProperty(instance, "Source", descriptor)
         if not success then return nil end
         properties.Source = encoded
     end
     
-    -- Encode all serializable properties
     local classDescriptor = RbxDom.findClassDescriptor(instance.ClassName)
     for propertyName, meta in classDescriptor.properties do
-        if SKIP_PROPERTIES[propertyName] then continue end           -- Parent, Name, Archivable
-        if SKIP_PROPERTIES_BY_CLASS[instance.ClassName]?[propertyName] then continue end  -- Source, ScriptGuid, etc.
+        if SKIP_PROPERTIES[propertyName] then continue end
+        if SKIP_PROPERTIES_BY_CLASS[instance.ClassName]?[propertyName] then continue end
         
         local isReadable = meta.scriptability == "ReadWrite" or meta.scriptability == "Read"
         local doesSerialize = meta.serialization ~= "DoesNotSerialize"
@@ -462,12 +475,11 @@ function encodeInstance(instance, parentId, _skipPathCheck)
         end
     end
     
-    -- Recursively encode children (skipping duplicates at each level)
+    -- All children encoded (including those with duplicate names;
+    -- the server handles duplicates via dedup suffix system)
     local children = {}
-    local childDuplicates = findDuplicateNames(instance:GetChildren())
     for _, child in instance:GetChildren() do
-        if childDuplicates[child.Name] then continue end
-        local encoded = encodeInstance(child, nil, true)  -- Skip path check, already validated
+        local encoded = encodeInstance(child, nil, true)
         if encoded then table.insert(children, encoded) end
     end
     
@@ -521,18 +533,30 @@ true, false, 42, "string"
 
 ### Server-Side: ChangeProcessor (`src/change_processor.rs`)
 
-Receives patches from plugin via `tree_mutation_receiver` channel. Handles removals, Source writes, renames (with slugify/dedup/meta lifecycle), ClassName changes (script type transitions via file renames), and property writes to meta/model files.
+Receives patches from plugin via `tree_mutation_receiver` channel. Handles removals (with dedup cleanup), Source writes, renames (with slugify/dedup/meta lifecycle), ClassName changes (script type transitions via file renames), property writes to meta/model files, and ref path updates.
 
 **Capabilities:**
 - **Removals:** Deletes file + associated meta file via `InstigatingSource::Path`
+- **Dedup cleanup after removals:** When a deletion leaves a dedup group needing suffix cleanup, performs renames (gap-tolerant, base-name promotion, group-to-1). Uses `removed_set` (HashSet) to exclude co-removed siblings from sibling enumeration. Calls `compute_cleanup_action()` from `dedup_suffix.rs`.
 - **Source writes:** Updates script file contents
 - **Renames:** Slugifies new name, deduplicates against siblings, renames file on disk, creates/updates/removes meta `name` field as needed. Handles both standalone files and init-file directories.
 - **ClassName changes:** Script-to-script transitions (e.g. ModuleScript → Script) via file extension renames
 - **Property writes:** Attributes and other properties written to meta/model files via `syncback_updated_properties` in `api.rs`
+- **Ref path updates:** `RefPathIndex` tracks which meta/model files contain `Rojo_Ref_*` paths. `update_ref_paths_after_rename()` efficiently updates all affected files when an instance is renamed or dedup-cleaned.
+- **VFS suppression for dedup renames:** `suppress_path_any(&from)` + `suppress_path(&to)` prevents the VFS watcher from re-triggering on files renamed during dedup cleanup.
+- **InstigatingSource updates:** After dedup cleanup renames, the renamed sibling's `InstigatingSource::Path` and metadata path indexes are updated in-memory.
 
 **InstigatingSource:** Every instance in RojoTree tracks where it came from:
 - `InstigatingSource::Path(PathBuf)` - Created from a file, can be written back
 - `InstigatingSource::ProjectNode { path, name, node, parent_class }` - Defined in project file, **cannot be modified via two-way sync**
+
+**`handle_tree_event()` flow:**
+1. Process removals (log but don't delete -- API already deleted files)
+2. Dedup cleanup (runs before `apply_patch_set` to use parent/sibling relationships)
+3. Process updates: renames, ClassName changes, Source writes, ref path updates
+4. `apply_patch_set()` to update RojoTree
+5. Apply metadata updates (InstigatingSource paths for both regular and dedup renames)
+6. Send applied patch to message queue for plugin broadcast
 
 ### Pause Mechanism: Critical for Consistency
 
@@ -592,8 +616,21 @@ end
 | **Rapid changes interleave** | 200ms batch window may split logically related changes | Partial updates can leave inconsistent state |
 | **Reparenting not supported** | `Parent` property changes to non-nil values are ignored | Moving instances in Studio doesn't sync |
 | **Project node instances immutable** | InstigatingSource::ProjectNode cannot be modified | Instances from project file can't be changed |
-| **Duplicate-named siblings skipped** | Path ambiguity makes reliable sync impossible | Instances with same-name siblings ignored |
-| **Ref properties complex** | Instance references may become invalid when instances move | ObjectValue.Value may not sync correctly |
+| **Greedy matching not globally optimal** | Ambiguous groups (same Name+ClassName) use greedy assignment | Rare edge cases may produce suboptimal pairing and rename churn |
+| **Ref paths with ancestor-level ambiguity** | `Rojo_Ref_*` path-based refs written to disk may resolve to wrong sibling if duplicates exist at any ancestor level | Ref may point to wrong instance after rebuild; in-memory tree is correct during session |
+
+### Reconciler Matching Algorithm (`plugin/src/Reconciler/`)
+
+The plugin uses a recursive change-count scoring algorithm (implemented in `matching.lua`) to pair incoming virtual instances with existing Studio instances during hydration.
+
+**Entry point:** `Matching.matchChildren(virtualChildren, studioChildren, parentVirtual, parentStudio)`
+
+**Algorithm:**
+1. **Fast path:** Group by (Name, ClassName). 1:1 groups get instant-matched with zero scoring.
+2. **Ambiguous groups:** For groups with multiple candidates, compute pairwise `_computeChangeCount()` (recursive, scores entire subtree). Greedy assignment sorted by cost ascending, child-order tiebreaker.
+3. **Leftovers:** Unmatched virtual = new instances, unmatched Studio = deleted.
+
+**Value equality:** Shared `trueEquals.lua` module used by both `matching.lua` and `diff.lua` (fuzzy equality for floats, Color3, CFrame, Vector3; NaN handling; nil/null-ref equivalence).
 
 ## Protocol Enforcement
 
@@ -637,4 +674,5 @@ Browser: `http://localhost:34872` → Network tab → WebSocket messages
 | `src/web/api.rs` - Endpoints | `plugin/src/ServeSession.lua` - Connection |
 | `src/web/interface.rs` - Packets | `plugin/src/ApiContext.lua` - HTTP/WS client |
 | `src/serve_session.rs` - Session | `plugin/src/ChangeBatcher/` - Two-way sync |
-| | `plugin/src/Reconciler/` - Patch application |
+| `src/change_processor.rs` - FS writer | `plugin/src/Reconciler/` - Patch application |
+| `src/rojo_ref.rs` - Ref paths | `plugin/src/Reconciler/matching.lua` - Matching |

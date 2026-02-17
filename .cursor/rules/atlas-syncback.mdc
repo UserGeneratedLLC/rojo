@@ -48,15 +48,17 @@ Filesystem (Lua files, models, directories)
 
 ```
 syncback/
-  mod.rs              - Main loop, orchestration
-  snapshot.rs         - Convert instances → snapshots
-  fs_snapshot.rs      - Filesystem representation
-  file_names.rs       - Generate valid filenames
-  meta.rs             - Meta file read/write helpers
+  mod.rs              - Main loop, orchestration, ref path post-processing
+  snapshot.rs         - Convert instances → snapshots, record_ref_path()
+  fs_snapshot.rs      - Filesystem representation, fix_ref_paths()
+  file_names.rs       - slugify_name(), deduplicate_name_with_ext(), name_for_inst()
+  matching.rs         - Recursive change-count matching algorithm
+  dedup_suffix.rs     - Dedup cleanup rules (gap-tolerant, base-name promotion, group-to-1)
+  meta.rs             - Meta file read/write helpers (upsert/remove name, update ref paths)
   property_filter.rs  - Filter properties per syncback rules
-  ref_properties.rs   - Handle Ref properties (cross-references)
+  ref_properties.rs   - Ref property path linking (Rojo_Ref_*, tentative_fs_path)
   hash/               - Content hashing for change detection
-    mod.rs            - Hash variants
+    mod.rs            - Hash tree computation
     variant.rs        - Variant-specific hashing
   stats.rs            - Statistics tracking
 ```
@@ -66,13 +68,16 @@ syncback/
 **Flow:**
 
 1. **Parse input file** - Read rbxl/rbxm with `rbx_binary`
-2. **Prune tree** - Remove instances not in original project
-3. **Filter hidden services** - Remove internal Roblox services (AdService, Analytics, etc.)
-4. **Collect pre-prune paths** - Track all instances before pruning (for external refs)
-5. **Hash comparison** - Compare hashes of old tree vs new tree
-6. **Recursive syncback** - Walk trees, matching instances to files
-7. **Write filesystem** - Create/update files based on changes
-8. **Link Ref properties** - Resolve cross-references between instances
+2. **Collect pre-prune paths** - `collect_all_paths()` maps all Refs to filesystem-name paths before pruning (for external refs)
+3. **Prune tree** - Remove instances not in original project
+4. **Filter hidden services** - Remove internal Roblox services (AdService, Analytics, etc.)
+5. **Collect referents** - `collect_referents()` finds Ref properties and writes `Rojo_Ref_*` attributes using tentative paths
+6. **Filter properties** - Apply syncback rules (ignore classes, properties, etc.)
+7. **Hash comparison** - Compare hashes of old tree vs new tree
+8. **Recursive syncback walk** - Match instances to files via matching algorithm, assign filenames with dedup
+9. **Record ref path map** - During the walk, `record_ref_path()` maps each Ref to its final dedup'd filesystem path
+10. **Post-process ref paths** - `fix_ref_paths()` compares tentative paths vs final paths, substitutes in written meta/model files
+11. **Write filesystem** - Apply FsSnapshot to disk (sequential or parallel)
 
 **Signature:**
 ```rust
@@ -110,6 +115,41 @@ pub fn syncback_loop(
 **Use case:** Major refactoring, or when incremental mode produces wrong results.
 
 **Implementation detail:** `old_ref` is ignored in `SyncbackSnapshot::with_joined_path` when `incremental=false`.
+
+## Matching Algorithm (`matching.rs`)
+
+Pairs new instances (from Roblox file) with old instances (from filesystem) to determine which files to update vs create.
+
+**Entry point:** `match_children(new_children, old_children, new_dom, old_dom, hashes)`
+
+**Algorithm:**
+1. **Fast path:** Group by (Name, ClassName). 1:1 groups get instant-matched with zero scoring.
+2. **Ambiguous groups:** For groups with multiple candidates on either side, compute pairwise `compute_change_count()` -- a recursive scoring function that counts property diffs + recursive children cost. Greedy assignment sorted by cost ascending, child-order tiebreaker for stability.
+3. **Hash fast-path:** If `new_hash == old_hash`, return 0 cost immediately (skips property comparison and recursion).
+
+**Constants:**
+- `UNMATCHED_PENALTY = 10,000` - Cost per unmatched child (create/delete is categorically more expensive than property tweaks)
+- `MAX_SCORING_DEPTH = 3` - Depth limit for recursive scoring to prevent O(n^k) explosion
+
+**`compute_change_count()` and `match_children()` are mutually recursive.** Base case: leaf nodes (no children).
+
+**Output:** `MatchResult { matched: Vec<(new_ref, old_ref)>, unmatched_new: Vec<new_ref>, unmatched_old: Vec<old_ref> }`
+
+**Known limitation:** Greedy assignment is not globally optimal. The Hungarian algorithm (O(N^3)) would give optimal results, but ambiguous groups are typically small (2-10 instances).
+
+## Dedup Suffix Management (`dedup_suffix.rs`)
+
+Manages `~N` suffix cleanup after instance deletions during two-way sync.
+
+**Key functions:**
+- `parse_dedup_suffix(stem) -> Option<(base, N)>` - Parse `~N` from filename stem
+- `build_dedup_name(base, suffix, ext)` - Build filename with optional `~N` suffix
+- `compute_cleanup_action(removed_stem, remaining_stems) -> DedupCleanupAction` - Determine what to do after a deletion
+
+**Cleanup rules:**
+- **Gap-tolerant:** Deleting `~1` from `{Foo, Foo~1, Foo~2}` leaves `{Foo, Foo~2}`. No renumbering.
+- **Base-name promotion:** Deleting `Foo` (base) from `{Foo, Foo~1, Foo~2}` promotes `Foo~1` to `Foo`. `Foo~2` stays.
+- **Group-to-1 cleanup:** If group shrinks to 1 member, remove its suffix entirely.
 
 ## Syncback Rules
 
@@ -246,12 +286,13 @@ snapshot.with_new_path(path, new_ref, old_ref)
 ```
 
 **Filename generation** (`file_names.rs`):
-- Slugifies instance name (`slugify_name()`: forbidden chars → `_`)
-- Deduplicates against taken names (`deduplicate_name()`: appends `~1`, `~2`, etc.)
-- Adds appropriate extension based on middleware
-- Stores real name in `.meta.json5` `name` field when slug differs
+- `slugify_name()`: forbidden chars (`<>:"/\|?*~`) → `_`. Also strips leading/trailing spaces/dots, neutralizes dangerous suffixes (`.server`, `.meta`, etc.), handles Windows reserved names (`CON`, `PRN`, etc.)
+- `deduplicate_name_with_ext()`: Dedup key = full filesystem name (slug + extension), case-insensitive. `Folder "Foo"` (key `"foo"`) and `Script "Foo"` (key `"foo.server.luau"`) do NOT collide. Appends `~1`, `~2`, etc. on collision, with suffix inserted before compound extension: `Foo~1.server.luau`
+- `name_for_inst()` returns `(filename, needs_meta_name, dedup_key)`. `needs_meta_name` is true when the filesystem name differs from the real instance name.
+- `~` is in `SLUGIFY_CHARS` so natural tilde names (e.g., `"Foo~1"`) get slugified to `"Foo_1"`, avoiding confusion with dedup suffixes.
 - Example: `Script` named "My Script" → `My Script.server.luau`
 - Example: `Script` named "Hey/Bro" → `Hey_Bro.server.luau` + meta with `name: "Hey/Bro"`
+- Example: Two `Folder "Data"` → `Data/` + `Data~1/` (meta: `name: "Data"`)
 
 ### Property Filtering
 
@@ -301,6 +342,10 @@ fs_snapshot.merge(other)  // Combine snapshots
 
 // Apply to filesystem
 fs_snapshot.write_to_vfs(base_path, vfs)?;
+fs_snapshot.write_to_vfs_parallel(base_path, vfs)?;  // Parallel writes with retry logic
+
+// Post-process ref paths
+fs_snapshot.fix_ref_paths(&substitutions);  // Replace tentative paths with final dedup'd paths
 
 // Query
 fs_snapshot.is_empty()
@@ -310,26 +355,53 @@ fs_snapshot.removed_paths()
 
 ## Ref Properties (`ref_properties.rs`)
 
-**Challenge:** Ref properties (like `ObjectValue.Value`) point to other instances by Ref, but Refs are different between old and new trees.
+**Challenge:** Ref properties (like `ObjectValue.Value`, `Model.PrimaryPart`) point to other instances by Ref, but Refs are different between old and new trees.
 
-**Solution:**
+**Solution: Path-based `Rojo_Ref_*` attributes (preferred)**
 
-1. **Collect paths** - Map every Ref → full instance path (e.g., `Workspace.Part1`)
-2. **Collect referents** - Find all properties that are Refs, store as (source_path, target_path)
-3. **Link referents** - After syncback, use Atlas's `$id` / `Rojo_Target_PropertyName` system to link instances
+Syncback writes filesystem-name-based paths as `Rojo_Ref_PropertyName` attributes:
 
-**Atlas linking system:**
-```json
+```json5
 {
-    "id": "some-unique-id",
     "properties": {},
     "attributes": {
-        "Rojo_Target_Value": "some-unique-id"
+        "Rojo_Ref_PrimaryPart": "Workspace/Handle.model.json5"
     }
 }
 ```
 
-Plugin reads `Rojo_Target_PropertyName` attributes and sets corresponding Ref properties.
+Forward sync reads `Rojo_Ref_*` attributes and resolves them to tree instances via `get_instance_by_path()`.
+
+**Legacy: `Rojo_Target_*` / `$id` system (still supported for reading)**
+
+```json5
+{
+    "id": "some-unique-id",
+    "attributes": { "Rojo_Target_Value": "some-unique-id" }
+}
+```
+
+Forward sync also reads `Rojo_Target_*` attributes and resolves via `get_specified_id()`. Priority: `Rojo_Ref_*` takes precedence over `Rojo_Target_*`.
+
+**Key functions:**
+- `collect_all_paths(dom)` - Maps all Refs to filesystem-name-compatible paths (called pre-prune for external refs)
+- `collect_referents(dom, paths, final_paths)` - Finds all Ref properties, stores as (source, target_path) pairs
+- `tentative_fs_path(dom, ref)` - Computes pre-dedup path: slugified name + extension based on class/children
+- `tentative_fs_path_public()` - Public wrapper used in post-processing
+- `link_referents(dom, referents)` - Writes `Rojo_Ref_*` attributes to instances
+
+**Ref path post-processing (in `mod.rs`):**
+
+During the syncback walk, `record_ref_path()` records each instance's final dedup'd filesystem path in `ref_path_map`. After the walk, `fix_ref_paths()` compares tentative paths to final paths and substitutes in all written meta/model files. Substitutions are sorted by length descending to prevent partial prefix matches.
+
+## Meta File Helpers (`meta.rs`)
+
+Shared helpers for reading/writing `.meta.json5` and `.model.json5` files:
+
+- `upsert_meta_name(path, name)` - Upsert `name` field in `.meta.json5`
+- `remove_meta_name(path)` - Remove `name` field; returns `RemoveNameOutcome` (NoOp, FieldRemoved, FileDeleted)
+- `upsert_model_name(path, name)` - Upsert `name` field in `.model.json5`
+- `update_ref_paths_in_file(path, old_prefix, new_prefix)` - Update `Rojo_Ref_*` attribute paths in a meta/model file
 
 ## Statistics Tracking (`stats.rs`)
 
@@ -433,7 +505,7 @@ Filesystem:
 2. Sending file to server
 3. Server runs syncback command
 
-**Two-way sync (experimental)** is different - see `atlas-api.mdc`.
+**Two-way sync** is different - see `atlas-api.mdc`.
 
 ## Performance Considerations
 
@@ -441,7 +513,7 @@ Filesystem:
 
 **Incremental benefit:** On large projects, incremental mode with hashing can be 10-100x faster than rewriting everything.
 
-**Parallelization:** Not currently parallelized - filesystem writes are sequential.
+**Parallelization:** File writes can be parallelized via `write_to_vfs_parallel()` (includes Windows retry logic).
 
 ## Debugging
 
@@ -473,14 +545,20 @@ diff place.rbxl rebuilt.rbxl
 **From code comments:**
 - Better detection of when root is directory vs file
 - More sophisticated middleware selection
-- Parallel file writes
 - Better handling of Roblox format changes
 - Support for partial syncback (only changed instances)
+- Globally optimal matching (Hungarian algorithm) for large ambiguous groups
+- Matching cache (parent_ref -> match_assignments) for avoiding redundant scoring
 
 ## Key Files to Reference
 
-- `src/syncback/mod.rs` - Main orchestration loop
+- `src/syncback/mod.rs` - Main orchestration loop, ref path post-processing
 - `src/syncback/snapshot.rs` - SyncbackSnapshot implementation
+- `src/syncback/matching.rs` - Recursive change-count matching algorithm
+- `src/syncback/file_names.rs` - slugify_name(), deduplicate_name_with_ext()
+- `src/syncback/dedup_suffix.rs` - Dedup cleanup rules
+- `src/syncback/meta.rs` - Meta file read/write helpers
+- `src/syncback/ref_properties.rs` - Ref property path linking
 - `src/syncback/hash/` - Hashing algorithm
 - `src/syncback/property_filter.rs` - Property filtering logic
 - `src/cli/syncback.rs` - CLI command implementation

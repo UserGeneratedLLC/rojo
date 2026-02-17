@@ -19,8 +19,9 @@ Pure functions: filesystem → instance tree → minimal patches → apply chang
 
 **Key files:**
 - `mod.rs` - System overview with detailed explanation
-- `patch_compute.rs` - Generate diffs
-- `patch_apply.rs` - Apply changes
+- `patch_compute.rs` - Generate diffs (uses matching algorithm)
+- `patch_apply.rs` - Apply changes (resolves `Rojo_Ref_*` and `Rojo_Target_*` refs)
+- `matching.rs` - Forward sync matching algorithm (recursive change-count scoring)
 - `instance_snapshot.rs` - Core snapshot type
 
 ```rust
@@ -73,9 +74,9 @@ pub struct InstanceContext {
 
 **Filename handling (syncback/two-way sync):**
 
-Instance names with forbidden filesystem chars (`<>:"/\|?*`) are handled by:
+Instance names with forbidden filesystem chars (`<>:"/\|?*~`) are handled by:
 1. `slugify_name()` -- replaces forbidden chars with `_` (pure, stateless)
-2. `deduplicate_name()` -- appends `~1`, `~2`, etc. on collision (stateful)
+2. `deduplicate_name_with_ext()` -- dedup key = full filesystem name (slug + extension), case-insensitive; appends `~1`, `~2`, etc. on collision (stateful)
 3. Metadata `name` field -- stores the real instance name in `.meta.json5`/`.model.json5` when the slug differs
 
 ### 3. Commands (`src/cli/`)
@@ -93,6 +94,10 @@ Reverse: Roblox file → filesystem
 
 - `snapshot.rs` - Convert instances to snapshots
 - `fs_snapshot.rs` - Filesystem representation
+- `matching.rs` - Syncback matching algorithm (recursive change-count scoring)
+- `dedup_suffix.rs` - Dedup cleanup rules (gap-tolerant, base-name promotion, group-to-1)
+- `meta.rs` - Meta file read/write helpers (upsert/remove name, update ref paths)
+- `ref_properties.rs` - Ref property path linking (`Rojo_Ref_*`, tentative_fs_path)
 - `hash/` - Content hashing for change detection
 - `property_filter.rs` - Apply syncback rules
 
@@ -220,10 +225,10 @@ Review: `cargo insta review`
 
 **WebSocket:** `ws://host:port/api/rojo`
 
-**Protocol v5:**
+**Protocol v6:**
 ```json
 // Handshake
-{"type": "ServerInfo", "protocolVersion": 5, "serverVersion": "7.7.0"}
+{"type": "ServerInfo", "protocolVersion": 6, "serverVersion": "7.7.0"}
 
 // Patch
 {
@@ -367,13 +372,20 @@ RUST_LOG=rojo=debug rojo build
 
 ```
 src/
-  cli/           - Commands
-  snapshot/      - Core system
-  snapshot_middleware/ - File handlers
-  syncback/      - Reverse sync
-  web/           - HTTP/WebSocket
-  lib.rs         - Public API
-  main.rs        - CLI entry
+  cli/                  - Commands
+  snapshot/             - Core system
+    matching.rs         - Forward sync matching algorithm
+  snapshot_middleware/   - File handlers
+  syncback/             - Reverse sync
+    matching.rs         - Syncback matching algorithm
+    dedup_suffix.rs     - Dedup cleanup rules
+    meta.rs             - Meta file helpers
+  web/                  - HTTP/WebSocket
+  change_processor.rs   - Two-way sync filesystem writer
+  rojo_ref.rs           - Ref path system (Rojo_Ref_*, RefPathIndex)
+  variant_eq.rs         - Property value comparison
+  lib.rs                - Public API
+  main.rs               - CLI entry
 
 crates/
   memofs/        - Virtual filesystem

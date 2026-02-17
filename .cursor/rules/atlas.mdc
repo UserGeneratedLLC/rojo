@@ -41,7 +41,7 @@ Atlas bridges filesystem and Roblox Studio, enabling professional development to
 **Current state:**
 - `atlas syncback` (CLI) is the **ground truth** for Roblox → filesystem syncing. It is battle-tested and handles edge cases reliably.
 - Plugin-based two-way sync (via `atlas serve` + the Studio plugin) is under active development to reach feature parity and match the resilience of CLI syncback.
-- The bar for replacing syncback is high: plugin two-way sync must handle all the same scenarios (encoded names, nested projects, property conflicts, large trees, concurrent edits) just as reliably before syncback can be deprecated.
+- The bar for replacing syncback is high: plugin two-way sync must handle all the same scenarios (slugified names, dedup suffixes, nested projects, property conflicts, large trees, concurrent edits) just as reliably before syncback can be deprecated.
 
 **When working on two-way sync:** Plugin-based sync must produce **exactly the same filesystem output** that `atlas syncback` would give for the same input. Byte-for-byte identical files, identical directory structures, identical naming. If the plugin path produces different results, treat syncback as the correct reference unless there's an explicit, documented reason to diverge. Any divergence is a bug until proven otherwise.
 
@@ -316,16 +316,25 @@ Reconciler.applyPatch(instanceMap, patch)
 src/                     - Rust server/CLI
   cli/                  - Command implementations
   snapshot/             - Core snapshot system
+    matching.rs         - Forward sync matching algorithm
   snapshot_middleware/   - File type handlers
   syncback/             - Roblox → filesystem
+    matching.rs         - Syncback matching algorithm
+    dedup_suffix.rs     - Dedup cleanup rules
+    meta.rs             - Meta file read/write helpers
   web/                  - HTTP/WebSocket server
   change_processor.rs   - Two-way sync filesystem writer
+  rojo_ref.rs           - Ref path system (Rojo_Ref_*, RefPathIndex)
+  variant_eq.rs         - Property value comparison
 
 plugin/src/             - Lua Studio plugin
   App/                  - Roact UI components
   Reconciler/           - Patch application logic
+    matching.lua        - Lua matching algorithm
+    trueEquals.lua      - Shared value equality module
   ChangeBatcher/        - Two-way sync patch creation
   Config.lua            - Version and protocol config
+  XXH32.luau            - Hash function for plugin
 
 rbx-dom/                - Git submodule (separate repo)
   rbx_binary/           - Binary format (rbxm/rbxl)

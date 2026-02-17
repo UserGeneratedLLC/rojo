@@ -6764,13 +6764,14 @@ fn ref_to_instance_added_in_same_request() {
 
         // The meta file should contain Rojo_Ref_PrimaryPart pointing to the new Part.
         // The added_paths fallback resolves the path from the AddedInstance data.
+        // The path includes the middleware extension (Fix 3: same-batch add+ref).
         let meta_path = session
             .path()
             .join("src/Workspace/TestModel/init.meta.json5");
         assert_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/NewPart",
+            "Workspace/TestModel/NewPart.model.json5",
         );
 
         // Verify the tree also has a resolved PrimaryPart Ref (not dangling).
@@ -7212,6 +7213,171 @@ fn ref_on_txt_file_instance() {
             &meta_path,
             "Rojo_Ref_PrimaryPart",
             "Workspace/TestModel/Part1.model.json5",
+        );
+    });
+}
+
+// =========================================================================
+// Regression tests for audit_ambiguous_paths_followup fixes
+// =========================================================================
+
+/// Fix 3 regression: when adding a new Script instance and a Ref property
+/// pointing to it in the same /api/write batch, the persisted Rojo_Ref_*
+/// path must include the middleware extension (e.g. ".server.luau").
+#[test]
+fn ref_same_batch_add_target_includes_extension() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, workspace_id, model_id, _, _, _) = ref_test_setup(&session);
+
+        // Add a new Script as a child of Workspace
+        let target_guid = Ref::new();
+        let mut add_props = HashMap::new();
+        add_props.insert(
+            "Source".to_string(),
+            Variant::String("-- target script".to_string()),
+        );
+        add_props.insert(
+            "RunContext".to_string(),
+            Variant::Enum(rbx_dom_weak::types::Enum::from_u32(1)), // Server
+        );
+
+        let added_inst = AddedInstance {
+            parent: Some(workspace_id),
+            name: "RefTarget".to_string(),
+            class_name: "Script".to_string(),
+            properties: add_props,
+            children: vec![],
+        };
+        let mut added_map = HashMap::new();
+        added_map.insert(target_guid, added_inst);
+
+        // In the same request, set PrimaryPart on TestModel to the new Script
+        let mut update_props = UstrMap::default();
+        update_props.insert(ustr("PrimaryPart"), Some(Variant::Ref(target_guid)));
+
+        let write_request = WriteRequest {
+            session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![InstanceUpdate {
+                id: model_id,
+                changed_name: None,
+                changed_class_name: None,
+                changed_properties: update_props,
+                changed_metadata: None,
+            }],
+        };
+        session.post_api_write(&write_request).unwrap();
+        thread::sleep(Duration::from_millis(500));
+
+        // The Rojo_Ref_PrimaryPart path should include the extension
+        let meta_path = session
+            .path()
+            .join("src/Workspace/TestModel/init.meta.json5");
+        poll_meta_has_ref_attr(
+            &meta_path,
+            "Rojo_Ref_PrimaryPart",
+            "Workspace/RefTarget.server.luau",
+        );
+    });
+}
+
+/// Fix 3 regression: same-batch add+ref for a ModuleScript target should
+/// produce a path ending in ".luau" (not bare instance name).
+#[test]
+fn ref_same_batch_add_module_target_includes_extension() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, workspace_id, model_id, _, _, _) = ref_test_setup(&session);
+
+        let target_guid = Ref::new();
+        let mut add_props = HashMap::new();
+        add_props.insert(
+            "Source".to_string(),
+            Variant::String("return {}".to_string()),
+        );
+
+        let added_inst = AddedInstance {
+            parent: Some(workspace_id),
+            name: "ModuleTarget".to_string(),
+            class_name: "ModuleScript".to_string(),
+            properties: add_props,
+            children: vec![],
+        };
+        let mut added_map = HashMap::new();
+        added_map.insert(target_guid, added_inst);
+
+        let mut update_props = UstrMap::default();
+        update_props.insert(ustr("PrimaryPart"), Some(Variant::Ref(target_guid)));
+
+        let write_request = WriteRequest {
+            session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![InstanceUpdate {
+                id: model_id,
+                changed_name: None,
+                changed_class_name: None,
+                changed_properties: update_props,
+                changed_metadata: None,
+            }],
+        };
+        session.post_api_write(&write_request).unwrap();
+        thread::sleep(Duration::from_millis(500));
+
+        let meta_path = session
+            .path()
+            .join("src/Workspace/TestModel/init.meta.json5");
+        poll_meta_has_ref_attr(
+            &meta_path,
+            "Rojo_Ref_PrimaryPart",
+            "Workspace/ModuleTarget.luau",
+        );
+    });
+}
+
+/// Fix 3 regression: same-batch add+ref for a Folder target (directory
+/// middleware) should produce a path WITHOUT an extension.
+#[test]
+fn ref_same_batch_add_folder_target_no_extension() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, workspace_id, model_id, _, _, _) = ref_test_setup(&session);
+
+        let target_guid = Ref::new();
+        let added_inst = AddedInstance {
+            parent: Some(workspace_id),
+            name: "FolderTarget".to_string(),
+            class_name: "Folder".to_string(),
+            properties: HashMap::new(),
+            children: vec![],
+        };
+        let mut added_map = HashMap::new();
+        added_map.insert(target_guid, added_inst);
+
+        let mut update_props = UstrMap::default();
+        update_props.insert(ustr("PrimaryPart"), Some(Variant::Ref(target_guid)));
+
+        let write_request = WriteRequest {
+            session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![InstanceUpdate {
+                id: model_id,
+                changed_name: None,
+                changed_class_name: None,
+                changed_properties: update_props,
+                changed_metadata: None,
+            }],
+        };
+        session.post_api_write(&write_request).unwrap();
+        thread::sleep(Duration::from_millis(500));
+
+        let meta_path = session
+            .path()
+            .join("src/Workspace/TestModel/init.meta.json5");
+        poll_meta_has_ref_attr(
+            &meta_path,
+            "Rojo_Ref_PrimaryPart",
+            "Workspace/FolderTarget",
         );
     });
 }

@@ -619,6 +619,9 @@ impl ApiService {
         // Build a path map for instances added in this same request.
         // This allows Ref properties in updates to reference just-added
         // instances that aren't in the tree yet (VFS watcher is async).
+        // The segment includes the middleware extension (e.g. .server.luau,
+        // .model.json5) so that Rojo_Ref_* paths match what the filesystem
+        // will actually contain.
         let added_paths: HashMap<Ref, String> = {
             let tree = self.serve_session.tree();
             request
@@ -631,14 +634,7 @@ impl ApiService {
                     } else {
                         return None;
                     };
-                    // Use slugified name (matching filesystem conventions) instead of
-                    // escape_ref_path_segment (which uses legacy \/ escaping that
-                    // get_instance_by_path cannot resolve).
-                    let fs_name = if crate::syncback::name_needs_slugify(&added.name) {
-                        crate::syncback::slugify_name(&added.name)
-                    } else {
-                        added.name.clone()
-                    };
+                    let fs_name = added_instance_fs_segment(added);
                     let path = if parent_path.is_empty() {
                         fs_name
                     } else {
@@ -3560,6 +3556,91 @@ fn instance_for_scripts_only<'a>(
         children: Cow::Owned(filtered_children),
         metadata,
     }
+}
+
+/// Compute the tentative filesystem name segment for an `AddedInstance`.
+///
+/// Mirrors the logic of `tentative_fs_name` in `ref_properties.rs` but
+/// operates on `AddedInstance` fields instead of `rbx_dom_weak::Instance`.
+/// Used by `added_paths` to build correct same-batch Ref target paths.
+fn added_instance_fs_segment(added: &crate::web::interface::AddedInstance) -> String {
+    let slug = if crate::syncback::name_needs_slugify(&added.name) {
+        crate::syncback::slugify_name(&added.name)
+    } else {
+        added.name.clone()
+    };
+
+    let has_children = !added.children.is_empty();
+
+    let is_container = matches!(
+        added.class_name.as_str(),
+        "Folder"
+            | "Configuration"
+            | "Tool"
+            | "ScreenGui"
+            | "SurfaceGui"
+            | "BillboardGui"
+            | "AdGui"
+    );
+
+    let is_script = matches!(
+        added.class_name.as_str(),
+        "Script" | "LocalScript" | "ModuleScript"
+    );
+
+    if is_container || (has_children && is_script) {
+        return slug;
+    }
+
+    let extension = match added.class_name.as_str() {
+        "Script" => {
+            if has_children {
+                return slug;
+            }
+            match added.properties.get("RunContext") {
+                Some(Variant::Enum(e)) => match e.to_u32() {
+                    0 => "legacy.luau",
+                    1 => "server.luau",
+                    2 => "client.luau",
+                    3 => "plugin.luau",
+                    _ => "legacy.luau",
+                },
+                _ => "legacy.luau",
+            }
+        }
+        "LocalScript" => {
+            if has_children {
+                return slug;
+            }
+            "local.luau"
+        }
+        "ModuleScript" => {
+            if has_children {
+                return slug;
+            }
+            "luau"
+        }
+        "StringValue" => {
+            if has_children {
+                return slug;
+            }
+            "txt"
+        }
+        "LocalizationTable" => {
+            if has_children {
+                return slug;
+            }
+            "csv"
+        }
+        _ => {
+            if has_children {
+                return slug;
+            }
+            "model.json5"
+        }
+    };
+
+    format!("{slug}.{extension}")
 }
 
 #[cfg(test)]

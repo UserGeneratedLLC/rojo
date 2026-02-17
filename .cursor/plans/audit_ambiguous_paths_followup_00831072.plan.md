@@ -4,19 +4,19 @@ overview: Production audit of the ambiguous-paths branch against origin/master. 
 todos:
   - id: fix-metadata-drift
     content: "Fix 1: Update dedup cleanup rename flow to keep tree metadata/path indexes in sync"
-    status: in_progress
+    status: completed
   - id: fix-batch-removal-dedup
     content: "Fix 2: Exclude co-removed siblings from dedup cleanup sibling enumeration"
-    status: pending
+    status: completed
   - id: fix-added-paths
     content: "Fix 3: Extend added_paths in api.rs to include middleware extension and dedup suffix"
-    status: pending
+    status: completed
   - id: fix-ref-path-final
     content: "Fix 4: Complete Phase 2 of previous audit Fix 3 -- pass final_paths to collect_referents instead of global text rewrite"
-    status: pending
+    status: completed
   - id: fix-regression-tests
     content: "Fix 5: Add regression tests for Fixes 1-4"
-    status: pending
+    status: completed
 isProject: false
 ---
 
