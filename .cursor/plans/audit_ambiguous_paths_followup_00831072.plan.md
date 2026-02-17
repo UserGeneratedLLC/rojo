@@ -3,7 +3,19 @@ name: audit ambiguous paths followup
 overview: Production audit of the ambiguous-paths branch against origin/master. Documents critical round-trip issues, approved fixes, accepted limitations, and required regression tests for implementation in a follow-up Agent-mode session.
 todos:
   - id: fix-metadata-drift
-    content: Update dedup cleanup rename flow to keep tree metadata/path indexes in sync
+    content: "Fix 1: Update dedup cleanup rename flow to keep tree metadata/path indexes in sync"
+    status: in_progress
+  - id: fix-batch-removal-dedup
+    content: "Fix 2: Exclude co-removed siblings from dedup cleanup sibling enumeration"
+    status: pending
+  - id: fix-added-paths
+    content: "Fix 3: Extend added_paths in api.rs to include middleware extension and dedup suffix"
+    status: pending
+  - id: fix-ref-path-final
+    content: "Fix 4: Complete Phase 2 of previous audit Fix 3 -- pass final_paths to collect_referents instead of global text rewrite"
+    status: pending
+  - id: fix-regression-tests
+    content: "Fix 5: Add regression tests for Fixes 1-4"
     status: pending
 isProject: false
 ---
@@ -36,6 +48,7 @@ Audited branch `ambiguous-paths` against `origin/master` using commit range `ori
 Primary findings:
 
 - Critical path drift in dedup cleanup rename flow (`[src/change_processor.rs](d:/UserGenerated/rojo/src/change_processor.rs)`).
+- Critical batch-removal dedup cleanup counts co-removed siblings as "remaining", defeating group-to-1 cleanup (`[src/change_processor.rs](d:/UserGenerated/rojo/src/change_processor.rs)`).
 - Critical same-batch Ref target path synthesis mismatch for added instances (`[src/web/api.rs](d:/UserGenerated/rojo/src/web/api.rs)`).
 - Critical ref-path post-processing strategy relies on global text replacement (`[src/syncback/mod.rs](d:/UserGenerated/rojo/src/syncback/mod.rs)`, `[src/syncback/fs_snapshot.rs](d:/UserGenerated/rojo/src/syncback/fs_snapshot.rs)`).
 - Known limitation accepted for this release: duplicate-named children under ProjectNode currently skipped in `[src/snapshot_middleware/project.rs](d:/UserGenerated/rojo/src/snapshot_middleware/project.rs)`.
@@ -59,13 +72,41 @@ Each fix below was approved by the user during the audit quiz. Implement in orde
   - Rust integration test in `[tests/tests/two_way_sync.rs](d:/UserGenerated/rojo/tests/tests/two_way_sync.rs)` covering delete-triggered dedup cleanup followed by update.
   - Optional focused unit test around cleanup metadata path update helper in `[src/change_processor.rs](d:/UserGenerated/rojo/src/change_processor.rs)`.
 
-### Fix 2: Build correct same-batch added Ref paths
+### Fix 2: Exclude co-removed siblings from dedup cleanup sibling enumeration
 
 - **Status:** Approved
+- **Files:** `[src/change_processor.rs](d:/UserGenerated/rojo/src/change_processor.rs)`
+- **Problem:** In the dedup cleanup loop (lines 1077-1203), the sibling enumeration (line 1120) only skips `sibling_ref == removed_id` -- the single instance being processed in the current iteration. It does NOT skip other instances that are also in `patch_set.removed_instances`. When multiple siblings from the same dedup group are removed in a single patch, the co-removed instances are incorrectly counted as "remaining", inflating the sibling count and defeating cleanup rules.
+- **Failure path:** Remove `Foo` (A) and `Foo~1` (B) from a group of 3, leaving `Foo~2` (C) as the sole survivor. api.rs deletes all files first. In the dedup cleanup loop, iteration for A finds B and C as remaining (count=2), so group-to-1 does not fire; instead `PromoteLowest` tries to rename the already-deleted `Foo~1` → `Foo` (fails). Iteration for B finds A and C as remaining (count=2), group-to-1 again does not fire. Result: C keeps its `~2` suffix permanently when it should have been renamed to `Foo`.
+- **Solution:** Before the dedup cleanup loop, build a `HashSet<Ref>` from `patch_set.removed_instances`. In the sibling enumeration (line 1121), change the skip condition from `sibling_ref == removed_id` to `removed_set.contains(&sibling_ref)`:
+
+```rust
+let removed_set: HashSet<Ref> = patch_set.removed_instances.iter().copied().collect();
+
+// ... inside sibling loop:
+for &sibling_ref in parent_inst.children() {
+    if removed_set.contains(&sibling_ref) {
+        continue;
+    }
+    // ... rest of sibling processing
+}
+```
+
+- **Risk:** Low; narrow, mechanical change. The HashSet construction is O(n) and the lookup is O(1).
+- **Verify round-trip:** Remove 2 of 3 duplicate siblings via two-way sync. Verify the sole survivor has its dedup suffix removed and survives rebuild with the clean name.
+- **Verify syncback parity:** N/A (dedup cleanup is a two-way sync operation only).
+- **Tests required:**
+  - Rust integration test in `[tests/tests/two_way_sync.rs](d:/UserGenerated/rojo/tests/tests/two_way_sync.rs)`: batch-remove 2 of 3 same-named siblings, verify survivor is renamed from `Foo~2` to `Foo`.
+  - Edge test: batch-remove ALL members of a dedup group (no survivor); verify no spurious rename attempts.
+
+### Fix 3: Build correct same-batch added Ref paths
+
+- **Status:** Approved
+- **Lineage:** Extends `ambiguous_paths_audit_fixes_9d3ed6da` Fix 2 (completed), which replaced `escape_ref_path_segment` with `slugify_name` in `added_paths` but explicitly acknowledged the missing extension as a limitation. The current code at lines 637-641 of `api.rs` uses `slugify_name`; this fix adds the remaining segments.
 - **Finding:** Step 2a / Step 10 (plugin->server wire format and write processing)
 - **Files:** `[src/web/api.rs](d:/UserGenerated/rojo/src/web/api.rs)`
-- **Problem:** `added_paths` map (`~622-649`) uses only slugified instance name; it omits middleware extension and dedup suffix. `syncback_updated_properties` then writes incorrect `Rojo_Ref_`* when target is newly added in same request (`~2694-2706`).
-- **Solution:** Derive same-batch added target path using the same filesystem naming pipeline as syncback write (class/middleware extension + dedup suffix + directory-vs-file representation). Reuse/shared helper preferred to avoid divergence.
+- **Problem:** `added_paths` map (`~622-649`) uses only slugified instance name (from the previous fix); it still omits middleware extension and dedup suffix. `syncback_updated_properties` then writes incorrect `Rojo_Ref_`* when target is newly added in same request (`~2694-2706`).
+- **Solution:** Extend the existing `added_paths` builder (lines 637-649) to derive the full filesystem name: slugified name + middleware extension based on `added.class_name` and `added.children.is_empty()` + dedup suffix if colliding with siblings. Reuse `tentative_fs_name` logic from `ref_properties.rs` or the shared helper from the Deferred Refactors section.
 - **Risk:** Medium; affects same-request Ref persistence edge path.
 - **Verify round-trip:** Send `/api/write` with add(target script/model) + update(ref property pointing to target) in one batch; verify persisted path includes correct segment (`.server.luau`, `.model.json5`, or dedup suffix) and resolves after rebuild.
 - **Verify syncback parity:** Run equivalent scenario via CLI syncback fixture and compare written `Rojo_Ref_`* attribute string.
@@ -73,32 +114,38 @@ Each fix below was approved by the user during the audit quiz. Implement in orde
   - Rust integration test in `[tests/tests/two_way_sync.rs](d:/UserGenerated/rojo/tests/tests/two_way_sync.rs)` for same-batch add+ref on file-backed and directory-backed targets.
   - Edge test for dedup suffix target (e.g., `Foo~1`).
 
-### Fix 3: Replace global ref-path text rewriting with attribute-scoped final paths
+### Fix 4: Complete attribute-scoped final paths (previously incomplete)
 
 - **Status:** Approved
 - **Finding:** Step 2a / Step 9 / Step 11h (round-trip identity, parity, determinism)
-- **Files:** `[src/syncback/mod.rs](d:/UserGenerated/rojo/src/syncback/mod.rs)`, `[src/syncback/ref_properties.rs](d:/UserGenerated/rojo/src/syncback/ref_properties.rs)`, `[src/syncback/fs_snapshot.rs](d:/UserGenerated/rojo/src/syncback/fs_snapshot.rs)`, `[src/syncback/snapshot.rs](d:/UserGenerated/rojo/src/syncback/snapshot.rs)`
-- **Problem:** Syncback currently calls `collect_referents(..., None)` (`~177`) then performs broad post-hoc string replacement (`~614-637`) via `fix_ref_paths` (`~456-492`) across entire meta/model file text. This is not attribute-scoped and can alter unrelated strings.
-- **Solution:** Feed definitive final paths into ref linking directly (e.g., pass populated `final_paths` to `collect_referents`) so `Rojo_Ref_`* attributes are written correctly first time. Remove or strictly confine generic text replacement path.
-- **Risk:** Medium-high; touches syncback ref pipeline and ordering.
+- **Lineage:** `ambiguous_paths_audit_fixes_9d3ed6da` Fix 3 defined a two-phase fix. Phase 1 (correct misleading comment) was completed -- visible at lines 194-199 of `ref_properties.rs`. Phase 2 (pass `final_paths` to `collect_referents`) was NOT completed despite the todo being marked "completed". The API was prepared (`final_paths: Option<&HashMap<Ref, String>>` parameter exists at line 188 of `ref_properties.rs`) but the call site at line 177 of `mod.rs` still passes `None`. The `ref_path_map` infrastructure was built by `ref_path_and_dedup_integration_81a47dfe` and is populated during the syncback walk (used at lines 614-637 of `mod.rs` for the text replacement). This fix completes that unfinished Phase 2.
+- **Files:** `[src/syncback/mod.rs](d:/UserGenerated/rojo/src/syncback/mod.rs)`, `[src/syncback/ref_properties.rs](d:/UserGenerated/rojo/src/syncback/ref_properties.rs)`, `[src/syncback/fs_snapshot.rs](d:/UserGenerated/rojo/src/syncback/fs_snapshot.rs)`
+- **Problem:** `collect_referents(&new_tree, &pre_prune_paths, None)` is called at line 177 of `mod.rs` BEFORE the syncback walk that populates `ref_path_map`. The `None` means tentative paths (without dedup suffixes) are written into `Rojo_Ref_`* attributes. Then the post-hoc `fix_ref_paths` (lines 614-637) performs global text replacement across entire meta/model file contents to substitute tentative paths with final dedup'd paths. This is not attribute-scoped and can alter unrelated strings that happen to contain the same substring as a tentative path.
+- **Existing infrastructure to build on:**
+  1. `collect_referents` already accepts `final_paths: Option<&HashMap<Ref, String>>` (line 188 of `ref_properties.rs`).
+  2. `ref_path_map` is already populated during the syncback walk with `(Ref, final_path)` entries.
+  3. `tentative_fs_path_public` is already used at line 623 of `mod.rs` to compute tentative paths for the substitution diff.
+- **Solution:** Move the `collect_referents` call from line 177 (before the syncback walk) to after the walk completes (after line 612). Pass `Some(&ref_path_map.borrow())` instead of `None`. Then remove or guard the `fix_ref_paths` block (lines 614-637) -- it should no longer be needed for any path that has a `final_paths` entry.
+- **Ordering constraint:** `collect_referents` is currently called before property filtering (lines 179-198). Moving it after the syncback walk means it runs after filtering. Verify that `collect_referents` does not depend on properties that are removed by filtering (it should not -- it only reads Ref-type properties, which are not in the filtered set unless `ignore_referents` is true, in which case refs are skipped entirely).
+- **Risk:** Medium; changes the ordering of the syncback pipeline. The infrastructure is already in place, reducing implementation risk.
 - **Verify round-trip:** Scenario with duplicate-named ref target and non-ref string property containing same substring as tentative path; ensure only `Rojo_Ref_`* changes and non-ref string is untouched.
 - **Verify syncback parity:** Compare CLI syncback and two-way outputs for refs targeting dedup-suffixed instances; paths must be byte-identical.
 - **Tests required:**
   - Rust integration test in `[tests/tests/syncback_roundtrip.rs](d:/UserGenerated/rojo/tests/tests/syncback_roundtrip.rs)` validating non-ref string preservation while refs are rewritten correctly.
   - Rust integration test in `[tests/tests/two_way_sync.rs](d:/UserGenerated/rojo/tests/tests/two_way_sync.rs)` for dedup-aware ref persistence without text rewrite side effects.
 
-### Fix 4: Add regression coverage for approved fixes
+### Fix 5: Add regression coverage for approved fixes
 
 - **Status:** Approved
 - **Finding:** Step 13 (missing coverage)
 - **Files:** `[tests/tests/two_way_sync.rs](d:/UserGenerated/rojo/tests/tests/two_way_sync.rs)`, `[tests/tests/syncback_roundtrip.rs](d:/UserGenerated/rojo/tests/tests/syncback_roundtrip.rs)`, optionally helper fixtures under `[rojo-test/syncback-tests](d:/UserGenerated/rojo/rojo-test/syncback-tests)`.
-- **Problem:** Current tests do not fully guard the three approved bug classes.
-- **Solution:** Add targeted regression tests tied to Fixes 1-3 and ensure they fail pre-fix and pass post-fix.
+- **Problem:** Current tests do not fully guard the four approved bug classes.
+- **Solution:** Add targeted regression tests tied to Fixes 1-4 and ensure they fail pre-fix and pass post-fix.
 - **Risk:** Low.
 - **Verify round-trip:** Covered by added integration scenarios.
 - **Verify syncback parity:** Add assertions comparing resulting file paths/attribute values against expected CLI-format output.
 - **Tests required:**
-  - All tests listed under Fixes 1-3.
+  - All tests listed under Fixes 1-4.
   - One deterministic re-run assertion (second run no changes) for affected scenarios.
 
 ## Skipped Fixes
@@ -128,21 +175,24 @@ Each fix below was approved by the user during the audit quiz. Implement in orde
 
 ## Deferred Refactors
 
-- Consolidate filesystem-segment derivation into one shared helper used by `[src/rojo_ref.rs](d:/UserGenerated/rojo/src/rojo_ref.rs)`, `[src/snapshot/tree.rs](d:/UserGenerated/rojo/src/snapshot/tree.rs)`, and `[src/web/api.rs](d:/UserGenerated/rojo/src/web/api.rs)` to eliminate duplicate naming logic.
-- Revisit optimal assignment algorithm for large ambiguous groups (major rewrite; out of current scope).
+- Consolidate filesystem-segment derivation into one shared helper used by `[src/rojo_ref.rs](d:/UserGenerated/rojo/src/rojo_ref.rs)`, `[src/snapshot/tree.rs](d:/UserGenerated/rojo/src/snapshot/tree.rs)`, and `[src/web/api.rs](d:/UserGenerated/rojo/src/web/api.rs)` to eliminate duplicate naming logic. *(Continuing from `ambiguous_paths_audit_fixes_9d3ed6da` Deferred Refactors -- still open.)*
+- Revisit optimal assignment algorithm for large ambiguous groups (major rewrite; out of current scope). *(Continuing from `ambiguous_paths_audit_fixes_9d3ed6da` Deferred Refactors -- still open.)*
+- Phase 2e matching cache from the original plan (`ambiguous_path_handling_f2eaef11`): add optional cache mapping `parent_ref -> (children_list_hash, match_assignments)` to avoid re-running the full algorithm when children haven't changed. Optimization only, not needed for correctness. *(Never completed or cancelled across any subsequent plan -- explicitly deferred here.)*
 
 ## Test Plan
 
 ### Rust Unit Tests (`#[cfg(test)]`)
 
 - Dedup cleanup metadata update helper behavior after rename (Fix 1).
-- Added-path segment generation helper returns correct extension/suffix across middleware types (Fix 2).
+- Added-path segment generation helper returns correct extension/suffix across middleware types (Fix 3).
 
 ### Rust Integration Tests (`tests/tests/`)
 
 - Delete base dedup name then update promoted sibling in same serve session; verify writes hit new path and persist after rebuild (Fix 1).
-- Same `/api/write` request: add target + set Ref to target, verify persisted path includes expected extension/suffix (Fix 2).
-- Ref rewrite safety: non-ref string fields are unchanged while `Rojo_Ref_`* gets final dedup path (Fix 3).
+- Batch-remove 2 of 3 same-named siblings; verify sole survivor is renamed from `Foo~2` to `Foo` (Fix 2).
+- Batch-remove all members of a dedup group; verify no spurious rename attempts (Fix 2).
+- Same `/api/write` request: add target + set Ref to target, verify persisted path includes expected extension/suffix (Fix 3).
+- Ref rewrite safety: non-ref string fields are unchanged while `Rojo_Ref_`* gets final dedup path (Fix 4).
 
 ### Lua Spec Tests (`.spec.lua`)
 
@@ -150,7 +200,7 @@ Each fix below was approved by the user during the audit quiz. Implement in orde
 
 ### Snapshot Tests (`insta`)
 
-- Add or update syncback snapshot fixture showing final dedup-aware `Rojo_Ref_`* output without incidental string changes (Fix 3).
+- Add or update syncback snapshot fixture showing final dedup-aware `Rojo_Ref_`* output without incidental string changes (Fix 4).
 
 ### Failing Tests for Known Limitations
 
