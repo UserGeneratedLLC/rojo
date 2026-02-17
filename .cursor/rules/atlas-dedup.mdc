@@ -1,24 +1,6 @@
 ---
-description: "Dedup system: matching algorithm, filesystem-collision dedup, suffix cleanup, ref path system, slugification, and cross-system integration for duplicate-named instances."
-globs:
-  - "src/syncback/file_names.rs"
-  - "src/syncback/dedup_suffix.rs"
-  - "src/syncback/matching.rs"
-  - "src/syncback/ref_properties.rs"
-  - "src/snapshot/matching.rs"
-  - "src/snapshot/tree.rs"
-  - "src/snapshot/patch_compute.rs"
-  - "src/rojo_ref.rs"
-  - "src/variant_eq.rs"
-  - "src/change_processor.rs"
-  - "src/web/api.rs"
-  - "plugin/src/Reconciler/matching.lua"
-  - "plugin/src/Reconciler/trueEquals.lua"
-  - "plugin/src/Reconciler/hydrate.lua"
-  - "plugin/src/Reconciler/diff.lua"
-  - "plugin/src/XXH32.luau"
-  - "tests/tests/two_way_sync.rs"
-  - "tests/tests/syncback_roundtrip.rs"
+globs: src/syncback/file_names.rs,src/syncback/dedup_suffix.rs,src/syncback/matching.rs,src/syncback/ref_properties.rs,src/snapshot/matching.rs,src/snapshot/tree.rs,src/snapshot/patch_compute.rs,src/rojo_ref.rs,src/variant_eq.rs,src/change_processor.rs,src/web/api.rs,plugin/src/Reconciler/matching.lua,plugin/src/Reconciler/trueEquals.lua,plugin/src/Reconciler/hydrate.lua,plugin/src/Reconciler/diff.lua,plugin/src/XXH32.luau,tests/tests/two_way_sync.rs,tests/tests/syncback_roundtrip.rs
+alwaysApply: false
 ---
 
 # Atlas Dedup System
@@ -58,11 +40,11 @@ All three use the same recursive change-count scoring + greedy assignment algori
 
 | File | Subsystem | Purpose |
 |------|-----------|---------|
-| `src/syncback/file_names.rs` | Dedup | `slugify_name`, `deduplicate_name_with_ext`, `name_for_inst`, `parse_dedup_suffix` |
-| `src/syncback/dedup_suffix.rs` | Dedup | `compute_cleanup_action`, `DedupCleanupAction`, suffix cleanup rules |
+| `src/syncback/file_names.rs` | Dedup | `slugify_name`, `deduplicate_name_with_ext`, `name_for_inst`, `name_needs_slugify` |
+| `src/syncback/dedup_suffix.rs` | Dedup | `compute_cleanup_action`, `DedupCleanupAction`, `parse_dedup_suffix`, `build_dedup_name` |
 | `src/syncback/matching.rs` | Matching | Syncback matching: `match_children` (WeakDom) |
 | `src/snapshot/matching.rs` | Matching | Forward sync matching: `match_forward` (Snapshot vs Tree) |
-| `plugin/src/Reconciler/matching.lua` | Matching | Lua matching: `matchChildren` (Studio vs Virtual) |
+| `plugin/src/Reconciler/matching.lua` | Matching | Lua matching: `Matching.matchChildren` (Virtual vs Studio) |
 | `src/rojo_ref.rs` | Ref Paths | `ref_target_path_from_tree`, `RefPathIndex`, `Rojo_Ref_*` constants |
 | `src/snapshot/tree.rs` | Ref Paths | `get_instance_by_path`, `filesystem_name_for` |
 | `src/syncback/ref_properties.rs` | Ref Paths | `collect_referents`, `tentative_fs_path`, `RefLinks` |
@@ -97,7 +79,7 @@ const INVALID_WINDOWS_NAMES: [&str; 22] = ["CON", "PRN", "AUX", "NUL", "COM1".."
 
 ### name_needs_slugify
 
-Returns `true` if the name contains any `SLUGIFY_CHARS`. Used to decide whether metadata `name` field is needed.
+Returns `true` if the name requires slugification. Checks for: `SLUGIFY_CHARS`, control characters, leading/trailing spaces, trailing dots, dangerous suffixes (`.server` etc.), Windows reserved names (`CON` etc.), and empty string. Used to decide whether metadata `name` field is needed.
 
 ### deduplicate_name_with_ext
 
@@ -141,9 +123,9 @@ pub fn name_for_inst<'a>(
 - In clean mode: slugifies name, adds middleware extension, deduplicates against `taken_names`
 - Returns `needs_meta_name = true` when slug differs from real name (including dedup suffix)
 
-### parse_dedup_suffix
+### parse_dedup_suffix (in `dedup_suffix.rs`)
 
-Parses `~N` suffix from a stem: `"Foo~3"` → `Some(("Foo", 3))`, `"Foo"` → `None`.
+Parses `~N` suffix from a stem: `"Foo~3"` → `Some(("Foo", 3))`, `"Foo"` → `None`. Returns `None` for `~0` (invalid) and `~abc` (non-numeric).
 
 ### Metadata `name` Field
 
@@ -220,14 +202,18 @@ pub fn match_forward(
 
 **Lua plugin:**
 ```lua
-function matchChildren(virtualInstances, virtualRootId, instanceMap, instance) -> MatchResult
+function Matching.matchChildren(
+    virtualChildren: { string },      -- array of virtual instance IDs
+    studioChildren: { Instance },      -- array of Studio Instance objects
+    virtualInstances: { [string]: any } -- map of virtual ID → virtual instance data
+) -> { matched, unmatchedVirtual, unmatchedStudio }
 ```
 
 ### Algorithm (All Three Implementations)
 
-**Fast-path 1: Ref Pin.** Scan parent's Ref properties (PrimaryPart, Value, etc.). If parent A's PrimaryPart points to child X on side A, and parent B's PrimaryPart points to child Y on side B, pin (X, Y) as matched. Remove both.
+**Fast-path: (Name, ClassName) Grouping.** Group children by `(Name, ClassName)`. 1:1 groups get instant-matched with zero scoring.
 
-**Fast-path 2: (Name, ClassName) Grouping.** Group remaining children by `(Name, ClassName)`. 1:1 groups get instant-matched with zero scoring.
+> **Note on Ref Pin:** The Lua matching module has a commented-out Ref pin fast-path (scanning parent Ref properties to pin child matches). In practice this is a no-op because during initial hydration the instanceMap is empty. The Rust implementations do not have Ref pin logic. Ref property correctness is maintained by `computeChangeCount` counting Ref property diffs.
 
 **Ambiguous Groups: Recursive Scoring + Greedy Assignment.** For groups with multiple candidates on at least one side:
 
@@ -315,9 +301,9 @@ Paths are slash-separated from DataModel's children downward: `"Workspace/TestMo
 pub fn ref_target_path_from_tree(tree: &RojoTree, target_ref: Ref) -> String
 // Uses filesystem_name_for() for each ancestor
 
-// From WeakDom (CLI syncback):
+// From WeakDom (CLI syncback, legacy instance-name paths):
 pub fn ref_target_path(dom: &WeakDom, target_ref: Ref) -> String
-// Uses dom.full_path_of()
+// Uses dom.ancestors_of() with escape_ref_path_segment (instance names, NOT filesystem names)
 
 // Tentative path (before dedup suffixes assigned):
 fn tentative_fs_path(dom: &WeakDom, target_ref: Ref) -> String

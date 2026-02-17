@@ -1,11 +1,6 @@
 ---
-description: "Web API and plugin communication: WebSocket protocol, live sync architecture, two-way sync, patch format, ServeSession state management, and ChangeBatcher."
-globs:
-  - "src/web/**/*.rs"
-  - "src/serve_session.rs"
-  - "plugin/src/ServeSession.lua"
-  - "plugin/src/ChangeBatcher/**/*.lua"
-  - "plugin/src/ApiContext.lua"
+globs: src/web/**/*.rs,src/serve_session.rs,plugin/src/ServeSession.lua,plugin/src/ChangeBatcher/**/*.lua,plugin/src/ApiContext.lua
+alwaysApply: false
 ---
 
 # Atlas API & Communication

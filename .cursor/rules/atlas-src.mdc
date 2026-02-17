@@ -1,8 +1,6 @@
 ---
-description: "Rust server/CLI implementation: snapshot system, middleware, commands, syncback, and web API architecture."
-globs:
-  - "src/**/*.rs"
-  - "crates/**/*.rs"
+globs: src/**/*.rs,crates/**/*.rs
+alwaysApply: false
 ---
 
 # Rojo Server/CLI (Rust)

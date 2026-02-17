@@ -1,9 +1,6 @@
 ---
-description: "rbx-dom submodule: separate Git repo for Roblox format libraries. Has own CI/CD and release cycle."
-globs:
-  - "rbx-dom/**/*.rs"
-  - "rbx-dom/**/*.lua"
-  - "rbx-dom/**/*.toml"
+globs: rbx-dom/**/*.rs,rbx-dom/**/*.lua,rbx-dom/**/*.toml
+alwaysApply: false
 ---
 
 # rbx-dom Submodule

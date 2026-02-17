@@ -1,12 +1,6 @@
 ---
-description: "Project file format specification: .project.json5 schema, file extensions, middleware types, init files, sync rules, and property reference."
-globs:
-  - "**/*.project.json5"
-  - "**/*.project.json"
-  - "**/*.meta.json5"
-  - "**/*.meta.json"
-  - "**/*.model.json5"
-  - "**/*.model.json"
+globs: **/*.project.json5,**/*.project.json,**/*.meta.json5,**/*.meta.json,**/*.model.json5,**/*.model.json
+alwaysApply: false
 ---
 
 # Atlas Project File Format

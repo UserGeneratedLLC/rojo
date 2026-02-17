@@ -1,8 +1,6 @@
 ---
-description: "Syncback architecture: Roblox→filesystem synchronization, incremental vs clean modes, hash-based change detection, middleware selection, and property filtering."
-globs:
-  - "src/syncback/**/*.rs"
-  - "src/cli/syncback.rs"
+globs: src/syncback/**/*.rs,src/cli/syncback.rs
+alwaysApply: false
 ---
 
 # Atlas Syncback Architecture

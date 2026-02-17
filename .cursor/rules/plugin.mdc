@@ -1,9 +1,6 @@
 ---
-description: "Rojo Studio plugin specifics: Roact patterns, reconciler logic, WebSocket protocol, and plugin testing."
-globs:
-  - "plugin/**/*.lua"
-  - "plugin/**/*.luau"
-  - "plugin/**/*.json"
+globs: plugin/**/*.lua,plugin/**/*.luau,plugin/**/*.json
+alwaysApply: false
 ---
 
 # Rojo Studio Plugin
