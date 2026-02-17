@@ -190,7 +190,7 @@ return function()
 	end)
 
 	describe("duplicate name handling", function()
-		it("should skip instances with duplicate-named siblings in real DOM", function()
+		it("should handle instances with duplicate-named siblings in real DOM", function()
 			local instanceMap = InstanceMap.new()
 
 			local root = Instance.new("Folder")
@@ -215,7 +215,6 @@ return function()
 
 			instanceMap:insert(rootId, root)
 			instanceMap:insert(uniqueChildId, uniqueChild)
-			-- Note: duplicates are NOT in instanceMap since we can't reliably sync them
 
 			local virtualInstances = {
 				[rootId] = {
@@ -239,14 +238,15 @@ return function()
 			local ok, patch = diff(instanceMap, virtualInstances, rootId)
 
 			expect(ok).to.equal(true)
-			-- Duplicates should NOT be marked for removal
-			-- Only if they had unique names would they be candidates
-			expect(#patch.removed).to.equal(0)
+			-- Unmapped duplicate-named real children are eligible for removal
+			-- like any other unmapped child (server handles duplicates via
+			-- rbxm container serialization)
+			expect(#patch.removed).to.equal(2)
 
 			instanceMap:stop()
 		end)
 
-		it("should skip instances with duplicate-named siblings in virtual DOM", function()
+		it("should add instances with duplicate-named siblings in virtual DOM", function()
 			local instanceMap = InstanceMap.new()
 
 			local root = Instance.new("Folder")
@@ -290,14 +290,15 @@ return function()
 			local ok, patch = diff(instanceMap, virtualInstances, rootId)
 
 			expect(ok).to.equal(true)
-			-- Neither duplicate should be added since the path is ambiguous
-			expect(patch.added[dup1Id]).to.equal(nil)
-			expect(patch.added[dup2Id]).to.equal(nil)
+			-- Both duplicates should be added (server handles them via
+			-- rbxm container serialization)
+			expect(patch.added[dup1Id]).to.be.ok()
+			expect(patch.added[dup2Id]).to.be.ok()
 
 			instanceMap:stop()
 		end)
 
-		it("should mark entire subtree as ambiguous when parent has duplicates", function()
+		it("should add entire subtree including children of duplicate-named parents", function()
 			local instanceMap = InstanceMap.new()
 
 			local root = Instance.new("Folder")
@@ -350,8 +351,9 @@ return function()
 			local ok, patch = diff(instanceMap, virtualInstances, rootId)
 
 			expect(ok).to.equal(true)
-			-- Grandchild should also NOT be added since its parent is ambiguous
-			expect(patch.added[grandchildId]).to.equal(nil)
+			-- Grandchild should be added along with its parent (server
+			-- handles the entire subtree via rbxm container)
+			expect(patch.added[grandchildId]).to.be.ok()
 
 			instanceMap:stop()
 		end)
