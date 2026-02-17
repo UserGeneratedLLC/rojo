@@ -31,6 +31,32 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+* Replace "skip duplicates" syncback behavior with **ambiguous rbxm containers**. When an instance has duplicate-named children, the parent is now serialized as a single `.rbxm` file preserving the full subtree, instead of silently dropping duplicates. An adjacent `.meta.json5` with `ambiguousContainer: true` tracks auto-created containers so they can expand back to directories when duplicates are resolved. ([#3])
+* Extend the rbxm container fallback to all Dir-like middlewares (`ServerScriptDir`, `ModuleScriptDir`, `ClientScriptDir`, etc.), not just `Dir`.
+* Add forward sync support for adjacent `.meta.json5` on `.rbxm` files, propagating `name` overrides and the `ambiguousContainer` flag into the snapshot tree.
+* Extend `ChangeProcessor` to re-serialize rbxm containers when properties change on instances inside them during two-way sync.
+* Remove duplicate-skip logic from the plugin (`diff.lua`, `encodeInstance.lua`). The server now handles duplicate-named instances via rbxm container serialization; the plugin encodes them normally.
+* Add typed `DuplicateChildrenError` for structured error matching in the syncback rbxm fallback path (replaces string-based error-as-flow-control).
+* Guard against rbxm container creation for ProjectNode parents (services defined in project files cannot be converted to rbxm; duplicates are skipped with a warning).
+* Add comprehensive test suite for ambiguous containers: ~30 integration tests across syncback (clean + incremental expansion), two-way sync, build, and edge cases (case-insensitive detection, slugified names, dedup collisions, deep nesting, script containers, Windows-invalid chars).
+
+<details>
+<summary>Full commit log</summary>
+
+- `d26ee529` initial implementation
+- `a163d6e8` Enhance audit documentation and add new test cases for ambiguous container scenarios
+- `46411bc1` Add ambiguous rbxm container system and comprehensive test suite
+- `da5b1564` Implement audit plan for ambiguous container fixes
+- `5a8b1025` Refactor tests and code for improved readability and consistency
+- `25dbb39f` Update duplicate-named sibling handling in tests
+- `4783f863` Implement JSON5 string escaping function and associated tests
+- `ffa0b3e3` Add new snapshot tests for ambiguous naming scenarios
+- `216b9e01` Add audit plan for rbxm-ambiguous branch round 2 fixes
+
+</details>
+
+[#3]: https://github.com/UserGeneratedLLC/rojo/pull/3
+
 ## [8.3.0] (February 15th, 2026)
 
 * Add two-way sync support for Ref properties via `Rojo_Ref_*` attributes. The plugin now detects Ref property changes in Studio and encodes them as path-based attributes; the server resolves paths back to instance Refs. ([#2])
