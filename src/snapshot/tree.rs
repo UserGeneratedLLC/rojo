@@ -10,7 +10,7 @@ use rbx_dom_weak::{
 
 use crate::{multimap::MultiMap, RojoRef};
 
-use super::{InstigatingSource, InstanceMetadata, InstanceSnapshot};
+use super::{InstanceMetadata, InstanceSnapshot, InstigatingSource};
 
 /// An expanded variant of rbx_dom_weak's `WeakDom` that tracks additional
 /// metadata per instance that's Rojo-specific.

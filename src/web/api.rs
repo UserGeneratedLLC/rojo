@@ -413,6 +413,11 @@ impl ApiService {
         // Create a stats tracker for this syncback operation
         let stats = crate::syncback::SyncbackStats::new();
 
+        // Track GUIDs that were updated in place (instance already existed
+        // in the tree). These must be excluded from the PatchAdd list to
+        // avoid creating duplicate instances in the tree.
+        let mut updated_in_place: HashSet<Ref> = HashSet::new();
+
         if !request.added.is_empty() {
             let tree = self.serve_session.tree();
             // Pre-compute duplicate sibling info in O(N) for efficient path uniqueness checks
@@ -523,14 +528,21 @@ impl ApiService {
             // Group added instances by parent so siblings share a dedup set.
             // This prevents two instances in the same batch from claiming the
             // same slug when added to the same parent.
-            let mut adds_by_parent: HashMap<Ref, Vec<&crate::web::interface::AddedInstance>> =
-                HashMap::new();
-            for added in request.added.values() {
+            let mut adds_by_parent: HashMap<
+                Ref,
+                Vec<(Ref, &crate::web::interface::AddedInstance)>,
+            > = HashMap::new();
+            for (guid, added) in &request.added {
                 if let Some(parent_ref) = added.parent {
-                    adds_by_parent.entry(parent_ref).or_default().push(added);
+                    adds_by_parent
+                        .entry(parent_ref)
+                        .or_default()
+                        .push((*guid, added));
                 } else {
-                    // No parent — process individually (will fail with context)
-                    adds_by_parent.entry(Ref::none()).or_default().push(added);
+                    adds_by_parent
+                        .entry(Ref::none())
+                        .or_default()
+                        .push((*guid, added));
                 }
             }
             for (parent_ref, siblings) in &adds_by_parent {
@@ -576,8 +588,8 @@ impl ApiService {
                 } else {
                     HashSet::new()
                 };
-                for added in siblings {
-                    if let Err(err) = self.syncback_added_instance(
+                for (guid, added) in siblings {
+                    match self.syncback_added_instance(
                         added,
                         &tree,
                         &duplicate_siblings_cache,
@@ -585,11 +597,17 @@ impl ApiService {
                         &converted_parents,
                         &mut sibling_slugs,
                     ) {
-                        log::warn!(
-                            "Failed to syncback added instance '{}': {}",
-                            added.name,
-                            err
-                        );
+                        Ok(true) => {
+                            updated_in_place.insert(*guid);
+                        }
+                        Ok(false) => {}
+                        Err(err) => {
+                            log::warn!(
+                                "Failed to syncback added instance '{}': {}",
+                                added.name,
+                                err
+                            );
+                        }
                     }
                 }
             }
@@ -696,9 +714,15 @@ impl ApiService {
         // plugin's GUID is used as the snapshot_id so that apply_patch_set's
         // snapshot_id_to_instance_id map rewrites Ref properties in
         // updated_instances to point to the correct tree IDs.
+        //
+        // Instances that were updated in place (already existed in the tree)
+        // are excluded — adding them would create duplicates. Tree
+        // reconciliation will pick up any property changes from the
+        // filesystem write.
         let added_instances: Vec<PatchAdd> = request
             .added
             .iter()
+            .filter(|(guid, _)| !updated_in_place.contains(guid))
             .filter_map(|(guid, added)| {
                 let parent_ref = added.parent?;
                 Some(PatchAdd {
@@ -911,7 +935,7 @@ impl ApiService {
         stats: &crate::syncback::SyncbackStats,
         converted_parents: &HashMap<Ref, PathBuf>,
         sibling_slugs: &mut HashSet<String>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         use anyhow::Context;
 
         // Get the parent Ref (required for top-level added instances)
@@ -947,8 +971,11 @@ impl ApiService {
                         added.name,
                         existing_path.display()
                     );
-                    // Update the existing instance instead of creating new files
-                    return self.syncback_update_existing_instance(added, existing_path, stats);
+                    // Update the existing instance instead of creating new files.
+                    // Return true to signal caller to skip PatchAdd (instance
+                    // already exists in tree, no need to add a duplicate).
+                    self.syncback_update_existing_instance(added, existing_path, stats)?;
+                    return Ok(true);
                 }
             }
         }
@@ -1048,7 +1075,7 @@ impl ApiService {
         let slug =
             self.syncback_instance_to_path_with_stats(added, &parent_dir, stats, sibling_slugs)?;
         sibling_slugs.insert(slug);
-        Ok(())
+        Ok(false)
     }
 
     /// Update an existing instance in place instead of creating new files.

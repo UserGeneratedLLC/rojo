@@ -1444,8 +1444,7 @@ impl JobThreadContext {
                                                     effective_meta_base = old_base;
                                                 } else {
                                                     overridden_source_path = Some(new_path.clone());
-                                                    new_ref_segment =
-                                                        Some(new_file_name.clone());
+                                                    new_ref_segment = Some(new_file_name.clone());
                                                     let old_meta = parent
                                                         .join(format!("{}.meta.json5", old_base));
                                                     let new_meta = parent.join(format!(
@@ -1748,9 +1747,7 @@ impl JobThreadContext {
                         if *old_ref_path != new_ref_path {
                             self.update_ref_paths_after_rename(old_ref_path, &new_ref_path);
                         }
-                    } else if update.changed_name.is_some()
-                        || update.changed_class_name.is_some()
-                    {
+                    } else if update.changed_name.is_some() || update.changed_class_name.is_some() {
                         // Rename or class change was requested but no filesystem
                         // rename happened (e.g., ProjectNode, init-file class
                         // change where directory name stays the same). No ref

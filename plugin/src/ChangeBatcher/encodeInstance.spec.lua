@@ -232,7 +232,7 @@ return function()
 				root:Destroy()
 			end)
 
-			it("should skip children with duplicate names", function()
+			it("should encode children with duplicate names", function()
 				local parent = Instance.new("Folder")
 				parent.Name = "Parent"
 
@@ -254,9 +254,8 @@ return function()
 				local encoded = encodeInstance(parent, "PARENT_ID")
 
 				expect(encoded).to.be.ok()
-				-- Should only have 1 child (UniqueName), duplicates skipped
-				expect(#encoded.children).to.equal(1)
-				expect(encoded.children[1].name).to.equal("UniqueName")
+				-- All children are encoded (server handles duplicates via dedup suffixes)
+				expect(#encoded.children).to.equal(3)
 
 				parent:Destroy()
 			end)
