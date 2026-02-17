@@ -1536,9 +1536,7 @@ mod tests {
         ];
         for name in &names {
             let escaped = escape_json5_string(name);
-            let json5_doc = format!(
-                "{{ ambiguousContainer: true, name: \"{escaped}\" }}"
-            );
+            let json5_doc = format!("{{ ambiguousContainer: true, name: \"{escaped}\" }}");
             let parsed: serde_json::Value = json5::from_str(&json5_doc)
                 .unwrap_or_else(|e| panic!("Failed to parse JSON5 for name {:?}: {e}", name));
             let parsed_name = parsed["name"].as_str().unwrap();

@@ -57,4 +57,3 @@ pub fn standard_project_json5(name: &str) -> String {
 }}"#
     )
 }
-

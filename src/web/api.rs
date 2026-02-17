@@ -1106,7 +1106,7 @@ impl ApiService {
                         self.convert_standalone_script_to_directory(
                             existing_path,
                             &added.name,
-                            &class_name,
+                            class_name,
                             parent_dir,
                         )?
                     };
