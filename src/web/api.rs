@@ -2640,7 +2640,7 @@ impl ApiService {
                         remove_attributes.push(attr_name);
                     } else if tree.get_instance(*target_ref).is_some() {
                         // Valid target: compute path and add as Rojo_Ref_* attribute
-                        let path = crate::ref_target_path_from_tree(&tree, *target_ref);
+                        let path = crate::ref_target_path_from_tree(tree, *target_ref);
 
                         // Warn if the path is ambiguous (duplicate-named siblings
                         // at any ancestor level). The ref will still be written,

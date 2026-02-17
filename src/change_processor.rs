@@ -1111,7 +1111,7 @@ impl JobThreadContext {
                     continue;
                 };
                 let mut remaining_stems: Vec<String> = Vec::new();
-                let mut deleted_was_base = parse_dedup_suffix(removed_stem).is_none();
+                let deleted_was_base = parse_dedup_suffix(removed_stem).is_none();
 
                 for &sibling_ref in parent_inst.children() {
                     if sibling_ref == removed_id {
