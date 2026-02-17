@@ -213,14 +213,9 @@ fn gen_ambiguous_deep_nesting() {
             folder("Deep")
                 .with_child(folder("Dup"))
                 .with_child(folder("Dup"))
-                .with_child(
-                    folder("Level1").with_child(
-                        folder("Level2").with_child(
-                            folder("Level3")
-                                .with_child(folder("Level4").with_child(folder("Level5"))),
-                        ),
-                    ),
-                ),
+                .with_child(folder("Level1").with_child(folder("Level2").with_child(
+                    folder("Level3").with_child(folder("Level4").with_child(folder("Level5"))),
+                ))),
         ),
     );
 }

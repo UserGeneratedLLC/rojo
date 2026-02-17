@@ -1062,9 +1062,7 @@ impl JobThreadContext {
                                 );
                             }
                         }
-                    } else if let Some((container_ref, rbxm_path)) =
-                        tree.find_rbxm_container(id)
-                    {
+                    } else if let Some((container_ref, rbxm_path)) = tree.find_rbxm_container(id) {
                         log::info!(
                             "Two-way sync: Removing instance {:?} from rbxm container",
                             id
@@ -1562,29 +1560,30 @@ impl JobThreadContext {
                                 // If a rename or ClassName change moved the file
                                 // earlier in this update, write to the new location
                                 // instead of the stale instigating_source path.
-                                let source_path =
-                                    if let Some(ref overridden) = overridden_source_path {
-                                        Some(overridden.clone())
-                                    } else if let Some(instigating_source) =
-                                        &instance.metadata().instigating_source
-                                    {
-                                        match instigating_source {
-                                            InstigatingSource::Path(path) => Some(path.clone()),
-                                            InstigatingSource::ProjectNode { .. } => {
-                                                log::warn!(
+                                let source_path = if let Some(ref overridden) =
+                                    overridden_source_path
+                                {
+                                    Some(overridden.clone())
+                                } else if let Some(instigating_source) =
+                                    &instance.metadata().instigating_source
+                                {
+                                    match instigating_source {
+                                        InstigatingSource::Path(path) => Some(path.clone()),
+                                        InstigatingSource::ProjectNode { .. } => {
+                                            log::warn!(
                                                     "Cannot update instance {:?}, it's from a project file",
                                                     id
                                                 );
-                                                None
-                                            }
+                                            None
                                         }
-                                    } else {
-                                        log::warn!(
+                                    }
+                                } else {
+                                    log::warn!(
                                             "Cannot update instance {:?}, it is not an instigating source.",
                                             id
                                         );
-                                        None
-                                    };
+                                    None
+                                };
 
                                 if let Some(ref write_path) = source_path {
                                     if let Some(Variant::String(value)) = changed_value {
@@ -1706,16 +1705,14 @@ impl JobThreadContext {
                         self.suppress_path(rbxm_path);
                         if let Err(err) = fs::write(rbxm_path, data) {
                             self.unsuppress_path(rbxm_path);
-                            log::error!(
-                                "Failed to write rbxm container {:?}: {}",
-                                rbxm_path, err
-                            );
+                            log::error!("Failed to write rbxm container {:?}: {}", rbxm_path, err);
                         }
                     }
                     Err(err) => {
                         log::error!(
                             "Failed to re-serialize rbxm container {:?}: {}",
-                            rbxm_path, err
+                            rbxm_path,
+                            err
                         );
                     }
                 }

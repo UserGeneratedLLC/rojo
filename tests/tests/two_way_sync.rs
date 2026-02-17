@@ -7210,10 +7210,7 @@ fn add_module_script_twoway(
 ) {
     let ref_id = Ref::new();
     let mut properties = HashMap::new();
-    properties.insert(
-        "Source".to_string(),
-        Variant::String(source.to_string()),
-    );
+    properties.insert("Source".to_string(), Variant::String(source.to_string()));
     let added = AddedInstance {
         parent: Some(parent_id),
         name: name.to_string(),
@@ -7260,7 +7257,9 @@ fn twoway_add_duplicate_names_handled() {
         thread::sleep(Duration::from_millis(500));
 
         // Server should still be alive and responsive
-        session.get_api_rojo().expect("Server should still be responsive after duplicate add");
+        session
+            .get_api_rojo()
+            .expect("Server should still be responsive after duplicate add");
     });
 }
 
@@ -7301,7 +7300,9 @@ fn twoway_source_update_basic() {
         let mut props = UstrMap::default();
         props.insert(
             ustr("Source"),
-            Some(Variant::String("-- MODIFIED\nreturn 'modified'".to_string())),
+            Some(Variant::String(
+                "-- MODIFIED\nreturn 'modified'".to_string(),
+            )),
         );
         send_update(
             &session,
@@ -7445,7 +7446,9 @@ fn twoway_add_then_rename_after_settle() {
         poll_file_exists(&renamed_path, "WasRenamed.luau should exist");
         poll_not_exists(&original_path, "Old file should be gone");
 
-        session.get_api_rojo().expect("Server alive after add+rename");
+        session
+            .get_api_rojo()
+            .expect("Server alive after add+rename");
     });
 }
 

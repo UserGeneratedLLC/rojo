@@ -11,7 +11,7 @@ use rbx_dom_weak::{
 
 use crate::{multimap::MultiMap, RojoRef};
 
-use super::{InstigatingSource, InstanceMetadata, InstanceSnapshot};
+use super::{InstanceMetadata, InstanceSnapshot, InstigatingSource};
 
 /// An expanded variant of rbx_dom_weak's `WeakDom` that tracks additional
 /// metadata per instance that's Rojo-specific.
@@ -507,7 +507,7 @@ mod test {
     use std::path::PathBuf;
 
     use crate::{
-        snapshot::{InstigatingSource, InstanceMetadata, InstanceSnapshot},
+        snapshot::{InstanceMetadata, InstanceSnapshot, InstigatingSource},
         RojoRef,
     };
 
@@ -549,9 +549,7 @@ mod test {
         let container_id = tree.insert_instance(root, container_snapshot);
 
         // Insert a child with no instigating source (inside the rbxm)
-        let child_snapshot = InstanceSnapshot::new()
-            .name("Child")
-            .class_name("Folder");
+        let child_snapshot = InstanceSnapshot::new().name("Child").class_name("Folder");
         let child_id = tree.insert_instance(container_id, child_snapshot);
 
         // Find container from child
@@ -581,9 +579,9 @@ mod test {
             .name("Child")
             .class_name("Folder")
             .metadata(
-                InstanceMetadata::new().instigating_source(InstigatingSource::Path(
-                    PathBuf::from("/src/Folder/Child.luau"),
-                )),
+                InstanceMetadata::new().instigating_source(InstigatingSource::Path(PathBuf::from(
+                    "/src/Folder/Child.luau",
+                ))),
             );
 
         let child_id = tree.insert_instance(folder_id, child_snapshot);
@@ -598,9 +596,7 @@ mod test {
         let root = tree.get_root_id();
 
         // Child with no instigating source and no rbxm ancestor
-        let child_snapshot = InstanceSnapshot::new()
-            .name("Orphan")
-            .class_name("Folder");
+        let child_snapshot = InstanceSnapshot::new().name("Orphan").class_name("Folder");
         let child_id = tree.insert_instance(root, child_snapshot);
 
         assert!(tree.find_rbxm_container(child_id).is_none());

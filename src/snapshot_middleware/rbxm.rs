@@ -39,10 +39,8 @@ pub fn snapshot_rbxm(
         // ambiguousContainer flag and/or a name override for this rbxm.
         let meta_path = path.with_extension("meta.json5");
         if let Some(meta_contents) = vfs.read(&meta_path).with_not_found()? {
-            let mut meta = AdjacentMetadata::from_slice_with_path(
-                &meta_contents,
-                meta_path.clone(),
-            )?;
+            let mut meta =
+                AdjacentMetadata::from_slice_with_path(&meta_contents, meta_path.clone())?;
             meta.apply_all(&mut snapshot)?;
             snapshot.metadata.relevant_paths.push(meta_path);
         } else {

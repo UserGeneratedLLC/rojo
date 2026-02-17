@@ -472,10 +472,9 @@ impl ApiService {
                                 // do NOT convert it to a directory — children
                                 // will be added to the tree and the container
                                 // will be re-serialized by the change_processor.
-                                let is_rbxm_container = resolved_path
-                                    .extension()
-                                    .is_some_and(|ext| ext == "rbxm")
-                                    && parent_inst.metadata().ambiguous_container;
+                                let is_rbxm_container =
+                                    resolved_path.extension().is_some_and(|ext| ext == "rbxm")
+                                        && parent_inst.metadata().ambiguous_container;
                                 if is_rbxm_container {
                                     log::info!(
                                         "Syncback: Parent '{}' is an ambiguous rbxm container — \
@@ -938,9 +937,7 @@ impl ApiService {
         // already triggered the conversion, use the cached directory path
         // instead of trying to convert again (the standalone file was already
         // deleted by the first conversion).
-        let is_rbxm_container = parent_path
-            .extension()
-            .is_some_and(|ext| ext == "rbxm")
+        let is_rbxm_container = parent_path.extension().is_some_and(|ext| ext == "rbxm")
             && parent_instance.metadata().ambiguous_container;
 
         if is_rbxm_container {

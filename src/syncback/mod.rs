@@ -577,7 +577,10 @@ pub fn syncback_loop_with_stats(
                     .old_inst()
                     .and_then(|inst| inst.metadata().instigating_source.as_ref())
                     .is_some_and(|source| {
-                        matches!(source, crate::snapshot::InstigatingSource::ProjectNode { .. })
+                        matches!(
+                            source,
+                            crate::snapshot::InstigatingSource::ProjectNode { .. }
+                        )
                     });
                 if is_project_node {
                     log::warn!(
@@ -624,8 +627,7 @@ pub fn syncback_loop_with_stats(
                     // Write adjacent .meta.json5 with ambiguousContainer flag
                     // so that forward sync can detect this is an auto-created
                     // rbxm and expansion can occur when duplicates are resolved.
-                    let is_ambiguous =
-                        has_duplicate_children(snapshot.new_tree(), snapshot.new);
+                    let is_ambiguous = has_duplicate_children(snapshot.new_tree(), snapshot.new);
                     if is_ambiguous {
                         let meta_path = path.with_extension("meta.json5");
                         let inst_name = snapshot.new_inst().name.clone();
@@ -635,8 +637,7 @@ pub fn syncback_loop_with_stats(
                             None
                         };
                         let meta_json = if let Some(ref name) = name_field {
-                            let escaped_name =
-                                name.replace('\\', "\\\\").replace('"', "\\\"");
+                            let escaped_name = name.replace('\\', "\\\\").replace('"', "\\\"");
                             format!(
                                 "{{\n  ambiguousContainer: true,\n  name: \"{escaped_name}\",\n}}\n"
                             )
