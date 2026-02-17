@@ -408,6 +408,9 @@ fn compute_change_count(
 /// Count own property diffs between two WeakDom instances (flat, non-recursive).
 /// Each differing property = +1. Children count diff = +1.
 /// Does NOT include hash fast-path (handled by `compute_change_count`).
+///
+/// Properties present on only one side are skipped when their value matches
+/// the class default (see `src/snapshot/matching.rs` for full rationale).
 fn count_own_diffs(new_ref: Ref, old_ref: Ref, new_dom: &WeakDom, old_dom: &WeakDom) -> u32 {
     let new_inst = match new_dom.get_by_ref(new_ref) {
         Some(i) => i,
@@ -420,19 +423,33 @@ fn count_own_diffs(new_ref: Ref, old_ref: Ref, new_dom: &WeakDom, old_dom: &Weak
 
     let mut cost: u32 = 0;
 
+    let class_data = rbx_reflection_database::get()
+        .ok()
+        .and_then(|db| db.classes.get(new_inst.class.as_str()));
+
     for (key, new_val) in new_inst.properties.iter() {
         if let Some(old_val) = old_inst.properties.get(key) {
             if !variant_eq(new_val, old_val) {
                 cost += 1;
             }
         } else {
-            cost += 1;
+            let is_default = class_data
+                .and_then(|cd| cd.default_properties.get(key.as_str()))
+                .is_some_and(|default| variant_eq(new_val, default));
+            if !is_default {
+                cost += 1;
+            }
         }
     }
 
-    for key in old_inst.properties.keys() {
+    for (key, old_val) in old_inst.properties.iter() {
         if !new_inst.properties.contains_key(key) {
-            cost += 1;
+            let is_default = class_data
+                .and_then(|cd| cd.default_properties.get(key.as_str()))
+                .is_some_and(|default| variant_eq(old_val, default));
+            if !is_default {
+                cost += 1;
+            }
         }
     }
 

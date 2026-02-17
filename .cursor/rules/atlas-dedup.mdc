@@ -403,6 +403,15 @@ After successful dedup rename (e.g., `Foo~1` → `Foo`):
 5. Updates the index: both path keys and filesystem paths
 6. Suppresses VFS events for each file write
 
+### Ref Path Updates After User-Initiated Rename
+
+User-initiated renames (via the plugin's two-way sync) also update `Rojo_Ref_*` paths. The flow:
+1. `old_ref_path` is captured BEFORE the rename (line ~1268, `ref_target_path_from_tree`)
+2. Rename handler sets `new_ref_segment` to the new filesystem name (directory rename line ~1350, file rename line ~1512)
+3. After rename handling, `update_ref_paths_after_rename(old_ref_path, new_ref_path)` is called (line ~1812) to update all meta/model files containing refs to the renamed instance
+
+This ensures both dedup-triggered and user-initiated renames maintain ref path integrity.
+
 ### Metadata Consistency
 
 After dedup rename, the survivor's metadata must be updated:
@@ -487,9 +496,9 @@ The greedy assignment may produce suboptimal pairing in rare ambiguous groups. A
 
 Phase 2e from the original plan: optional cache mapping `parent_ref → (children_list_hash, match_assignments)` to avoid re-running matching when children haven't changed. Optimization only, not needed for correctness.
 
-### Stale Ref Paths After Rename
+### ~~Stale Ref Paths After Rename~~ (Resolved)
 
-When a Ref target is renamed, the stored `Rojo_Ref_*` path becomes stale. During two-way sync, `update_ref_paths_after_rename` handles this for dedup-triggered renames. However, user-initiated renames via the plugin do NOT automatically update ref paths in meta files. The path remains stale until the next full syncback. This is a known round-trip violation.
+Both dedup-triggered renames and user-initiated renames now update `Rojo_Ref_*` paths automatically. See "Ref Path Updates" in the Integration Point 1 section for details.
 
 ---
 

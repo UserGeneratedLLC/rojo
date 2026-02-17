@@ -1084,7 +1084,7 @@ impl JobThreadContext {
             let mut dedup_metadata_updates: Vec<(Ref, PathBuf)> = Vec::new();
 
             for &removed_id in &patch_set.removed_instances {
-                let (parent_ref, removed_fs_name) = {
+                let (parent_ref, removed_fs_name, removed_file_dir) = {
                     let Some(inst) = tree.get_instance(removed_id) else {
                         continue;
                     };
@@ -1096,7 +1096,23 @@ impl JobThreadContext {
                     }
                     let parent = inst.parent();
                     let fs_name = tree.filesystem_name_for(removed_id);
-                    (parent, fs_name)
+                    // Derive the directory containing this file from its own
+                    // instigating source path. This works even when the parent
+                    // is a ProjectNode (where instigating_source is not a Path).
+                    let file_dir = match source {
+                        InstigatingSource::Path(p) => {
+                            let fname = p.file_name().and_then(|f| f.to_str()).unwrap_or("");
+                            if fname.starts_with("init.") {
+                                // Directory-format: path is dir/init.luau,
+                                // the containing dir is the grandparent
+                                p.parent().and_then(|d| d.parent()).map(|d| d.to_path_buf())
+                            } else {
+                                p.parent().map(|d| d.to_path_buf())
+                            }
+                        }
+                        _ => None,
+                    };
+                    (parent, fs_name, file_dir)
                 };
 
                 if parent_ref.is_none() {
@@ -1157,15 +1173,11 @@ impl JobThreadContext {
 
                 let extension = removed_extension;
 
-                // Get the parent directory path
-                let parent_dir = {
-                    let Some(parent) = tree.get_instance(parent_ref) else {
-                        continue;
-                    };
-                    match &parent.metadata().instigating_source {
-                        Some(InstigatingSource::Path(p)) => p.clone(),
-                        _ => continue,
-                    }
+                // Get the parent directory path (derived from the removed
+                // instance's own path, not the parent's instigating source,
+                // because the parent may be a ProjectNode).
+                let Some(parent_dir) = removed_file_dir.clone() else {
+                    continue;
                 };
 
                 let action = compute_cleanup_action(
@@ -1196,6 +1208,33 @@ impl JobThreadContext {
                             );
                             self.unsuppress_path(&to);
                         } else {
+                            // Also rename the adjacent meta file if it exists
+                            // (standalone files only; directory-format instances
+                            // have init.meta.json5 inside the directory which
+                            // moves automatically with the dir rename).
+                            if from.is_file() || !from.exists() {
+                                if let (Some(from_parent), Some(from_name), Some(to_name)) = (
+                                    from.parent(),
+                                    from.file_stem().and_then(|s| s.to_str()),
+                                    to.file_stem().and_then(|s| s.to_str()),
+                                ) {
+                                    let from_base = strip_script_suffix(from_name);
+                                    let to_base = strip_script_suffix(to_name);
+                                    let old_meta =
+                                        from_parent.join(format!("{}.meta.json5", from_base));
+                                    if old_meta.exists() {
+                                        let new_meta =
+                                            from_parent.join(format!("{}.meta.json5", to_base));
+                                        self.suppress_path_any(&old_meta);
+                                        self.suppress_path(&new_meta);
+                                        if fs::rename(&old_meta, &new_meta).is_err() {
+                                            self.unsuppress_path_any(&old_meta);
+                                            self.unsuppress_path(&new_meta);
+                                        }
+                                    }
+                                }
+                            }
+
                             // Update ref paths if the renamed instance has refs
                             let old_ref_segment =
                                 from.file_name().and_then(|f| f.to_str()).unwrap_or("");

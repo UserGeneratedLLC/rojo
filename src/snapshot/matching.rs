@@ -385,11 +385,21 @@ fn compute_change_count(
 /// Count own property diffs between a snapshot and a tree instance.
 /// Each differing property = +1. Tags and Attributes counted granularly.
 /// Children count diff = +1.
+///
+/// Syncback strips default-valued properties from model/meta files, so
+/// filesystem snapshots may omit properties that the tree (populated from
+/// Studio via two-way sync) has at their class defaults. To avoid inflating
+/// match costs with phantom diffs, properties present on only one side are
+/// skipped when their value matches the class default.
 fn count_own_diffs(snap: &InstanceSnapshot, inst: &InstanceWithMeta) -> u32 {
     let mut cost: u32 = 0;
 
     let snap_props = &snap.properties;
     let inst_props = inst.properties();
+
+    let class_data = rbx_reflection_database::get()
+        .ok()
+        .and_then(|db| db.classes.get(snap.class_name.as_str()));
 
     // Properties present on the snapshot side
     for (key, snap_val) in snap_props.iter() {
@@ -398,14 +408,24 @@ fn count_own_diffs(snap: &InstanceSnapshot, inst: &InstanceWithMeta) -> u32 {
                 cost += 1;
             }
         } else {
-            cost += 1; // Missing on tree side
+            let is_default = class_data
+                .and_then(|cd| cd.default_properties.get(key.as_str()))
+                .is_some_and(|default| variant_eq(snap_val, default));
+            if !is_default {
+                cost += 1;
+            }
         }
     }
 
     // Properties present only on the tree side
-    for key in inst_props.keys() {
+    for (key, inst_val) in inst_props.iter() {
         if !snap_props.contains_key(key) {
-            cost += 1;
+            let is_default = class_data
+                .and_then(|cd| cd.default_properties.get(key.as_str()))
+                .is_some_and(|default| variant_eq(inst_val, default));
+            if !is_default {
+                cost += 1;
+            }
         }
     }
 

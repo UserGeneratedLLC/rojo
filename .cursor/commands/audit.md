@@ -1,8 +1,10 @@
 # /audit - Production-Grade Sync Feature Audit
 
+**IMMEDIATE ACTION:** Before reading any files, running any commands, or performing any analysis, you MUST call `SwitchMode` with `target_mode_id: "plan"`. Do not proceed with any other step until you are in Plan mode. This is non-negotiable.
+
 **Mode:** This command runs in **Plan mode** (read-only). It does NOT directly apply code changes. The deliverable is a `.cursor/plans/*.plan.md` file containing every approved fix, ready to be executed in a subsequent Agent-mode session.
 
-**Workflow:** Analyze -> Report -> Quiz user on each fix -> Write plan file.
+**Workflow:** Switch to Plan mode -> Analyze -> Report -> Quiz user on each fix -> Write plan file.
 
 ## Prerequisites
 

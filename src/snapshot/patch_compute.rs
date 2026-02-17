@@ -226,7 +226,7 @@ fn compute_children_patches(
     let instance_children = instance.children().to_vec();
     let snapshot_children = take(&mut snapshot.children);
 
-    // Use the 3-pass matching algorithm instead of greedy name+class.
+    // Use the recursive change-count scoring + greedy assignment matching algorithm.
     let match_result = match_forward(snapshot_children, &instance_children, tree);
 
     // Matched pairs: recursively compute patches.
