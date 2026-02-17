@@ -1,0 +1,10 @@
+{
+  "name": "ambiguous_container",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "$path": "src"
+    }
+  }
+}

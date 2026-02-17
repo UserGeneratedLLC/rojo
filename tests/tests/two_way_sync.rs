@@ -7195,3 +7195,270 @@ fn ref_on_txt_file_instance() {
         );
     });
 }
+
+// ===========================================================================
+// Ambiguous rbxm Container Two-Way Sync Tests
+// ===========================================================================
+
+/// Helper: Add a named ModuleScript under a parent via the write API.
+fn add_module_script_twoway(
+    session: &crate::rojo_test::serve_util::TestServeSession,
+    session_id: &librojo::SessionId,
+    parent_id: Ref,
+    name: &str,
+    source: &str,
+) {
+    let ref_id = Ref::new();
+    let mut properties = HashMap::new();
+    properties.insert(
+        "Source".to_string(),
+        Variant::String(source.to_string()),
+    );
+    let added = AddedInstance {
+        parent: Some(parent_id),
+        name: name.to_string(),
+        class_name: "ModuleScript".to_string(),
+        properties,
+        children: vec![],
+    };
+    let mut added_map = HashMap::new();
+    added_map.insert(ref_id, added);
+    let write_request = WriteRequest {
+        session_id: *session_id,
+        removed: vec![],
+        added: added_map,
+        updated: vec![],
+    };
+    session.post_api_write(&write_request).unwrap();
+    thread::sleep(Duration::from_millis(500));
+}
+
+/// Helper: get RS id from ambiguous_container fixture
+fn get_ambiguous_rs(
+    session: &crate::rojo_test::serve_util::TestServeSession,
+) -> (librojo::SessionId, Ref) {
+    let info = session.get_api_rojo().unwrap();
+    let root_read = session.get_api_read(info.root_instance_id).unwrap();
+    let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+    (info.session_id, rs_id)
+}
+
+/// Test: Adding two instances with the same name should be handled by
+/// the server without crashing. Both instances should exist in the tree.
+#[test]
+fn twoway_add_duplicate_names_handled() {
+    run_serve_test("ambiguous_container", |session, _| {
+        let (session_id, rs_id) = get_ambiguous_rs(&session);
+
+        // Add first "Dup"
+        add_module_script_twoway(&session, &session_id, rs_id, "Dup", "return 'first'");
+        let dup_path = session.path().join("src").join("Dup.luau");
+        poll_file_exists(&dup_path, "First Dup.luau should exist");
+
+        // Add second "Dup" — server must handle the duplicate
+        add_module_script_twoway(&session, &session_id, rs_id, "Dup", "return 'second'");
+        thread::sleep(Duration::from_millis(500));
+
+        // Server should still be alive and responsive
+        session.get_api_rojo().expect("Server should still be responsive after duplicate add");
+    });
+}
+
+/// Test: Renaming to create a duplicate name doesn't crash the server.
+#[test]
+fn twoway_rename_creates_duplicate_no_crash() {
+    run_serve_test("ambiguous_container", |session, _| {
+        let (session_id, rs_id) = get_ambiguous_rs(&session);
+        let rs_read = session.get_api_read(rs_id).unwrap();
+        let (script_a_id, _) = find_by_name(&rs_read.instances, "ScriptA");
+
+        // Rename "ScriptA" to "ScriptB" — creates a duplicate
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: script_a_id,
+                changed_name: Some("ScriptB".to_string()),
+                changed_class_name: None,
+                changed_properties: UstrMap::default(),
+                changed_metadata: None,
+            },
+        );
+        thread::sleep(Duration::from_millis(500));
+
+        session.get_api_rojo().expect("Server alive after rename");
+    });
+}
+
+/// Test: Source property update on a normal script works as expected.
+#[test]
+fn twoway_source_update_basic() {
+    run_serve_test("ambiguous_container", |session, _| {
+        let (session_id, rs_id) = get_ambiguous_rs(&session);
+        let rs_read = session.get_api_read(rs_id).unwrap();
+        let (script_a_id, _) = find_by_name(&rs_read.instances, "ScriptA");
+
+        let mut props = UstrMap::default();
+        props.insert(
+            ustr("Source"),
+            Some(Variant::String("-- MODIFIED\nreturn 'modified'".to_string())),
+        );
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: script_a_id,
+                changed_name: None,
+                changed_class_name: None,
+                changed_properties: props,
+                changed_metadata: None,
+            },
+        );
+
+        let file_path = session.path().join("src").join("ScriptA.luau");
+        poll_file_contains(&file_path, "MODIFIED", "Source should be updated");
+    });
+}
+
+/// Test: Removing a script cleans up the file.
+#[test]
+fn twoway_remove_cleans_up_file() {
+    run_serve_test("ambiguous_container", |session, _| {
+        let (session_id, rs_id) = get_ambiguous_rs(&session);
+        let rs_read = session.get_api_read(rs_id).unwrap();
+        let (script_b_id, _) = find_by_name(&rs_read.instances, "ScriptB");
+
+        send_removal(&session, &session_id, vec![script_b_id]);
+
+        let removed_path = session.path().join("src").join("ScriptB.luau");
+        poll_not_exists(&removed_path, "ScriptB should be removed");
+
+        let kept_path = session.path().join("src").join("ScriptA.luau");
+        assert_file_exists(&kept_path, "ScriptA should still exist");
+    });
+}
+
+/// Test: Mixed batch: update + remove + add in one request.
+#[test]
+fn twoway_batch_mixed_operations() {
+    run_serve_test("ambiguous_container", |session, _| {
+        let (session_id, rs_id) = get_ambiguous_rs(&session);
+        let rs_read = session.get_api_read(rs_id).unwrap();
+        let (script_a_id, _) = find_by_name(&rs_read.instances, "ScriptA");
+        let (script_b_id, _) = find_by_name(&rs_read.instances, "ScriptB");
+
+        let mut props = UstrMap::default();
+        props.insert(
+            ustr("Source"),
+            Some(Variant::String("-- batch updated".to_string())),
+        );
+
+        let new_ref = Ref::new();
+        let mut new_props = HashMap::new();
+        new_props.insert(
+            "Source".to_string(),
+            Variant::String("return 'new in batch'".to_string()),
+        );
+        let mut added_map = HashMap::new();
+        added_map.insert(
+            new_ref,
+            AddedInstance {
+                parent: Some(rs_id),
+                name: "BatchNew".to_string(),
+                class_name: "ModuleScript".to_string(),
+                properties: new_props,
+                children: vec![],
+            },
+        );
+
+        let write_request = WriteRequest {
+            session_id,
+            removed: vec![script_b_id],
+            added: added_map,
+            updated: vec![InstanceUpdate {
+                id: script_a_id,
+                changed_name: None,
+                changed_class_name: None,
+                changed_properties: props,
+                changed_metadata: None,
+            }],
+        };
+        session.post_api_write(&write_request).unwrap();
+        thread::sleep(Duration::from_millis(500));
+
+        poll_not_exists(
+            &session.path().join("src").join("ScriptB.luau"),
+            "ScriptB removed in batch",
+        );
+        poll_file_contains(
+            &session.path().join("src").join("ScriptA.luau"),
+            "batch updated",
+            "ScriptA updated in batch",
+        );
+        poll_file_exists(
+            &session.path().join("src").join("BatchNew.luau"),
+            "BatchNew created in batch",
+        );
+    });
+}
+
+/// Test: Add instance then rename it after VFS settles — server must stay stable.
+#[test]
+fn twoway_add_then_rename_after_settle() {
+    run_serve_test("ambiguous_container", |session, _| {
+        let (session_id, rs_id) = get_ambiguous_rs(&session);
+
+        // Add an instance and wait for VFS to settle
+        add_module_script_twoway(
+            &session,
+            &session_id,
+            rs_id,
+            "AddThenRename",
+            "return 'original'",
+        );
+
+        let original_path = session.path().join("src").join("AddThenRename.luau");
+        poll_file_exists(&original_path, "AddThenRename.luau should exist");
+        // Extra settle time for VFS watcher
+        thread::sleep(Duration::from_millis(500));
+
+        // Now get the instance ID from the tree (the VFS watcher
+        // will have added it after the file was created)
+        let rs_read = session.get_api_read(rs_id).unwrap();
+        let (inst_id, _) = find_by_name(&rs_read.instances, "AddThenRename");
+
+        // Rename it
+        send_update(
+            &session,
+            &session_id,
+            InstanceUpdate {
+                id: inst_id,
+                changed_name: Some("WasRenamed".to_string()),
+                changed_class_name: None,
+                changed_properties: UstrMap::default(),
+                changed_metadata: None,
+            },
+        );
+
+        // Verify rename happened
+        let renamed_path = session.path().join("src").join("WasRenamed.luau");
+        poll_file_exists(&renamed_path, "WasRenamed.luau should exist");
+        poll_not_exists(&original_path, "Old file should be gone");
+
+        session.get_api_rojo().expect("Server alive after add+rename");
+    });
+}
+
+/// Test: Tree consistency after several operations.
+#[test]
+fn twoway_tree_consistency_after_operations() {
+    run_serve_test("ambiguous_container", |session, _| {
+        let (session_id, rs_id) = get_ambiguous_rs(&session);
+
+        add_module_script_twoway(&session, &session_id, rs_id, "Fresh1", "return 1");
+        add_module_script_twoway(&session, &session_id, rs_id, "Fresh2", "return 2");
+        thread::sleep(Duration::from_millis(500));
+
+        session.assert_tree_fresh();
+    });
+}

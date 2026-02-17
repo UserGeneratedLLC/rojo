@@ -1673,6 +1673,20 @@ impl JobThreadContext {
                 }
             }
 
+            // Check newly added instances: if any were added under an rbxm
+            // container, mark that container for re-serialization so the
+            // new child is persisted in the binary file.
+            for &added_id in &applied.added {
+                if let Some(inst) = tree.get_instance(added_id) {
+                    let parent = inst.parent();
+                    if let Some((container_ref, rbxm_path)) = tree.find_rbxm_container(parent) {
+                        rbxm_containers_to_reserialize
+                            .entry(container_ref)
+                            .or_insert(rbxm_path);
+                    }
+                }
+            }
+
             // Merge rbxm containers from removals into the re-serialization set.
             for (container_ref, rbxm_path) in rbxm_removal_containers {
                 rbxm_containers_to_reserialize

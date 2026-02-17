@@ -1,0 +1,33 @@
+---
+source: tests/rojo_test/syncback_util.rs
+expression: src/CaseTest.rbxm
+---
+num_types: 1
+num_instances: 3
+chunks:
+  - Inst:
+      type_id: 0
+      type_name: Folder
+      object_format: 0
+      referents:
+        - 0
+        - 1
+        - 2
+  - Prop:
+      type_id: 0
+      prop_name: Name
+      prop_type: String
+      values:
+        - child
+        - Child
+        - CaseTest
+  - Prnt:
+      version: 0
+      links:
+        - - 0
+          - 2
+        - - 1
+          - 2
+        - - 2
+          - -1
+  - End

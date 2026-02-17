@@ -1,0 +1,45 @@
+---
+source: tests/rojo_test/syncback_util.rs
+expression: src/Parent.rbxm
+---
+num_types: 1
+num_instances: 6
+chunks:
+  - Inst:
+      type_id: 0
+      type_name: Folder
+      object_format: 0
+      referents:
+        - 0
+        - 1
+        - 2
+        - 3
+        - 4
+        - 5
+  - Prop:
+      type_id: 0
+      prop_name: Name
+      prop_type: String
+      values:
+        - Alpha
+        - Alpha
+        - Beta
+        - Beta
+        - Unique
+        - Parent
+  - Prnt:
+      version: 0
+      links:
+        - - 0
+          - 5
+        - - 1
+          - 5
+        - - 2
+          - 5
+        - - 3
+          - 5
+        - - 4
+          - 5
+        - - 5
+          - -1
+  - End

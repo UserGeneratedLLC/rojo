@@ -504,8 +504,10 @@ impl InstanceWithMetaMut<'_> {
 
 #[cfg(test)]
 mod test {
+    use std::path::PathBuf;
+
     use crate::{
-        snapshot::{InstanceMetadata, InstanceSnapshot},
+        snapshot::{InstigatingSource, InstanceMetadata, InstanceSnapshot},
         RojoRef,
     };
 
@@ -526,5 +528,118 @@ mod test {
 
         tree.remove(original);
         assert_eq!(tree.get_specified_id(&custom_ref.clone()), Some(duped));
+    }
+
+    #[test]
+    fn find_rbxm_container_returns_rbxm_ancestor() {
+        let mut tree = RojoTree::new(InstanceSnapshot::new());
+        let root = tree.get_root_id();
+
+        let container_snapshot = InstanceSnapshot::new()
+            .name("Container")
+            .class_name("Folder")
+            .metadata(
+                InstanceMetadata::new()
+                    .instigating_source(InstigatingSource::Path(PathBuf::from(
+                        "/src/Container.rbxm",
+                    )))
+                    .ambiguous_container(true),
+            );
+
+        let container_id = tree.insert_instance(root, container_snapshot);
+
+        // Insert a child with no instigating source (inside the rbxm)
+        let child_snapshot = InstanceSnapshot::new()
+            .name("Child")
+            .class_name("Folder");
+        let child_id = tree.insert_instance(container_id, child_snapshot);
+
+        // Find container from child
+        let result = tree.find_rbxm_container(child_id);
+        assert!(result.is_some());
+        let (found_ref, found_path) = result.unwrap();
+        assert_eq!(found_ref, container_id);
+        assert_eq!(found_path, PathBuf::from("/src/Container.rbxm"));
+    }
+
+    #[test]
+    fn find_rbxm_container_returns_none_for_regular_instance() {
+        let mut tree = RojoTree::new(InstanceSnapshot::new());
+        let root = tree.get_root_id();
+
+        let folder_snapshot = InstanceSnapshot::new()
+            .name("Folder")
+            .class_name("Folder")
+            .metadata(
+                InstanceMetadata::new()
+                    .instigating_source(InstigatingSource::Path(PathBuf::from("/src/Folder"))),
+            );
+
+        let folder_id = tree.insert_instance(root, folder_snapshot);
+
+        let child_snapshot = InstanceSnapshot::new()
+            .name("Child")
+            .class_name("Folder")
+            .metadata(
+                InstanceMetadata::new().instigating_source(InstigatingSource::Path(
+                    PathBuf::from("/src/Folder/Child.luau"),
+                )),
+            );
+
+        let child_id = tree.insert_instance(folder_id, child_snapshot);
+
+        // Not inside an rbxm container
+        assert!(tree.find_rbxm_container(child_id).is_none());
+    }
+
+    #[test]
+    fn find_rbxm_container_returns_none_for_no_source() {
+        let mut tree = RojoTree::new(InstanceSnapshot::new());
+        let root = tree.get_root_id();
+
+        // Child with no instigating source and no rbxm ancestor
+        let child_snapshot = InstanceSnapshot::new()
+            .name("Orphan")
+            .class_name("Folder");
+        let child_id = tree.insert_instance(root, child_snapshot);
+
+        assert!(tree.find_rbxm_container(child_id).is_none());
+    }
+
+    #[test]
+    fn clear_descendant_sources_clears_children() {
+        let mut tree = RojoTree::new(InstanceSnapshot::new());
+        let root = tree.get_root_id();
+
+        let parent_snapshot = InstanceSnapshot::new()
+            .name("Parent")
+            .class_name("Folder")
+            .metadata(
+                InstanceMetadata::new()
+                    .instigating_source(InstigatingSource::Path(PathBuf::from("/src/Parent"))),
+            );
+        let parent_id = tree.insert_instance(root, parent_snapshot);
+
+        let child_snapshot = InstanceSnapshot::new()
+            .name("Child")
+            .class_name("Folder")
+            .metadata(
+                InstanceMetadata::new()
+                    .instigating_source(InstigatingSource::Path(PathBuf::from(
+                        "/src/Parent/Child.luau",
+                    )))
+                    .relevant_paths(vec![PathBuf::from("/src/Parent/Child.luau")]),
+            );
+        let child_id = tree.insert_instance(parent_id, child_snapshot);
+
+        // Parent should still have its source
+        tree.clear_descendant_sources(parent_id);
+
+        let parent_inst = tree.get_instance(parent_id).unwrap();
+        assert!(parent_inst.metadata().instigating_source.is_some());
+
+        let child_inst = tree.get_instance(child_id).unwrap();
+        assert!(child_inst.metadata().instigating_source.is_none());
+        assert!(child_inst.metadata().relevant_paths.is_empty());
     }
 }

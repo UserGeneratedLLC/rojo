@@ -99,6 +99,29 @@ syncback_tests! {
     string_value_project => ["default.project.json5"],
     // Ensures that the `syncUnscriptable` setting works
     unscriptable_properties => ["default.project.json5"],
+
+    // ---------------------------------------------------------------
+    // Ambiguous container tests (duplicate-named children → rbxm)
+    // ---------------------------------------------------------------
+
+    // Two children both named "Child" under a Folder → parent becomes rbxm
+    ambiguous_basic => ["src/Parent.rbxm", "src/Parent.meta.json5"],
+    // Outer/Inner where only Inner has duplicates → Inner rbxm, Outer stays dir
+    ambiguous_deepest_level => ["src/Outer/Inner.rbxm", "src/Outer/Inner.meta.json5"],
+    // Parent has A(x2) + B(x2) + Unique → all captured in one rbxm
+    ambiguous_multiple_groups => ["src/Parent.rbxm", "src/Parent.meta.json5"],
+    // Parent has Dup(x2) + Solo → all inside rbxm (Solo is NOT a separate file)
+    ambiguous_with_unique_siblings => ["src/Parent.rbxm", "src/Parent.meta.json5"],
+    // ModuleScript with Source + duplicate children → entire script becomes rbxm
+    ambiguous_script_container => ["src/MyModule.rbxm"],
+    // Container named "What?Folder" → slugified rbxm name + meta with real name
+    ambiguous_slugified_name => ["src/What_Folder.rbxm", "src/What_Folder.meta.json5"],
+    // Container with 5 levels of nesting → all preserved in rbxm
+    ambiguous_deep_nesting => ["src/Deep.rbxm"],
+    // Two children "child" and "Child" (case only) → detected as duplicates
+    ambiguous_case_insensitive => ["src/CaseTest.rbxm", "src/CaseTest.meta.json5"],
+    // Container named with forbidden Windows chars → slugified + meta
+    ambiguous_windows_invalid_chars => [],
 }
 
 // Tests that run in incremental mode (preserving existing structure)
@@ -117,4 +140,15 @@ syncback_tests_incremental! {
     respect_old_middleware => ["default.project.json5", "src/model_json.model.json5", "src/rbxm.rbxm", "src/rbxmx.rbxmx"],
     // Ensures that sync rules are respected (incremental mode only - uses old paths when possible)
     sync_rules => ["src/module.modulescript", "src/text.text"],
+
+    // ---------------------------------------------------------------
+    // Ambiguous container expansion tests (incremental mode)
+    // ---------------------------------------------------------------
+
+    // Was rbxm (2x "Child"), one renamed → rbxm expands back to directory
+    ambiguous_expansion_resolved => [],
+    // Was rbxm (3x "Child"), one renamed but 2 remain → stays as rbxm
+    ambiguous_expansion_still_ambiguous => ["src/Parent.rbxm", "src/Parent.meta.json5"],
+    // User rbxm (no ambiguousContainer flag) with unique children → stays as rbxm
+    ambiguous_user_rbxm_not_expanded => ["src/UserModel.rbxm"],
 }

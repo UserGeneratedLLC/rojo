@@ -70,6 +70,7 @@ gen_build_tests! {
     dedup_suffix_with_meta,
     init_meta_name_override,
     reserved_name_override,
+    ambiguous_container,
 }
 
 fn run_build_test(test_name: &str) {

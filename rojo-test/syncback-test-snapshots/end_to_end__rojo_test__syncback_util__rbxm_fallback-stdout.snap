@@ -2,8 +2,9 @@
 source: tests/rojo_test/syncback_util.rs
 expression: normalized_stdout
 ---
+Writing src/ChildWithDuplicates.meta.json5
+Writing src/ChildWithDuplicates.rbxm
 Writing src/ChildWithoutDuplicates/Child/.gitkeep
-Writing src/ChildWithDuplicates
 Writing src/ChildWithoutDuplicates
 Writing src/ChildWithoutDuplicates/Child
-Removing src/ChildWithDuplicates/.gitkeep
+Removing src/ChildWithDuplicates

@@ -69,7 +69,7 @@ isProject: false
 - `[src/web/interface.rs](src/web/interface.rs)` line 28: `PROTOCOL_VERSION: u64 = 5` -> `6`
 - `[plugin/src/Config.lua](plugin/src/Config.lua)` line 30: `protocolVersion = 5` -> `6`
 
-**Add `serverFork` field to `ServerInfoResponse**` so the plugin can reject non-Atlas servers even if protocol versions coincidentally match in the future:
+**Add `serverFork` field to `ServerInfoResponse`** so the plugin can reject non-Atlas servers even if protocol versions coincidentally match in the future:
 
 - `[src/web/interface.rs](src/web/interface.rs)`: add `pub server_fork: String` to `ServerInfoResponse` (serializes as `"serverFork"`)
 - `[src/web/api.rs](src/web/api.rs)` ~line 272: include `server_fork: "atlas".to_owned()` when constructing the response
@@ -139,7 +139,7 @@ These are `CreateDockWidgetPluginGui` IDs that persist across sessions and would
 
 ## 8. VS Code Extension: Binary Invocations `rojo` -> `atlas`
 
-The extension package is already rebranded (`vscode-atlas`, commands `vscode-atlas.*`, config `atlas.*`). But source files still invoke the `rojo` binary:
+The extension package is already rebranded (`vscode-atlas`, commands `vscode-atlas.`*, config `atlas.*`). But source files still invoke the `rojo` binary:
 
 - `[vscode-rojo/src/getRojoInstall.ts](vscode-rojo/src/getRojoInstall.ts)`:
   - Line 46: `which("rojo")` -> `which("atlas")`

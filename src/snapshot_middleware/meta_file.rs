@@ -653,6 +653,50 @@ mod test {
     }
 
     #[test]
+    fn adjacent_read_ambiguous_container() {
+        let mut imfs = InMemoryFs::new();
+        imfs.load_snapshot(
+            "/foo/bar.meta.json5",
+            VfsSnapshot::file(r#"{ ambiguousContainer: true, name: "Real Name" }"#),
+        )
+        .unwrap();
+
+        let vfs = Vfs::new(imfs);
+        let path = Path::new("/foo/bar.rbxm");
+        let mut snapshot = InstanceSnapshot::new();
+
+        AdjacentMetadata::read_and_apply_all(&vfs, path, "bar", &mut snapshot).unwrap();
+
+        assert!(snapshot.metadata.ambiguous_container);
+        assert_eq!(snapshot.name.as_ref(), "Real Name");
+        assert_eq!(
+            snapshot.metadata.specified_name.as_deref(),
+            Some("Real Name")
+        );
+    }
+
+    #[test]
+    fn adjacent_meta_ambiguous_container_is_empty() {
+        let meta = AdjacentMetadata {
+            schema: None,
+            id: None,
+            ignore_unknown_instances: None,
+            properties: IndexMap::new(),
+            attributes: IndexMap::new(),
+            name: None,
+            ambiguous_container: None,
+            path: PathBuf::new(),
+        };
+        assert!(meta.is_empty());
+
+        let meta_with_flag = AdjacentMetadata {
+            ambiguous_container: Some(true),
+            ..meta
+        };
+        assert!(!meta_with_flag.is_empty());
+    }
+
+    #[test]
     fn directory_read_json5() {
         let mut imfs = InMemoryFs::new();
         imfs.load_snapshot(

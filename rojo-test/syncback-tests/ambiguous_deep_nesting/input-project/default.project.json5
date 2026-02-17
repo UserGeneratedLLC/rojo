@@ -1,0 +1,6 @@
+{
+  "name": "ambiguous_deep_nesting",
+  "tree": {
+    "$path": "src"
+  }
+}

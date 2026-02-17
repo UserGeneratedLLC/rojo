@@ -1,3 +1,4 @@
+pub mod fixture_gen;
 pub mod internable;
 pub mod io_util;
 pub mod roundtrip_util;

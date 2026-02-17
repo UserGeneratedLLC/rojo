@@ -1,0 +1,8 @@
+---
+source: tests/rojo_test/syncback_util.rs
+expression: normalized_stdout
+---
+Writing src/Outer/Inner.meta.json5
+Writing src/Outer/Inner.rbxm
+Writing src/Outer
+Removing src/.gitkeep

@@ -471,6 +471,23 @@ impl ApiService {
                                 }
                             };
                             if !resolved_path.is_dir() {
+                                // If the parent is an ambiguous rbxm container,
+                                // do NOT convert it to a directory — children
+                                // will be added to the tree and the container
+                                // will be re-serialized by the change_processor.
+                                let is_rbxm_container = resolved_path
+                                    .extension()
+                                    .is_some_and(|ext| ext == "rbxm")
+                                    && parent_inst.metadata().ambiguous_container;
+                                if is_rbxm_container {
+                                    log::info!(
+                                        "Syncback: Parent '{}' is an ambiguous rbxm container — \
+                                         skipping directory conversion, will re-serialize rbxm",
+                                        parent_inst.name()
+                                    );
+                                    continue;
+                                }
+
                                 let parent_class = parent_inst.class_name();
                                 let parent_name = parent_inst.name();
                                 let containing_dir = match resolved_path.parent() {
@@ -946,11 +963,26 @@ impl ApiService {
         // Instance doesn't exist in tree - create new files
         // Get the parent's filesystem path from its metadata.
         // For ProjectNode sources, resolve the $path field relative to the project file.
-        let instigating_source = parent_instance
-            .metadata()
-            .instigating_source
-            .as_ref()
-            .context("Parent instance has no filesystem path (not synced from filesystem)")?;
+        //
+        // If the parent has no instigating_source, it may be inside an rbxm
+        // container. In that case, the child will be added to the tree via the
+        // PatchSet, and the change_processor will re-serialize the container.
+        let instigating_source = match parent_instance.metadata().instigating_source.as_ref() {
+            Some(source) => source,
+            None => {
+                if tree.find_rbxm_container(parent_ref).is_some() {
+                    log::info!(
+                        "Syncback: Parent of '{}' is inside an rbxm container — \
+                         child will be added to tree and rbxm re-serialized",
+                        added.name
+                    );
+                    return Ok(());
+                }
+                anyhow::bail!(
+                    "Parent instance has no filesystem path (not synced from filesystem)"
+                );
+            }
+        };
 
         let parent_path: std::borrow::Cow<'_, std::path::Path> = match instigating_source {
             crate::snapshot::InstigatingSource::Path(p) => std::borrow::Cow::Borrowed(p.as_path()),
@@ -986,10 +1018,34 @@ impl ApiService {
         // standalone file (script, model, txt, csv, etc.), we must convert it
         // to directory format before we can place children inside it.
         //
+        // EXCEPTION: If the parent is an ambiguous rbxm container, do NOT
+        // convert it. Instead, the child will be added to the tree and the
+        // change_processor will re-serialize the rbxm container with the
+        // new child included.
+        //
         // Check converted_parents first — if another child in this batch
         // already triggered the conversion, use the cached directory path
         // instead of trying to convert again (the standalone file was already
         // deleted by the first conversion).
+        let is_rbxm_container = parent_path
+            .extension()
+            .is_some_and(|ext| ext == "rbxm")
+            && parent_instance.metadata().ambiguous_container;
+
+        if is_rbxm_container {
+            // Parent is an ambiguous rbxm container. The child will be
+            // added to the in-memory tree (via the PatchSet downstream),
+            // and the change_processor will re-serialize the rbxm with
+            // the new child included. We don't create files on disk here.
+            log::info!(
+                "Syncback: Parent '{}' is an ambiguous rbxm container — \
+                 child '{}' will be added to tree and rbxm re-serialized",
+                parent_instance.name(),
+                added.name
+            );
+            return Ok(());
+        }
+
         let parent_dir = if let Some(dir) = converted_parents.get(&parent_ref) {
             dir.clone()
         } else if parent_path.is_dir() {

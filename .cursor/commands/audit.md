@@ -559,7 +559,20 @@ Given the same instance tree, does the feature ALWAYS produce the same filesyste
 
 Running the operation twice should produce zero changes on the second run. If re-running writes the same files again (even with identical content), something is unstable.
 
-#### 11j. Edge Cases
+#### 11j. Review Dialogue Invariant
+
+**No two-way sync change may bypass the review dialogue.** In Always and Initial sync modes, every incoming change must be cataloged in the confirmation UI. The user must explicitly choose a resolution (Atlas / Skip / Studio) for each entry. There is no "fast path" or silent application.
+
+**Verify:**
+- Are there any code paths in `ServeSession`, `ApiContext`, or the Reconciler that apply patches without routing through the confirmation UI?
+- Does the ChangeBatcher or any batch-processing logic silently apply changes that should appear in the review dialogue?
+- When multiple changes arrive in a single WebSocket message or batch, does every individual change appear as a separate reviewable entry in the UI?
+- Are there error/fallback paths that skip the dialogue and apply changes directly (e.g., "if dialogue fails, apply anyway")?
+- Does the plugin correctly block patch application until the user has resolved every entry in the dialogue?
+
+Any code path that writes to Studio instances without the user having explicitly approved it through the review UI is a **critical** bug. This applies to property updates, additions, removals, renames, and any other mutation — nothing is exempt.
+
+#### 11k. Edge Cases
 
 - **ProjectNode instances**: Can the feature interact with instances defined in project files? Is there a guard?
 - **Nested projects**: Does data span project boundaries correctly?

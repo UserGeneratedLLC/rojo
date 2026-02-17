@@ -496,7 +496,7 @@ pub fn syncback_loop_with_stats(
     let mut fs_snapshot = FsSnapshot::new();
     let mut instance_paths: HashMap<Ref, Vec<PathBuf>> = HashMap::new();
 
-    'syncback: while let Some(snapshot) = snapshots.pop() {
+    'syncback: while let Some(mut snapshot) = snapshots.pop() {
         let inst_path = snapshot.get_new_inst_path(snapshot.new);
         // In incremental mode, we can quickly check that two subtrees are identical
         // and if they are, skip reconciling them. In clean mode, we always process
@@ -545,6 +545,14 @@ pub fn syncback_loop_with_stats(
         // Expansion resolved if old was ambiguous rbxm but new middleware is no longer Rbxm
         let expansion_resolved =
             old_was_ambiguous_rbxm && !matches!(middleware, Middleware::Rbxm);
+
+        // When expanding from rbxm back to directory, the snapshot path still
+        // has the .rbxm extension. Strip it so the Dir middleware gets a
+        // proper directory path.
+        if expansion_resolved {
+            let dir_path = snapshot.path.with_extension("");
+            snapshot = snapshot.with_new_path(dir_path, snapshot.new, snapshot.old);
+        }
 
         log::trace!(
             "Middleware for {inst_path} is {:?} (path is {})",
@@ -1353,5 +1361,86 @@ fn strip_unknown_root_children(new: &mut WeakDom, old: &RojoTree) {
         }
         log::trace!("Pruning root child {} of class {}", child.name, child.class);
         new.destroy(child_ref);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rbx_dom_weak::InstanceBuilder;
+
+    #[test]
+    fn has_duplicate_children_detects_duplicates() {
+        let mut dom = WeakDom::new(InstanceBuilder::new("Folder").with_name("Root"));
+        let root = dom.root_ref();
+
+        dom.insert(root, InstanceBuilder::new("Folder").with_name("Child"));
+        dom.insert(root, InstanceBuilder::new("Folder").with_name("Child"));
+        dom.insert(root, InstanceBuilder::new("Folder").with_name("Other"));
+
+        assert!(has_duplicate_children(&dom, root));
+    }
+
+    #[test]
+    fn has_duplicate_children_no_duplicates() {
+        let mut dom = WeakDom::new(InstanceBuilder::new("Folder").with_name("Root"));
+        let root = dom.root_ref();
+
+        dom.insert(root, InstanceBuilder::new("Folder").with_name("A"));
+        dom.insert(root, InstanceBuilder::new("Folder").with_name("B"));
+        dom.insert(root, InstanceBuilder::new("Folder").with_name("C"));
+
+        assert!(!has_duplicate_children(&dom, root));
+    }
+
+    #[test]
+    fn has_duplicate_children_case_insensitive() {
+        let mut dom = WeakDom::new(InstanceBuilder::new("Folder").with_name("Root"));
+        let root = dom.root_ref();
+
+        dom.insert(root, InstanceBuilder::new("Folder").with_name("child"));
+        dom.insert(root, InstanceBuilder::new("Folder").with_name("Child"));
+
+        assert!(has_duplicate_children(&dom, root));
+    }
+
+    #[test]
+    fn has_duplicate_children_empty() {
+        let dom = WeakDom::new(InstanceBuilder::new("Folder").with_name("Root"));
+        let root = dom.root_ref();
+
+        assert!(!has_duplicate_children(&dom, root));
+    }
+
+    #[test]
+    fn has_duplicate_children_single_child() {
+        let mut dom = WeakDom::new(InstanceBuilder::new("Folder").with_name("Root"));
+        let root = dom.root_ref();
+
+        dom.insert(root, InstanceBuilder::new("Folder").with_name("Only"));
+
+        assert!(!has_duplicate_children(&dom, root));
+    }
+
+    #[test]
+    fn is_dir_middleware_returns_true_for_all_dir_variants() {
+        assert!(is_dir_middleware(Middleware::Dir));
+        assert!(is_dir_middleware(Middleware::ServerScriptDir));
+        assert!(is_dir_middleware(Middleware::ClientScriptDir));
+        assert!(is_dir_middleware(Middleware::ModuleScriptDir));
+        assert!(is_dir_middleware(Middleware::PluginScriptDir));
+        assert!(is_dir_middleware(Middleware::LegacyScriptDir));
+        assert!(is_dir_middleware(Middleware::LocalScriptDir));
+        assert!(is_dir_middleware(Middleware::CsvDir));
+    }
+
+    #[test]
+    fn is_dir_middleware_returns_false_for_non_dir() {
+        assert!(!is_dir_middleware(Middleware::Rbxm));
+        assert!(!is_dir_middleware(Middleware::Rbxmx));
+        assert!(!is_dir_middleware(Middleware::JsonModel));
+        assert!(!is_dir_middleware(Middleware::ServerScript));
+        assert!(!is_dir_middleware(Middleware::ModuleScript));
+        assert!(!is_dir_middleware(Middleware::Text));
     }
 }

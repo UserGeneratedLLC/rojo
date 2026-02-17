@@ -1,0 +1,7 @@
+---
+source: tests/tests/syncback.rs
+expression: src/CaseTest.meta.json5
+---
+{
+  ambiguousContainer: true,
+}

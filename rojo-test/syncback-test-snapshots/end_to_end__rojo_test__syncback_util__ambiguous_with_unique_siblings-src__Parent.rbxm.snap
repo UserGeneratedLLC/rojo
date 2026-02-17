@@ -1,0 +1,53 @@
+---
+source: tests/rojo_test/syncback_util.rs
+expression: src/Parent.rbxm
+---
+num_types: 2
+num_instances: 4
+chunks:
+  - Inst:
+      type_id: 0
+      type_name: Folder
+      object_format: 0
+      referents:
+        - 0
+        - 1
+        - 3
+  - Inst:
+      type_id: 1
+      type_name: ModuleScript
+      object_format: 0
+      referents:
+        - 2
+  - Prop:
+      type_id: 0
+      prop_name: Name
+      prop_type: String
+      values:
+        - Dup
+        - Dup
+        - Parent
+  - Prop:
+      type_id: 1
+      prop_name: Name
+      prop_type: String
+      values:
+        - Solo
+  - Prop:
+      type_id: 1
+      prop_name: Source
+      prop_type: String
+      values:
+        - "return 'solo'"
+  - Prnt:
+      version: 0
+      links:
+        - - 0
+          - 3
+        - - 1
+          - 3
+        - - 2
+          - 3
+        - - 3
+          - -1
+  - End

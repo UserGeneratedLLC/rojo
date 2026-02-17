@@ -1,0 +1,6 @@
+{
+  "name": "ambiguous_with_unique_siblings",
+  "tree": {
+    "$path": "src"
+  }
+}

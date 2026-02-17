@@ -451,3 +451,15 @@ fn snapshot_dir_inner(root: &Path, current: &Path, map: &mut HashMap<String, Vec
 fn reserved_name_roundtrip() {
     run_roundtrip_test("reserved_name_override");
 }
+
+// =============================================================================
+// AMBIGUOUS CONTAINER ROUNDTRIP TEST
+// =============================================================================
+
+/// Projects with rbxm containers (ambiguousContainer flag) should round-trip
+/// correctly: build produces all instances (including duplicates), syncback
+/// re-creates the rbxm container, and rebuild produces the same tree.
+#[test]
+fn ambiguous_container_roundtrip() {
+    run_roundtrip_test("ambiguous_container");
+}
