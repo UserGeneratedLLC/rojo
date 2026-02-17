@@ -330,6 +330,48 @@ function Matching._countOwnDiffs(vInst: any, studioInstance: Instance): number
 		end
 	end
 
+	-- Properties present only on the Studio side (not in virtual).
+	-- Syncback strips default-valued properties from model files, so virtual
+	-- instances may omit properties that Studio has at non-default values.
+	-- Without this check, a virtual instance missing e.g. Face scores equally
+	-- against all Studio instances in the group, causing wrong pairings.
+	local defaults = RbxDom.findDefaultProperties(vInst.ClassName)
+	if defaults then
+		for propName, encodedDefault in defaults do
+			if propName == "Tags" or propName == "Attributes" then
+				continue
+			end
+
+			-- Skip properties already compared from the virtual side
+			if vProps and vProps[propName] ~= nil then
+				continue
+			end
+
+			-- Skip Ref/UniqueId types (not comparable during hydration)
+			local ty = next(encodedDefault)
+			if ty == "Ref" or ty == "UniqueId" then
+				continue
+			end
+
+			-- pcall guards against unsupported types (e.g. SharedString)
+			local pcallOk, decodeOk, defaultValue = pcall(RbxDom.EncodedValue.decode, encodedDefault)
+			if not pcallOk or not decodeOk then
+				continue
+			end
+
+			local readOk, studioValue = pcall(function()
+				return (studioInstance :: any)[propName]
+			end)
+			if not readOk then
+				continue
+			end
+
+			if not trueEquals(defaultValue, studioValue) then
+				cost += 1
+			end
+		end
+	end
+
 	-- Tags: count individual adds/removes
 	local vTags = vInst.Properties and vInst.Properties.Tags
 	if vTags then

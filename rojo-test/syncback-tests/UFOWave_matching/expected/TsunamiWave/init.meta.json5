@@ -1,0 +1,60 @@
+{
+  className: "UnionOperation",
+  properties: {
+    Anchored: true,
+    AssetId: "http://www.roblox.com//asset/?id=212226088",
+    CFrame: [
+      801.715576171875,
+      36.375,
+      0.00000762939453125,
+      1,
+      0,
+      0,
+      0,
+      1,
+      0,
+      0,
+      0,
+      1
+    ],
+    CanCollide: false,
+    CanQuery: false,
+    CanTouch: false,
+    CastShadow: false,
+    Color: {
+      Color3uint8: [
+        48,
+        12,
+        71
+      ]
+    },
+    FormFactor: "Symmetric",
+    InitialSize: [
+      18.943885803222656,
+      6.7999587059021,
+      39.99999237060547
+    ],
+    Size: [
+      49.43058776855469,
+      72.75,
+      260
+    ],
+    UnscaledCofm: [
+      -1.2760223150253296,
+      -0.917913019657135,
+      0.000006928649327164749
+    ],
+    UnscaledVolInertiaDiags: [
+      321672.25,
+      343861.1875,
+      37455.859375
+    ],
+    UnscaledVolInertiaOffDiags: [
+      5263.43994140625,
+      0.014713685028254986,
+      -0.0022491957060992718
+    ],
+    UnscaledVolume: 2355.29296875,
+    UsePartColor: true
+  }
+}

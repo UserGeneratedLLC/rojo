@@ -1,0 +1,60 @@
+{
+  className: "TextLabel",
+  properties: {
+    AnchorPoint: [
+      0.5,
+      0
+    ],
+    BackgroundColor3: [
+      1,
+      1,
+      1
+    ],
+    BackgroundTransparency: 1,
+    BorderColor3: [
+      0,
+      0,
+      0
+    ],
+    BorderSizePixel: 0,
+    FontFace: {
+      cachedFaceId: null,
+      family: "rbxasset://fonts/families/LuckiestGuy.json",
+      style: "Normal",
+      weight: "Regular"
+    },
+    Position: {
+      UDim2: [
+        [
+          0.5,
+          0
+        ],
+        [
+          0,
+          0
+        ]
+      ]
+    },
+    Size: {
+      UDim2: [
+        [
+          1,
+          0
+        ],
+        [
+          0.5,
+          0
+        ]
+      ]
+    },
+    Text: "UFO",
+    TextColor3: [
+      1,
+      1,
+      1
+    ],
+    TextScaled: true,
+    TextSize: 14,
+    TextWrapped: true
+  }
+}

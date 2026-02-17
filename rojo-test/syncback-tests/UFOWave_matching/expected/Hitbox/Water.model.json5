@@ -1,0 +1,16 @@
+{
+  attributes: {
+    Rojo_Ref_SoundGroup: "ServerStorage/__server_muted.model.json5"
+  },
+  className: "Sound",
+  properties: {
+    AudioContent: "rbxassetid://9120549564",
+    Looped: true,
+    Playing: true,
+    SourceAssetId: 9120549564,
+    Tags: [
+      "SoundGroupEffects"
+    ],
+    Volume: 3
+  }
+}

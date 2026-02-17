@@ -739,6 +739,449 @@ mod tests {
         }
     }
 
+    /// Helper: builds a RojoTree from child snapshots (with properties).
+    fn make_tree_from_snapshots(children: Vec<InstanceSnapshot>) -> (RojoTree, Vec<Ref>) {
+        let root_snap = InstanceSnapshot {
+            snapshot_id: Ref::none(),
+            metadata: InstanceMetadata::default(),
+            name: Cow::Borrowed("DataModel"),
+            class_name: ustr("DataModel"),
+            properties: Default::default(),
+            children,
+        };
+        let tree = RojoTree::new(root_snap);
+        let root_id = tree.get_root_id();
+        let child_ids: Vec<Ref> = tree.get_instance(root_id).unwrap().children().to_vec();
+        (tree, child_ids)
+    }
+
+    // ================================================================
+    // Default-omission matching tests
+    //
+    // These reproduce the scenario where syncback strips default-valued
+    // properties from model files, creating an asymmetry between the
+    // snapshot (sparse) and tree (full properties from Studio).
+    //
+    // The matching must still pair instances correctly despite some
+    // snapshots missing properties that the tree has at their defaults.
+    // ================================================================
+
+    #[test]
+    fn reflection_database_has_expected_defaults() {
+        // Validates the reflection database has the defaults we rely on.
+        use rbx_dom_weak::types::Variant;
+
+        let db = rbx_reflection_database::get().expect("reflection database should load");
+        let texture = db.classes.get("Texture").expect("Texture class should exist");
+        let face_default = texture
+            .default_properties
+            .get("Face")
+            .expect("Texture should have Face default");
+        match face_default {
+            Variant::Enum(e) => assert_eq!(e.to_u32(), 5, "Face default should be Front (5)"),
+            other => panic!("Face default should be Enum, got {:?}", other),
+        }
+
+        let part = db.classes.get("Part").expect("Part class should exist");
+        let anchored_default = part
+            .default_properties
+            .get("Anchored")
+            .expect("Part should have Anchored default");
+        assert_eq!(
+            anchored_default,
+            &Variant::Bool(false),
+            "Anchored default should be false"
+        );
+    }
+
+    #[test]
+    fn texture_face_six_instances_default_omitted() {
+        // Exact reproduction of the Texture Face bug:
+        // 6 Textures all named "Texture", each with a different Face.
+        // Snapshot side: 5 have explicit Face, 1 omits Face (Front=default).
+        // Tree side: all 6 have explicit Face (populated from Studio).
+        //
+        // Without the default-aware fix, the snapshot without Face scores
+        // equally against all tree instances, steals one by iteration order,
+        // and displaces the correct match.
+        use rbx_dom_weak::types::{Enum, Variant};
+
+        let faces = [
+            ("Top", Enum::from_u32(1)),
+            ("Right", Enum::from_u32(0)),
+            ("Left", Enum::from_u32(3)),
+            ("Bottom", Enum::from_u32(4)),
+            ("Back", Enum::from_u32(2)),
+        ];
+        let face_front = Enum::from_u32(5);
+
+        let shared_props = vec![("Transparency", Variant::Float32(0.65))];
+
+        // Snapshots: 5 with explicit Face + 1 without (Front default)
+        let mut snaps: Vec<InstanceSnapshot> = faces
+            .iter()
+            .map(|(_, face_enum)| {
+                let mut props = shared_props.clone();
+                props.push(("Face", Variant::Enum(face_enum.clone())));
+                make_snapshot_with_props("Texture", "Texture", props)
+            })
+            .collect();
+        // The Front one: NO Face property (default omitted by syncback)
+        snaps.push(make_snapshot_with_props(
+            "Texture",
+            "Texture",
+            shared_props.clone(),
+        ));
+
+        // Tree: all 6 with explicit Face (Studio always has all properties)
+        let mut tree_children: Vec<InstanceSnapshot> = faces
+            .iter()
+            .map(|(_, face_enum)| {
+                let mut props = shared_props.clone();
+                props.push(("Face", Variant::Enum(face_enum.clone())));
+                make_snapshot_with_props("Texture", "Texture", props)
+            })
+            .collect();
+        tree_children.push(make_snapshot_with_props(
+            "Texture",
+            "Texture",
+            {
+                let mut props = shared_props.clone();
+                props.push(("Face", Variant::Enum(face_front.clone())));
+                props
+            },
+        ));
+
+        let (tree, tree_refs) = make_tree_from_snapshots(tree_children);
+        let result = match_forward(snaps, &tree_refs, &tree);
+
+        assert_eq!(result.matched.len(), 6);
+        assert!(result.unmatched_snapshot.is_empty());
+        assert!(result.unmatched_tree.is_empty());
+
+        // Verify each pair has matching Face values.
+        for (snap, tree_ref) in &result.matched {
+            let inst = tree.get_instance(*tree_ref).unwrap();
+            let snap_face = snap.properties.get(&ustr("Face"));
+            let tree_face = inst.properties().get(&ustr("Face")).unwrap();
+
+            match snap_face {
+                Some(sv) => {
+                    assert!(
+                        variant_eq(sv, tree_face),
+                        "Face mismatch: snap={:?}, tree={:?}",
+                        sv,
+                        tree_face
+                    );
+                }
+                None => {
+                    // Snapshot omitted Face = must match tree Face=Front (5)
+                    assert!(
+                        variant_eq(tree_face, &Variant::Enum(face_front.clone())),
+                        "Snapshot without Face should match Front, got {:?}",
+                        tree_face
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn texture_face_twelve_instances_two_groups() {
+        // Exact reproduction of the user's real scenario:
+        // 12 Textures split into two groups of 6 by TextureContent.
+        // Each group covers all 6 faces, with Front omitted (default).
+        // Tree has all 12 with explicit Face.
+        use rbx_dom_weak::types::{Enum, Variant};
+
+        let face_values: Vec<Enum> = vec![
+            Enum::from_u32(1), // Top
+            Enum::from_u32(0), // Right
+            Enum::from_u32(3), // Left
+            Enum::from_u32(4), // Bottom
+            Enum::from_u32(2), // Back
+        ];
+        let face_front = Enum::from_u32(5);
+
+        let mut snaps = Vec::new();
+        let mut tree_children = Vec::new();
+
+        for group_transparency in [0.6_f32, 0.65_f32] {
+            // 5 with explicit Face
+            for face in &face_values {
+                snaps.push(make_snapshot_with_props(
+                    "Texture",
+                    "Texture",
+                    vec![
+                        ("Transparency", Variant::Float32(group_transparency)),
+                        ("Face", Variant::Enum(face.clone())),
+                    ],
+                ));
+                tree_children.push(make_snapshot_with_props(
+                    "Texture",
+                    "Texture",
+                    vec![
+                        ("Transparency", Variant::Float32(group_transparency)),
+                        ("Face", Variant::Enum(face.clone())),
+                    ],
+                ));
+            }
+            // 1 without Face (Front default)
+            snaps.push(make_snapshot_with_props(
+                "Texture",
+                "Texture",
+                vec![("Transparency", Variant::Float32(group_transparency))],
+            ));
+            tree_children.push(make_snapshot_with_props(
+                "Texture",
+                "Texture",
+                vec![
+                    ("Transparency", Variant::Float32(group_transparency)),
+                    ("Face", Variant::Enum(face_front.clone())),
+                ],
+            ));
+        }
+
+        // Reverse tree order to make it harder
+        tree_children.reverse();
+
+        let (tree, tree_refs) = make_tree_from_snapshots(tree_children);
+        let result = match_forward(snaps, &tree_refs, &tree);
+
+        assert_eq!(result.matched.len(), 12);
+        assert!(result.unmatched_snapshot.is_empty());
+        assert!(result.unmatched_tree.is_empty());
+
+        for (snap, tree_ref) in &result.matched {
+            let inst = tree.get_instance(*tree_ref).unwrap();
+            let snap_face = snap.properties.get(&ustr("Face"));
+            let tree_face = inst.properties().get(&ustr("Face")).unwrap();
+
+            // Transparency must match (distinguishes the two groups)
+            let snap_t = snap.properties.get(&ustr("Transparency")).unwrap();
+            let tree_t = inst.properties().get(&ustr("Transparency")).unwrap();
+            assert!(
+                variant_eq(snap_t, tree_t),
+                "Group mismatch: snap Transparency={:?}, tree={:?}",
+                snap_t,
+                tree_t
+            );
+
+            match snap_face {
+                Some(sv) => assert!(
+                    variant_eq(sv, tree_face),
+                    "Face mismatch: snap={:?}, tree={:?}",
+                    sv,
+                    tree_face
+                ),
+                None => assert!(
+                    variant_eq(tree_face, &Variant::Enum(face_front.clone())),
+                    "Omitted Face should match Front, got {:?}",
+                    tree_face
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn part_anchored_default_omitted() {
+        // 4 Parts named "Block": 3 have Anchored=true (explicit),
+        // 1 omits Anchored (false is the default). Tree has all 4.
+        use rbx_dom_weak::types::Variant;
+
+        let mut snaps = Vec::new();
+        let mut tree_children = Vec::new();
+
+        for i in 0..3 {
+            let props = vec![
+                ("Transparency", Variant::Float32(i as f32 * 0.1)),
+                ("Anchored", Variant::Bool(true)),
+            ];
+            snaps.push(make_snapshot_with_props("Block", "Part", props.clone()));
+            tree_children.push(make_snapshot_with_props("Block", "Part", props));
+        }
+        // The one with default Anchored=false: snapshot omits it
+        snaps.push(make_snapshot_with_props(
+            "Block",
+            "Part",
+            vec![("Transparency", Variant::Float32(0.3))],
+        ));
+        tree_children.push(make_snapshot_with_props(
+            "Block",
+            "Part",
+            vec![
+                ("Transparency", Variant::Float32(0.3)),
+                ("Anchored", Variant::Bool(false)),
+            ],
+        ));
+
+        tree_children.reverse();
+
+        let (tree, tree_refs) = make_tree_from_snapshots(tree_children);
+        let result = match_forward(snaps, &tree_refs, &tree);
+
+        assert_eq!(result.matched.len(), 4);
+
+        for (snap, tree_ref) in &result.matched {
+            let inst = tree.get_instance(*tree_ref).unwrap();
+            let snap_t = snap.properties.get(&ustr("Transparency")).unwrap();
+            let tree_t = inst.properties().get(&ustr("Transparency")).unwrap();
+            assert!(
+                variant_eq(snap_t, tree_t),
+                "Transparency mismatch: snap={:?}, tree={:?}",
+                snap_t,
+                tree_t
+            );
+        }
+    }
+
+    #[test]
+    fn multiple_defaults_omitted_all_at_once() {
+        // Tree instances have MANY extra properties all at their class defaults.
+        // Snapshots omit all of them. The match should not be thrown off.
+        use rbx_dom_weak::types::Variant;
+
+        // Two sparse snapshots differing only by Transparency
+        let snap_a = make_snapshot_with_props(
+            "Wall",
+            "Part",
+            vec![("Transparency", Variant::Float32(0.0))],
+        );
+        let snap_b = make_snapshot_with_props(
+            "Wall",
+            "Part",
+            vec![("Transparency", Variant::Float32(1.0))],
+        );
+
+        // Tree has Transparency + many known Part defaults from Studio.
+        // These are all at their default values, so count_own_diffs should
+        // skip them (not inflate match cost).
+        let extra_defaults: Vec<(&str, Variant)> = vec![
+            ("Anchored", Variant::Bool(false)),
+            ("CastShadow", Variant::Bool(true)),
+            ("CanCollide", Variant::Bool(true)),
+            ("CanTouch", Variant::Bool(true)),
+            ("Locked", Variant::Bool(false)),
+            ("Massless", Variant::Bool(false)),
+        ];
+
+        let mut tree_props_a = vec![("Transparency", Variant::Float32(0.0))];
+        tree_props_a.extend(extra_defaults.iter().cloned());
+        let mut tree_props_b = vec![("Transparency", Variant::Float32(1.0))];
+        tree_props_b.extend(extra_defaults.iter().cloned());
+
+        // Tree in reversed order
+        let (tree, tree_refs) = make_tree_from_snapshots(vec![
+            make_snapshot_with_props("Wall", "Part", tree_props_b),
+            make_snapshot_with_props("Wall", "Part", tree_props_a),
+        ]);
+        let result = match_forward(vec![snap_a, snap_b], &tree_refs, &tree);
+
+        assert_eq!(result.matched.len(), 2, "Both should match");
+
+        for (snap, tree_ref) in &result.matched {
+            let inst = tree.get_instance(*tree_ref).unwrap();
+            let snap_t = snap.properties.get(&ustr("Transparency")).unwrap();
+            let tree_t = inst.properties().get(&ustr("Transparency")).unwrap();
+            assert!(
+                variant_eq(snap_t, tree_t),
+                "Part with 6 extra default props mismatched: snap={:?}, tree={:?}",
+                snap_t,
+                tree_t
+            );
+        }
+    }
+
+    #[test]
+    fn ten_ambiguous_textures_stress() {
+        // 10 Textures: 8 with unique Face values (some repeated across
+        // groups), 2 with Front omitted. Two distinguishing groups by
+        // Transparency. The matcher must handle this without mis-pairing.
+        use rbx_dom_weak::types::{Enum, Variant};
+
+        let faces_group_a = [
+            Some(Enum::from_u32(1)), // Top
+            Some(Enum::from_u32(0)), // Right
+            Some(Enum::from_u32(3)), // Left
+            None,                     // Front (default, omitted)
+            Some(Enum::from_u32(4)), // Bottom
+        ];
+        let faces_group_b = [
+            Some(Enum::from_u32(2)), // Back
+            Some(Enum::from_u32(4)), // Bottom
+            None,                     // Front (default, omitted)
+            Some(Enum::from_u32(1)), // Top
+            Some(Enum::from_u32(3)), // Left
+        ];
+        let face_front = Enum::from_u32(5);
+
+        let mut snaps = Vec::new();
+        let mut tree_children = Vec::new();
+
+        for (group_t, faces) in [(0.5_f32, &faces_group_a[..]), (0.8_f32, &faces_group_b[..])] {
+            for face_opt in faces {
+                let mut snap_props = vec![("Transparency", Variant::Float32(group_t))];
+                let mut tree_props = vec![("Transparency", Variant::Float32(group_t))];
+
+                if let Some(face) = face_opt {
+                    snap_props.push(("Face", Variant::Enum(face.clone())));
+                    tree_props.push(("Face", Variant::Enum(face.clone())));
+                } else {
+                    // Snapshot omits Face; tree has Front
+                    tree_props.push(("Face", Variant::Enum(face_front.clone())));
+                }
+
+                snaps.push(make_snapshot_with_props("Texture", "Texture", snap_props));
+                tree_children.push(make_snapshot_with_props(
+                    "Texture",
+                    "Texture",
+                    tree_props,
+                ));
+            }
+        }
+
+        // Shuffle tree order (reverse)
+        tree_children.reverse();
+
+        let (tree, tree_refs) = make_tree_from_snapshots(tree_children);
+        let result = match_forward(snaps, &tree_refs, &tree);
+
+        assert_eq!(result.matched.len(), 10);
+        assert!(result.unmatched_snapshot.is_empty());
+        assert!(result.unmatched_tree.is_empty());
+
+        for (snap, tree_ref) in &result.matched {
+            let inst = tree.get_instance(*tree_ref).unwrap();
+
+            // Transparency must match (group discriminator)
+            let snap_t = snap.properties.get(&ustr("Transparency")).unwrap();
+            let tree_t = inst.properties().get(&ustr("Transparency")).unwrap();
+            assert!(
+                variant_eq(snap_t, tree_t),
+                "Group mismatch: snap={:?}, tree={:?}",
+                snap_t,
+                tree_t
+            );
+
+            // Face must match
+            let snap_face = snap.properties.get(&ustr("Face"));
+            let tree_face = inst.properties().get(&ustr("Face")).unwrap();
+            match snap_face {
+                Some(sv) => assert!(
+                    variant_eq(sv, tree_face),
+                    "Face mismatch: snap={:?}, tree={:?}",
+                    sv,
+                    tree_face
+                ),
+                None => assert!(
+                    variant_eq(tree_face, &Variant::Enum(face_front.clone())),
+                    "Omitted Face should match Front, got {:?}",
+                    tree_face
+                ),
+            }
+        }
+    }
+
     #[test]
     fn depth_limit_completes_quickly() {
         // Deeply nested tree (depth=6) with same-named instances at each level.

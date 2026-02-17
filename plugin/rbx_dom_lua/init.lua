@@ -6,6 +6,43 @@ local PropertyDescriptor = require(script.PropertyDescriptor)
 -- Returns nil if the class doesn't exist in the database
 -- The properties table maps property names to metadata (scriptability, serialization status)
 -- To get a full PropertyDescriptor for encoding, use findCanonicalPropertyDescriptor
+-- Cache for default properties per class (includes inherited defaults).
+local defaultPropertiesCache: { [string]: { [string]: any } } = {}
+
+-- Returns a table mapping property names to their encoded default values
+-- for a given class, including inherited defaults from parent classes.
+-- Subclass overrides take precedence. Results are cached per class.
+local function findDefaultProperties(className: string): { [string]: any }
+	local cached = defaultPropertiesCache[className]
+	if cached then
+		return cached
+	end
+
+	local defaults: { [string]: any } = {}
+	local currentClassName: string? = className
+
+	repeat
+		local currentClass = database.Classes[currentClassName]
+		if currentClass == nil then
+			break
+		end
+
+		local classDefaults = currentClass.DefaultProperties
+		if classDefaults then
+			for propName, encodedValue in classDefaults do
+				if defaults[propName] == nil then
+					defaults[propName] = encodedValue
+				end
+			end
+		end
+
+		currentClassName = currentClass.Superclass
+	until currentClassName == nil
+
+	defaultPropertiesCache[className] = defaults
+	return defaults
+end
+
 local function findClassDescriptor(className)
 	local classData = database.Classes[className]
 	if classData == nil then
@@ -111,6 +148,7 @@ return {
 	writeProperty = writeProperty,
 	findCanonicalPropertyDescriptor = findCanonicalPropertyDescriptor,
 	findClassDescriptor = findClassDescriptor,
+	findDefaultProperties = findDefaultProperties,
 	Error = Error,
 	EncodedValue = require(script.EncodedValue),
 }
