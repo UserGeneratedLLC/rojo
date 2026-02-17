@@ -22,23 +22,11 @@ pub fn folder(name: &str) -> InstanceBuilder {
     InstanceBuilder::new("Folder").with_name(name)
 }
 
-/// Build a Script instance with the given Source.
-pub fn server_script(name: &str, source: &str) -> InstanceBuilder {
-    InstanceBuilder::new("Script")
-        .with_name(name)
-        .with_property("Source", Variant::String(source.to_string()))
-}
-
 /// Build a ModuleScript instance with the given Source.
 pub fn module_script(name: &str, source: &str) -> InstanceBuilder {
     InstanceBuilder::new("ModuleScript")
         .with_name(name)
         .with_property("Source", Variant::String(source.to_string()))
-}
-
-/// Build an ObjectValue instance (for Ref testing).
-pub fn object_value(name: &str) -> InstanceBuilder {
-    InstanceBuilder::new("ObjectValue").with_name(name)
 }
 
 /// Build a Part instance.
@@ -49,6 +37,13 @@ pub fn part(name: &str) -> InstanceBuilder {
 /// Build a Model instance.
 pub fn model(name: &str) -> InstanceBuilder {
     InstanceBuilder::new("Model").with_name(name)
+}
+
+/// Ensure a directory and its parents exist.
+pub fn ensure_dir(path: &Path) {
+    if !path.exists() {
+        std::fs::create_dir_all(path).expect("Failed to create directory");
+    }
 }
 
 /// Create the standard project json5 content for syncback tests.
@@ -63,9 +58,3 @@ pub fn standard_project_json5(name: &str) -> String {
     )
 }
 
-/// Ensure a directory and its parents exist.
-pub fn ensure_dir(path: &Path) {
-    if !path.exists() {
-        std::fs::create_dir_all(path).expect("Failed to create directory");
-    }
-}

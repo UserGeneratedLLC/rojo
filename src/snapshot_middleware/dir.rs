@@ -6,6 +6,12 @@ use std::{
 use anyhow::Context;
 use memofs::{DirEntry, Vfs};
 
+#[derive(Debug, thiserror::Error)]
+#[error("directory has duplicate-named children at {path}")]
+pub struct DuplicateChildrenError {
+    pub path: String,
+}
+
 use crate::{
     snapshot::{InstanceContext, InstanceMetadata, InstanceSnapshot, InstigatingSource},
     snapshot_middleware::Middleware,
@@ -154,9 +160,7 @@ pub fn syncback_dir_no_meta<'sync>(
     // the ProjectNode special case (skip instead of rbxm for services).
     if crate::syncback::has_duplicate_children(snapshot.new_tree(), snapshot.new) {
         let inst_path = crate::syncback::inst_path(snapshot.new_tree(), snapshot.new);
-        anyhow::bail!(
-            "directory has duplicate-named children at {inst_path}, converting to rbxm container"
-        );
+        return Err(DuplicateChildrenError { path: inst_path }.into());
     }
 
     if let Some(old_inst) = snapshot.old_inst() {

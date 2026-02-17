@@ -1101,64 +1101,20 @@ impl ApiService {
                             .to_path_buf()
                     } else {
                         // Standalone scripts cannot have children in Rojo's file format.
-                        // We need to convert from standalone (e.g., MyScript.server.luau)
-                        // to directory format (e.g., MyScript/init.server.luau).
-                        let script_name = added.name.as_str();
+                        // Convert to directory format (e.g., MyScript/init.server.luau).
                         let parent_dir = existing_path.parent().unwrap_or(existing_path);
-                        let new_dir = parent_dir.join(script_name);
-
-                        // Create the directory
-                        self.suppress_path(&new_dir);
-                        fs::create_dir_all(&new_dir).with_context(|| {
-                            format!(
-                                "Failed to create directory for script with children: {}",
-                                new_dir.display()
-                            )
-                        })?;
-
-                        // Determine the init file name based on class
-                        let init_name = match class_name.as_str() {
-                            "ModuleScript" => "init.luau",
-                            "Script" => "init.server.luau",
-                            "LocalScript" => "init.local.luau",
-                            _ => "init.luau",
-                        };
-
-                        // Move the script content to init file
-                        let init_path = new_dir.join(init_name);
-                        self.suppress_path(&init_path);
-                        fs::write(&init_path, source.as_bytes()).with_context(|| {
-                            format!("Failed to write init file: {}", init_path.display())
-                        })?;
-
-                        // Remove the old standalone file
-                        if existing_path.exists() && existing_path != init_path {
-                            self.suppress_path_remove(existing_path);
-                            fs::remove_file(existing_path).with_context(|| {
-                                format!(
-                                    "Failed to remove old standalone script: {}",
-                                    existing_path.display()
-                                )
-                            })?;
-                        }
-
-                        log::info!(
-                            "Syncback: Converted standalone {} to directory format at {}",
-                            class_name,
-                            new_dir.display()
-                        );
-
-                        new_dir
+                        self.convert_standalone_script_to_directory(
+                            existing_path,
+                            &added.name,
+                            &class_name,
+                            parent_dir,
+                        )?
                     };
-
-                    // Filter duplicate children
-                    let inst_path = format!("{}", existing_path.display());
-                    let unique_children =
-                        self.filter_duplicate_children(&added.children, &inst_path, stats);
 
                     // Process children using normal syncback path
                     // This will use detect_existing_script_format to check existing files
-                    self.process_children_incremental(&unique_children, &children_dir, stats)?;
+                    let children_refs: Vec<&_> = added.children.iter().collect();
+                    self.process_children_incremental(&children_refs, &children_dir, stats)?;
                 }
             }
 
@@ -1188,11 +1144,8 @@ impl ApiService {
 
                     // Handle children
                     if !added.children.is_empty() {
-                        let inst_path = format!("{}", existing_path.display());
-                        let unique_children =
-                            self.filter_duplicate_children(&added.children, &inst_path, stats);
-
-                        self.process_children_incremental(&unique_children, existing_path, stats)?;
+                        let children_refs: Vec<&_> = added.children.iter().collect();
+                        self.process_children_incremental(&children_refs, existing_path, stats)?;
                     }
                 } else {
                     // It's a standalone file (e.g., .model.json5)
@@ -1608,18 +1561,6 @@ impl ApiService {
         true
     }
 
-    /// Returns all children for syncing. Previously filtered out duplicates,
-    /// but now the server handles duplicate-named children via rbxm container
-    /// serialization.
-    fn filter_duplicate_children<'a>(
-        &self,
-        children: &'a [crate::web::interface::AddedInstance],
-        _parent_path: &str,
-        _stats: &crate::syncback::SyncbackStats,
-    ) -> Vec<&'a crate::web::interface::AddedInstance> {
-        children.iter().collect()
-    }
-
     /// Detects what file format currently exists on disk for a given instance.
     /// This is used to preserve the existing format during partial updates.
     ///
@@ -1750,12 +1691,8 @@ impl ApiService {
             None
         };
 
-        // Build path string for stats
-        let inst_path = format!("{}/{}", parent_dir.display(), added.name);
-
-        // Filter out children with duplicate names (cannot reliably sync)
-        let unique_children = self.filter_duplicate_children(&added.children, &inst_path, stats);
-        let has_children = !unique_children.is_empty();
+        let children_refs: Vec<&_> = added.children.iter().collect();
+        let has_children = !children_refs.is_empty();
 
         // Determine the appropriate middleware/file format based on class name.
         // This matches the logic in src/syncback/mod.rs::get_best_middleware.
@@ -1811,7 +1748,7 @@ impl ApiService {
                     })?;
                     self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated ModuleScript at {}", init_path.display());
-                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                    self.process_children_incremental(&children_refs, &dir_path, stats)?;
                 } else {
                     let file_path = parent_dir.join(format!("{}.luau", encoded_name));
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
@@ -1861,7 +1798,7 @@ impl ApiService {
                     })?;
                     self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated Script at {}", init_path.display());
-                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                    self.process_children_incremental(&children_refs, &dir_path, stats)?;
                 } else {
                     let file_path =
                         parent_dir.join(format!("{}.{}.luau", encoded_name, script_suffix));
@@ -1911,7 +1848,7 @@ impl ApiService {
                     })?;
                     self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated LocalScript at {}", init_path.display());
-                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                    self.process_children_incremental(&children_refs, &dir_path, stats)?;
                 } else {
                     let file_path = parent_dir.join(format!("{}.local.luau", encoded_name));
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
@@ -1957,7 +1894,7 @@ impl ApiService {
                 );
 
                 // Recursively process children
-                self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                self.process_children_incremental(&children_refs, &dir_path, stats)?;
             }
 
             // StringValue: .txt file if no children, directory with init.meta.json5 if has children
@@ -1973,7 +1910,7 @@ impl ApiService {
                         "Syncback: Created StringValue directory at {}",
                         dir_path.display()
                     );
-                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                    self.process_children_incremental(&children_refs, &dir_path, stats)?;
                 } else {
                     let value = added
                         .properties
@@ -2027,7 +1964,7 @@ impl ApiService {
                         "Syncback: Created LocalizationTable directory at {}",
                         dir_path.display()
                     );
-                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                    self.process_children_incremental(&children_refs, &dir_path, stats)?;
                 } else {
                     let file_path = parent_dir.join(format!("{}.csv", encoded_name));
                     fs::write(&file_path, content.as_bytes()).with_context(|| {
@@ -2091,7 +2028,7 @@ impl ApiService {
                     );
 
                     // Recursively process children
-                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                    self.process_children_incremental(&children_refs, &dir_path, stats)?;
                 } else {
                     let content = self.serialize_instance_to_model_json(added, meta_name_field)?;
                     // Use the detected file path if available (preserves .model.json
@@ -5405,8 +5342,8 @@ mod tests {
 
         #[test]
         fn test_syncback_skips_duplicate_children() {
-            // When syncing back children, duplicates should be skipped
-            // This test verifies the filter_duplicate_children logic
+            // When syncing back children, duplicates should be detected
+            // This test verifies the filter_duplicate_names helper logic
 
             let children_names = ["ChildA", "ChildB", "ChildA", "ChildC"];
             let unique: Vec<_> = children_names

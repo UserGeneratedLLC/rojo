@@ -10,7 +10,7 @@
 ///! level (project.rs rejects them) — they must be deeper in the tree.
 mod rojo_test;
 
-use rbx_dom_weak::{types::Variant, InstanceBuilder, WeakDom};
+use rbx_dom_weak::{InstanceBuilder, WeakDom};
 use std::path::Path;
 
 use rojo_test::fixture_gen::*;

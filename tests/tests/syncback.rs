@@ -119,15 +119,15 @@ syncback_tests! {
     // Container with 5 levels of nesting → all preserved in rbxm
     ambiguous_deep_nesting => ["src/Deep.rbxm"],
     // "Test" (normal dir) and "Te/st" (has duplicates, slugifies to "Test") → dedup rbxm
-    ambiguous_dedup_collision => [],
+    ambiguous_dedup_collision => ["src/Te_st.rbxm", "src/Te_st.meta.json5"],
     // Two children "child" and "Child" (case only) → detected as duplicates
     ambiguous_case_insensitive => ["src/CaseTest.rbxm", "src/CaseTest.meta.json5"],
     // Container named with forbidden Windows chars → slugified + meta
-    ambiguous_windows_invalid_chars => [],
+    ambiguous_windows_invalid_chars => ["src/What_______Name.rbxm", "src/What_______Name.meta.json5"],
     // Duplicates under ProjectNode → falls back to rbxm (entire $path directory
     // becomes rbxm, preserving all children including duplicates and unique ones).
     // In clean mode, old_inst is None so ProjectNode detection doesn't trigger.
-    ambiguous_project_node_parent => [],
+    ambiguous_project_node_parent => ["src.rbxm", "src.meta.json5"],
 }
 
 // Tests that run in incremental mode (preserving existing structure)
@@ -152,7 +152,7 @@ syncback_tests_incremental! {
     // ---------------------------------------------------------------
 
     // Was rbxm (2x "Child"), one renamed → rbxm expands back to directory
-    ambiguous_expansion_resolved => [],
+    ambiguous_expansion_resolved => ["src/Parent/ChildB/.gitkeep"],
     // Was rbxm (3x "Child"), one renamed but 2 remain → stays as rbxm
     ambiguous_expansion_still_ambiguous => ["src/Parent.rbxm", "src/Parent.meta.json5"],
     // User rbxm (no ambiguousContainer flag) with unique children → stays as rbxm

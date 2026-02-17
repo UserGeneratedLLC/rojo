@@ -584,49 +584,90 @@ pub fn syncback_project<'sync>(
             project_node_property_syncback_no_path(snapshot, new_inst, node);
         }
 
+        // Detect duplicate children using case-insensitive comparison
+        // (matching has_duplicate_children in syncback/mod.rs) to correctly
+        // handle "Script" vs "script" collisions on case-insensitive filesystems.
         let mut new_duplicate_names: HashSet<String> = HashSet::new();
+        {
+            let mut seen: HashSet<String> = HashSet::new();
+            for child_ref in new_inst.children() {
+                let child = snapshot
+                    .get_new_instance(*child_ref)
+                    .expect("all children of Instances should be in new DOM");
+                let lower = child.name.to_lowercase();
+                if !seen.insert(lower.clone()) {
+                    new_duplicate_names.insert(lower);
+                }
+            }
+        }
+        if !new_duplicate_names.is_empty() {
+            let parent_path = inst_path(snapshot.new_tree(), new_inst.referent());
+            for child_ref in new_inst.children() {
+                let child = snapshot
+                    .get_new_instance(*child_ref)
+                    .expect("all children of Instances should be in new DOM");
+                if new_duplicate_names.contains(&child.name.to_lowercase()) {
+                    log::warn!(
+                        "Skipping duplicate-named child '{}' under ProjectNode '{}' -- \
+                        cannot create rbxm container for project-file instances. \
+                        Full path: {}/{}",
+                        child.name,
+                        parent_path,
+                        parent_path,
+                        child.name
+                    );
+                }
+            }
+        }
         for child_ref in new_inst.children() {
             let child = snapshot
                 .get_new_instance(*child_ref)
                 .expect("all children of Instances should be in new DOM");
-            if new_child_map.insert(&child.name, child).is_some() {
-                let parent_path = inst_path(snapshot.new_tree(), new_inst.referent());
-                log::warn!(
-                    "Skipping duplicate-named child '{}' under ProjectNode '{}' -- \
-                    cannot create rbxm container for project-file instances. \
-                    Full path: {}/{}",
-                    child.name,
-                    parent_path,
-                    parent_path,
-                    child.name
-                );
-                new_duplicate_names.insert(child.name.to_lowercase());
+            if !new_duplicate_names.contains(&child.name.to_lowercase()) {
+                new_child_map.insert(&child.name, child);
             }
         }
+
         let mut old_duplicate_names: HashSet<String> = HashSet::new();
+        {
+            let mut seen: HashSet<String> = HashSet::new();
+            for child_ref in old_inst.children() {
+                let child = snapshot
+                    .get_old_instance(*child_ref)
+                    .expect("all children of Instances should be in old DOM");
+                let lower = child.name().to_lowercase();
+                if !seen.insert(lower.clone()) {
+                    old_duplicate_names.insert(lower);
+                }
+            }
+        }
+        if !old_duplicate_names.is_empty() {
+            let parent_path = inst_path(snapshot.old_tree(), old_inst.id());
+            for child_ref in old_inst.children() {
+                let child = snapshot
+                    .get_old_instance(*child_ref)
+                    .expect("all children of Instances should be in old DOM");
+                if old_duplicate_names.contains(&child.name().to_lowercase()) {
+                    log::warn!(
+                        "Skipping duplicate-named child '{}' under ProjectNode '{}' -- \
+                        cannot create rbxm container for project-file instances. \
+                        Full path: {}/{}",
+                        child.name(),
+                        parent_path,
+                        parent_path,
+                        child.name()
+                    );
+                }
+            }
+        }
         for child_ref in old_inst.children() {
             let child = snapshot
                 .get_old_instance(*child_ref)
                 .expect("all children of Instances should be in old DOM");
-            if old_child_map.insert(child.name(), child).is_some() {
-                let parent_path = inst_path(snapshot.old_tree(), old_inst.id());
-                log::warn!(
-                    "Skipping duplicate-named child '{}' under ProjectNode '{}' -- \
-                    cannot create rbxm container for project-file instances. \
-                    Full path: {}/{}",
-                    child.name(),
-                    parent_path,
-                    parent_path,
-                    child.name()
-                );
-                old_duplicate_names.insert(child.name().to_lowercase());
+            if !old_duplicate_names.contains(&child.name().to_lowercase()) {
+                old_child_map.insert(child.name(), child);
             }
         }
-
-        // Remove duplicate-named children from the maps so they don't get
-        // processed as normal children (they were warned about above).
-        new_child_map.retain(|name, _| !new_duplicate_names.contains(&name.to_lowercase()));
-        old_child_map.retain(|name, _| !old_duplicate_names.contains(&name.to_lowercase()));
 
         // This loop does basic matching of Instance children to the node's
         // children. It ensures that `new_child_map` and `old_child_map` will

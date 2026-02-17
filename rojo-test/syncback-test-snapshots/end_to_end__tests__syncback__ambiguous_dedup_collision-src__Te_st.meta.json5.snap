@@ -1,0 +1,8 @@
+---
+source: tests/tests/syncback.rs
+expression: src/Te_st.meta.json5
+---
+{
+  ambiguousContainer: true,
+  name: "Te/st",
+}

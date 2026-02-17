@@ -570,7 +570,12 @@ pub fn syncback_loop_with_stats(
 
         let syncback = match middleware.syncback(&snapshot) {
             Ok(syncback) => syncback,
-            Err(err) if is_dir_middleware(middleware) => {
+            Err(err)
+                if is_dir_middleware(middleware)
+                    && err
+                        .downcast_ref::<crate::snapshot_middleware::DuplicateChildrenError>()
+                        .is_some() =>
+            {
                 // If the parent is a ProjectNode / service, we CANNOT convert
                 // it to an rbxm container (that would swallow the entire service).
                 // Skip the duplicate children with a warning instead.

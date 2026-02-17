@@ -1,0 +1,8 @@
+---
+source: tests/tests/syncback.rs
+expression: src/What_______Name.meta.json5
+---
+{
+  ambiguousContainer: true,
+  name: "What<>:\"|?*Name",
+}

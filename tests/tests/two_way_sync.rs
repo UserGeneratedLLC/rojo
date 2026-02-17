@@ -7252,9 +7252,15 @@ fn twoway_add_duplicate_names_handled() {
         let dup_path = session.path().join("src").join("Dup.luau");
         poll_file_exists(&dup_path, "First Dup.luau should exist");
 
-        // Add second "Dup" — server must handle the duplicate
+        // Add second "Dup" — server finds the existing "Dup" and updates it in place
         add_module_script_twoway(&session, &session_id, rs_id, "Dup", "return 'second'");
-        thread::sleep(Duration::from_millis(500));
+
+        // The existing file gets updated with the second instance's source
+        poll_file_contains(
+            &dup_path,
+            "return 'second'",
+            "Dup.luau should contain the second script's source",
+        );
 
         // Server should still be alive and responsive
         session
@@ -7283,7 +7289,14 @@ fn twoway_rename_creates_duplicate_no_crash() {
                 changed_metadata: None,
             },
         );
-        thread::sleep(Duration::from_millis(500));
+
+        // The renamed instance gets a dedup suffix since "ScriptB" already exists
+        let dedup_path = session.path().join("src").join("ScriptB~1.luau");
+        poll_file_exists(&dedup_path, "Renamed script should exist as ScriptB~1.luau");
+
+        // Old ScriptA file should be cleaned up
+        let old_path = session.path().join("src").join("ScriptA.luau");
+        poll_not_exists(&old_path, "Old ScriptA.luau should be removed after rename");
 
         session.get_api_rojo().expect("Server alive after rename");
     });

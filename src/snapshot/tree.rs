@@ -293,7 +293,7 @@ impl RojoTree {
             }
             let instance = self.inner.get_by_ref(current)?;
             let parent = instance.parent();
-            if !parent.is_some() || parent == self.inner.root_ref() {
+            if parent.is_none() || parent == self.inner.root_ref() {
                 return None;
             }
             current = parent;

@@ -8,6 +8,8 @@
 mod csv;
 mod dir;
 mod json;
+
+pub use dir::DuplicateChildrenError;
 mod json_model;
 mod lua;
 mod meta_file;
