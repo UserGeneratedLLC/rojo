@@ -1104,7 +1104,13 @@ impl JobThreadContext {
                     None => (removed_stem.to_string(), None),
                 };
 
-                // Find siblings that share the same dedup base stem
+                // Find siblings that share the same dedup base stem AND extension.
+                // Matching by stem alone would incorrectly group across different
+                // middleware types (e.g., Foo.server.luau and Foo.luau have the
+                // same stem "Foo" but different dedup keys).
+                let removed_extension =
+                    removed_fs_name.find('.').map(|i| &removed_fs_name[i + 1..]);
+
                 let Some(parent_inst) = tree.get_instance(parent_ref) else {
                     continue;
                 };
@@ -1117,6 +1123,13 @@ impl JobThreadContext {
                     }
                     let sibling_fs = tree.filesystem_name_for(sibling_ref);
                     let sibling_stem = sibling_fs.split('.').next().unwrap_or(&sibling_fs);
+                    let sibling_ext = sibling_fs.find('.').map(|i| &sibling_fs[i + 1..]);
+
+                    // Only group siblings with the same extension (same dedup key space)
+                    if sibling_ext != removed_extension {
+                        continue;
+                    }
+
                     let sibling_base = match parse_dedup_suffix(sibling_stem) {
                         Some((b, _)) => b,
                         None => sibling_stem,
@@ -1130,8 +1143,7 @@ impl JobThreadContext {
                     continue;
                 }
 
-                // Determine extension from the removed instance's FS name
-                let extension = removed_fs_name.find('.').map(|i| &removed_fs_name[i + 1..]);
+                let extension = removed_extension;
 
                 // Get the parent directory path
                 let parent_dir = {

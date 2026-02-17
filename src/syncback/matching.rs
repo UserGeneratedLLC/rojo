@@ -20,6 +20,10 @@ use crate::variant_eq::variant_eq;
 
 const UNMATCHED_PENALTY: u32 = 10_000;
 
+/// Maximum recursion depth for `compute_change_count`. Beyond this depth,
+/// only flat property comparison is used (no subtree recursion).
+const MAX_SCORING_DEPTH: u32 = 3;
+
 /// Result of the matching algorithm.
 #[derive(Debug)]
 pub struct MatchResult {
@@ -140,14 +144,22 @@ pub fn match_children(
             continue;
         }
 
-        // Score all (A, B) pairs
+        // Score all (A, B) pairs using recursive change-count scoring
         let mut pairs: Vec<(u32, Ref, Ref)> = Vec::new();
         let mut best_so_far = u32::MAX;
 
         for &new_ref in &avail_new {
             for &old_ref in &avail_old {
-                let cost =
-                    count_own_diffs(new_ref, old_ref, new_dom, old_dom, new_hashes, old_hashes);
+                let cost = compute_change_count(
+                    new_ref,
+                    old_ref,
+                    new_dom,
+                    old_dom,
+                    new_hashes,
+                    old_hashes,
+                    best_so_far,
+                    0,
+                );
                 pairs.push((cost, new_ref, old_ref));
                 if cost < best_so_far {
                     best_so_far = cost;
@@ -179,16 +191,156 @@ pub fn match_children(
     }
 }
 
-/// Count own property diffs between two WeakDom instances.
-/// Hash fast-path: if hashes match, return 0 (identical, no property check needed).
-/// Each differing property = +1. Children count diff = +1.
-fn count_own_diffs(
+/// Lightweight matching result used during recursive scoring.
+struct ScoringMatchResult {
+    matched: Vec<(usize, usize)>,
+    unmatched_new: usize,
+    unmatched_old: usize,
+}
+
+/// Match children by reference for scoring purposes (non-consuming).
+/// Groups by (Name, ClassName), instant-matches 1:1 groups, and scores
+/// ambiguous groups using `compute_change_count` (mutually recursive).
+fn match_children_for_scoring(
+    new_children: &[Ref],
+    old_children: &[Ref],
+    new_dom: &WeakDom,
+    old_dom: &WeakDom,
+    new_hashes: Option<&HashMap<Ref, Hash>>,
+    old_hashes: Option<&HashMap<Ref, Hash>>,
+    depth: u32,
+) -> ScoringMatchResult {
+    let mut new_matched = vec![false; new_children.len()];
+    let mut old_matched = vec![false; old_children.len()];
+    let mut matched = Vec::new();
+
+    if new_children.is_empty() && old_children.is_empty() {
+        return ScoringMatchResult {
+            matched,
+            unmatched_new: 0,
+            unmatched_old: 0,
+        };
+    }
+
+    // Group by (Name, ClassName)
+    let mut new_by_key: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    for (i, &r) in new_children.iter().enumerate() {
+        if let Some(inst) = new_dom.get_by_ref(r) {
+            new_by_key
+                .entry((inst.name.clone(), inst.class.to_string()))
+                .or_default()
+                .push(i);
+        }
+    }
+
+    let mut old_by_key: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    for (i, &r) in old_children.iter().enumerate() {
+        if let Some(inst) = old_dom.get_by_ref(r) {
+            old_by_key
+                .entry((inst.name.clone(), inst.class.to_string()))
+                .or_default()
+                .push(i);
+        }
+    }
+
+    // 1:1 groups: instant match
+    for (key, new_indices) in &new_by_key {
+        if let Some(old_indices) = old_by_key.get(key) {
+            if new_indices.len() == 1 && old_indices.len() == 1 {
+                let ni = new_indices[0];
+                let oi = old_indices[0];
+                matched.push((ni, oi));
+                new_matched[ni] = true;
+                old_matched[oi] = true;
+            }
+        }
+    }
+
+    // Ambiguous groups: score + greedy assign
+    for (key, new_indices) in &new_by_key {
+        let Some(old_indices) = old_by_key.get(key) else {
+            continue;
+        };
+
+        let avail_new: Vec<usize> = new_indices
+            .iter()
+            .filter(|&&ni| !new_matched[ni])
+            .copied()
+            .collect();
+        let avail_old: Vec<usize> = old_indices
+            .iter()
+            .filter(|&&oi| !old_matched[oi])
+            .copied()
+            .collect();
+
+        if avail_new.is_empty() || avail_old.is_empty() {
+            continue;
+        }
+        if avail_new.len() == 1 && avail_old.len() == 1 {
+            let ni = avail_new[0];
+            let oi = avail_old[0];
+            matched.push((ni, oi));
+            new_matched[ni] = true;
+            old_matched[oi] = true;
+            continue;
+        }
+
+        let mut pairs: Vec<(u32, usize, usize)> = Vec::new();
+        let mut best_so_far = u32::MAX;
+        for &ni in &avail_new {
+            for &oi in &avail_old {
+                let cost = compute_change_count(
+                    new_children[ni],
+                    old_children[oi],
+                    new_dom,
+                    old_dom,
+                    new_hashes,
+                    old_hashes,
+                    best_so_far,
+                    depth,
+                );
+                pairs.push((cost, ni, oi));
+                if cost < best_so_far {
+                    best_so_far = cost;
+                }
+            }
+        }
+
+        pairs.sort_by_key(|&(cost, _, _)| cost);
+
+        for &(_, ni, oi) in &pairs {
+            if new_matched[ni] || old_matched[oi] {
+                continue;
+            }
+            matched.push((ni, oi));
+            new_matched[ni] = true;
+            old_matched[oi] = true;
+        }
+    }
+
+    let unmatched_new = new_matched.iter().filter(|&&m| !m).count();
+    let unmatched_old = old_matched.iter().filter(|&&m| !m).count();
+
+    ScoringMatchResult {
+        matched,
+        unmatched_new,
+        unmatched_old,
+    }
+}
+
+/// Compute total change count between two WeakDom instances, including
+/// recursive subtree scoring. Hash fast-path: if hashes match, return 0.
+///
+/// Mutually recursive with `match_children_for_scoring`.
+fn compute_change_count(
     new_ref: Ref,
     old_ref: Ref,
     new_dom: &WeakDom,
     old_dom: &WeakDom,
     new_hashes: Option<&HashMap<Ref, Hash>>,
     old_hashes: Option<&HashMap<Ref, Hash>>,
+    best_so_far: u32,
+    depth: u32,
 ) -> u32 {
     // Hash fast-path: identical subtree = 0 cost
     if let (Some(nh), Some(oh)) = (new_hashes, old_hashes) {
@@ -197,6 +349,11 @@ fn count_own_diffs(
                 return 0;
             }
         }
+    }
+
+    let mut cost = count_own_diffs(new_ref, old_ref, new_dom, old_dom);
+    if cost >= best_so_far || depth >= MAX_SCORING_DEPTH {
+        return cost;
     }
 
     let new_inst = match new_dom.get_by_ref(new_ref) {
@@ -208,9 +365,61 @@ fn count_own_diffs(
         None => return UNMATCHED_PENALTY,
     };
 
+    let new_children = new_inst.children();
+    let old_children = old_inst.children();
+
+    if new_children.is_empty() && old_children.is_empty() {
+        return cost;
+    }
+
+    let scoring = match_children_for_scoring(
+        new_children,
+        old_children,
+        new_dom,
+        old_dom,
+        new_hashes,
+        old_hashes,
+        depth + 1,
+    );
+
+    for &(ni, oi) in &scoring.matched {
+        let remaining = best_so_far.saturating_sub(cost);
+        cost += compute_change_count(
+            new_children[ni],
+            old_children[oi],
+            new_dom,
+            old_dom,
+            new_hashes,
+            old_hashes,
+            remaining,
+            depth + 1,
+        );
+        if cost >= best_so_far {
+            return cost;
+        }
+    }
+
+    cost = cost
+        .saturating_add((scoring.unmatched_new + scoring.unmatched_old) as u32 * UNMATCHED_PENALTY);
+
+    cost
+}
+
+/// Count own property diffs between two WeakDom instances (flat, non-recursive).
+/// Each differing property = +1. Children count diff = +1.
+/// Does NOT include hash fast-path (handled by `compute_change_count`).
+fn count_own_diffs(new_ref: Ref, old_ref: Ref, new_dom: &WeakDom, old_dom: &WeakDom) -> u32 {
+    let new_inst = match new_dom.get_by_ref(new_ref) {
+        Some(i) => i,
+        None => return UNMATCHED_PENALTY,
+    };
+    let old_inst = match old_dom.get_by_ref(old_ref) {
+        Some(i) => i,
+        None => return UNMATCHED_PENALTY,
+    };
+
     let mut cost: u32 = 0;
 
-    // Properties present on new side
     for (key, new_val) in new_inst.properties.iter() {
         if let Some(old_val) = old_inst.properties.get(key) {
             if !variant_eq(new_val, old_val) {
@@ -221,14 +430,12 @@ fn count_own_diffs(
         }
     }
 
-    // Properties present only on old side
     for key in old_inst.properties.keys() {
         if !new_inst.properties.contains_key(key) {
             cost += 1;
         }
     }
 
-    // Children count diff
     if new_inst.children().len() != old_inst.children().len() {
         cost += 1;
     }

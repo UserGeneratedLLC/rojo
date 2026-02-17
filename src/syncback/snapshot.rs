@@ -1,6 +1,7 @@
 use indexmap::IndexMap;
 use memofs::Vfs;
-use std::collections::HashSet;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::{
@@ -29,6 +30,10 @@ pub struct SyncbackData<'sync> {
     pub(super) incremental: bool,
     /// Statistics tracker for syncback issues.
     pub(super) stats: &'sync SyncbackStats,
+    /// Records (Ref → ref-path-string) for each instance as filenames are
+    /// assigned during the syncback walk. Used after the walk to fix
+    /// Rojo_Ref_* attribute paths with correct dedup suffixes.
+    pub(super) ref_path_map: &'sync RefCell<HashMap<Ref, String>>,
 }
 
 impl<'sync> SyncbackData<'sync> {
@@ -87,6 +92,10 @@ impl<'sync> SyncbackSnapshot<'sync> {
         snapshot.path = self.path.join(&*name);
         snapshot.needs_meta_name = needs_meta_name;
 
+        // Record the Ref → ref-path mapping for dedup-aware ref linking.
+        // The ref path is built from the parent's entry + the child filename.
+        self.record_ref_path(new_ref, &name);
+
         Ok((snapshot, needs_meta_name, dedup_key))
     }
 
@@ -126,7 +135,31 @@ impl<'sync> SyncbackSnapshot<'sync> {
         snapshot.path = base_path.join(&*name);
         snapshot.needs_meta_name = needs_meta_name;
 
+        // Record the Ref → ref-path mapping for dedup-aware ref linking.
+        self.record_ref_path(new_ref, &name);
+
         Ok((snapshot, needs_meta_name, dedup_key))
+    }
+
+    /// Records the ref path for a child instance in the shared ref_path_map.
+    /// The ref path is: self's ref path + "/" + child_filename.
+    fn record_ref_path(&self, child_ref: Ref, child_filename: &str) {
+        let parent_path = self
+            .data
+            .ref_path_map
+            .borrow()
+            .get(&self.new)
+            .cloned()
+            .unwrap_or_default();
+        let child_path = if parent_path.is_empty() {
+            child_filename.to_string()
+        } else {
+            format!("{}/{}", parent_path, child_filename)
+        };
+        self.data
+            .ref_path_map
+            .borrow_mut()
+            .insert(child_ref, child_path);
     }
 
     /// Constructs a SyncbackSnapshot with the provided path and refs while

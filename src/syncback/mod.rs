@@ -174,7 +174,7 @@ pub fn syncback_loop_with_stats(
     }
 
     log::debug!("Collecting referents for new DOM...");
-    let deferred_referents = collect_referents(&new_tree, &pre_prune_paths);
+    let deferred_referents = collect_referents(&new_tree, &pre_prune_paths, None);
 
     // Remove any properties that are manually blocked from syncback via the
     // project file.
@@ -451,6 +451,7 @@ pub fn syncback_loop_with_stats(
         HashSet::new()
     };
 
+    let ref_path_map = std::cell::RefCell::new(HashMap::new());
     let syncback_data = SyncbackData {
         vfs,
         old_tree,
@@ -458,6 +459,7 @@ pub fn syncback_loop_with_stats(
         project,
         incremental,
         stats,
+        ref_path_map: &ref_path_map,
     };
 
     // Always start with old reference for the Project middleware.
@@ -607,6 +609,32 @@ pub fn syncback_loop_with_stats(
         });
 
         snapshots.extend(syncback.children);
+    }
+
+    // Post-process: fix Rojo_Ref_* attribute paths with correct dedup suffixes.
+    // During the walk, we recorded (Ref → final_path) in the ref_path_map.
+    // Compare against tentative_fs_path to find instances where dedup changed the path.
+    {
+        use ref_properties::tentative_fs_path_public;
+
+        let final_map = ref_path_map.borrow();
+        let mut substitutions: Vec<(String, String)> = Vec::new();
+        for (&inst_ref, final_path) in final_map.iter() {
+            let tentative = tentative_fs_path_public(&new_tree, inst_ref);
+            if tentative != *final_path {
+                substitutions.push((tentative, final_path.clone()));
+            }
+        }
+        if !substitutions.is_empty() {
+            // Sort by length descending so longer paths are replaced first
+            // (prevents partial prefix matches on shorter paths)
+            substitutions.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+            log::debug!(
+                "Fixing {} Rojo_Ref_* paths with dedup suffixes",
+                substitutions.len()
+            );
+            fs_snapshot.fix_ref_paths(&substitutions);
+        }
     }
 
     // In clean mode, remove any existing paths that weren't overwritten by new structure.

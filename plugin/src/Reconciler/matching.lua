@@ -16,88 +16,9 @@
 local Packages = script.Parent.Parent.Parent.Packages
 local RbxDom = require(Packages.RbxDom)
 
+local trueEquals = require(script.Parent.trueEquals)
+
 local UNMATCHED_PENALTY = 10000
-
--- Value equality check. This MUST match the trueEquals function in diff.lua
--- exactly. If matching says "equal" but diff says "different", we get phantom
--- changes from cross-paired instances.
-local function fuzzyEq(a: number, b: number, epsilon: number): boolean
-	local diff = math.abs(a - b)
-	local maxVal = math.max(math.abs(a), math.abs(b), 1)
-	return diff < epsilon or diff < maxVal * epsilon
-end
-
-local function trueEquals(a, b): boolean
-	if a == b then
-		return true
-	end
-
-	if
-		(a == nil and type(b) == "table" and b.Ref == "00000000000000000000000000000000")
-		or (b == nil and type(a) == "table" and a.Ref == "00000000000000000000000000000000")
-	then
-		return true
-	end
-
-	local typeA, typeB = typeof(a), typeof(b)
-
-	if typeA == "table" and typeB == "table" then
-		local checkedKeys = {}
-		for key, value in a do
-			checkedKeys[key] = true
-			if not trueEquals(value, b[key]) then
-				return false
-			end
-		end
-		for key, value in b do
-			if checkedKeys[key] then
-				continue
-			end
-			if not trueEquals(value, a[key]) then
-				return false
-			end
-		end
-		return true
-	elseif a ~= a and b ~= b then
-		return true
-	elseif typeA == "number" and typeB == "number" then
-		return fuzzyEq(a, b, 0.0001)
-	elseif typeA == "number" and typeB == "EnumItem" then
-		return a == b.Value
-	elseif typeA == "EnumItem" and typeB == "number" then
-		return a.Value == b
-	elseif typeA == "Color3" and typeB == "Color3" then
-		local aR, aG, aB = math.floor(a.R * 255), math.floor(a.G * 255), math.floor(a.B * 255)
-		local bR, bG, bB = math.floor(b.R * 255), math.floor(b.G * 255), math.floor(b.B * 255)
-		return aR == bR and aG == bG and aB == bB
-	elseif typeA == "CFrame" and typeB == "CFrame" then
-		local aComponents, bComponents = { a:GetComponents() }, { b:GetComponents() }
-		for i, aComponent in aComponents do
-			if not fuzzyEq(aComponent, bComponents[i], 0.0001) then
-				return false
-			end
-		end
-		return true
-	elseif typeA == "Vector3" and typeB == "Vector3" then
-		local aComponents, bComponents = { a.X, a.Y, a.Z }, { b.X, b.Y, b.Z }
-		for i, aComponent in aComponents do
-			if not fuzzyEq(aComponent, bComponents[i], 0.0001) then
-				return false
-			end
-		end
-		return true
-	elseif typeA == "Vector2" and typeB == "Vector2" then
-		local aComponents, bComponents = { a.X, a.Y }, { b.X, b.Y }
-		for i, aComponent in aComponents do
-			if not fuzzyEq(aComponent, bComponents[i], 0.0001) then
-				return false
-			end
-		end
-		return true
-	end
-
-	return false
-end
 
 local Matching = {}
 

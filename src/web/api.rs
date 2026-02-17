@@ -631,11 +631,18 @@ impl ApiService {
                     } else {
                         return None;
                     };
-                    let escaped_name = crate::escape_ref_path_segment(&added.name);
-                    let path = if parent_path.is_empty() {
-                        escaped_name.into_owned()
+                    // Use slugified name (matching filesystem conventions) instead of
+                    // escape_ref_path_segment (which uses legacy \/ escaping that
+                    // get_instance_by_path cannot resolve).
+                    let fs_name = if crate::syncback::name_needs_slugify(&added.name) {
+                        crate::syncback::slugify_name(&added.name)
                     } else {
-                        format!("{}/{}", parent_path, escaped_name)
+                        added.name.clone()
+                    };
+                    let path = if parent_path.is_empty() {
+                        fs_name
+                    } else {
+                        format!("{}/{}", parent_path, fs_name)
                     };
                     Some((*guid, path))
                 })

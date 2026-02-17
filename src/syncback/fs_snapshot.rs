@@ -446,4 +446,54 @@ impl FsSnapshot {
         removed_dirs.sort_unstable();
         removed_dirs
     }
+
+    /// Post-process `Rojo_Ref_*` attribute paths in meta/model JSON files.
+    ///
+    /// For each entry in `substitutions` (old_path → new_path), finds all
+    /// `.meta.json5` and `.model.json5` files in the snapshot and replaces
+    /// occurrences of the old path with the new path. This fixes tentative
+    /// ref paths that didn't include dedup suffixes.
+    pub fn fix_ref_paths(&mut self, substitutions: &[(String, String)]) {
+        if substitutions.is_empty() {
+            return;
+        }
+
+        let ref_paths: Vec<PathBuf> = self
+            .added_files
+            .keys()
+            .filter(|p| {
+                let name = p.file_name().and_then(|f| f.to_str()).unwrap_or("");
+                name.ends_with(".meta.json5")
+                    || name.ends_with(".meta.json")
+                    || name.ends_with(".model.json5")
+                    || name.ends_with(".model.json")
+            })
+            .cloned()
+            .collect();
+
+        for path in ref_paths {
+            let Some(contents) = self.added_files.get_mut(&path) else {
+                continue;
+            };
+            let Ok(text) = std::str::from_utf8(contents) else {
+                continue;
+            };
+            if !text.contains("Rojo_Ref_") {
+                continue;
+            }
+
+            let mut modified = text.to_string();
+            for (old_path, new_path) in substitutions {
+                if old_path == new_path {
+                    continue;
+                }
+                // Replace exact path matches and prefix matches (path + "/")
+                modified = modified.replace(old_path.as_str(), new_path.as_str());
+            }
+
+            if modified != text {
+                *contents = modified.into_bytes();
+            }
+        }
+    }
 }

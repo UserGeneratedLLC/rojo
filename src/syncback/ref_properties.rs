@@ -15,6 +15,12 @@ use crate::{
     REF_ID_ATTRIBUTE_NAME, REF_PATH_ATTRIBUTE_PREFIX, REF_POINTER_ATTRIBUTE_PREFIX,
 };
 
+/// Public wrapper for `tentative_fs_path` used by the post-processing step
+/// in `syncback_loop` to compare tentative vs final paths.
+pub fn tentative_fs_path_public(dom: &WeakDom, target_ref: Ref) -> String {
+    tentative_fs_path(dom, target_ref)
+}
+
 /// Compute a filesystem-name-compatible path for an instance in a bare WeakDom.
 ///
 /// Each path segment is a **tentative filesystem name**: the slugified instance
@@ -172,16 +178,28 @@ pub fn collect_all_paths(dom: &WeakDom) -> HashMap<Ref, String> {
 /// The `pre_prune_paths` parameter should contain paths for instances that may
 /// have been pruned from the DOM. This allows references to instances outside
 /// the sync tree to be preserved as path-based attributes.
-pub fn collect_referents(dom: &WeakDom, pre_prune_paths: &HashMap<Ref, String>) -> RefLinks {
+///
+/// The `final_paths` parameter, when provided, contains the definitive
+/// filesystem-name-based paths assigned during the syncback walk (including
+/// dedup suffixes like `~1`). These take priority over `tentative_fs_path()`.
+pub fn collect_referents(
+    dom: &WeakDom,
+    pre_prune_paths: &HashMap<Ref, String>,
+    final_paths: Option<&HashMap<Ref, String>>,
+) -> RefLinks {
     let mut path_links: HashMap<Ref, Vec<PathRefLink>> = HashMap::new();
     let id_links: HashMap<Ref, Vec<IdRefLink>> = HashMap::new();
     let targets_needing_id: HashSet<Ref> = HashSet::new();
 
-    // With the dedup system, ALL filesystem paths are unique (filesystem names
-    // are unique among siblings by definition). Always use path-based linking.
-    // ID-based fallback ($id/Rojo_Target_*) is only for instances without
-    // filesystem backing (inside .rbxm files), which will be handled when the
-    // syncback flow is restructured to pass filesystem name info.
+    // NOTE: tentative_fs_path() does not include dedup suffixes (~N). For
+    // instances with duplicate names under the same parent, this produces
+    // ambiguous paths. Resolution via get_instance_by_path() returns the
+    // first matching child, which may be wrong.
+    //
+    // When `final_paths` is provided (from the syncback walk), it is used
+    // instead of tentative_fs_path() to get the correct dedup'd path.
+    // Otherwise, falls back to tentative_fs_path() (pre-dedup, potentially
+    // ambiguous for duplicate-named instances).
 
     let mut queue = VecDeque::new();
     queue.push_back(dom.root_ref());
@@ -199,10 +217,12 @@ pub fn collect_referents(dom: &WeakDom, pre_prune_paths: &HashMap<Ref, String>) 
             }
 
             if dom.get_by_ref(*target_ref).is_some() {
-                // Target exists in DOM -- always use path-based system.
-                // Use tentative filesystem names so the path is compatible
-                // with get_instance_by_path() resolution.
-                let target_path = tentative_fs_path(dom, *target_ref);
+                // Target exists in DOM -- use path-based system.
+                // Prefer final_paths (dedup-aware) when available,
+                // fall back to tentative_fs_path (pre-dedup).
+                let target_path = final_paths
+                    .and_then(|fp| fp.get(target_ref).cloned())
+                    .unwrap_or_else(|| tentative_fs_path(dom, *target_ref));
                 path_links.entry(inst_ref).or_default().push(PathRefLink {
                     name: *prop_name,
                     path: target_path,
