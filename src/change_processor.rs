@@ -1539,11 +1539,31 @@ impl JobThreadContext {
                         log::warn!("Cannot change metadata yet.");
                     }
 
-                    // Check if this instance is inside an rbxm container.
-                    // If so, all property changes (including Source) are handled
-                    // by re-serializing the container after tree updates.
+                    // Check if this instance is inside an rbxm container OR is
+                    // the container itself. In either case, property changes
+                    // (including Source) are handled by re-serializing the
+                    // container after tree updates. Without this, Source writes
+                    // would write plain text directly to the .rbxm binary path,
+                    // corrupting the file.
                     let rbxm_container = if instance.metadata().instigating_source.is_none() {
                         tree.find_rbxm_container(id)
+                    } else if instance
+                        .metadata()
+                        .instigating_source
+                        .as_ref()
+                        .is_some_and(|s| {
+                            matches!(s, InstigatingSource::Path(p) if p.extension().is_some_and(|ext| ext == "rbxm"))
+                        })
+                    {
+                        // The instance IS the rbxm container root.
+                        instance
+                            .metadata()
+                            .instigating_source
+                            .as_ref()
+                            .and_then(|s| match s {
+                                InstigatingSource::Path(p) => Some((id, p.clone())),
+                                _ => None,
+                            })
                     } else {
                         None
                     };

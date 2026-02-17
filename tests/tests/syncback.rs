@@ -128,6 +128,9 @@ syncback_tests! {
     // becomes rbxm, preserving all children including duplicates and unique ones).
     // In clean mode, old_inst is None so ProjectNode detection doesn't trigger.
     ambiguous_project_node_parent => ["src.rbxm", "src.meta.json5"],
+    // Two duplicate children with Tags and Attributes properties → parent becomes rbxm,
+    // Tags and Attributes survive the rbxm binary serialization round-trip.
+    ambiguous_tags_and_attributes => ["src/Parent.rbxm", "src/Parent.meta.json5"],
 }
 
 // Tests that run in incremental mode (preserving existing structure)

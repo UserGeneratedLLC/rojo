@@ -1,0 +1,49 @@
+---
+source: tests/rojo_test/syncback_util.rs
+expression: src/Parent.rbxm
+---
+num_types: 1
+num_instances: 3
+chunks:
+  - Inst:
+      type_id: 0
+      type_name: Folder
+      object_format: 0
+      referents:
+        - 0
+        - 1
+        - 2
+  - Prop:
+      type_id: 0
+      prop_name: AttributesSerialize
+      prop_type: String
+      values:
+        - "\u0003\u0000\u0000\u0000\u000b\u0000\u0000\u0000DisplayName\u0002\u0004\u0000\u0000\u0000Hero\u0006\u0000\u0000\u0000Health\u0006\u0000\u0000\u0000\u0000\u0000\u0000Y@\u0005\u0000\u0000\u0000IsNPC\u0003\u0001"
+        - "\u0001\u0000\u0000\u0000\b\u0000\u0000\u0000Priority\u0006\u0000\u0000\u0000\u0000\u0000\u0000\u0014@"
+        - ""
+  - Prop:
+      type_id: 0
+      prop_name: Name
+      prop_type: String
+      values:
+        - Child
+        - Child
+        - Parent
+  - Prop:
+      type_id: 0
+      prop_name: Tags
+      prop_type: String
+      values:
+        - "Collectible\u0000Rare"
+        - ""
+        - ""
+  - Prnt:
+      version: 0
+      links:
+        - - 0
+          - 2
+        - - 1
+          - 2
+        - - 2
+          - -1
+  - End

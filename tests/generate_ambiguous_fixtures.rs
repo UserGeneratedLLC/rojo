@@ -10,7 +10,10 @@
 ///! level (project.rs rejects them) — they must be deeper in the tree.
 mod rojo_test;
 
-use rbx_dom_weak::{InstanceBuilder, WeakDom};
+use rbx_dom_weak::{
+    types::{Tags, Variant},
+    InstanceBuilder, WeakDom,
+};
 use std::path::Path;
 
 use rojo_test::fixture_gen::*;
@@ -220,6 +223,46 @@ fn gen_ambiguous_deep_nesting() {
     );
 }
 
+#[test]
+#[ignore]
+fn gen_ambiguous_tags_and_attributes() {
+    use rbx_dom_weak::types::Attributes as RbxAttributes;
+    // Container with children that have Tags and Attributes properties.
+    // Verifies these properties survive the rbxm round-trip.
+    let mut attrs = RbxAttributes::new();
+    attrs.insert("Health".to_string(), Variant::Float64(100.0));
+    attrs.insert(
+        "DisplayName".to_string(),
+        Variant::String("Hero".to_string()),
+    );
+    attrs.insert("IsNPC".to_string(), Variant::Bool(true));
+
+    let tagged_child = InstanceBuilder::new("Folder")
+        .with_name("Child")
+        .with_property(
+            "Tags",
+            Variant::Tags(["Collectible", "Rare"].iter().copied().collect::<Tags>()),
+        )
+        .with_property("Attributes", Variant::Attributes(attrs));
+
+    let child_with_attrs_only = {
+        let mut a2 = RbxAttributes::new();
+        a2.insert("Priority".to_string(), Variant::Float64(5.0));
+        InstanceBuilder::new("Folder")
+            .with_name("Child")
+            .with_property("Attributes", Variant::Attributes(a2))
+    };
+
+    create_syncback_fixture(
+        "ambiguous_tags_and_attributes",
+        folder("Root").with_child(
+            folder("Parent")
+                .with_child(tagged_child)
+                .with_child(child_with_attrs_only),
+        ),
+    );
+}
+
 // ============================================================
 // SYNCBACK INCREMENTAL FIXTURES (expansion tests)
 // ============================================================
@@ -376,6 +419,58 @@ fn gen_build_ambiguous_container() {
 
     // Normal sibling
     std::fs::write(src.join("Normal.luau"), "return 'normal sibling'").unwrap();
+}
+
+#[test]
+#[ignore]
+fn gen_build_ambiguous_tags_and_attributes() {
+    use rbx_dom_weak::types::Attributes as RbxAttributes;
+
+    let base = build_base().join("ambiguous_tags_and_attributes");
+    let src = base.join("src");
+    ensure_dir(&src);
+
+    std::fs::write(
+        base.join("default.project.json5"),
+        standard_project_json5("ambiguous_tags_and_attributes"),
+    )
+    .unwrap();
+
+    let mut attrs = RbxAttributes::new();
+    attrs.insert("Health".to_string(), Variant::Float64(100.0));
+    attrs.insert(
+        "DisplayName".to_string(),
+        Variant::String("Hero".to_string()),
+    );
+    attrs.insert("IsNPC".to_string(), Variant::Bool(true));
+
+    let tagged_child = InstanceBuilder::new("Folder")
+        .with_name("Child")
+        .with_property(
+            "Tags",
+            Variant::Tags(["Collectible", "Rare"].iter().copied().collect::<Tags>()),
+        )
+        .with_property("Attributes", Variant::Attributes(attrs));
+
+    let child_with_attrs_only = {
+        let mut a2 = RbxAttributes::new();
+        a2.insert("Priority".to_string(), Variant::Float64(5.0));
+        InstanceBuilder::new("Folder")
+            .with_name("Child")
+            .with_property("Attributes", Variant::Attributes(a2))
+    };
+
+    let container_rbxm = build_rbxm_bytes(
+        folder("Container")
+            .with_child(tagged_child)
+            .with_child(child_with_attrs_only),
+    );
+    std::fs::write(src.join("Container.rbxm"), container_rbxm).unwrap();
+    std::fs::write(
+        src.join("Container.meta.json5"),
+        "{\n  ambiguousContainer: true,\n}\n",
+    )
+    .unwrap();
 }
 
 // ============================================================

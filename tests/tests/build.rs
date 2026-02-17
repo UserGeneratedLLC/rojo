@@ -71,6 +71,7 @@ gen_build_tests! {
     init_meta_name_override,
     reserved_name_override,
     ambiguous_container,
+    ambiguous_tags_and_attributes,
 }
 
 fn run_build_test(test_name: &str) {

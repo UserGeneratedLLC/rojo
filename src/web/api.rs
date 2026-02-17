@@ -2510,10 +2510,24 @@ impl ApiService {
         let instigating_source = instance.metadata().instigating_source.as_ref();
 
         // If the instance has no instigating_source, it may be inside an rbxm
-        // container. In that case, property writes are handled by re-serializing
-        // the container in the change_processor after the tree is updated.
+        // container. If the instance IS the rbxm container root (instigating_source
+        // is a .rbxm path), property changes must also be deferred -- writing
+        // Source as plain text to a .rbxm path would corrupt the binary format.
+        // In both cases, the change_processor re-serializes the container after
+        // the tree is updated via apply_patch_set.
         let instigating_source = match instigating_source {
-            Some(source) => source,
+            Some(source) => {
+                if matches!(source, InstigatingSource::Path(p) if p.extension().is_some_and(|ext| ext == "rbxm"))
+                {
+                    log::debug!(
+                        "Instance {:?} IS an rbxm container root; \
+                         property write deferred to change_processor",
+                        update.id
+                    );
+                    return Ok(());
+                }
+                source
+            }
             None => {
                 if tree.find_rbxm_container(update.id).is_some() {
                     log::debug!(

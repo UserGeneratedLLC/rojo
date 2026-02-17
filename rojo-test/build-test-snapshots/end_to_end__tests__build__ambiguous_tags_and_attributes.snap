@@ -1,0 +1,32 @@
+---
+source: tests/tests/build.rs
+expression: contents
+---
+<roblox version="4">
+  <Item class="Folder" referent="0">
+    <Properties>
+      <string name="Name">ambiguous_tags_and_attributes</string>
+    </Properties>
+    <Item class="Folder" referent="1">
+      <Properties>
+        <string name="Name">Container</string>
+        <BinaryString name="AttributesSerialize"></BinaryString>
+        <BinaryString name="Tags"></BinaryString>
+      </Properties>
+      <Item class="Folder" referent="2">
+        <Properties>
+          <string name="Name">Child</string>
+          <BinaryString name="AttributesSerialize">AwAAAAsAAABEaXNwbGF5TmFtZQIEAAAASGVybwYAAABIZWFsdGgGAAAAAAAAWUAFAAAASXNOUEMDAQ==</BinaryString>
+          <BinaryString name="Tags">Q29sbGVjdGlibGUAUmFyZQ==</BinaryString>
+        </Properties>
+      </Item>
+      <Item class="Folder" referent="3">
+        <Properties>
+          <string name="Name">Child</string>
+          <BinaryString name="AttributesSerialize">AQAAAAgAAABQcmlvcml0eQYAAAAAAAAUQA==</BinaryString>
+          <BinaryString name="Tags"></BinaryString>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+</roblox>

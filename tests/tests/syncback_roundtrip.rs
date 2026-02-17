@@ -215,6 +215,19 @@ fn compare_properties(
             );
         }
     }
+
+    // Check Tags if present
+    if let (Some(tags_a), Some(tags_b)) = (
+        inst_a.properties.get(&ustr("Tags")),
+        inst_b.properties.get(&ustr("Tags")),
+    ) {
+        if tags_a != tags_b {
+            panic!(
+                "[{}] Tags differ for '{}' ({}):\nOriginal: {:?}\nRoundtrip: {:?}",
+                test_name, inst_a.name, inst_a.class, tags_a, tags_b
+            );
+        }
+    }
 }
 
 // =============================================================================
@@ -456,4 +469,11 @@ fn reserved_name_roundtrip() {
 #[test]
 fn ambiguous_container_roundtrip() {
     run_roundtrip_test("ambiguous_container");
+}
+
+/// rbxm containers with Tags and Attributes on instances should preserve
+/// these properties through the build -> syncback -> rebuild cycle.
+#[test]
+fn ambiguous_tags_and_attributes_roundtrip() {
+    run_roundtrip_test("ambiguous_tags_and_attributes");
 }
