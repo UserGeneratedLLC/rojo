@@ -11,6 +11,10 @@
 
 	The change count for a pair = how many things the reconciler would need
 	to touch to turn instance A into instance B, including the entire subtree.
+
+	Performance: all property decoding and Studio reads are pre-computed
+	BEFORE the N×M scoring loop. The inner comparison is pure table
+	lookups + trueEquals, with zero pcall/decode in the hot path.
 ]]
 
 local Packages = script.Parent.Parent.Parent.Packages
@@ -22,13 +26,337 @@ local UNMATCHED_PENALTY = 10000
 
 local Matching = {}
 
+-- ================================================================
+-- Pre-computation helpers (called once per instance per group)
+-- ================================================================
+
 --[[
-	Entry point. Match virtual children to Studio children under a parent.
+	Pre-decode all virtual instance properties into native Roblox values.
+	Called once per virtual instance, reused across all M studio comparisons.
+
+	Returns: {
+		props:      { [propName]: decodedValue },
+		extraProps: { propName, ... } | nil,  -- props not in classKeys (rare)
+		tags:       { [tag]: true } | nil,
+		attrs:      { [key]: value } | nil,
+		childCount: number,
+	}
+]]
+function Matching._cacheVirtual(vInst: any, classKeys: any)
+	local decoded: { [string]: any } = {}
+	local extraProps: { string }? = nil
+	local vProps = vInst.Properties
+
+	if vProps then
+		for propName, encodedValue in vProps do
+			if propName == "Tags" or propName == "Attributes" then
+				continue
+			end
+
+			local ty = next(encodedValue)
+			if ty == "Ref" then
+				continue
+			end
+
+			local pcallOk, decodeOk, value = pcall(RbxDom.EncodedValue.decode, encodedValue)
+			if pcallOk and decodeOk and value ~= nil then
+				decoded[propName] = value
+				if not classKeys.propNameSet[propName] then
+					if not extraProps then
+						extraProps = {}
+					end
+					table.insert(extraProps, propName)
+				end
+			end
+		end
+	end
+
+	-- Pre-decode tags into a set
+	local decodedTags: { [string]: boolean }? = nil
+	if vProps and vProps.Tags then
+		local ok, tags = RbxDom.EncodedValue.decode(vProps.Tags)
+		if ok and type(tags) == "table" then
+			decodedTags = {}
+			for _, tag in tags do
+				decodedTags[tag] = true
+			end
+		end
+	end
+
+	-- Pre-decode attributes
+	local decodedAttrs: { [string]: any }? = nil
+	if vProps and vProps.Attributes then
+		local ok, attrs = RbxDom.EncodedValue.decode(vProps.Attributes)
+		if ok and type(attrs) == "table" then
+			decodedAttrs = attrs
+		end
+	end
+
+	return {
+		props = decoded,
+		extraProps = extraProps,
+		tags = decodedTags,
+		attrs = decodedAttrs,
+		childCount = if vInst.Children then #vInst.Children else 0,
+	}
+end
+
+--[[
+	Pre-read all comparable properties from a Studio instance.
+	Called once per Studio instance, reused across all N virtual comparisons.
+
+	Returns: {
+		props:      { [propName]: value },
+		readable:   { [propName]: true },  -- tracks which reads succeeded
+		tags:       { [tag]: true } | nil,
+		attrs:      { [key]: value } | nil,
+		children:   { Instance } | nil,
+		childCount: number,
+	}
+]]
+function Matching._cacheStudio(studioInstance: Instance, classKeys: any, extraPropNames: { string }?)
+	local props: { [string]: any } = {}
+
+	-- Read all comparison-key properties
+	for _, propName in classKeys.propNames do
+		local ok, value = pcall(function()
+			return (studioInstance :: any)[propName]
+		end)
+		if ok and value ~= nil then
+			props[propName] = value
+		end
+	end
+
+	-- Read any extra properties the virtual side has (not in classKeys)
+	if extraPropNames then
+		for _, propName in extraPropNames do
+			if props[propName] ~= nil then
+				continue
+			end
+			local ok, value = pcall(function()
+				return (studioInstance :: any)[propName]
+			end)
+			if ok and value ~= nil then
+				props[propName] = value
+			end
+		end
+	end
+
+	-- Read tags
+	local tags: { [string]: boolean }? = nil
+	local tagsOk, studioTags = pcall(function()
+		return studioInstance:GetTags()
+	end)
+	if tagsOk then
+		tags = {}
+		for _, tag in studioTags do
+			tags[tag] = true
+		end
+	end
+
+	-- Read attributes
+	local attrs: { [string]: any }? = nil
+	local attrsOk, studioAttrs = pcall(function()
+		return studioInstance:GetAttributes()
+	end)
+	if attrsOk then
+		attrs = studioAttrs
+	end
+
+	-- Read children
+	local children: { Instance }? = nil
+	local childCount = 0
+	local childOk, studioKids = pcall(function()
+		return studioInstance:GetChildren()
+	end)
+	if childOk then
+		children = studioKids
+		childCount = #studioKids
+	end
+
+	return {
+		props = props,
+		tags = tags,
+		attrs = attrs,
+		children = children,
+		childCount = childCount,
+	}
+end
+
+-- ================================================================
+-- Hot-path scoring (ZERO pcall, ZERO decode, ZERO reflection lookup)
+-- ================================================================
+
+--[[
+	Count own property diffs between pre-computed virtual and Studio caches.
+	Single loop over the class's comparable properties. Pure table lookups
+	and trueEquals calls -- no pcall, no decode, no reflection queries.
+]]
+function Matching._countOwnDiffsCached(vCache: any, sCache: any, classKeys: any): number
+	local cost = 0
+	local vProps = vCache.props
+	local sProps = sCache.props
+	local defaults = classKeys.defaults
+
+	-- Single loop over all comparable property names for this class.
+	-- For each property, the effective virtual value is the explicit value
+	-- if present, otherwise the class default (syncback strips defaults).
+	for _, propName in classKeys.propNames do
+		local vVal = vProps[propName]
+		if vVal == nil then
+			vVal = defaults[propName]
+		end
+
+		if not trueEquals(vVal, sProps[propName]) then
+			cost += 1
+		end
+	end
+
+	-- Handle virtual properties not in the class comparison set (rare:
+	-- unknown class or properties from a newer API version).
+	if vCache.extraProps then
+		for _, propName in vCache.extraProps do
+			if not trueEquals(vProps[propName], sProps[propName]) then
+				cost += 1
+			end
+		end
+	end
+
+	-- Tags: symmetric set diff (pre-computed sets)
+	local vTags = vCache.tags
+	local sTags = sCache.tags
+	if vTags and sTags then
+		for tag in vTags do
+			if not sTags[tag] then
+				cost += 1
+			end
+		end
+		for tag in sTags do
+			if not vTags[tag] then
+				cost += 1
+			end
+		end
+	end
+
+	-- Attributes: symmetric map diff (pre-decoded / pre-read)
+	local vAttrs = vCache.attrs
+	local sAttrs = sCache.attrs
+	if vAttrs and sAttrs then
+		for key, vVal in vAttrs do
+			if not trueEquals(vVal, sAttrs[key]) then
+				cost += 1
+			end
+		end
+		for key in sAttrs do
+			if vAttrs[key] == nil then
+				cost += 1
+			end
+		end
+	end
+
+	-- Children count diff
+	if vCache.childCount ~= sCache.childCount then
+		cost += 1
+	end
+
+	return cost
+end
+
+-- ================================================================
+-- Recursive scoring (children matching)
+-- ================================================================
+
+--[[
+	Compute the recursive children cost for a matched pair.
+	Uses sCache.children (pre-read) to avoid repeated GetChildren().
+]]
+function Matching._computeChildrenCost(
+	vInst: any,
+	sCache: any,
+	virtualInstances: { [string]: any },
+	bestSoFar: number
+): number
+	local vChildren = vInst.Children
+	local studioKids = sCache.children
+
+	if not vChildren or #vChildren == 0 then
+		if studioKids then
+			return #studioKids * UNMATCHED_PENALTY
+		end
+		return 0
+	end
+
+	if not studioKids then
+		return 0
+	end
+
+	local validVChildren: { string } = {}
+	for _, childId in vChildren do
+		if virtualInstances[childId] then
+			table.insert(validVChildren, childId)
+		end
+	end
+
+	local childResult = Matching.matchChildren(validVChildren, studioKids, virtualInstances)
+
+	local cost = 0
+	for _, pair in childResult.matched do
+		cost += Matching._computeChangeCount(
+			pair.virtualId, pair.studioInstance, virtualInstances, bestSoFar - cost
+		)
+		if cost >= bestSoFar then
+			return cost
+		end
+	end
+
+	cost += (#childResult.unmatchedVirtual + #childResult.unmatchedStudio) * UNMATCHED_PENALTY
+	return cost
+end
+
+--[[
+	Compute total change count between a virtual instance and a Studio instance.
+	Includes own property diffs + recursive children cost.
+	Early-exits if cost reaches or exceeds bestSoFar.
+
+	Used for recursive 1:1 scoring (matched child pairs). For the N×M
+	ambiguous-group loop, matchChildren uses pre-computed caches directly.
+]]
+function Matching._computeChangeCount(
+	virtualId: string,
+	studioInstance: Instance,
+	virtualInstances: { [string]: any },
+	bestSoFar: number
+): number
+	local vInst = virtualInstances[virtualId]
+	if not vInst then
+		return UNMATCHED_PENALTY
+	end
+
+	-- Build caches inline (1:1 call, no N×M savings needed here,
+	-- but classKeys is still cached per class so it's free).
+	local classKeys = RbxDom.getClassComparisonKeys(vInst.ClassName)
+	local vCache = Matching._cacheVirtual(vInst, classKeys)
+	local sCache = Matching._cacheStudio(studioInstance, classKeys, vCache.extraProps)
+
+	local cost = Matching._countOwnDiffsCached(vCache, sCache, classKeys)
+	if cost >= bestSoFar then
+		return cost
+	end
+
+	cost += Matching._computeChildrenCost(vInst, sCache, virtualInstances, bestSoFar - cost)
+	return cost
+end
+
+-- ================================================================
+-- Entry point
+-- ================================================================
+
+--[[
+	Match virtual children to Studio children under a parent.
 
 	virtualChildren: array of virtual instance IDs
 	studioChildren: array of Studio Instance objects
 	virtualInstances: map of virtual ID → virtual instance data
-	instanceMap: bidirectional ID ↔ Instance mapping
 
 	Returns {matched, unmatchedVirtual, unmatchedStudio}
 ]]
@@ -44,9 +372,6 @@ function Matching.matchChildren(
 	-- ============================================================
 	-- Fast-path 1: Ref pin (confirmed identity, highest priority)
 	-- ============================================================
-	-- Scan virtual parent for Ref-typed properties that point to
-	-- virtual children. If the corresponding Studio parent property
-	-- points to a Studio child, pin them as a confirmed match.
 	-- (Ref pins are handled implicitly during hydration -- the parent
 	-- is already matched, and its Ref properties resolve via instanceMap
 	-- after children are matched. For initial hydration the instanceMap
@@ -155,8 +480,64 @@ function Matching.matchChildren(
 			continue
 		end
 
-		-- Build all (A, B) pairs with change counts.
-		-- Pairs are built in child order (virtual outer, studio inner).
+		-- --------------------------------------------------------
+		-- Pre-compute caches for this ambiguous group.
+		-- All instances share the same ClassName (grouped by key).
+		-- --------------------------------------------------------
+		local firstVInst = virtualInstances[remainingVirtual[vIndices[1]]]
+		if not firstVInst then
+			continue
+		end
+		local classKeys = RbxDom.getClassComparisonKeys(firstVInst.ClassName)
+
+		-- Pre-decode all virtual instances in this group
+		local vCaches: { [number]: any } = {}
+		local allExtraProps: { [string]: boolean }? = nil
+		for _, vi in vIndices do
+			if matchedV2[vi] then
+				continue
+			end
+			local vInst = virtualInstances[remainingVirtual[vi]]
+			if not vInst then
+				continue
+			end
+			local vCache = Matching._cacheVirtual(vInst, classKeys)
+			vCaches[vi] = vCache
+			-- Collect extra prop names across all virtuals for studio reads
+			if vCache.extraProps then
+				if not allExtraProps then
+					allExtraProps = {}
+				end
+				for _, propName in vCache.extraProps do
+					allExtraProps[propName] = true
+				end
+			end
+		end
+
+		-- Convert extra props set to array for studio caching
+		local extraPropNamesArray: { string }? = nil
+		if allExtraProps then
+			extraPropNamesArray = {}
+			for propName in allExtraProps do
+				table.insert(extraPropNamesArray, propName)
+			end
+		end
+
+		-- Pre-read all Studio instances in this group
+		local sCaches: { [number]: any } = {}
+		for _, si in sIndices do
+			if not matchedS2[si] then
+				sCaches[si] = Matching._cacheStudio(
+					remainingStudio[si], classKeys, extraPropNamesArray
+				)
+			end
+		end
+
+		-- --------------------------------------------------------
+		-- Score all (A, B) pairs using pre-computed caches.
+		-- Own diffs = pure table lookups (FAST).
+		-- Children cost = recursive (only if own diffs < bestSoFar).
+		-- --------------------------------------------------------
 		local pairs: { { vi: number, si: number, cost: number, idx: number } } = {}
 		local pairIdx = 0
 		local bestSoFar = math.huge
@@ -165,13 +546,35 @@ function Matching.matchChildren(
 			if matchedV2[vi] then
 				continue
 			end
+			local vCache = vCaches[vi]
+			if not vCache then
+				continue
+			end
+
 			for _, si in sIndices do
 				if matchedS2[si] then
 					continue
 				end
+				local sCache = sCaches[si]
+				if not sCache then
+					continue
+				end
+
 				pairIdx += 1
-				local cost =
-					Matching._computeChangeCount(remainingVirtual[vi], remainingStudio[si], virtualInstances, bestSoFar)
+
+				-- Own diffs: pure table lookups + trueEquals
+				local cost = Matching._countOwnDiffsCached(vCache, sCache, classKeys)
+
+				if cost < bestSoFar then
+					-- Recursive children cost
+					local vInst = virtualInstances[remainingVirtual[vi]]
+					if vInst then
+						cost += Matching._computeChildrenCost(
+							vInst, sCache, virtualInstances, bestSoFar - cost
+						)
+					end
+				end
+
 				table.insert(pairs, { vi = vi, si = si, cost = cost, idx = pairIdx })
 				if cost < bestSoFar then
 					bestSoFar = cost
@@ -211,234 +614,6 @@ function Matching.matchChildren(
 		unmatchedVirtual = remainingVirtual,
 		unmatchedStudio = remainingStudio,
 	}
-end
-
---[[
-	Compute total change count between a virtual instance and a Studio instance.
-	Includes own property diffs + recursive children cost.
-	Early-exits if cost reaches or exceeds bestSoFar.
-]]
-function Matching._computeChangeCount(
-	virtualId: string,
-	studioInstance: Instance,
-	virtualInstances: { [string]: any },
-	bestSoFar: number
-): number
-	local vInst = virtualInstances[virtualId]
-	if not vInst then
-		return UNMATCHED_PENALTY
-	end
-
-	-- Cheap: own property diffs
-	local cost = Matching._countOwnDiffs(vInst, studioInstance)
-	if cost >= bestSoFar then
-		return cost
-	end
-
-	-- Expensive: recursive children matching
-	local vChildren = vInst.Children
-	if not vChildren or #vChildren == 0 then
-		-- No virtual children: any Studio children are unmatched
-		local ok, studioKids = pcall(function()
-			return studioInstance:GetChildren()
-		end)
-		if ok then
-			cost += #studioKids * UNMATCHED_PENALTY
-		end
-		return cost
-	end
-
-	local ok, studioKids = pcall(function()
-		return studioInstance:GetChildren()
-	end)
-	if not ok then
-		return cost
-	end
-
-	-- Filter valid virtual children
-	local validVChildren: { string } = {}
-	for _, childId in vChildren do
-		if virtualInstances[childId] then
-			table.insert(validVChildren, childId)
-		end
-	end
-
-	-- Recursive: match children and sum costs
-	local childResult = Matching.matchChildren(validVChildren, studioKids, virtualInstances)
-
-	-- Matched children: recursively score each pair
-	for _, pair in childResult.matched do
-		cost += Matching._computeChangeCount(pair.virtualId, pair.studioInstance, virtualInstances, bestSoFar - cost)
-		if cost >= bestSoFar then
-			return cost
-		end
-	end
-
-	-- Unmatched children: penalty per instance
-	local unmatchedCount = #childResult.unmatchedVirtual + #childResult.unmatchedStudio
-	cost += unmatchedCount * UNMATCHED_PENALTY
-
-	return cost
-end
-
---[[
-	Count own property diffs between a virtual instance and Studio instance.
-	Each differing property = +1. Tags and Attributes counted granularly.
-]]
-function Matching._countOwnDiffs(vInst: any, studioInstance: Instance): number
-	local cost = 0
-
-	-- Compare properties from the virtual side
-	local vProps = vInst.Properties
-	if vProps then
-		for propName, encodedValue in vProps do
-			-- Skip Tags and Attributes here (counted separately below)
-			if propName == "Tags" or propName == "Attributes" then
-				continue
-			end
-
-			-- Try to decode the virtual value and compare to Studio
-			local ty = next(encodedValue)
-			if ty == "Ref" then
-				-- Ref properties: can't easily compare during hydration
-				-- (instanceMap not yet populated). Skip for now.
-				continue
-			end
-
-			-- Decode the encoded value to a native Roblox type
-			local decodeOk, decodedValue = RbxDom.EncodedValue.decode(encodedValue)
-			if not decodeOk then
-				-- Can't decode: assume different (conservative)
-				cost += 1
-				continue
-			end
-
-			-- Read the Studio property
-			local readOk, studioValue = pcall(function()
-				return (studioInstance :: any)[propName]
-			end)
-			if not readOk then
-				-- Can't read: assume different
-				cost += 1
-				continue
-			end
-
-			-- Compare values using the same equality check as diff.lua
-			if not trueEquals(decodedValue, studioValue) then
-				cost += 1
-			end
-		end
-	end
-
-	-- Properties present only on the Studio side (not in virtual).
-	-- Syncback strips default-valued properties from model files, so virtual
-	-- instances may omit properties that Studio has at non-default values.
-	-- Without this check, a virtual instance missing e.g. Face scores equally
-	-- against all Studio instances in the group, causing wrong pairings.
-	local defaults = RbxDom.findDefaultProperties(vInst.ClassName)
-	if defaults then
-		for propName, encodedDefault in defaults do
-			if propName == "Tags" or propName == "Attributes" then
-				continue
-			end
-
-			-- Skip properties already compared from the virtual side
-			if vProps and vProps[propName] ~= nil then
-				continue
-			end
-
-			-- Skip Ref/UniqueId types (not comparable during hydration)
-			local ty = next(encodedDefault)
-			if ty == "Ref" or ty == "UniqueId" then
-				continue
-			end
-
-			-- pcall guards against unsupported types (e.g. SharedString)
-			local pcallOk, decodeOk, defaultValue = pcall(RbxDom.EncodedValue.decode, encodedDefault)
-			if not pcallOk or not decodeOk then
-				continue
-			end
-
-			local readOk, studioValue = pcall(function()
-				return (studioInstance :: any)[propName]
-			end)
-			if not readOk then
-				continue
-			end
-
-			if not trueEquals(defaultValue, studioValue) then
-				cost += 1
-			end
-		end
-	end
-
-	-- Tags: count individual adds/removes
-	local vTags = vInst.Properties and vInst.Properties.Tags
-	if vTags then
-		local decodeOk, decodedTags = RbxDom.EncodedValue.decode(vTags)
-		if decodeOk and type(decodedTags) == "table" then
-			local readOk, studioTags = pcall(function()
-				return studioInstance:GetTags()
-			end)
-			if readOk then
-				local vSet: { [string]: boolean } = {}
-				for _, tag in decodedTags do
-					vSet[tag] = true
-				end
-				local sSet: { [string]: boolean } = {}
-				for _, tag in studioTags do
-					sSet[tag] = true
-				end
-				-- Count symmetric difference
-				for tag in vSet do
-					if not sSet[tag] then
-						cost += 1
-					end
-				end
-				for tag in sSet do
-					if not vSet[tag] then
-						cost += 1
-					end
-				end
-			end
-		end
-	end
-
-	-- Attributes: count individual adds/removes/changes
-	local vAttrs = vInst.Properties and vInst.Properties.Attributes
-	if vAttrs then
-		local decodeOk, decodedAttrs = RbxDom.EncodedValue.decode(vAttrs)
-		if decodeOk and type(decodedAttrs) == "table" then
-			local readOk, studioAttrs = pcall(function()
-				return studioInstance:GetAttributes()
-			end)
-			if readOk then
-				-- Count diffs in attribute maps
-				for key, vVal in decodedAttrs do
-					local sVal = studioAttrs[key]
-					if sVal == nil or not trueEquals(vVal, sVal) then
-						cost += 1
-					end
-				end
-				for key in studioAttrs do
-					if decodedAttrs[key] == nil then
-						cost += 1
-					end
-				end
-			end
-		end
-	end
-
-	-- Children count diff
-	local vChildCount = if vInst.Children then #vInst.Children else 0
-	local readOk, studioChildCount = pcall(function()
-		return #studioInstance:GetChildren()
-	end)
-	if readOk and vChildCount ~= studioChildCount then
-		cost += 1
-	end
-
-	return cost
 end
 
 --[[
