@@ -38,7 +38,8 @@ Making a new release? Simply add the new header with the version and date undern
 * Remove duplicate-skip logic from the plugin (`diff.lua`, `encodeInstance.lua`). The server now handles duplicate-named instances via rbxm container serialization; the plugin encodes them normally.
 * Add typed `DuplicateChildrenError` for structured error matching in the syncback rbxm fallback path (replaces string-based error-as-flow-control).
 * Guard against rbxm container creation for ProjectNode parents (services defined in project files cannot be converted to rbxm; duplicates are skipped with a warning).
-* Add comprehensive test suite for ambiguous containers: ~30 integration tests across syncback (clean + incremental expansion), two-way sync, build, and edge cases (case-insensitive detection, slugified names, dedup collisions, deep nesting, script containers, Windows-invalid chars).
+* Defer Tags and Attributes property changes for instances inside rbxm containers to re-serialization, preventing corruption of binary formats.
+* Add comprehensive test suite for ambiguous containers: ~30 integration tests across syncback (clean + incremental expansion), two-way sync, build, and edge cases (case-insensitive detection, slugified names, dedup collisions, deep nesting, script containers, Tags/Attributes, Windows-invalid chars).
 
 <details>
 <summary>Full commit log</summary>
@@ -52,6 +53,8 @@ Making a new release? Simply add the new header with the version and date undern
 - `4783f863` Implement JSON5 string escaping function and associated tests
 - `ffa0b3e3` Add new snapshot tests for ambiguous naming scenarios
 - `216b9e01` Add audit plan for rbxm-ambiguous branch round 2 fixes
+- `84400346` Enhance rbxm container system with ambiguous handling and comprehensive tests
+- `594e572a` Add support for ambiguous tags and attributes in rbxm containers
 
 </details>
 
