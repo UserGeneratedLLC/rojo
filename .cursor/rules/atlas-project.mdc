@@ -1,6 +1,5 @@
 ---
-globs: **/*.project.json5,**/*.project.json,**/*.meta.json5,**/*.meta.json,**/*.model.json5,**/*.model.json
-alwaysApply: false
+alwaysApply: true
 ---
 
 # Atlas Project File Format

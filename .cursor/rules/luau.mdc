@@ -1,5 +1,4 @@
 ---
-description: Luau language syntax, type system, single-threaded model, and common gotchas
 alwaysApply: true
 ---
 # Luau Language Rules
