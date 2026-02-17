@@ -229,40 +229,50 @@ fn pass3_similarity(
             continue;
         };
 
-        // Build pairs with similarity scores.
-        let mut pairs: Vec<(usize, usize, u32)> = Vec::new();
+        // Narrow by ClassName within this name group.
+        let mut snap_by_class: HashMap<&str, Vec<usize>> = HashMap::new();
         for &si in snap_indices {
             if snap_matched[si] {
                 continue;
             }
-            let snap = match &snap_available[si] {
-                Some(s) => s,
-                None => continue,
-            };
-            for &ti in tree_indices {
-                if !tree_available[ti] {
-                    continue;
-                }
-                let inst = match tree.get_instance(tree_children[ti]) {
-                    Some(i) => i,
-                    None => continue,
-                };
-                let score = compute_forward_similarity(snap, &inst);
-                pairs.push((si, ti, score));
+            if let Some(snap) = &snap_available[si] {
+                snap_by_class
+                    .entry(&snap.class_name)
+                    .or_default()
+                    .push(si);
+            }
+        }
+        let mut tree_by_class: HashMap<String, Vec<usize>> = HashMap::new();
+        for &ti in tree_indices {
+            if !tree_available[ti] {
+                continue;
+            }
+            if let Some(inst) = tree.get_instance(tree_children[ti]) {
+                tree_by_class
+                    .entry(inst.class_name().to_string())
+                    .or_default()
+                    .push(ti);
             }
         }
 
-        // Sort descending by score, tiebreak by original order.
-        pairs.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.cmp(&b.0).then(a.1.cmp(&b.1))));
-
-        // Greedy assignment.
-        for (si, ti, _score) in pairs {
-            if snap_matched[si] || !tree_available[ti] {
+        // Within same-name+class sub-groups, use POSITIONAL matching.
+        // The Nth snapshot child matches the Nth tree child within each
+        // sub-group. This preserves child ordering, which is the strongest
+        // signal for duplicate-named instances (e.g., Parts in a Model).
+        for (class, snap_class_indices) in &snap_by_class {
+            let Some(tree_class_indices) = tree_by_class.get(*class) else {
                 continue;
+            };
+            let match_count = snap_class_indices.len().min(tree_class_indices.len());
+            for idx in 0..match_count {
+                let si = snap_class_indices[idx];
+                let ti = tree_class_indices[idx];
+                if !snap_matched[si] && tree_available[ti] {
+                    matched.push((si, ti));
+                    snap_matched[si] = true;
+                    tree_available[ti] = false;
+                }
             }
-            matched.push((si, ti));
-            snap_matched[si] = true;
-            tree_available[ti] = false;
         }
     }
 }

@@ -16,7 +16,10 @@ use crate::{
         apply_patch_set, compute_patch_set, AppliedPatchSet, InstigatingSource, PatchSet, RojoTree,
     },
     snapshot_middleware::{snapshot_from_vfs, snapshot_project_node},
-    syncback::{deduplicate_name, name_needs_slugify, slugify_name, strip_script_suffix},
+    syncback::{
+        dedup_suffix::{compute_cleanup_action, parse_dedup_suffix, DedupCleanupAction},
+        deduplicate_name, name_needs_slugify, slugify_name, strip_script_suffix,
+    },
 };
 
 /// Wrapper that displays a path relative to a project root directory.
@@ -1066,6 +1069,140 @@ impl JobThreadContext {
                     }
                 } else {
                     log::warn!("Cannot remove instance {:?}, it does not exist.", id);
+                }
+            }
+
+            // Dedup suffix cleanup: after removals, check if any dedup
+            // groups need suffix renames (base-name promotion, group-to-1).
+            // Must run BEFORE apply_patch_set removes the instances from
+            // the tree, because we need parent/sibling relationships.
+            for &removed_id in &patch_set.removed_instances {
+                let (parent_ref, removed_fs_name) = {
+                    let Some(inst) = tree.get_instance(removed_id) else {
+                        continue;
+                    };
+                    let Some(source) = &inst.metadata().instigating_source else {
+                        continue;
+                    };
+                    if matches!(source, InstigatingSource::ProjectNode { .. }) {
+                        continue;
+                    }
+                    let parent = inst.parent();
+                    let fs_name = tree.filesystem_name_for(removed_id);
+                    (parent, fs_name)
+                };
+
+                if parent_ref.is_none() {
+                    continue;
+                }
+
+                // Parse the dedup suffix from the removed instance's FS name
+                let removed_stem = removed_fs_name
+                    .split('.')
+                    .next()
+                    .unwrap_or(&removed_fs_name);
+                let (base_stem, _) = match parse_dedup_suffix(removed_stem) {
+                    Some((base, n)) => (base.to_string(), Some(n)),
+                    None => (removed_stem.to_string(), None),
+                };
+
+                // Find siblings that share the same dedup base stem
+                let Some(parent_inst) = tree.get_instance(parent_ref) else {
+                    continue;
+                };
+                let mut remaining_stems: Vec<String> = Vec::new();
+                let mut deleted_was_base = parse_dedup_suffix(removed_stem).is_none();
+
+                for &sibling_ref in parent_inst.children() {
+                    if sibling_ref == removed_id {
+                        continue;
+                    }
+                    let sibling_fs = tree.filesystem_name_for(sibling_ref);
+                    let sibling_stem = sibling_fs
+                        .split('.')
+                        .next()
+                        .unwrap_or(&sibling_fs);
+                    let sibling_base = match parse_dedup_suffix(sibling_stem) {
+                        Some((b, _)) => b,
+                        None => sibling_stem,
+                    };
+                    if sibling_base.eq_ignore_ascii_case(&base_stem) {
+                        remaining_stems.push(sibling_stem.to_string());
+                    }
+                }
+
+                if remaining_stems.is_empty() {
+                    continue;
+                }
+
+                // Determine extension from the removed instance's FS name
+                let extension = removed_fs_name
+                    .find('.')
+                    .map(|i| &removed_fs_name[i + 1..]);
+
+                // Get the parent directory path
+                let parent_dir = {
+                    let Some(parent) = tree.get_instance(parent_ref) else {
+                        continue;
+                    };
+                    match &parent.metadata().instigating_source {
+                        Some(InstigatingSource::Path(p)) => p.clone(),
+                        _ => continue,
+                    }
+                };
+
+                let action = compute_cleanup_action(
+                    &base_stem,
+                    extension,
+                    &remaining_stems,
+                    deleted_was_base,
+                    &parent_dir,
+                );
+
+                match action {
+                    DedupCleanupAction::None => {}
+                    DedupCleanupAction::RemoveSuffix { from, to }
+                    | DedupCleanupAction::PromoteLowest { from, to } => {
+                        log::info!(
+                            "Dedup cleanup: renaming {} -> {}",
+                            self.display_path(&from),
+                            self.display_path(&to),
+                        );
+                        self.suppress_path_any(&from);
+                        self.suppress_path(&to);
+                        if let Err(e) = fs::rename(&from, &to) {
+                            log::warn!(
+                                "Dedup cleanup rename failed: {} -> {}: {}",
+                                from.display(),
+                                to.display(),
+                                e
+                            );
+                            self.unsuppress_path(&to);
+                        } else {
+                            // Update ref paths if the renamed instance has refs
+                            let old_ref_segment = from
+                                .file_name()
+                                .and_then(|f| f.to_str())
+                                .unwrap_or("");
+                            let new_ref_segment = to
+                                .file_name()
+                                .and_then(|f| f.to_str())
+                                .unwrap_or("");
+                            if old_ref_segment != new_ref_segment {
+                                // Build the old and new ref path prefixes
+                                let parent_path =
+                                    crate::ref_target_path_from_tree(&tree, parent_ref);
+                                let old_prefix =
+                                    format!("{}/{}", parent_path, old_ref_segment);
+                                let new_prefix =
+                                    format!("{}/{}", parent_path, new_ref_segment);
+                                self.update_ref_paths_after_rename(
+                                    &old_prefix,
+                                    &new_prefix,
+                                );
+                            }
+                        }
+                    }
                 }
             }
 

@@ -344,53 +344,84 @@ fn pass3_similarity(
             continue;
         };
 
-        let mut pairs: Vec<(Ref, Ref, u32)> = Vec::new();
-        for &new_ref in new_refs {
-            if matched_new.contains(&new_ref) {
+        // Narrow by ClassName within this name group.
+        let mut new_by_class: HashMap<&str, Vec<Ref>> = HashMap::new();
+        for &r in new_refs {
+            if matched_new.contains(&r) {
                 continue;
             }
-            for &old_ref in old_refs {
-                if matched_old.contains(&old_ref) {
-                    continue;
-                }
-                let score = compute_similarity(
-                    new_ref, old_ref, new_dom, old_dom, new_hashes, old_hashes,
-                );
-                pairs.push((new_ref, old_ref, score));
+            if let Some(inst) = new_dom.get_by_ref(r) {
+                new_by_class.entry(&inst.class).or_default().push(r);
+            }
+        }
+        let mut old_by_class: HashMap<&str, Vec<Ref>> = HashMap::new();
+        for &r in old_refs {
+            if matched_old.contains(&r) {
+                continue;
+            }
+            if let Some(inst) = old_dom.get_by_ref(r) {
+                old_by_class.entry(&inst.class).or_default().push(r);
             }
         }
 
-        pairs.sort_by(|a, b| {
-            b.2.cmp(&a.2).then_with(|| {
-                let a_new_idx = original_new_children
-                    .iter()
-                    .position(|&r| r == a.0)
-                    .unwrap_or(usize::MAX);
-                let b_new_idx = original_new_children
-                    .iter()
-                    .position(|&r| r == b.0)
-                    .unwrap_or(usize::MAX);
-                a_new_idx.cmp(&b_new_idx).then_with(|| {
-                    let a_old_idx = original_old_children
-                        .iter()
-                        .position(|&r| r == a.1)
-                        .unwrap_or(usize::MAX);
-                    let b_old_idx = original_old_children
-                        .iter()
-                        .position(|&r| r == b.1)
-                        .unwrap_or(usize::MAX);
-                    a_old_idx.cmp(&b_old_idx)
-                })
-            })
-        });
-
-        for (new_ref, old_ref, _score) in &pairs {
-            if matched_new.contains(new_ref) || matched_old.contains(old_ref) {
+        // Within same-name+class sub-groups: try hash-based matching first,
+        // then fall back to positional matching.
+        for (class, new_class_refs) in &new_by_class {
+            let Some(old_class_refs) = old_by_class.get(class) else {
                 continue;
+            };
+
+            // First pass: match by hash equality (strong signal).
+            let mut hash_matched_new: HashSet<Ref> = HashSet::new();
+            let mut hash_matched_old: HashSet<Ref> = HashSet::new();
+            if let (Some(nh), Some(oh)) = (new_hashes, old_hashes) {
+                for &new_ref in new_class_refs {
+                    if matched_new.contains(&new_ref) || hash_matched_new.contains(&new_ref) {
+                        continue;
+                    }
+                    if let Some(new_hash) = nh.get(&new_ref) {
+                        for &old_ref in old_class_refs {
+                            if matched_old.contains(&old_ref) || hash_matched_old.contains(&old_ref)
+                            {
+                                continue;
+                            }
+                            if let Some(old_hash) = oh.get(&old_ref) {
+                                if new_hash == old_hash {
+                                    matched.push((new_ref, old_ref));
+                                    matched_new.insert(new_ref);
+                                    matched_old.insert(old_ref);
+                                    hash_matched_new.insert(new_ref);
+                                    hash_matched_old.insert(old_ref);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
             }
-            matched.push((*new_ref, *old_ref));
-            matched_new.insert(*new_ref);
-            matched_old.insert(*old_ref);
+
+            // Second pass: positional matching for remaining unmatched.
+            // The Nth unmatched new ref matches the Nth unmatched old ref.
+            let remaining_new_class: Vec<Ref> = new_class_refs
+                .iter()
+                .filter(|r| !matched_new.contains(r))
+                .copied()
+                .collect();
+            let remaining_old_class: Vec<Ref> = old_class_refs
+                .iter()
+                .filter(|r| !matched_old.contains(r))
+                .copied()
+                .collect();
+            let match_count = remaining_new_class.len().min(remaining_old_class.len());
+            for idx in 0..match_count {
+                let new_ref = remaining_new_class[idx];
+                let old_ref = remaining_old_class[idx];
+                if !matched_new.contains(&new_ref) && !matched_old.contains(&old_ref) {
+                    matched.push((new_ref, old_ref));
+                    matched_new.insert(new_ref);
+                    matched_old.insert(old_ref);
+                }
+            }
         }
     }
 

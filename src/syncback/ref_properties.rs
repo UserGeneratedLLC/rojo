@@ -10,9 +10,133 @@ use rbx_dom_weak::{
 };
 
 use crate::{
-    ref_attribute_name, ref_target_attribute_name, syncback::snapshot::inst_path,
+    ref_attribute_name, ref_target_attribute_name,
+    syncback::{name_needs_slugify, slugify_name},
     REF_ID_ATTRIBUTE_NAME, REF_PATH_ATTRIBUTE_PREFIX, REF_POINTER_ATTRIBUTE_PREFIX,
 };
+
+/// Compute a filesystem-name-compatible path for an instance in a bare WeakDom.
+///
+/// Each path segment is a **tentative filesystem name**: the slugified instance
+/// name plus the extension that the syncback middleware would assign based on
+/// class and children. This produces paths like `"Workspace/Hey_Bro.server.luau"`
+/// that are compatible with `get_instance_by_path()` (which resolves using
+/// filesystem names).
+///
+/// For directory-style instances (Folders, services, scripts with children),
+/// the segment is just the slugified name (no extension).
+fn tentative_fs_path(dom: &WeakDom, target_ref: Ref) -> String {
+    let root_ref = dom.root_ref();
+    let mut components: Vec<String> = Vec::new();
+    let mut current = target_ref;
+
+    loop {
+        if current == root_ref || current.is_none() {
+            break;
+        }
+
+        let inst = match dom.get_by_ref(current) {
+            Some(i) => i,
+            None => break,
+        };
+
+        let segment = tentative_fs_name(inst);
+        components.push(segment);
+        current = inst.parent();
+    }
+
+    components.reverse();
+    components.join("/")
+}
+
+/// Compute the tentative filesystem name for a single instance based on its
+/// class, RunContext property, and whether it has children.
+///
+/// This mirrors the logic in `get_best_middleware()` + `extension_for_middleware()`
+/// but operates on a bare Instance without SyncbackSnapshot context.
+fn tentative_fs_name(inst: &Instance) -> String {
+    let slug = if name_needs_slugify(&inst.name) {
+        slugify_name(&inst.name)
+    } else {
+        inst.name.clone()
+    };
+
+    let has_children = !inst.children().is_empty();
+
+    // Directory-style classes never get extensions
+    let is_container = matches!(
+        inst.class.as_str(),
+        "Folder"
+            | "Configuration"
+            | "Tool"
+            | "ScreenGui"
+            | "SurfaceGui"
+            | "BillboardGui"
+            | "AdGui"
+    );
+
+    if is_container || (has_children && is_script_class(inst.class.as_str())) {
+        // Directory representation -- slug only, no extension
+        return slug;
+    }
+
+    let extension = match inst.class.as_str() {
+        "Script" => {
+            if has_children {
+                return slug; // directory
+            }
+            match inst.properties.get(&ustr("RunContext")) {
+                Some(Variant::Enum(e)) => match e.to_u32() {
+                    0 => "legacy.luau",
+                    1 => "server.luau",
+                    2 => "client.luau",
+                    3 => "plugin.luau",
+                    _ => "legacy.luau",
+                },
+                _ => "legacy.luau",
+            }
+        }
+        "LocalScript" => {
+            if has_children {
+                return slug;
+            }
+            "local.luau"
+        }
+        "ModuleScript" => {
+            if has_children {
+                return slug;
+            }
+            "luau"
+        }
+        "StringValue" => {
+            if has_children {
+                return slug;
+            }
+            "txt"
+        }
+        "LocalizationTable" => {
+            if has_children {
+                return slug;
+            }
+            "csv"
+        }
+        _ => {
+            if has_children {
+                return slug; // directory
+            }
+            "model.json5"
+        }
+    };
+
+    format!("{slug}.{extension}")
+}
+
+fn is_script_class(class: &str) -> bool {
+    matches!(
+        class,
+        "Script" | "LocalScript" | "ModuleScript"
+    )
+}
 
 pub struct RefLinks {
     /// Refs that use path-based linking (path is unique).
@@ -36,7 +160,7 @@ struct IdRefLink {
 }
 
 /// Collects all instance paths in a WeakDom before any pruning occurs.
-/// Returns a map of Ref -> path for all instances.
+/// Returns a map of Ref -> filesystem-name-compatible path for all instances.
 pub fn collect_all_paths(dom: &WeakDom) -> HashMap<Ref, String> {
     let mut paths = HashMap::new();
     let mut queue = VecDeque::new();
@@ -45,7 +169,7 @@ pub fn collect_all_paths(dom: &WeakDom) -> HashMap<Ref, String> {
     while let Some(inst_ref) = queue.pop_front() {
         let inst = dom.get_by_ref(inst_ref).unwrap();
         queue.extend(inst.children().iter().copied());
-        paths.insert(inst_ref, inst_path(dom, inst_ref));
+        paths.insert(inst_ref, tentative_fs_path(dom, inst_ref));
     }
 
     paths
@@ -85,17 +209,19 @@ pub fn collect_referents(dom: &WeakDom, pre_prune_paths: &HashMap<Ref, String>) 
 
             if dom.get_by_ref(*target_ref).is_some() {
                 // Target exists in DOM -- always use path-based system.
-                // With dedup suffixes, paths are always unique.
-                let target_path = inst_path(dom, *target_ref);
+                // Use tentative filesystem names so the path is compatible
+                // with get_instance_by_path() resolution.
+                let target_path = tentative_fs_path(dom, *target_ref);
                 path_links.entry(inst_ref).or_default().push(PathRefLink {
                     name: *prop_name,
                     path: target_path,
                 });
             } else if let Some(external_path) = pre_prune_paths.get(target_ref) {
-                // Target was pruned -- use pre-prune path
+                // Target was pruned -- use pre-prune path (already in
+                // filesystem-name format from collect_all_paths)
                 log::debug!(
                     "Property {}.{} points to pruned instance at '{}', storing as path reference",
-                    inst_path(dom, inst_ref),
+                    tentative_fs_path(dom, inst_ref),
                     prop_name,
                     external_path
                 );
@@ -106,7 +232,7 @@ pub fn collect_referents(dom: &WeakDom, pre_prune_paths: &HashMap<Ref, String>) 
             } else {
                 log::warn!(
                     "Property {}.{} will be `nil` on disk because the referenced instance does not exist",
-                    inst_path(dom, inst_ref),
+                    tentative_fs_path(dom, inst_ref),
                     prop_name
                 );
             }

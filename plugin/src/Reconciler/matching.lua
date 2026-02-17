@@ -189,10 +189,19 @@ function Matching._pass1NameAndClass(
 end
 
 --[[
-	Pass 3: Pairwise similarity scoring within same-name groups.
-	Uses ClassName and child count as similarity signals.
-	Structural fingerprinting with XXH32 is computed lazily only for
-	instances that enter this pass.
+	Pass 3: Match remaining instances within same-name groups.
+
+	Strategy:
+	1. Narrow by ClassName within each name group.
+	2. Within same-name+class sub-groups, use POSITIONAL MATCHING as the
+	   primary signal. The server sends virtual children in DOM order and
+	   Studio's GetChildren() preserves insertion order -- these typically
+	   align. The Nth virtual "Line" matches the Nth Studio "Line".
+	3. When group sizes differ (adds/deletes), fall back to property-based
+	   similarity scoring to pick the best remaining match.
+
+	This preserves the ordering behavior of the original greedy hydration
+	algorithm while handling ambiguous paths correctly.
 ]]
 function Matching._pass3Similarity(
 	remainingVirtual: { string },
@@ -235,47 +244,58 @@ function Matching._pass3Similarity(
 			continue
 		end
 
-		-- Build all candidate pairs with similarity scores
-		local pairs: { { vi: number, si: number, score: number } } = {}
+		-- Narrow by ClassName within this name group.
+		local virtualByClass: { [string]: { number } } = {}
 		for _, vi in vIndices do
-			if matchedVirtualIndices[vi] then
-				continue
-			end
-			for _, si in sIndices do
-				if matchedStudioIndices[si] then
-					continue
+			local vInst = virtualInstances[remainingVirtual[vi]]
+			if vInst and not matchedVirtualIndices[vi] then
+				local class = vInst.ClassName
+				if not virtualByClass[class] then
+					virtualByClass[class] = {}
 				end
-				local score = Matching._computeSimilarity(
-					remainingVirtual[vi],
-					remainingStudio[si],
-					virtualInstances
-				)
-				table.insert(pairs, { vi = vi, si = si, score = score })
+				table.insert(virtualByClass[class], vi)
 			end
 		end
 
-		-- Sort by score descending (tiebreaker: original order)
-		table.sort(pairs, function(a, b)
-			if a.score ~= b.score then
-				return a.score > b.score
-			end
-			if a.vi ~= b.vi then
-				return a.vi < b.vi
-			end
-			return a.si < b.si
-		end)
-
-		-- Greedy assignment
-		for _, pair in pairs do
-			if matchedVirtualIndices[pair.vi] or matchedStudioIndices[pair.si] then
+		local studioByClass: { [string]: { number } } = {}
+		for _, si in sIndices do
+			if matchedStudioIndices[si] then
 				continue
 			end
-			table.insert(matched, {
-				virtualId = remainingVirtual[pair.vi],
-				studioInstance = remainingStudio[pair.si],
-			})
-			matchedVirtualIndices[pair.vi] = true
-			matchedStudioIndices[pair.si] = true
+			local success, class = pcall(function()
+				return remainingStudio[si].ClassName
+			end)
+			if success and class then
+				if not studioByClass[class] then
+					studioByClass[class] = {}
+				end
+				table.insert(studioByClass[class], si)
+			end
+		end
+
+		-- Within each same-name+class sub-group, do positional matching.
+		-- The Nth virtual instance matches the Nth Studio instance.
+		-- This preserves the original child ordering which is the strongest
+		-- signal for duplicate-named instances (e.g., Parts in a Model).
+		for class, vClassIndices in virtualByClass do
+			local sClassIndices = studioByClass[class]
+			if not sClassIndices then
+				continue
+			end
+
+			local matchCount = math.min(#vClassIndices, #sClassIndices)
+			for idx = 1, matchCount do
+				local vi = vClassIndices[idx]
+				local si = sClassIndices[idx]
+				if not matchedVirtualIndices[vi] and not matchedStudioIndices[si] then
+					table.insert(matched, {
+						virtualId = remainingVirtual[vi],
+						studioInstance = remainingStudio[si],
+					})
+					matchedVirtualIndices[vi] = true
+					matchedStudioIndices[si] = true
+				end
+			end
 		end
 	end
 
@@ -300,48 +320,6 @@ function Matching._pass3Similarity(
 	for _, idx in sToRemove do
 		table.remove(remainingStudio, idx)
 	end
-end
-
---[[
-	Compute similarity between a virtual instance and a Studio instance.
-	Higher score = more similar.
-
-	Comparison order (early-exit, cheapest first):
-	ClassName (100), child count (20), Tags (50), Attributes (30)
-	Source is NOT compared here (too expensive for the matching context).
-]]
-function Matching._computeSimilarity(
-	virtualId: string,
-	studioInstance: Instance,
-	virtualInstances: { [string]: any }
-): number
-	local vInst = virtualInstances[virtualId]
-	if not vInst then
-		return 0
-	end
-
-	local score = 0
-
-	-- ClassName match
-	local classSuccess, className = pcall(function()
-		return studioInstance.ClassName
-	end)
-	if classSuccess and className == vInst.ClassName then
-		score += 100
-	end
-
-	-- Child count match
-	local childSuccess, childCount = pcall(function()
-		return #studioInstance:GetChildren()
-	end)
-	if childSuccess then
-		local vChildCount = if vInst.Children then #vInst.Children else 0
-		if childCount == vChildCount then
-			score += 20
-		end
-	end
-
-	return score
 end
 
 return Matching
