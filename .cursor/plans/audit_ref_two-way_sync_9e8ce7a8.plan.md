@@ -189,7 +189,7 @@ The forward-sync direction (filesystem -> server -> plugin) must correctly resol
   - `tree.get_instance_by_path(path)` returns `None` for invalid paths without crashing?
   - `None` return for unresolvable paths -- does this cause property removal on the tree instance? (could silently clear a Ref that was set during the session but hasn't been written to disk yet)
 - [patch_apply.rs](src/snapshot/patch_apply.rs):
-  - `defer_ref_properties` correctly collects `Rojo_Ref_*` attributes for later resolution?
+  - `defer_ref_properties` correctly collects `Rojo_Ref_`* attributes for later resolution?
   - `finalize_patch_application` resolves path refs via `get_instance_by_path`?
   - Resolved refs are set as `Variant::Ref` on the instance?
   - `Rojo_Ref_*` attributes are cleaned from the Attributes property after resolution? (they should NOT appear as instance attributes in Studio)
@@ -403,7 +403,7 @@ Evaluate existing tests against the audit areas above. For each gap, flag as mis
 - **Path edge cases**: Instance names with `/` in them? Deep nesting? Root-level Ref targets?
 - **Concurrent changes**: Multiple Ref changes in one batch?
 - **Error paths**: Ref to non-existent instance? Ref on ProjectNode instance?
-- **CLI syncback parity**: Does the test suite verify that two-way sync and CLI syncback produce identical `Rojo_Ref_`* output for the same input?
+- **CLI syncback parity**: Does the test suite verify that two-way sync and CLI syncback produce identical `Rojo_Ref`_* output for the same input?
 
 ---
 

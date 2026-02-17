@@ -118,10 +118,16 @@ syncback_tests! {
     ambiguous_slugified_name => ["src/What_Folder.rbxm", "src/What_Folder.meta.json5"],
     // Container with 5 levels of nesting → all preserved in rbxm
     ambiguous_deep_nesting => ["src/Deep.rbxm"],
+    // "Test" (normal dir) and "Te/st" (has duplicates, slugifies to "Test") → dedup rbxm
+    ambiguous_dedup_collision => [],
     // Two children "child" and "Child" (case only) → detected as duplicates
     ambiguous_case_insensitive => ["src/CaseTest.rbxm", "src/CaseTest.meta.json5"],
     // Container named with forbidden Windows chars → slugified + meta
     ambiguous_windows_invalid_chars => [],
+    // Duplicates under ProjectNode → falls back to rbxm (entire $path directory
+    // becomes rbxm, preserving all children including duplicates and unique ones).
+    // In clean mode, old_inst is None so ProjectNode detection doesn't trigger.
+    ambiguous_project_node_parent => [],
 }
 
 // Tests that run in incremental mode (preserving existing structure)

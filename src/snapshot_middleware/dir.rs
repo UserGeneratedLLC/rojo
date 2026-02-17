@@ -150,7 +150,8 @@ pub fn syncback_dir_no_meta<'sync>(
 
     // Detect duplicate child names (case-insensitive for file system safety).
     // Instead of skipping duplicates, return an error to trigger the rbxm
-    // container fallback in the main syncback loop.
+    // container fallback in the main syncback loop. The main loop handles
+    // the ProjectNode special case (skip instead of rbxm for services).
     if crate::syncback::has_duplicate_children(snapshot.new_tree(), snapshot.new) {
         let inst_path = crate::syncback::inst_path(snapshot.new_tree(), snapshot.new);
         anyhow::bail!(

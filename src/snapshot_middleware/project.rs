@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     path::Path,
 };
 
@@ -584,32 +584,49 @@ pub fn syncback_project<'sync>(
             project_node_property_syncback_no_path(snapshot, new_inst, node);
         }
 
+        let mut new_duplicate_names: HashSet<String> = HashSet::new();
         for child_ref in new_inst.children() {
             let child = snapshot
                 .get_new_instance(*child_ref)
                 .expect("all children of Instances should be in new DOM");
             if new_child_map.insert(&child.name, child).is_some() {
                 let parent_path = inst_path(snapshot.new_tree(), new_inst.referent());
-                anyhow::bail!(
-                    "Instances that are direct children of an Instance that is made by a project file \
-                    must have a unique name.\nThe child '{}' is duplicated in the place file.\n\
-                    Full path: {}/{}", child.name, parent_path, child.name
+                log::warn!(
+                    "Skipping duplicate-named child '{}' under ProjectNode '{}' -- \
+                    cannot create rbxm container for project-file instances. \
+                    Full path: {}/{}",
+                    child.name,
+                    parent_path,
+                    parent_path,
+                    child.name
                 );
+                new_duplicate_names.insert(child.name.to_lowercase());
             }
         }
+        let mut old_duplicate_names: HashSet<String> = HashSet::new();
         for child_ref in old_inst.children() {
             let child = snapshot
                 .get_old_instance(*child_ref)
                 .expect("all children of Instances should be in old DOM");
             if old_child_map.insert(child.name(), child).is_some() {
                 let parent_path = inst_path(snapshot.old_tree(), old_inst.id());
-                anyhow::bail!(
-                    "Instances that are direct children of an Instance that is made by a project file \
-                    must have a unique name.\nThe child '{}' is duplicated on the file system.\n\
-                    Full path: {}/{}", child.name(), parent_path, child.name()
+                log::warn!(
+                    "Skipping duplicate-named child '{}' under ProjectNode '{}' -- \
+                    cannot create rbxm container for project-file instances. \
+                    Full path: {}/{}",
+                    child.name(),
+                    parent_path,
+                    parent_path,
+                    child.name()
                 );
+                old_duplicate_names.insert(child.name().to_lowercase());
             }
         }
+
+        // Remove duplicate-named children from the maps so they don't get
+        // processed as normal children (they were warned about above).
+        new_child_map.retain(|name, _| !new_duplicate_names.contains(&name.to_lowercase()));
+        old_child_map.retain(|name, _| !old_duplicate_names.contains(&name.to_lowercase()));
 
         // This loop does basic matching of Instance children to the node's
         // children. It ensures that `new_child_map` and `old_child_map` will

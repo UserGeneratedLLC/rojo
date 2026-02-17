@@ -16,35 +16,6 @@ local function isEmpty(table)
 	return next(table) == nil
 end
 
--- Finds duplicate names among children and returns a set of names that are duplicated
-local function findDuplicateNames(
-	children: { Instance } | { string },
-	virtualInstances: { [string]: any }?
-): { [string]: boolean }
-	local nameCounts: { [string]: number } = {}
-	local duplicates: { [string]: boolean } = {}
-
-	for _, child in children do
-		local name: string
-		if typeof(child) == "Instance" then
-			name = child.Name
-		elseif virtualInstances then
-			-- child is a virtual instance ID
-			local virtualChild = virtualInstances[child]
-			name = virtualChild and virtualChild.Name or ""
-		else
-			continue
-		end
-
-		nameCounts[name] = (nameCounts[name] or 0) + 1
-		if nameCounts[name] > 1 then
-			duplicates[name] = true
-		end
-	end
-
-	return duplicates
-end
-
 local function fuzzyEq(a: number, b: number, epsilon: number): boolean
 	local diff = math.abs(a - b)
 	-- Use both absolute and relative epsilon for better precision handling

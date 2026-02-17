@@ -1,0 +1,10 @@
+---
+source: tests/rojo_test/syncback_util.rs
+expression: normalized_stdout
+---
+Writing src/Te_st.meta.json5
+Writing src/Te_st.rbxm
+Writing src/Test/NormalChild/.gitkeep
+Writing src/Test
+Writing src/Test/NormalChild
+Removing src/.gitkeep

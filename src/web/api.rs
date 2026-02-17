@@ -415,9 +415,6 @@ impl ApiService {
 
         if !request.added.is_empty() {
             let tree = self.serve_session.tree();
-            // Pre-compute duplicate sibling info in O(N) for efficient path uniqueness checks
-            // This makes all subsequent path checks O(d) instead of O(d × s)
-            let duplicate_siblings_cache = Self::compute_tree_refs_with_duplicate_siblings(&tree);
 
             // Pre-scan: identify standalone parents that need directory conversion.
             // Multiple children may share the same parent. We convert each parent
@@ -597,7 +594,6 @@ impl ApiService {
                     if let Err(err) = self.syncback_added_instance(
                         added,
                         &tree,
-                        &duplicate_siblings_cache,
                         &stats,
                         &converted_parents,
                         &mut sibling_slugs,
@@ -771,53 +767,6 @@ impl ApiService {
     /// Syncback an added instance by creating a file in the filesystem.
     /// The file watcher will pick up the change and update Rojo's tree.
     ///
-    /// Pre-computes which instances have duplicate-named siblings in a RojoTree.
-    /// Returns a HashSet of Refs that have at least one sibling with the same name.
-    ///
-    /// This is O(N) where N is the number of instances, and allows subsequent
-    /// path uniqueness checks to be O(d) instead of O(d × s) where d=depth, s=siblings.
-    fn compute_tree_refs_with_duplicate_siblings(tree: &crate::snapshot::RojoTree) -> HashSet<Ref> {
-        use std::collections::VecDeque;
-
-        let mut has_duplicate_siblings = HashSet::new();
-        let mut queue = VecDeque::new();
-        queue.push_back(tree.root().id());
-
-        while let Some(inst_ref) = queue.pop_front() {
-            let inst = match tree.get_instance(inst_ref) {
-                Some(i) => i,
-                None => continue,
-            };
-
-            // Count children by name and collect their refs
-            let mut name_to_refs: HashMap<&str, Vec<Ref>> = HashMap::new();
-            for child_ref in inst.children() {
-                if let Some(child) = tree.get_instance(*child_ref) {
-                    name_to_refs
-                        .entry(child.name())
-                        .or_default()
-                        .push(*child_ref);
-                }
-                queue.push_back(*child_ref);
-            }
-
-            // Mark refs that share a name with siblings
-            for (_name, refs) in name_to_refs {
-                if refs.len() > 1 {
-                    for r in refs {
-                        has_duplicate_siblings.insert(r);
-                    }
-                }
-            }
-        }
-
-        has_duplicate_siblings
-    }
-
-    /// Checks if a path in the Rojo tree is unique using pre-computed duplicate sibling info.
-    /// Returns true if the path is unique, false if duplicates exist at any level.
-    /// This is O(d) where d is the depth of the instance.
-    /// Records any duplicate path issues via the stats tracker.
     /// Check if a Ref target's path is unique (no duplicate-named siblings
     /// at any ancestor level). Used for warning about ambiguous Rojo_Ref_* paths.
     fn is_ref_path_unique(tree: &crate::snapshot::RojoTree, target_ref: Ref) -> bool {
@@ -849,43 +798,6 @@ impl ApiService {
                 }
             }
 
-            current_ref = parent_ref;
-        }
-    }
-
-    fn is_tree_path_unique_with_cache(
-        tree: &crate::snapshot::RojoTree,
-        target_ref: Ref,
-        has_duplicate_siblings: &HashSet<Ref>,
-        stats: &crate::syncback::SyncbackStats,
-    ) -> bool {
-        let mut current_ref = target_ref;
-
-        loop {
-            // O(1) lookup instead of O(siblings) counting
-            if has_duplicate_siblings.contains(&current_ref) {
-                if let Some(current) = tree.get_instance(current_ref) {
-                    if let Some(parent) = tree.get_instance(current.parent()) {
-                        // Build the path for the stats tracker
-                        let inst_path = format!("{}/{}", parent.name(), current.name());
-                        stats.record_duplicate_name(&inst_path, current.name());
-                    }
-                }
-                return false;
-            }
-
-            let current = match tree.get_instance(current_ref) {
-                Some(inst) => inst,
-                None => return false,
-            };
-
-            let parent_ref = current.parent();
-            if parent_ref.is_none() {
-                // Reached root - path is unique at all levels
-                return true;
-            }
-
-            // Move up to parent and check the next level
             current_ref = parent_ref;
         }
     }
@@ -924,7 +836,6 @@ impl ApiService {
         &self,
         added: &crate::web::interface::AddedInstance,
         tree: &crate::snapshot::RojoTree,
-        duplicate_siblings_cache: &HashSet<Ref>,
         stats: &crate::syncback::SyncbackStats,
         converted_parents: &HashMap<Ref, PathBuf>,
         sibling_slugs: &mut HashSet<String>,

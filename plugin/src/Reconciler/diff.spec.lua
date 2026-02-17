@@ -276,7 +276,7 @@ return function()
 	end)
 
 	describe("duplicate-named siblings", function()
-		it("should skip real DOM children with duplicate names", function()
+		it("should not remove real DOM children with duplicate names", function()
 			local knownInstances = InstanceMap.new()
 			local virtualInstances = {
 				ROOT = {
@@ -305,11 +305,12 @@ return function()
 
 			assert(ok, tostring(patch))
 
-			-- Duplicate-named children should be skipped (not removed)
+			-- Duplicate-named children should not be removed (they are
+			-- unmapped real children that we don't know how to match)
 			assert(isEmpty(patch.removed))
 		end)
 
-		it("should skip virtual children with duplicate names among siblings", function()
+		it("should add virtual children with duplicate names", function()
 			local knownInstances = InstanceMap.new()
 			local virtualInstances = {
 				ROOT = {
@@ -340,8 +341,10 @@ return function()
 
 			assert(ok, tostring(patch))
 
-			-- Duplicate-named virtual children should not be added
-			assert(isEmpty(patch.added))
+			-- Duplicate-named virtual children should be added (server
+			-- handles them via rbxm container serialization)
+			expect(patch.added["CHILD_A"]).to.equal(virtualInstances["CHILD_A"])
+			expect(patch.added["CHILD_B"]).to.equal(virtualInstances["CHILD_B"])
 		end)
 	end)
 

@@ -1544,19 +1544,18 @@ impl JobThreadContext {
                     // Check if this instance is inside an rbxm container.
                     // If so, all property changes (including Source) are handled
                     // by re-serializing the container after tree updates.
-                    let inside_rbxm = instance.metadata().instigating_source.is_none()
-                        && tree.find_rbxm_container(id).is_some();
+                    let rbxm_container = if instance.metadata().instigating_source.is_none() {
+                        tree.find_rbxm_container(id)
+                    } else {
+                        None
+                    };
 
-                    if inside_rbxm {
+                    if let Some((container_ref, rbxm_path)) = rbxm_container {
                         // Mark this instance's rbxm container for re-serialization.
                         // The actual write happens after apply_patch_set below.
-                        if let Some((container_ref, rbxm_path)) =
-                            tree.find_rbxm_container(id)
-                        {
-                            rbxm_containers_to_reserialize
-                                .entry(container_ref)
-                                .or_insert_with(|| rbxm_path);
-                        }
+                        rbxm_containers_to_reserialize
+                            .entry(container_ref)
+                            .or_insert_with(|| rbxm_path);
                     } else {
                         for (key, changed_value) in &update.changed_properties {
                             if key == "Source" {

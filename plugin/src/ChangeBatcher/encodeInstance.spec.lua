@@ -232,34 +232,34 @@ return function()
 				root:Destroy()
 			end)
 
-			it("should skip children with duplicate names", function()
-				local parent = Instance.new("Folder")
-				parent.Name = "Parent"
+		it("should encode children with duplicate names", function()
+			local parent = Instance.new("Folder")
+			parent.Name = "Parent"
 
-				local child1 = Instance.new("ModuleScript")
-				child1.Name = "DuplicateName"
-				child1.Source = "return 1"
-				child1.Parent = parent
+			local child1 = Instance.new("ModuleScript")
+			child1.Name = "DuplicateName"
+			child1.Source = "return 1"
+			child1.Parent = parent
 
-				local child2 = Instance.new("ModuleScript")
-				child2.Name = "DuplicateName" -- Same name!
-				child2.Source = "return 2"
-				child2.Parent = parent
+			local child2 = Instance.new("ModuleScript")
+			child2.Name = "DuplicateName" -- Same name!
+			child2.Source = "return 2"
+			child2.Parent = parent
 
-				local child3 = Instance.new("ModuleScript")
-				child3.Name = "UniqueName"
-				child3.Source = "return 3"
-				child3.Parent = parent
+			local child3 = Instance.new("ModuleScript")
+			child3.Name = "UniqueName"
+			child3.Source = "return 3"
+			child3.Parent = parent
 
-				local encoded = encodeInstance(parent, "PARENT_ID")
+			local encoded = encodeInstance(parent, "PARENT_ID")
 
-				expect(encoded).to.be.ok()
-				-- Should only have 1 child (UniqueName), duplicates skipped
-				expect(#encoded.children).to.equal(1)
-				expect(encoded.children[1].name).to.equal("UniqueName")
+			expect(encoded).to.be.ok()
+			-- All 3 children should be encoded (server handles duplicates
+			-- via rbxm container serialization)
+			expect(#encoded.children).to.equal(3)
 
-				parent:Destroy()
-			end)
+			parent:Destroy()
+		end)
 
 			it("should return empty children array when all children deleted", function()
 				-- Simulate: parent had children, now they're all gone

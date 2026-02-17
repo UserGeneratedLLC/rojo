@@ -117,9 +117,6 @@ end
 -- Forward declaration for recursion
 local encodeInstance
 
--- Track skipped duplicates for logging
-local skippedDuplicateCount = 0
-
 -- Encode Attributes if present on any instance
 local function encodeAttributes(instance, properties)
 	-- Try to get Attributes - this works for all instance types
@@ -280,20 +277,6 @@ encodeInstance = function(instance, parentId, _skipPathCheck)
 	}
 end
 
--- Wrapper function that resets the duplicate count and returns the final count
-local function encodeInstanceWithDuplicateTracking(instance, parentId)
-	skippedDuplicateCount = 0
-	local result = encodeInstance(instance, parentId, false)
-
-	-- Log summary if any duplicates were skipped
-	if skippedDuplicateCount > 0 then
-		Log.warn(
-			"Skipped {} location(s) with duplicate-named siblings during pull (cannot reliably sync)",
-			skippedDuplicateCount
-		)
-	end
-
-	return result, skippedDuplicateCount
+return function(instance, parentId)
+	return encodeInstance(instance, parentId, false)
 end
-
-return encodeInstanceWithDuplicateTracking

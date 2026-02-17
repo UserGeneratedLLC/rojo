@@ -542,8 +542,10 @@ pub fn syncback_loop_with_stats(
 
         let middleware = get_best_middleware(&snapshot);
 
-        // Expansion resolved if old was ambiguous rbxm but new middleware is no longer Rbxm
-        let expansion_resolved =
+        // Expansion resolved if old was ambiguous rbxm but new middleware is no longer Rbxm.
+        // Mutable: reset to false if the Dir middleware fails and falls back to rbxm,
+        // to prevent the cleanup code from deleting the newly-created fallback rbxm.
+        let mut expansion_resolved =
             old_was_ambiguous_rbxm && !matches!(middleware, Middleware::Rbxm);
 
         // When expanding from rbxm back to directory, the snapshot path still
@@ -568,6 +570,23 @@ pub fn syncback_loop_with_stats(
         let syncback = match middleware.syncback(&snapshot) {
             Ok(syncback) => syncback,
             Err(err) if is_dir_middleware(middleware) => {
+                // If the parent is a ProjectNode / service, we CANNOT convert
+                // it to an rbxm container (that would swallow the entire service).
+                // Skip the duplicate children with a warning instead.
+                let is_project_node = snapshot
+                    .old_inst()
+                    .and_then(|inst| inst.metadata().instigating_source.as_ref())
+                    .is_some_and(|source| {
+                        matches!(source, crate::snapshot::InstigatingSource::ProjectNode { .. })
+                    });
+                if is_project_node {
+                    log::warn!(
+                        "Cannot create rbxm container for ProjectNode at {inst_path}: {err}. \
+                         Duplicate children will be skipped."
+                    );
+                    continue;
+                }
+
                 let new_middleware = match env::var(DEBUG_MODEL_FORMAT_VAR) {
                     Ok(value) if value == "1" => Middleware::Rbxmx,
                     Ok(value) if value == "2" => Middleware::JsonModel,
@@ -586,6 +605,13 @@ pub fn syncback_loop_with_stats(
                 let new_snapshot = snapshot.with_new_path(path.clone(), snapshot.new, snapshot.old);
                 // Record the fallback in stats instead of warning directly
                 stats.record_rbxm_fallback(&inst_path, &err.to_string());
+                // The Dir middleware failed and we're falling back to rbxm.
+                // If expansion_resolved was true (we tried to expand an
+                // ambiguous container back to directory), cancel it: the
+                // expansion didn't succeed, so the cleanup code must NOT
+                // delete the rbxm that the fallback is about to create.
+                expansion_resolved = false;
+
                 let mut new_syncback_result = new_middleware
                     .syncback(&new_snapshot)
                     .with_context(|| format!("Failed to syncback {inst_path}"));

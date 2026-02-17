@@ -412,3 +412,22 @@ fn gen_serve_ambiguous_container() {
     std::fs::write(src.join("ScriptA.luau"), "return 'A'").unwrap();
     std::fs::write(src.join("ScriptB.luau"), "return 'B'").unwrap();
 }
+
+// ============================================================
+// PROJECT NODE PARENT TEST FIXTURE
+// ============================================================
+
+#[test]
+#[ignore]
+fn gen_ambiguous_project_node_parent() {
+    // Root with duplicate-named direct children (these are direct children
+    // of a ProjectNode, so they can't become rbxm containers).
+    // Also includes a unique child to verify it syncs normally.
+    create_syncback_fixture(
+        "ambiguous_project_node_parent",
+        folder("Root")
+            .with_child(folder("Dup"))
+            .with_child(folder("Dup"))
+            .with_child(module_script("UniqueScript", "return 'unique'")),
+    );
+}
