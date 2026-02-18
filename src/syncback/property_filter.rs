@@ -40,7 +40,7 @@ pub fn filter_properties_with_stats<'inst>(
         .syncback_rules
         .as_ref()
         .and_then(|s| s.sync_unscriptable)
-        .unwrap_or(true);
+        .unwrap_or(false);
 
     let database = rbx_reflection_database::get().unwrap();
     let class_data = database.classes.get(inst.class.as_str());
