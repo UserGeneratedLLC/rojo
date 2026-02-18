@@ -15,8 +15,6 @@ local SKIP_PROPERTIES = {
 
 return function(service: Instance)
 	local properties = {}
-	local attributes = {}
-	local tags = {}
 	local refs = {}
 
 	local classDescriptor = RbxDom.findClassDescriptor(service.ClassName)
@@ -25,11 +23,9 @@ return function(service: Instance)
 			if SKIP_PROPERTIES[propertyName] then
 				continue
 			end
-			if propertyName == "Attributes" or propertyName == "Tags" then
-				continue
-			end
 
-			local isReadable = propertyMeta.scriptability == "ReadWrite" or propertyMeta.scriptability == "Read"
+			local isReadable = propertyMeta.scriptability == "ReadWrite"
+				or propertyMeta.scriptability == "Read"
 			local doesSerialize = propertyMeta.serialization ~= "DoesNotSerialize"
 
 			if isReadable and doesSerialize then
@@ -59,26 +55,6 @@ return function(service: Instance)
 		end
 	end
 
-	local attrOk, attrMap = pcall(function()
-		return service:GetAttributes()
-	end)
-	if attrOk and attrMap and next(attrMap) then
-		local descriptor = RbxDom.findCanonicalPropertyDescriptor(service.ClassName, "Attributes")
-		if descriptor then
-			local encodeOk, encoded = encodeProperty(service, "Attributes", descriptor)
-			if encodeOk and encoded ~= nil then
-				attributes = encoded
-			end
-		end
-	end
-
-	local tagOk, tagList = pcall(function()
-		return service:GetTags()
-	end)
-	if tagOk and tagList and #tagList > 0 then
-		tags = tagList
-	end
-
 	local children = service:GetChildren()
 	local data = buffer.create(0)
 	if #children > 0 then
@@ -90,23 +66,10 @@ return function(service: Instance)
 		end
 	end
 
-	local result = {
+	return {
 		className = service.ClassName,
 		data = data,
+		properties = properties,
+		refs = refs,
 	}
-
-	if next(properties) then
-		result.properties = properties
-	end
-	if next(attributes) then
-		result.attributes = attributes
-	end
-	if #tags > 0 then
-		result.tags = tags
-	end
-	if next(refs) then
-		result.refs = refs
-	end
-
-	return result
 end

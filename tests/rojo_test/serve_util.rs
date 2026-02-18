@@ -528,16 +528,15 @@ pub fn make_service_chunk(
     class_name: &str,
     children: Vec<rbx_dom_weak::InstanceBuilder>,
 ) -> librojo::web_api::ServiceChunk {
-    make_service_chunk_full(class_name, vec![], vec![], vec![], vec![], children)
+    make_service_chunk_full(class_name, vec![], vec![], children)
 }
 
-/// Build a ServiceChunk with explicit service-level properties, attributes,
-/// tags, and ref hints alongside the serialized children.
+/// Build a ServiceChunk with explicit service-level properties and ref hints
+/// alongside the serialized children. Attributes and Tags should be included
+/// in the `properties` vec as `Variant::Attributes(...)` / `Variant::Tags(...)`.
 pub fn make_service_chunk_full(
     class_name: &str,
     properties: Vec<(&str, rbx_dom_weak::types::Variant)>,
-    attributes: Vec<(&str, rbx_dom_weak::types::Variant)>,
-    tags: Vec<String>,
     refs: Vec<(&str, &str, &str)>,
     children: Vec<rbx_dom_weak::InstanceBuilder>,
 ) -> librojo::web_api::ServiceChunk {
@@ -559,10 +558,6 @@ pub fn make_service_chunk_full(
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))
         .collect();
-    let attrs_map: HashMap<String, rbx_dom_weak::types::Variant> = attributes
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect();
     let refs_map: HashMap<String, librojo::web_api::ServiceRef> = refs
         .into_iter()
         .map(|(prop, name, class)| {
@@ -580,8 +575,6 @@ pub fn make_service_chunk_full(
         class_name: class_name.to_string(),
         data: buf,
         properties: props_map,
-        attributes: attrs_map,
-        tags,
         refs: refs_map,
     }
 }
@@ -589,7 +582,7 @@ pub fn make_service_chunk_full(
 /// Build a complete rbxl file from service chunks, mirroring the same data
 /// that live syncback receives. Used for CLI parity testing.
 pub fn make_rbxl_from_chunks(chunks: &[librojo::web_api::ServiceChunk]) -> Vec<u8> {
-    use rbx_dom_weak::types::{Attributes, Tags, Variant};
+    use rbx_dom_weak::types::Variant;
     use rbx_dom_weak::WeakDom;
     use std::collections::HashMap;
     use std::io::Cursor;
@@ -602,19 +595,6 @@ pub fn make_rbxl_from_chunks(chunks: &[librojo::web_api::ServiceChunk]) -> Vec<u
 
         for (key, value) in &chunk.properties {
             builder = builder.with_property(key.as_str(), value.clone());
-        }
-
-        if !chunk.attributes.is_empty() {
-            let mut attrs = Attributes::new();
-            for (key, value) in &chunk.attributes {
-                attrs.insert(key.clone(), value.clone());
-            }
-            builder = builder.with_property("Attributes", Variant::Attributes(attrs));
-        }
-
-        if !chunk.tags.is_empty() {
-            let tags: Tags = chunk.tags.iter().map(|s| s.as_str()).collect();
-            builder = builder.with_property("Tags", Variant::Tags(tags));
         }
 
         let service_ref = dom.insert(root_ref, builder);

@@ -139,7 +139,6 @@ fn run_live_syncback(project_path: &Path, payload: SyncbackPayload) -> anyhow::R
 
 fn build_dom_from_chunks(payload: SyncbackPayload) -> anyhow::Result<WeakDom> {
     use crate::syncback::VISIBLE_SERVICES;
-    use rbx_dom_weak::types::{Attributes, Tags};
 
     let mut dom = WeakDom::new(InstanceBuilder::new("DataModel"));
     let root_ref = dom.root_ref();
@@ -152,19 +151,6 @@ fn build_dom_from_chunks(payload: SyncbackPayload) -> anyhow::Result<WeakDom> {
 
         for (key, value) in &chunk.properties {
             builder = builder.with_property(key.as_str(), value.clone());
-        }
-
-        if !chunk.attributes.is_empty() {
-            let mut attrs = Attributes::new();
-            for (key, value) in &chunk.attributes {
-                attrs.insert(key.clone(), value.clone());
-            }
-            builder = builder.with_property("Attributes", Variant::Attributes(attrs));
-        }
-
-        if !chunk.tags.is_empty() {
-            let tags: Tags = chunk.tags.iter().map(|s| s.as_str()).collect();
-            builder = builder.with_property("Tags", Variant::Tags(tags));
         }
 
         let service_ref = dom.insert(root_ref, builder);

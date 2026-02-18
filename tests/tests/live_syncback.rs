@@ -198,8 +198,6 @@ fn parity_lighting_properties() {
             ("ClockTime", Variant::Float32(14.5)),
         ],
         vec![],
-        vec![],
-        vec![],
         vec![InstanceBuilder::new("PointLight").with_name("TestLight")],
     )];
     assert_live_matches_cli("live_syncback", &chunks, None);
@@ -220,8 +218,6 @@ fn parity_soundservice_properties() {
         ],
         vec![],
         vec![],
-        vec![],
-        vec![],
     )];
     assert_live_matches_cli("live_syncback", &chunks, None);
 }
@@ -233,8 +229,6 @@ fn parity_starterplayer_properties() {
     let chunks = vec![make_service_chunk_full(
         "StarterPlayer",
         vec![("CameraMaxZoomDistance", Variant::Float32(200.0))],
-        vec![],
-        vec![],
         vec![],
         vec![],
     )];
@@ -253,8 +247,6 @@ fn parity_textchatservice_properties() {
         )],
         vec![],
         vec![],
-        vec![],
-        vec![],
     )];
     assert_live_matches_cli("live_syncback", &chunks, None);
 }
@@ -271,8 +263,6 @@ fn parity_childless_service_with_properties() {
         )],
         vec![],
         vec![],
-        vec![],
-        vec![],
     )];
     assert_live_matches_cli("live_syncback", &chunks, None);
 }
@@ -287,8 +277,6 @@ fn parity_service_properties_with_children() {
             ("Ambient", Variant::Color3(Color3::new(0.3, 0.3, 0.3))),
             ("Brightness", Variant::Float32(3.0)),
         ],
-        vec![],
-        vec![],
         vec![],
         vec![
             InstanceBuilder::new("PointLight").with_name("LightA"),
@@ -310,14 +298,10 @@ fn parity_multiple_services_with_properties() {
             vec![("Ambient", Variant::Color3(Color3::new(0.2, 0.2, 0.2)))],
             vec![],
             vec![],
-            vec![],
-            vec![],
         ),
         make_service_chunk_full(
             "SoundService",
             vec![("DistanceFactor", Variant::Float32(10.0))],
-            vec![],
-            vec![],
             vec![],
             vec![],
         ),
@@ -334,8 +318,6 @@ fn parity_camera_not_synced() {
     let camera_child = InstanceBuilder::new("Camera").with_name("Camera");
     let chunks = vec![make_service_chunk_full(
         "Workspace",
-        vec![],
-        vec![],
         vec![],
         vec![("CurrentCamera", "Camera", "Camera")],
         vec![
@@ -667,37 +649,16 @@ fn roundtrip_build_syncback_rebuild() {
                             );
                         }
                     }
-                    rbx_dom_weak::types::Variant::Attributes(_)
-                    | rbx_dom_weak::types::Variant::Tags(_) => {}
                     _ => {
                         properties.insert(key.to_string(), value.clone());
                     }
                 }
             }
 
-            let mut attributes_map = std::collections::HashMap::new();
-            if let Some(rbx_dom_weak::types::Variant::Attributes(attrs)) =
-                service.properties.get(&rbx_dom_weak::ustr("Attributes"))
-            {
-                for (k, v) in attrs.iter() {
-                    attributes_map.insert(k.to_string(), v.clone());
-                }
-            }
-
-            let tags_vec = if let Some(rbx_dom_weak::types::Variant::Tags(tags)) =
-                service.properties.get(&rbx_dom_weak::ustr("Tags"))
-            {
-                tags.iter().map(|s| s.to_string()).collect()
-            } else {
-                vec![]
-            };
-
             chunks.push(ServiceChunk {
                 class_name: service.class.to_string(),
                 data,
                 properties,
-                attributes: attributes_map,
-                tags: tags_vec,
                 refs: refs_map,
             });
         }

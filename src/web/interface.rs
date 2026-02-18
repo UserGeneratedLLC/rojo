@@ -28,7 +28,11 @@ pub(crate) const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const PROTOCOL_VERSION: u64 = 6;
 
 /// A single service's children serialized as rbxm binary data, plus the
-/// service's own properties, attributes, tags, and Ref property hints.
+/// service's own properties and Ref property hints.
+///
+/// Attributes and Tags are included in the `properties` map as
+/// `Variant::Attributes(...)` and `Variant::Tags(...)` respectively,
+/// matching the encoding used by the existing `/api/write` path.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceChunk {
@@ -37,10 +41,6 @@ pub struct ServiceChunk {
     pub data: Vec<u8>,
     #[serde(default)]
     pub properties: HashMap<String, Variant>,
-    #[serde(default)]
-    pub attributes: HashMap<String, Variant>,
-    #[serde(default)]
-    pub tags: Vec<String>,
     #[serde(default)]
     pub refs: HashMap<String, ServiceRef>,
 }
