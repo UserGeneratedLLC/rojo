@@ -319,8 +319,7 @@ function PatchTree.build(patch, instanceMap, changeListHeaders, gitMetadata)
 		if changedIdSet then
 			if not changedIdSet[change.id] then
 				defaultSelection = "pull"
-			elseif instance:IsA("LuaSourceContainer")
-				and gitMetadata.scriptCommittedHashes then
+			elseif instance:IsA("LuaSourceContainer") and gitMetadata.scriptCommittedHashes then
 				local hashes = gitMetadata.scriptCommittedHashes[change.id]
 				if hashes then
 					local source = instance.Source

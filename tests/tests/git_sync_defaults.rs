@@ -14,8 +14,8 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::process::Command;
-use std::{fs, thread};
 use std::time::Duration;
+use std::{fs, thread};
 
 use librojo::web_api::{AddedInstance, InstanceUpdate, WriteRequest};
 use rbx_dom_weak::types::{Ref, Variant};
@@ -297,10 +297,7 @@ fn staged_hash_deduplicated_when_same_as_head() {
         if let Some(hashes) = meta.script_committed_hashes.get(&module_id) {
             // When staged differs from HEAD, we get 2 hashes
             // When staged == HEAD, we'd get 1 hash (deduplicated)
-            assert!(
-                hashes.len() <= 2,
-                "Should have at most 2 hashes"
-            );
+            assert!(hashes.len() <= 2, "Should have at most 2 hashes");
         }
     }
 }
@@ -410,13 +407,17 @@ fn all_script_types_get_hashes() {
 fn stage_ids_in_write_request_triggers_git_add() {
     let mut session = TestServeSession::new_with_git("git_sync_defaults", |path| {
         git_commit_all(path, "initial commit");
-        fs::write(path.join("src/ModuleA.luau"), "-- modified for staging test").unwrap();
+        fs::write(
+            path.join("src/ModuleA.luau"),
+            "-- modified for staging test",
+        )
+        .unwrap();
     });
     let info = session.wait_to_come_online();
     let read = session.get_api_read(info.root_instance_id).unwrap();
 
-    let (module_id, _) = find_instance_by_name(&read.instances, "ModuleA")
-        .expect("ModuleA should exist");
+    let (module_id, _) =
+        find_instance_by_name(&read.instances, "ModuleA").expect("ModuleA should exist");
 
     // Send a write request with stage_ids containing ModuleA
     let write_request = WriteRequest {
@@ -473,8 +474,8 @@ fn stage_ids_only_stages_specified_files() {
     let info = session.wait_to_come_online();
     let read = session.get_api_read(info.root_instance_id).unwrap();
 
-    let (module_id, _) = find_instance_by_name(&read.instances, "ModuleA")
-        .expect("ModuleA should exist");
+    let (module_id, _) =
+        find_instance_by_name(&read.instances, "ModuleA").expect("ModuleA should exist");
 
     // Only stage ModuleA, NOT ServerScript
     let write_request = WriteRequest {
@@ -509,14 +510,16 @@ fn source_write_with_stage_ids_stages_after_write() {
     let info = session.wait_to_come_online();
     let read = session.get_api_read(info.root_instance_id).unwrap();
 
-    let (module_id, _) = find_instance_by_name(&read.instances, "ModuleA")
-        .expect("ModuleA should exist");
+    let (module_id, _) =
+        find_instance_by_name(&read.instances, "ModuleA").expect("ModuleA should exist");
 
     // Write a Source update AND include in stage_ids
     let mut props = UstrMap::default();
     props.insert(
         ustr("Source"),
-        Some(Variant::String("-- new source from pull\nreturn {}\n".to_string())),
+        Some(Variant::String(
+            "-- new source from pull\nreturn {}\n".to_string(),
+        )),
     );
 
     let write_request = WriteRequest {
@@ -559,13 +562,15 @@ fn source_write_without_stage_ids_does_not_stage() {
     let info = session.wait_to_come_online();
     let read = session.get_api_read(info.root_instance_id).unwrap();
 
-    let (module_id, _) = find_instance_by_name(&read.instances, "ModuleA")
-        .expect("ModuleA should exist");
+    let (module_id, _) =
+        find_instance_by_name(&read.instances, "ModuleA").expect("ModuleA should exist");
 
     let mut props = UstrMap::default();
     props.insert(
         ustr("Source"),
-        Some(Variant::String("-- manual pull, not auto-staged".to_string())),
+        Some(Variant::String(
+            "-- manual pull, not auto-staged".to_string(),
+        )),
     );
 
     // NO stage_ids

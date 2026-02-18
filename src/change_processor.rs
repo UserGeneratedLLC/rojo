@@ -1822,7 +1822,10 @@ impl JobThreadContext {
                                         );
                                     } else if patch_set.stage_ids.contains(&id) {
                                         if let Some(ref repo_root) = self.git_repo_root {
-                                            crate::git::git_add(repo_root, std::slice::from_ref(write_path));
+                                            crate::git::git_add(
+                                                repo_root,
+                                                std::slice::from_ref(write_path),
+                                            );
                                         }
                                     }
                                 } else {

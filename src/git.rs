@@ -155,23 +155,29 @@ struct ResolvedInstance {
 
 /// Computes git metadata for the two-way sync confirmation UI.
 ///
+/// `repo_root` must be the git repository root (from `git_repo_root()`),
+/// cached at session start by `ServeSession`.
+///
 /// Uses a two-phase approach to avoid holding the tree lock during I/O:
 /// 1. Run git commands to get changed files (no lock)
 /// 2. Briefly lock tree to resolve file paths to instance Refs and class names
 /// 3. Run git show for each changed script and compute hashes (no lock)
-pub fn compute_git_metadata(
-    tree_handle: &Arc<Mutex<RojoTree>>,
-    project_root: &Path,
-) -> Option<GitMetadata> {
-    let repo_root_raw = git_repo_root(project_root)?;
-    let repo_root = std::fs::canonicalize(&repo_root_raw).unwrap_or(repo_root_raw);
-    let changed_files = git_changed_files(&repo_root)?;
+pub fn compute_git_metadata(tree_handle: &Arc<Mutex<RojoTree>>, repo_root: &Path) -> GitMetadata {
+    let changed_files = match git_changed_files(repo_root) {
+        Some(files) => files,
+        None => {
+            return GitMetadata {
+                changed_ids: Vec::new(),
+                script_committed_hashes: HashMap::new(),
+            };
+        }
+    };
 
     if changed_files.is_empty() {
-        return Some(GitMetadata {
+        return GitMetadata {
             changed_ids: Vec::new(),
             script_committed_hashes: HashMap::new(),
-        });
+        };
     }
 
     // Brief lock: resolve changed file paths to instance Refs and class names
@@ -207,11 +213,11 @@ pub fn compute_git_metadata(
 
         let mut hashes = Vec::with_capacity(2);
 
-        if let Some(head_content) = git_show_head(&repo_root, &ri.rel_path) {
+        if let Some(head_content) = git_show_head(repo_root, &ri.rel_path) {
             hashes.push(compute_blob_sha1(&head_content));
         }
 
-        if let Some(staged_content) = git_show_staged(&repo_root, &ri.rel_path) {
+        if let Some(staged_content) = git_show_staged(repo_root, &ri.rel_path) {
             let staged_hash = compute_blob_sha1(&staged_content);
             if hashes.is_empty() || hashes[0] != staged_hash {
                 hashes.push(staged_hash);
@@ -223,10 +229,10 @@ pub fn compute_git_metadata(
         }
     }
 
-    Some(GitMetadata {
+    GitMetadata {
         changed_ids,
         script_committed_hashes,
-    })
+    }
 }
 
 #[cfg(test)]
@@ -251,13 +257,7 @@ mod tests {
             .output()
             .unwrap();
         Command::new("git")
-            .args([
-                "-C",
-                &dir.to_string_lossy(),
-                "config",
-                "user.name",
-                "Test",
-            ])
+            .args(["-C", &dir.to_string_lossy(), "config", "user.name", "Test"])
             .output()
             .unwrap();
     }
@@ -382,10 +382,7 @@ mod tests {
         // Subdirectory should resolve to the same repo root
         assert_eq!(
             root.canonicalize().unwrap(),
-            git_repo_root(dir.path())
-                .unwrap()
-                .canonicalize()
-                .unwrap()
+            git_repo_root(dir.path()).unwrap().canonicalize().unwrap()
         );
     }
 

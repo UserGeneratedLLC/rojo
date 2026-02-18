@@ -868,7 +868,12 @@ function App:startSession()
 		})
 		self:setState({
 			appStatus = AppStatus.Confirming,
-			patchTree = PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" }, serverInfo.gitMetadata),
+			patchTree = PatchTree.build(
+				patch,
+				instanceMap,
+				{ "Property", "Current", "Incoming" },
+				serverInfo.gitMetadata
+			),
 			confirmData = {
 				serverInfo = serverInfo,
 			},

@@ -273,10 +273,9 @@ impl ApiService {
             Vec::new()
         };
 
-        let git_metadata = crate::git::compute_git_metadata(
-            &self.serve_session.tree_handle(),
-            self.serve_session.root_dir(),
-        );
+        let git_metadata = self.serve_session.git_repo_root().map(|repo_root| {
+            crate::git::compute_git_metadata(&self.serve_session.tree_handle(), repo_root)
+        });
 
         msgpack_ok(&ServerInfoResponse {
             server_version: SERVER_VERSION.to_owned(),
@@ -742,33 +741,35 @@ impl ApiService {
 
         let stage_ids: HashSet<Ref> = request.stage_ids.into_iter().collect();
 
+        let paths_to_stage: Vec<PathBuf> = if !stage_ids.is_empty() {
+            let tree = self.serve_session.tree();
+            stage_ids
+                .iter()
+                .filter_map(|&id| {
+                    tree.get_instance(id).and_then(|inst| {
+                        inst.metadata()
+                            .instigating_source
+                            .as_ref()
+                            .map(|src| src.path().to_path_buf())
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         tree_mutation_sender
             .send(PatchSet {
                 removed_instances: actually_removed,
                 added_instances,
                 updated_instances,
-                stage_ids: stage_ids.clone(),
+                stage_ids,
             })
             .unwrap();
 
         if let Some(repo_root) = self.serve_session.git_repo_root() {
-            if !stage_ids.is_empty() {
-                let tree = self.serve_session.tree();
-                let paths_to_stage: Vec<PathBuf> = stage_ids
-                    .iter()
-                    .filter_map(|&id| {
-                        tree.get_instance(id).and_then(|inst| {
-                            inst.metadata().instigating_source.as_ref().map(|src| {
-                                src.path().to_path_buf()
-                            })
-                        })
-                    })
-                    .collect();
-                drop(tree);
-
-                if !paths_to_stage.is_empty() {
-                    crate::git::git_add(repo_root, &paths_to_stage);
-                }
+            if !paths_to_stage.is_empty() {
+                crate::git::git_add(repo_root, &paths_to_stage);
             }
         }
 
