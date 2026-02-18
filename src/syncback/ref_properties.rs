@@ -142,6 +142,11 @@ pub struct RefLinks {
     id_links: HashMap<Ref, Vec<IdRefLink>>,
     /// Target instances that need a Rojo_Id written (for ID-based system).
     targets_needing_id: HashSet<Ref>,
+    /// Maps placeholder strings to target Refs. Populated when `final_paths`
+    /// is not available (CLI syncback). After the syncback walk populates the
+    /// `ref_path_map`, these placeholders are substituted with the correct
+    /// dedup-aware filesystem paths via `fix_ref_paths`.
+    pub placeholder_to_target: HashMap<String, Ref>,
 }
 
 #[derive(PartialEq, Eq)]
@@ -190,16 +195,7 @@ pub fn collect_referents(
     let mut path_links: HashMap<Ref, Vec<PathRefLink>> = HashMap::new();
     let id_links: HashMap<Ref, Vec<IdRefLink>> = HashMap::new();
     let targets_needing_id: HashSet<Ref> = HashSet::new();
-
-    // NOTE: tentative_fs_path() does not include dedup suffixes (~N). For
-    // instances with duplicate names under the same parent, this produces
-    // ambiguous paths. Resolution via get_instance_by_path() returns the
-    // first matching child, which may be wrong.
-    //
-    // When `final_paths` is provided (from the syncback walk), it is used
-    // instead of tentative_fs_path() to get the correct dedup'd path.
-    // Otherwise, falls back to tentative_fs_path() (pre-dedup, potentially
-    // ambiguous for duplicate-named instances).
+    let mut placeholder_to_target: HashMap<String, Ref> = HashMap::new();
 
     let mut queue = VecDeque::new();
     queue.push_back(dom.root_ref());
@@ -218,18 +214,25 @@ pub fn collect_referents(
 
             if dom.get_by_ref(*target_ref).is_some() {
                 // Target exists in DOM -- use path-based system.
-                // Prefer final_paths (dedup-aware) when available,
-                // fall back to tentative_fs_path (pre-dedup).
-                let target_path = final_paths
-                    .and_then(|fp| fp.get(target_ref).cloned())
-                    .unwrap_or_else(|| tentative_fs_path(dom, *target_ref));
+                let target_path = if let Some(fp) = final_paths {
+                    // final_paths available (dedup-aware) -- use directly.
+                    fp.get(target_ref)
+                        .cloned()
+                        .unwrap_or_else(|| tentative_fs_path(dom, *target_ref))
+                } else {
+                    // No final_paths yet (pre-walk). Use a unique placeholder
+                    // keyed by the target Ref so that duplicate-named siblings
+                    // get distinct values. The syncback post-processing step
+                    // substitutes these with the correct dedup'd paths.
+                    let placeholder = ref_placeholder(*target_ref);
+                    placeholder_to_target.insert(placeholder.clone(), *target_ref);
+                    placeholder
+                };
                 path_links.entry(inst_ref).or_default().push(PathRefLink {
                     name: *prop_name,
                     path: target_path,
                 });
             } else if let Some(external_path) = pre_prune_paths.get(target_ref) {
-                // Target was pruned -- use pre-prune path (already in
-                // filesystem-name format from collect_all_paths)
                 log::debug!(
                     "Property {}.{} points to pruned instance at '{}', storing as path reference",
                     tentative_fs_path(dom, inst_ref),
@@ -254,7 +257,19 @@ pub fn collect_referents(
         path_links,
         id_links,
         targets_needing_id,
+        placeholder_to_target,
     }
+}
+
+/// Prefix used for ref placeholder strings. Chosen to be unambiguous with
+/// real filesystem paths (which cannot contain double underscores in this
+/// position).
+const REF_PLACEHOLDER_PREFIX: &str = "__ROJO_REF_";
+const REF_PLACEHOLDER_SUFFIX: &str = "__";
+
+/// Build a unique placeholder string for a target Ref.
+fn ref_placeholder(target: Ref) -> String {
+    format!("{REF_PLACEHOLDER_PREFIX}{target}{REF_PLACEHOLDER_SUFFIX}")
 }
 
 /// Writes reference attributes to instances in the DOM.
@@ -404,5 +419,117 @@ fn get_existing_id_from_props(props: &rbx_dom_weak::UstrMap<Variant>) -> Option<
         }
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rbx_dom_weak::InstanceBuilder;
+
+    fn make_beam_attachment_dom() -> (WeakDom, Ref, Vec<Ref>, Ref) {
+        let mut dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let root = dom.root_ref();
+
+        let container = dom.insert(root, InstanceBuilder::new("Folder").with_name("Beams1"));
+
+        let mut attachments = Vec::new();
+        for _ in 0..4 {
+            let att =
+                dom.insert(container, InstanceBuilder::new("Attachment").with_name("001"));
+            attachments.push(att);
+        }
+
+        let beam = dom.insert(
+            container,
+            InstanceBuilder::new("Beam")
+                .with_name("BeamA")
+                .with_property("Attachment0", Variant::Ref(attachments[2])),
+        );
+
+        (dom, container, attachments, beam)
+    }
+
+    #[test]
+    fn collect_referents_uses_unique_placeholders_for_duplicate_names() {
+        let (dom, _, attachments, beam) = make_beam_attachment_dom();
+
+        let links = collect_referents(&dom, &HashMap::new(), None);
+
+        let beam_links = links.path_links.get(&beam).expect("beam should have refs");
+        assert_eq!(beam_links.len(), 1);
+
+        let path = &beam_links[0].path;
+        assert!(
+            path.starts_with(REF_PLACEHOLDER_PREFIX),
+            "path should be a placeholder, got: {path}"
+        );
+
+        assert_eq!(
+            links.placeholder_to_target.get(path).copied(),
+            Some(attachments[2]),
+            "placeholder should map to the specific target Ref"
+        );
+    }
+
+    #[test]
+    fn placeholders_are_unique_per_target_ref() {
+        let mut dom2 = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let root2 = dom2.root_ref();
+        let c2 = dom2.insert(root2, InstanceBuilder::new("Folder").with_name("Beams1"));
+        let att_a = dom2.insert(c2, InstanceBuilder::new("Attachment").with_name("001"));
+        let att_b = dom2.insert(c2, InstanceBuilder::new("Attachment").with_name("001"));
+        dom2.insert(
+            c2,
+            InstanceBuilder::new("Beam")
+                .with_name("Beam1")
+                .with_property("Attachment0", Variant::Ref(att_a))
+                .with_property("Attachment1", Variant::Ref(att_b)),
+        );
+
+        let links = collect_referents(&dom2, &HashMap::new(), None);
+
+        let placeholders: Vec<&String> = links
+            .placeholder_to_target
+            .keys()
+            .collect();
+
+        assert!(placeholders.len() >= 2, "should have at least 2 placeholders");
+
+        let targets: HashSet<&Ref> = links.placeholder_to_target.values().collect();
+        assert!(
+            targets.contains(&att_a),
+            "should have placeholder for att_a"
+        );
+        assert!(
+            targets.contains(&att_b),
+            "should have placeholder for att_b"
+        );
+
+        // Crucially: the placeholder strings themselves must be distinct
+        let unique_placeholders: HashSet<&String> = placeholders.iter().copied().collect();
+        assert_eq!(
+            unique_placeholders.len(),
+            placeholders.len(),
+            "all placeholders must be unique strings"
+        );
+    }
+
+    #[test]
+    fn collect_referents_with_final_paths_skips_placeholders() {
+        let (dom, _, attachments, beam) = make_beam_attachment_dom();
+
+        let mut final_paths = HashMap::new();
+        final_paths.insert(attachments[2], "Beams1/001~3".to_string());
+
+        let links = collect_referents(&dom, &HashMap::new(), Some(&final_paths));
+
+        assert!(
+            links.placeholder_to_target.is_empty(),
+            "should not generate placeholders when final_paths is provided"
+        );
+
+        let beam_links = links.path_links.get(&beam).expect("beam should have refs");
+        assert_eq!(beam_links[0].path, "Beams1/001~3");
     }
 }

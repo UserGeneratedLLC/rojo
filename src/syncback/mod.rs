@@ -174,7 +174,8 @@ pub fn syncback_loop_with_stats(
     }
 
     log::debug!("Collecting referents for new DOM...");
-    let deferred_referents = collect_referents(&new_tree, &pre_prune_paths, None);
+    let mut deferred_referents = collect_referents(&new_tree, &pre_prune_paths, None);
+    let placeholder_map = std::mem::take(&mut deferred_referents.placeholder_to_target);
 
     // Remove any properties that are manually blocked from syncback via the
     // project file.
@@ -611,26 +612,26 @@ pub fn syncback_loop_with_stats(
         snapshots.extend(syncback.children);
     }
 
-    // Post-process: fix Rojo_Ref_* attribute paths with correct dedup suffixes.
-    // During the walk, we recorded (Ref → final_path) in the ref_path_map.
-    // Compare against tentative_fs_path to find instances where dedup changed the path.
+    // Post-process: substitute Ref placeholders with correct filesystem paths.
+    // During collect_referents (pre-walk), each in-DOM Ref target was assigned
+    // a unique placeholder string keyed by its Ref. During the walk, the
+    // ref_path_map was populated with (Ref → final dedup'd path). Now we
+    // substitute placeholder → final_path in all written meta/model files.
     {
         use ref_properties::tentative_fs_path_public;
 
         let final_map = ref_path_map.borrow();
         let mut substitutions: Vec<(String, String)> = Vec::new();
-        for (&inst_ref, final_path) in final_map.iter() {
-            let tentative = tentative_fs_path_public(&new_tree, inst_ref);
-            if tentative != *final_path {
-                substitutions.push((tentative, final_path.clone()));
-            }
+        for (placeholder, target_ref) in &placeholder_map {
+            let final_path = final_map
+                .get(target_ref)
+                .cloned()
+                .unwrap_or_else(|| tentative_fs_path_public(&new_tree, *target_ref));
+            substitutions.push((placeholder.clone(), final_path));
         }
         if !substitutions.is_empty() {
-            // Sort by length descending so longer paths are replaced first
-            // (prevents partial prefix matches on shorter paths)
-            substitutions.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
             log::debug!(
-                "Fixing {} Rojo_Ref_* paths with dedup suffixes",
+                "Fixing {} Rojo_Ref_* placeholder paths",
                 substitutions.len()
             );
             fs_snapshot.fix_ref_paths(&substitutions);
