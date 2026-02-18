@@ -24,6 +24,12 @@ pub struct PatchSet {
     /// Populated from WriteRequest.stage_ids, consumed by change_processor.
     #[serde(default, skip)]
     pub stage_ids: HashSet<Ref>,
+    /// Pre-resolved filesystem paths to stage via git add.
+    /// Populated by api.rs (for files already on disk), consumed by change_processor
+    /// together with any Source write paths from stage_ids.
+    /// All staging is consolidated into a single git_add call to avoid index.lock races.
+    #[serde(default, skip)]
+    pub stage_paths: Vec<std::path::PathBuf>,
 }
 
 impl PatchSet {
@@ -33,6 +39,7 @@ impl PatchSet {
             added_instances: Vec::new(),
             updated_instances: Vec::new(),
             stage_ids: HashSet::new(),
+            stage_paths: Vec::new(),
         }
     }
 }

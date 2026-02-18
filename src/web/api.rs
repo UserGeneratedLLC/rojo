@@ -764,14 +764,9 @@ impl ApiService {
                 added_instances,
                 updated_instances,
                 stage_ids,
+                stage_paths: paths_to_stage,
             })
             .unwrap();
-
-        if let Some(repo_root) = self.serve_session.git_repo_root() {
-            if !paths_to_stage.is_empty() {
-                crate::git::git_add(repo_root, &paths_to_stage);
-            }
-        }
 
         msgpack_ok(WriteResponse { session_id })
     }

@@ -690,3 +690,212 @@ fn init_style_script_staging_targets_init_file() {
         );
     }
 }
+
+// ===========================================================================
+// Batch staging: many files in a single write request
+// ===========================================================================
+
+const BATCH_SCRIPT_COUNT: usize = 20;
+
+fn batch_script_name(i: usize) -> String {
+    format!("BatchScript{:02}", i)
+}
+
+fn batch_script_rel_path(i: usize) -> String {
+    format!("src/{}.luau", batch_script_name(i))
+}
+
+#[test]
+fn batch_stage_20_files_no_index_lock_race() {
+    let mut session = TestServeSession::new_with_git("git_sync_defaults", |path| {
+        git_commit_all(path, "initial commit");
+        for i in 1..=BATCH_SCRIPT_COUNT {
+            fs::write(
+                path.join(batch_script_rel_path(i)),
+                format!("-- modified {}\nreturn {{}}\n", i),
+            )
+            .unwrap();
+        }
+    });
+    let info = session.wait_to_come_online();
+    let read = session.get_api_read(info.root_instance_id).unwrap();
+
+    let mut stage_ids = Vec::new();
+    for i in 1..=BATCH_SCRIPT_COUNT {
+        if let Some((id, _)) = find_instance_by_name(&read.instances, &batch_script_name(i)) {
+            stage_ids.push(id);
+        }
+    }
+    assert!(
+        stage_ids.len() >= BATCH_SCRIPT_COUNT,
+        "Should find all {} batch scripts, found {}",
+        BATCH_SCRIPT_COUNT,
+        stage_ids.len()
+    );
+
+    let write_request = WriteRequest {
+        session_id: info.session_id,
+        removed: vec![],
+        added: HashMap::new(),
+        updated: vec![],
+        stage_ids,
+    };
+    session.post_api_write(&write_request).unwrap();
+    thread::sleep(Duration::from_millis(1500));
+
+    for i in 1..=BATCH_SCRIPT_COUNT {
+        assert!(
+            git_is_staged(session.path(), &batch_script_rel_path(i)),
+            "{} should be staged",
+            batch_script_name(i)
+        );
+    }
+}
+
+#[test]
+fn batch_source_write_20_files_all_staged() {
+    let mut session = TestServeSession::new_with_git("git_sync_defaults", |path| {
+        git_commit_all(path, "initial commit");
+    });
+    let info = session.wait_to_come_online();
+    let read = session.get_api_read(info.root_instance_id).unwrap();
+
+    let mut updates = Vec::new();
+    let mut stage_ids = Vec::new();
+    for i in 1..=BATCH_SCRIPT_COUNT {
+        if let Some((id, _)) = find_instance_by_name(&read.instances, &batch_script_name(i)) {
+            let mut props = UstrMap::default();
+            props.insert(
+                ustr("Source"),
+                Some(Variant::String(format!(
+                    "-- batch pull {}\nreturn {{}}\n",
+                    i
+                ))),
+            );
+            updates.push(InstanceUpdate {
+                id,
+                changed_name: None,
+                changed_class_name: None,
+                changed_properties: props,
+                changed_metadata: None,
+            });
+            stage_ids.push(id);
+        }
+    }
+    assert!(
+        updates.len() >= BATCH_SCRIPT_COUNT,
+        "Should find all {} batch scripts, found {}",
+        BATCH_SCRIPT_COUNT,
+        updates.len()
+    );
+
+    let write_request = WriteRequest {
+        session_id: info.session_id,
+        removed: vec![],
+        added: HashMap::new(),
+        updated: updates,
+        stage_ids,
+    };
+    session.post_api_write(&write_request).unwrap();
+    thread::sleep(Duration::from_millis(2000));
+
+    for i in 1..=BATCH_SCRIPT_COUNT {
+        let rel = batch_script_rel_path(i);
+        assert!(
+            git_is_staged(session.path(), &rel),
+            "{} should be staged after batch Source write",
+            batch_script_name(i)
+        );
+        let content = fs::read_to_string(session.path().join(&rel)).unwrap();
+        assert!(
+            content.contains(&format!("batch pull {}", i)),
+            "{} should have new content on disk",
+            batch_script_name(i)
+        );
+    }
+}
+
+#[test]
+fn batch_mixed_stage_and_source_write() {
+    let mut session = TestServeSession::new_with_git("git_sync_defaults", |path| {
+        git_commit_all(path, "initial commit");
+        // Modify the first 10 files on disk (push-accepted: already on disk, just stage)
+        for i in 1..=10 {
+            fs::write(
+                path.join(batch_script_rel_path(i)),
+                format!("-- push modified {}\nreturn {{}}\n", i),
+            )
+            .unwrap();
+        }
+    });
+    let info = session.wait_to_come_online();
+    let read = session.get_api_read(info.root_instance_id).unwrap();
+
+    let mut updates = Vec::new();
+    let mut stage_ids = Vec::new();
+
+    // Files 1-10: push-accepted (already modified on disk, just stage)
+    for i in 1..=10 {
+        if let Some((id, _)) = find_instance_by_name(&read.instances, &batch_script_name(i)) {
+            stage_ids.push(id);
+        }
+    }
+
+    // Files 11-20: pull-accepted (Source write + stage)
+    for i in 11..=BATCH_SCRIPT_COUNT {
+        if let Some((id, _)) = find_instance_by_name(&read.instances, &batch_script_name(i)) {
+            let mut props = UstrMap::default();
+            props.insert(
+                ustr("Source"),
+                Some(Variant::String(format!(
+                    "-- pull source {}\nreturn {{}}\n",
+                    i
+                ))),
+            );
+            updates.push(InstanceUpdate {
+                id,
+                changed_name: None,
+                changed_class_name: None,
+                changed_properties: props,
+                changed_metadata: None,
+            });
+            stage_ids.push(id);
+        }
+    }
+
+    assert!(
+        stage_ids.len() >= BATCH_SCRIPT_COUNT,
+        "Should have {} stage_ids, got {}",
+        BATCH_SCRIPT_COUNT,
+        stage_ids.len()
+    );
+
+    let write_request = WriteRequest {
+        session_id: info.session_id,
+        removed: vec![],
+        added: HashMap::new(),
+        updated: updates,
+        stage_ids,
+    };
+    session.post_api_write(&write_request).unwrap();
+    thread::sleep(Duration::from_millis(2000));
+
+    // All 20 files should be staged
+    for i in 1..=BATCH_SCRIPT_COUNT {
+        assert!(
+            git_is_staged(session.path(), &batch_script_rel_path(i)),
+            "{} should be staged in mixed batch",
+            batch_script_name(i)
+        );
+    }
+
+    // Files 11-20 should have the new pull content
+    for i in 11..=BATCH_SCRIPT_COUNT {
+        let content = fs::read_to_string(session.path().join(batch_script_rel_path(i))).unwrap();
+        assert!(
+            content.contains(&format!("pull source {}", i)),
+            "{} should have pull content on disk",
+            batch_script_name(i)
+        );
+    }
+}

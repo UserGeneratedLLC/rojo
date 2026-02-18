@@ -1013,6 +1013,7 @@ impl JobThreadContext {
             removed_instances: patch_set.removed_instances,
             updated_instances: Vec::new(),
             stage_ids: HashSet::new(),
+            stage_paths: Vec::new(),
         };
 
         let applied = apply_patch_set(&mut tree, structural_patch);
@@ -1027,7 +1028,7 @@ impl JobThreadContext {
         );
     }
 
-    fn handle_tree_event(&self, patch_set: PatchSet) {
+    fn handle_tree_event(&self, mut patch_set: PatchSet) {
         // Log incoming patch summary at debug level
         log::debug!(
             "Processing client patch: {} removed, {} added, {} updated",
@@ -1307,6 +1308,10 @@ impl JobThreadContext {
             // filesystem path changed (rename / ClassName transition).
             // Applied after the PatchSet to keep metadata in sync.
             let mut metadata_updates: Vec<(Ref, PathBuf)> = Vec::new();
+
+            // Paths to stage via git add after all writes complete.
+            // Starts with pre-resolved paths from api.rs, then Source writes are appended.
+            let mut pending_stage_paths = std::mem::take(&mut patch_set.stage_paths);
 
             for update in &patch_set.updated_instances {
                 let id = update.id;
@@ -1821,12 +1826,7 @@ impl JobThreadContext {
                                             err
                                         );
                                     } else if patch_set.stage_ids.contains(&id) {
-                                        if let Some(ref repo_root) = self.git_repo_root {
-                                            crate::git::git_add(
-                                                repo_root,
-                                                std::slice::from_ref(write_path),
-                                            );
-                                        }
+                                        pending_stage_paths.push(write_path.clone());
                                     }
                                 } else {
                                     log::warn!("Cannot change Source to non-string value.");
@@ -1895,6 +1895,14 @@ impl JobThreadContext {
                         Some(InstigatingSource::Path(new_instigating_source.clone()));
                     new_metadata.relevant_paths = rebuild_relevant_paths(&new_instigating_source);
                     tree.update_metadata(id, new_metadata);
+                }
+            }
+
+            // Consolidated git staging: one git_add call for all paths
+            // (pre-resolved from api.rs + Source writes from this function).
+            if !pending_stage_paths.is_empty() {
+                if let Some(ref repo_root) = self.git_repo_root {
+                    crate::git::git_add(repo_root, &pending_stage_paths);
                 }
             }
 
