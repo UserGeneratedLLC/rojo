@@ -59,6 +59,7 @@ type VCache = {
 	attrs: { [string]: any },
 	refs: { [string]: RefIdentity },
 	childCount: number,
+	validChildren: { string },
 }
 
 type SCache = {
@@ -120,7 +121,11 @@ end
 -- Pre-computation helpers (called once per instance per group)
 -- ================================================================
 
-local function cacheVirtual(vInst: VirtualInstance, classKeys: ClassComparisonKeys, virtualInstances: VirtualInstances): VCache
+local function cacheVirtual(
+	vInst: VirtualInstance,
+	classKeys: ClassComparisonKeys,
+	virtualInstances: VirtualInstances
+): VCache
 	local decoded: { [string]: any } = {}
 	local extraProps: { string } = {}
 	local refs: { [string]: RefIdentity } = {}
@@ -172,6 +177,15 @@ local function cacheVirtual(vInst: VirtualInstance, classKeys: ClassComparisonKe
 		end
 	end
 
+	local validChildren: { string } = {}
+	if vInst.Children then
+		for _, childId in ipairs(vInst.Children) do
+			if virtualInstances[childId] then
+				table.insert(validChildren, childId)
+			end
+		end
+	end
+
 	return {
 		props = decoded,
 		extraProps = extraProps,
@@ -179,10 +193,16 @@ local function cacheVirtual(vInst: VirtualInstance, classKeys: ClassComparisonKe
 		attrs = decodedAttrs,
 		refs = refs,
 		childCount = if vInst.Children then #vInst.Children else 0,
+		validChildren = validChildren,
 	}
 end
 
-local function cacheStudio(studioInstance: Instance, classKeys: ClassComparisonKeys, extraPropNames: { string }, refPropNames: { string }): SCache
+local function cacheStudio(
+	studioInstance: Instance,
+	classKeys: ClassComparisonKeys,
+	extraPropNames: { string },
+	refPropNames: { string }
+): SCache
 	local props: { [string]: any } = {}
 
 	for _, propName in ipairs(classKeys.propNames) do
@@ -244,13 +264,16 @@ local function countOwnDiffs(vCache: VCache, sCache: SCache, classKeys: ClassCom
 			vVal = defaults[propName]
 		end
 
-		if not trueEquals(vVal, sProps[propName]) then
+		local sVal = sProps[propName]
+		if vVal ~= sVal and not trueEquals(vVal, sVal) then
 			cost += 1
 		end
 	end
 
 	for _, propName in ipairs(vCache.extraProps) do
-		if not trueEquals(vProps[propName], sProps[propName]) then
+		local vVal = vProps[propName]
+		local sVal = sProps[propName]
+		if vVal ~= sVal and not trueEquals(vVal, sVal) then
 			cost += 1
 		end
 	end
@@ -271,7 +294,8 @@ local function countOwnDiffs(vCache: VCache, sCache: SCache, classKeys: ClassCom
 	local vAttrs = vCache.attrs
 	local sAttrs = sCache.attrs
 	for key, vVal in pairs(vAttrs) do
-		if not trueEquals(vVal, sAttrs[key]) then
+		local sVal = sAttrs[key]
+		if vVal ~= sVal and not trueEquals(vVal, sVal) then
 			cost += 1
 		end
 	end
@@ -304,23 +328,6 @@ local function countOwnDiffs(vCache: VCache, sCache: SCache, classKeys: ClassCom
 	end
 
 	return cost
-end
-
--- ================================================================
--- Utilities
--- ================================================================
-
-local function removeMatched(arr: { any }, matchedIndices: { [number]: boolean }): ()
-	local write = 1
-	for read = 1, #arr do
-		if not matchedIndices[read] then
-			arr[write] = arr[read]
-			write += 1
-		end
-	end
-	for i = write, #arr do
-		arr[i] = nil
-	end
 end
 
 -- ================================================================
@@ -362,32 +369,18 @@ local function computePairCost(
 		return cost
 	end
 
-	local vChildren = vInst.Children
+	local validVChildren = vCache.validChildren
 	local studioKids = sCache.children
 
-	if (vChildren and #vChildren > 0) or #studioKids > 0 then
-		if not vChildren or #vChildren == 0 then
+	if #validVChildren > 0 or #studioKids > 0 then
+		if #validVChildren == 0 then
 			cost += #studioKids * UNMATCHED_PENALTY
 		elseif #studioKids == 0 then
-			for _, childId in ipairs(vChildren) do
-				if virtualInstances[childId] then
-					cost += UNMATCHED_PENALTY
-				end
-			end
+			cost += #validVChildren * UNMATCHED_PENALTY
 		else
-			local validVChildren: { string } = {}
-			for _, childId in ipairs(vChildren) do
-				if virtualInstances[childId] then
-					table.insert(validVChildren, childId)
-				end
-			end
-			if #validVChildren > 0 then
-				local childResult =
-					matchChildren(session, validVChildren, studioKids, virtualInstances, virtualId, studioInstance)
-				cost += childResult.totalCost
-			else
-				cost += #studioKids * UNMATCHED_PENALTY
-			end
+			local childResult =
+				matchChildren(session, validVChildren, studioKids, virtualInstances, virtualId, studioInstance)
+			cost += childResult.totalCost
 		end
 	end
 
@@ -409,7 +402,6 @@ matchChildren = function(
 	parentVirtualId: string?,
 	parentStudioInstance: Instance?
 ): MatchResult
-	-- Cache lookup
 	if parentVirtualId and parentStudioInstance then
 		local pc = session.matchCache[parentVirtualId]
 		if pc then
@@ -421,14 +413,14 @@ matchChildren = function(
 	end
 
 	local matched: { MatchPair } = {}
-	local remainingVirtual: { string } = table.clone(virtualChildren)
-	local remainingStudio: { Instance } = table.clone(studioChildren)
+	local matchedV: { [number]: boolean } = {}
+	local matchedS: { [number]: boolean } = {}
 
 	-- ============================================================
-	-- Group by (Name, ClassName) -- direct property access, no pcall
+	-- Group by (Name, ClassName) once
 	-- ============================================================
 	local vByKey: { [string]: { number } } = {}
-	for i, id in ipairs(remainingVirtual) do
+	for i, id in ipairs(virtualChildren) do
 		local vInst = virtualInstances[id]
 		if vInst then
 			local key = vInst.Name .. "\0" .. vInst.ClassName
@@ -442,7 +434,7 @@ matchChildren = function(
 	end
 
 	local sByKey: { [string]: { number } } = {}
-	for i, inst in ipairs(remainingStudio) do
+	for i, inst in ipairs(studioChildren) do
 		local key = inst.Name .. "\0" .. inst.ClassName
 		local group = sByKey[key]
 		if not group then
@@ -453,222 +445,160 @@ matchChildren = function(
 	end
 
 	-- ============================================================
-	-- 1:1 instant match
+	-- 1:1 instant match + ambiguous scoring in single pass
 	-- ============================================================
-	local matchedV: { [number]: boolean } = {}
-	local matchedS: { [number]: boolean } = {}
-
 	for key, vIndices in pairs(vByKey) do
 		local sIndices = sByKey[key]
-		if sIndices and #vIndices == 1 and #sIndices == 1 then
+		if not sIndices then
+			continue
+		end
+
+		if #vIndices == 1 and #sIndices == 1 then
 			local vi, si = vIndices[1], sIndices[1]
-			if not matchedV[vi] and not matchedS[si] then
-				table.insert(matched, {
-					virtualId = remainingVirtual[vi],
-					studioInstance = remainingStudio[si],
-				})
-				matchedV[vi] = true
-				matchedS[si] = true
-			end
-		end
-	end
-
-	removeMatched(remainingVirtual, matchedV)
-	removeMatched(remainingStudio, matchedS)
-
-	-- ============================================================
-	-- Ambiguous groups: change-count scoring + greedy assignment
-	-- ============================================================
-	if #remainingVirtual > 0 and #remainingStudio > 0 then
-		local vByKey2: { [string]: { number } } = {}
-		for i, id in ipairs(remainingVirtual) do
-			local vInst = virtualInstances[id]
-			if vInst then
-				local key = vInst.Name .. "\0" .. vInst.ClassName
-				local group = vByKey2[key]
-				if not group then
-					group = {}
-					vByKey2[key] = group
-				end
-				table.insert(group, i)
-			end
+			table.insert(matched, {
+				virtualId = virtualChildren[vi],
+				studioInstance = studioChildren[si],
+			})
+			matchedV[vi] = true
+			matchedS[si] = true
+			continue
 		end
 
-		local sByKey2: { [string]: { number } } = {}
-		for i, inst in ipairs(remainingStudio) do
-			local key = inst.Name .. "\0" .. inst.ClassName
-			local group = sByKey2[key]
-			if not group then
-				group = {}
-				sByKey2[key] = group
+		local firstVInst = virtualInstances[virtualChildren[vIndices[1]]]
+		if not firstVInst then
+			continue
+		end
+		local classKeys = RbxDom.getClassComparisonKeys(firstVInst.ClassName)
+
+		local vCaches: { [number]: VCache } = {}
+		local allExtraProps: { [string]: boolean } = {}
+		local allRefProps: { [string]: boolean } = {}
+		for _, vi in ipairs(vIndices) do
+			local vInst = virtualInstances[virtualChildren[vi]]
+			if not vInst then
+				continue
 			end
-			table.insert(group, i)
+			local vCache = cacheVirtual(vInst, classKeys, virtualInstances)
+			vCaches[vi] = vCache
+			for _, propName in ipairs(vCache.extraProps) do
+				allExtraProps[propName] = true
+			end
+			for propName, _ in pairs(vCache.refs) do
+				allRefProps[propName] = true
+			end
 		end
 
-		local matchedV2: { [number]: boolean } = {}
-		local matchedS2: { [number]: boolean } = {}
+		local extraPropNamesArray: { string } = {}
+		for propName, _ in pairs(allExtraProps) do
+			table.insert(extraPropNamesArray, propName)
+		end
 
-		for key, vIndices in pairs(vByKey2) do
-			local sIndices = sByKey2[key]
-			if not sIndices then
+		local refPropNamesArray: { string } = {}
+		for propName, _ in pairs(allRefProps) do
+			table.insert(refPropNamesArray, propName)
+		end
+
+		local sCaches: { [number]: SCache } = {}
+		for _, si in ipairs(sIndices) do
+			sCaches[si] = cacheStudio(studioChildren[si], classKeys, extraPropNamesArray, refPropNamesArray)
+		end
+
+		local scoredPairs: { ScoredPair } = {}
+		local pairIdx = 0
+		local bestSoFar = math.huge
+
+		for _, vi in ipairs(vIndices) do
+			local vCache = vCaches[vi]
+			if not vCache then
 				continue
 			end
 
-			local firstVInst = virtualInstances[remainingVirtual[vIndices[1]]]
-			if not firstVInst then
-				continue
-			end
-			local classKeys = RbxDom.getClassComparisonKeys(firstVInst.ClassName)
-
-			local vCaches: { [number]: VCache } = {}
-			local allExtraProps: { [string]: boolean } = {}
-			local allRefProps: { [string]: boolean } = {}
-			for _, vi in ipairs(vIndices) do
-				if matchedV2[vi] then
-					continue
-				end
-				local vInst = virtualInstances[remainingVirtual[vi]]
-				if not vInst then
-					continue
-				end
-				local vCache = cacheVirtual(vInst, classKeys, virtualInstances)
-				vCaches[vi] = vCache
-				for _, propName in ipairs(vCache.extraProps) do
-					allExtraProps[propName] = true
-				end
-				for propName, _ in pairs(vCache.refs) do
-					allRefProps[propName] = true
-				end
-			end
-
-			local extraPropNamesArray: { string } = {}
-			for propName, _ in pairs(allExtraProps) do
-				table.insert(extraPropNamesArray, propName)
-			end
-
-			local refPropNamesArray: { string } = {}
-			for propName, _ in pairs(allRefProps) do
-				table.insert(refPropNamesArray, propName)
-			end
-
-			local sCaches: { [number]: SCache } = {}
 			for _, si in ipairs(sIndices) do
-				if not matchedS2[si] then
-					sCaches[si] = cacheStudio(remainingStudio[si], classKeys, extraPropNamesArray, refPropNamesArray)
-				end
-			end
-
-			-- Score all (A, B) pairs
-			local scoredPairs: { ScoredPair } = {}
-			local pairIdx = 0
-			local bestSoFar = math.huge
-
-			for _, vi in ipairs(vIndices) do
-				if matchedV2[vi] then
-					continue
-				end
-				local vCache = vCaches[vi]
-				if not vCache then
+				local sCache = sCaches[si]
+				if not sCache then
 					continue
 				end
 
-				for _, si in ipairs(sIndices) do
-					if matchedS2[si] then
-						continue
-					end
-					local sCache = sCaches[si]
-					if not sCache then
-						continue
-					end
+				pairIdx += 1
+				local cost = countOwnDiffs(vCache, sCache, classKeys)
 
-					pairIdx += 1
+				if cost < bestSoFar then
+					local validVChildren = vCache.validChildren
+					local studioKids = sCache.children
 
-					local cost = countOwnDiffs(vCache, sCache, classKeys)
-
-					if cost < bestSoFar then
-						local vInst = virtualInstances[remainingVirtual[vi]]
-						if vInst then
-							local vChildren = vInst.Children
-							local studioKids = sCache.children
-
-							if (vChildren and #vChildren > 0) or #studioKids > 0 then
-								if not vChildren or #vChildren == 0 then
-									cost += #studioKids * UNMATCHED_PENALTY
-								elseif #studioKids == 0 then
-									for _, childId in ipairs(vChildren) do
-										if virtualInstances[childId] then
-											cost += UNMATCHED_PENALTY
-										end
-									end
-								else
-									local validVChildren: { string } = {}
-									for _, childId in ipairs(vChildren) do
-										if virtualInstances[childId] then
-											table.insert(validVChildren, childId)
-										end
-									end
-									if #validVChildren > 0 then
-										local childResult = matchChildren(
-											session,
-											validVChildren,
-											studioKids,
-											virtualInstances,
-											remainingVirtual[vi],
-											sCache.instance
-										)
-										cost += childResult.totalCost
-									else
-										cost += #studioKids * UNMATCHED_PENALTY
-									end
-								end
-							end
+					if #validVChildren > 0 or #studioKids > 0 then
+						if #validVChildren == 0 then
+							cost += #studioKids * UNMATCHED_PENALTY
+						elseif #studioKids == 0 then
+							cost += #validVChildren * UNMATCHED_PENALTY
+						else
+							local childResult = matchChildren(
+								session,
+								validVChildren,
+								studioKids,
+								virtualInstances,
+								virtualChildren[vi],
+								sCache.instance
+							)
+							cost += childResult.totalCost
 						end
 					end
-
-					table.insert(scoredPairs, { vi = vi, si = si, cost = cost, idx = pairIdx })
-					if cost < bestSoFar then
-						bestSoFar = cost
-					end
 				end
-			end
 
-			table.sort(scoredPairs, function(a: ScoredPair, b: ScoredPair): boolean
-				if a.cost ~= b.cost then
-					return a.cost < b.cost
+				table.insert(scoredPairs, { vi = vi, si = si, cost = cost, idx = pairIdx })
+				if cost < bestSoFar then
+					bestSoFar = cost
 				end
-				return a.idx < b.idx
-			end)
-
-			for _, pair in ipairs(scoredPairs) do
-				if matchedV2[pair.vi] or matchedS2[pair.si] then
-					continue
-				end
-				table.insert(matched, {
-					virtualId = remainingVirtual[pair.vi],
-					studioInstance = remainingStudio[pair.si],
-				})
-				matchedV2[pair.vi] = true
-				matchedS2[pair.si] = true
 			end
 		end
 
-		removeMatched(remainingVirtual, matchedV2)
-		removeMatched(remainingStudio, matchedS2)
+		table.sort(scoredPairs, function(a: ScoredPair, b: ScoredPair): boolean
+			if a.cost ~= b.cost then
+				return a.cost < b.cost
+			end
+			return a.idx < b.idx
+		end)
+
+		for _, pair in ipairs(scoredPairs) do
+			if matchedV[pair.vi] or matchedS[pair.si] then
+				continue
+			end
+			table.insert(matched, {
+				virtualId = virtualChildren[pair.vi],
+				studioInstance = studioChildren[pair.si],
+			})
+			matchedV[pair.vi] = true
+			matchedS[pair.si] = true
+		end
 	end
 
 	-- ============================================================
-	-- Compute totalCost for ALL matched pairs (session cache helps)
+	-- Build unmatched lists + compute totalCost
 	-- ============================================================
+	local unmatchedVirtual: { string } = {}
+	for i, id in ipairs(virtualChildren) do
+		if not matchedV[i] then
+			table.insert(unmatchedVirtual, id)
+		end
+	end
+
+	local unmatchedStudio: { Instance } = {}
+	for i, inst in ipairs(studioChildren) do
+		if not matchedS[i] then
+			table.insert(unmatchedStudio, inst)
+		end
+	end
+
 	local totalCost = 0
 	for _, pair in ipairs(matched) do
 		totalCost += computePairCost(session, pair.virtualId, pair.studioInstance, virtualInstances, math.huge)
 	end
-	totalCost += (#remainingVirtual + #remainingStudio) * UNMATCHED_PENALTY
+	totalCost += (#unmatchedVirtual + #unmatchedStudio) * UNMATCHED_PENALTY
 
 	local result = {
 		matched = matched,
-		unmatchedVirtual = remainingVirtual,
-		unmatchedStudio = remainingStudio,
+		unmatchedVirtual = unmatchedVirtual,
+		unmatchedStudio = unmatchedStudio,
 		totalCost = totalCost,
 	}
 

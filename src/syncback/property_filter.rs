@@ -61,12 +61,22 @@ pub fn filter_properties_with_stats<'inst>(
             return true;
         }
         if !sync_unscriptable {
-            if let Some(data) = class_data {
+            let mut current = class_data;
+            loop {
+                let data = match current {
+                    Some(d) => d,
+                    None => break,
+                };
                 if let Some(prop_data) = data.properties.get(prop_name.as_str()) {
                     if matches!(prop_data.scriptability, Scriptability::None) {
                         return true;
                     }
+                    break;
                 }
+                current = data
+                    .superclass
+                    .as_ref()
+                    .and_then(|s| database.classes.get(&**s));
             }
         }
         false

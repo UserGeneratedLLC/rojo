@@ -937,14 +937,14 @@ impl JobThreadContext {
         let start = Instant::now();
         let instance_context = InstanceContext::new();
 
-        let snapshot = match snapshot_from_vfs(&instance_context, &self.vfs, &self.project_file_path)
-        {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!("Tree reconciliation snapshot error: {:?}", e);
-                return;
-            }
-        };
+        let snapshot =
+            match snapshot_from_vfs(&instance_context, &self.vfs, &self.project_file_path) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::error!("Tree reconciliation snapshot error: {:?}", e);
+                    return;
+                }
+            };
 
         let mut tree = self.tree.lock().unwrap();
         let root_id = tree.get_root_id();

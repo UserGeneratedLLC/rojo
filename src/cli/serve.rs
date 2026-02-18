@@ -4,7 +4,6 @@ use std::{
     mem::forget,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::Arc,
 };
 
@@ -131,7 +130,7 @@ fn run_live_syncback(project_path: &Path, payload: SyncbackPayload) -> anyhow::R
         result.fs_snapshot.removed_paths().len()
     );
 
-    refresh_git_index(base_path);
+    crate::git::refresh_git_index(base_path);
 
     forget(session_old);
 
@@ -228,33 +227,6 @@ fn fixup_ref_properties(dom: &mut WeakDom, ref_map: &HashMap<Ref, Ref>) {
             for (key, new_ref) in props_to_fix {
                 inst.properties.insert(key.into(), Variant::Ref(new_ref));
             }
-        }
-    }
-}
-
-fn refresh_git_index(project_dir: &Path) {
-    let mut check_dir = Some(project_dir);
-    let mut is_git_repo = false;
-    while let Some(dir) = check_dir {
-        if dir.join(".git").exists() {
-            is_git_repo = true;
-            break;
-        }
-        check_dir = dir.parent();
-    }
-
-    if is_git_repo {
-        log::info!("Refreshing git index...");
-        match Command::new("git")
-            .args(["update-index", "--refresh", "-q"])
-            .current_dir(project_dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-        {
-            Ok(_) => log::info!("Git index refreshed."),
-            Err(e) => log::warn!("Failed to run git update-index --refresh: {}", e),
         }
     }
 }

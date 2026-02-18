@@ -1318,7 +1318,10 @@ mod tests {
         let (tree, children) = make_tree_with_children(&[("Alpha", "Folder"), ("Beta", "Folder")]);
         let result = match_forward(snaps, &children, &tree, &MatchingSession::new());
         assert_eq!(result.matched.len(), 2);
-        assert_eq!(result.total_cost, 0, "Identical instances should have zero cost");
+        assert_eq!(
+            result.total_cost, 0,
+            "Identical instances should have zero cost"
+        );
     }
 
     #[test]
@@ -1390,14 +1393,8 @@ mod tests {
 
     #[test]
     fn session_cache_consistent() {
-        let snaps1 = vec![
-            make_snapshot("X", "Folder"),
-            make_snapshot("Y", "Folder"),
-        ];
-        let snaps2 = vec![
-            make_snapshot("X", "Folder"),
-            make_snapshot("Y", "Folder"),
-        ];
+        let snaps1 = vec![make_snapshot("X", "Folder"), make_snapshot("Y", "Folder")];
+        let snaps2 = vec![make_snapshot("X", "Folder"), make_snapshot("Y", "Folder")];
         let (tree, children) = make_tree_with_children(&[("X", "Folder"), ("Y", "Folder")]);
         let session = MatchingSession::new();
 
@@ -1406,10 +1403,7 @@ mod tests {
 
         assert_eq!(r1.matched.len(), r2.matched.len());
         assert_eq!(r1.total_cost, r2.total_cost);
-        assert_eq!(
-            r1.unmatched_snapshot.len(),
-            r2.unmatched_snapshot.len()
-        );
+        assert_eq!(r1.unmatched_snapshot.len(), r2.unmatched_snapshot.len());
     }
 
     #[test]

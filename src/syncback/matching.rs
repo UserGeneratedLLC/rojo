@@ -829,29 +829,14 @@ mod tests {
     fn total_cost_includes_unmatched() {
         let mut new_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
         let new_root = new_dom.root_ref();
-        new_dom.insert(
-            new_root,
-            InstanceBuilder::new("Folder").with_name("A"),
-        );
-        new_dom.insert(
-            new_root,
-            InstanceBuilder::new("Folder").with_name("B"),
-        );
-        new_dom.insert(
-            new_root,
-            InstanceBuilder::new("Folder").with_name("C"),
-        );
+        new_dom.insert(new_root, InstanceBuilder::new("Folder").with_name("A"));
+        new_dom.insert(new_root, InstanceBuilder::new("Folder").with_name("B"));
+        new_dom.insert(new_root, InstanceBuilder::new("Folder").with_name("C"));
 
         let mut old_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
         let old_root = old_dom.root_ref();
-        old_dom.insert(
-            old_root,
-            InstanceBuilder::new("Folder").with_name("A"),
-        );
-        old_dom.insert(
-            old_root,
-            InstanceBuilder::new("Folder").with_name("B"),
-        );
+        old_dom.insert(old_root, InstanceBuilder::new("Folder").with_name("A"));
+        old_dom.insert(old_root, InstanceBuilder::new("Folder").with_name("B"));
 
         let new_children: Vec<Ref> = new_dom.get_by_ref(new_root).unwrap().children().to_vec();
         let old_children: Vec<Ref> = old_dom.get_by_ref(old_root).unwrap().children().to_vec();

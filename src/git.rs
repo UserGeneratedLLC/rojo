@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     sync::{Arc, Mutex},
 };
 
@@ -241,6 +241,39 @@ pub fn compute_git_metadata(tree_handle: &Arc<Mutex<RojoTree>>, repo_root: &Path
     GitMetadata {
         changed_ids,
         script_committed_hashes,
+    }
+}
+
+/// Refreshes the git index if the project is in a git repository.
+///
+/// This is useful because syncback may rewrite files with identical content,
+/// which can cause git to report them as modified due to timestamp changes.
+pub fn refresh_git_index(project_dir: &Path) {
+    let mut check_dir = Some(project_dir);
+    let mut is_git_repo = false;
+    while let Some(dir) = check_dir {
+        if dir.join(".git").exists() {
+            is_git_repo = true;
+            break;
+        }
+        check_dir = dir.parent();
+    }
+
+    if is_git_repo {
+        log::info!("Refreshing git index...");
+        match Command::new("git")
+            .args(["update-index", "--refresh", "-q"])
+            .current_dir(project_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+        {
+            Ok(_) => log::info!("Git index refreshed."),
+            Err(e) => log::warn!("Failed to run git update-index --refresh: {}", e),
+        }
+    } else {
+        log::debug!("Not a git repository, skipping index refresh.");
     }
 }
 

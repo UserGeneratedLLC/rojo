@@ -64,10 +64,20 @@ return function()
 			local parentInst = container
 
 			local result1 = Matching.matchChildren(
-				session, { "A" }, { studioChild }, virtualInstances, "PARENT", parentInst
+				session,
+				{ "A" },
+				{ studioChild },
+				virtualInstances,
+				"PARENT",
+				parentInst
 			)
 			local result2 = Matching.matchChildren(
-				session, { "A" }, { studioChild }, virtualInstances, "PARENT", parentInst
+				session,
+				{ "A" },
+				{ studioChild },
+				virtualInstances,
+				"PARENT",
+				parentInst
 			)
 			expect(result1).to.equal(result2)
 		end)
@@ -82,10 +92,20 @@ return function()
 			local studioY = makeStudioFolder("Y", container)
 
 			local result1 = Matching.matchChildren(
-				session, { "A" }, { studioX }, virtualInstances, "PARENT_1", container
+				session,
+				{ "A" },
+				{ studioX },
+				virtualInstances,
+				"PARENT_1",
+				container
 			)
 			local result2 = Matching.matchChildren(
-				session, { "B" }, { studioY }, virtualInstances, "PARENT_2", container
+				session,
+				{ "B" },
+				{ studioY },
+				virtualInstances,
+				"PARENT_2",
+				container
 			)
 			expect(result1).never.to.equal(result2)
 			expect(result1.matched[1].virtualId).to.equal("A")
@@ -100,12 +120,8 @@ return function()
 			}
 			local studioChild = makeStudioFolder("Child", container)
 
-			local result1 = Matching.matchChildren(
-				session1, { "A" }, { studioChild }, virtualInstances, "P", container
-			)
-			local result2 = Matching.matchChildren(
-				session2, { "A" }, { studioChild }, virtualInstances, "P", container
-			)
+			local result1 = Matching.matchChildren(session1, { "A" }, { studioChild }, virtualInstances, "P", container)
+			local result2 = Matching.matchChildren(session2, { "A" }, { studioChild }, virtualInstances, "P", container)
 			expect(result1).never.to.equal(result2)
 			expect(result1.totalCost).to.equal(result2.totalCost)
 		end)
@@ -120,7 +136,12 @@ return function()
 			local studioAlpha = makeStudioFolder("Alpha", container)
 
 			local result = Matching.matchChildren(
-				session, { "A" }, { studioAlpha }, virtualInstances, "ROOT", container
+				session,
+				{ "A" },
+				{ studioAlpha },
+				virtualInstances,
+				"ROOT",
+				container
 			)
 			expect(#result.matched).to.equal(1)
 			expect(result.totalCost).to.equal(0)
@@ -136,7 +157,12 @@ return function()
 			local studioBeta = makeStudioFolder("Beta", container)
 
 			local result = Matching.matchChildren(
-				session, { "A", "B" }, { studioAlpha, studioBeta }, virtualInstances, "ROOT", container
+				session,
+				{ "A", "B" },
+				{ studioAlpha, studioBeta },
+				virtualInstances,
+				"ROOT",
+				container
 			)
 			expect(#result.matched).to.equal(2)
 			expect(result.totalCost).to.equal(0)
@@ -149,9 +175,7 @@ return function()
 			}
 			local studioPart = makeStudioPart("P", container, 0)
 
-			local result = Matching.matchChildren(
-				session, { "A" }, { studioPart }, virtualInstances, "ROOT", container
-			)
+			local result = Matching.matchChildren(session, { "A" }, { studioPart }, virtualInstances, "ROOT", container)
 			expect(#result.matched).to.equal(1)
 			expect(result.totalCost > 0).to.equal(true)
 		end)
@@ -165,7 +189,12 @@ return function()
 			local studioAlpha = makeStudioFolder("Alpha", container)
 
 			local result = Matching.matchChildren(
-				session, { "A", "B" }, { studioAlpha }, virtualInstances, "ROOT", container
+				session,
+				{ "A", "B" },
+				{ studioAlpha },
+				virtualInstances,
+				"ROOT",
+				container
 			)
 			expect(#result.matched).to.equal(1)
 			expect(#result.unmatchedVirtual).to.equal(1)
@@ -181,7 +210,12 @@ return function()
 			local studioBeta = makeStudioFolder("Beta", container)
 
 			local result = Matching.matchChildren(
-				session, { "A" }, { studioAlpha, studioBeta }, virtualInstances, "ROOT", container
+				session,
+				{ "A" },
+				{ studioAlpha, studioBeta },
+				virtualInstances,
+				"ROOT",
+				container
 			)
 			expect(#result.matched).to.equal(1)
 			expect(#result.unmatchedStudio).to.equal(1)
@@ -361,7 +395,12 @@ return function()
 			local s2 = makeStudioFolder("Data", container)
 
 			local result = Matching.matchChildren(
-				session, { "A", "B" }, { s1, s2 }, virtualInstances, "ROOT", container
+				session,
+				{ "A", "B" },
+				{ s1, s2 },
+				virtualInstances,
+				"ROOT",
+				container
 			)
 			expect(#result.matched).to.equal(2)
 			expect(result.totalCost).to.equal(0)
@@ -378,7 +417,12 @@ return function()
 			local s2 = makeStudioFolder("Data", container)
 
 			local result = Matching.matchChildren(
-				session, { "A", "B", "C" }, { s1, s2 }, virtualInstances, "ROOT", container
+				session,
+				{ "A", "B", "C" },
+				{ s1, s2 },
+				virtualInstances,
+				"ROOT",
+				container
 			)
 			expect(#result.matched).to.equal(2)
 			expect(#result.unmatchedVirtual).to.equal(1)
@@ -442,9 +486,7 @@ return function()
 				A = makeVirtualInstance("Alpha", "Folder", {}, {}),
 				B = makeVirtualInstance("Beta", "Folder", {}, {}),
 			}
-			local result = Matching.matchChildren(
-				session, { "A", "B" }, {}, virtualInstances, "ROOT", container
-			)
+			local result = Matching.matchChildren(session, { "A", "B" }, {}, virtualInstances, "ROOT", container)
 			expect(#result.matched).to.equal(0)
 			expect(#result.unmatchedVirtual).to.equal(2)
 			expect(result.totalCost).to.equal(20000)
@@ -454,9 +496,7 @@ return function()
 			local session = Matching.newSession()
 			local s1 = makeStudioFolder("Alpha", container)
 			local s2 = makeStudioFolder("Beta", container)
-			local result = Matching.matchChildren(
-				session, {}, { s1, s2 }, {}, "ROOT", container
-			)
+			local result = Matching.matchChildren(session, {}, { s1, s2 }, {}, "ROOT", container)
 			expect(#result.matched).to.equal(0)
 			expect(#result.unmatchedStudio).to.equal(2)
 			expect(result.totalCost).to.equal(20000)
@@ -497,9 +537,7 @@ return function()
 			}
 			local studioOnly = makeStudioFolder("Only", container)
 
-			local result = Matching.matchChildren(
-				session, { "A" }, { studioOnly }, virtualInstances, "ROOT", container
-			)
+			local result = Matching.matchChildren(session, { "A" }, { studioOnly }, virtualInstances, "ROOT", container)
 			expect(#result.matched).to.equal(1)
 			expect(result.matched[1].virtualId).to.equal("A")
 			expect(result.matched[1].studioInstance).to.equal(studioOnly)
