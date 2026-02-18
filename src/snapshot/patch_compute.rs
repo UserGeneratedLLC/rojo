@@ -19,12 +19,15 @@ use super::{
 
 #[profiling::function]
 pub fn compute_patch_set(snapshot: Option<InstanceSnapshot>, tree: &RojoTree, id: Ref) -> PatchSet {
+    use super::matching::MatchingSession;
+
     let mut patch_set = PatchSet::new();
 
     if let Some(snapshot) = snapshot {
         let mut context = ComputePatchContext::default();
+        let session = MatchingSession::new();
 
-        compute_patch_set_internal(&mut context, snapshot, tree, id, &mut patch_set);
+        compute_patch_set_internal(&mut context, snapshot, tree, id, &mut patch_set, &session);
 
         // Rewrite Ref properties to refer to instance IDs instead of snapshot IDs
         // for all of the IDs that we know about so far.
@@ -80,6 +83,7 @@ fn compute_patch_set_internal(
     tree: &RojoTree,
     id: Ref,
     patch_set: &mut PatchSet,
+    session: &super::matching::MatchingSession,
 ) {
     if snapshot.snapshot_id.is_some() {
         context
@@ -92,7 +96,7 @@ fn compute_patch_set_internal(
         .expect("Instance did not exist in tree");
 
     compute_property_patches(&mut snapshot, &instance, patch_set, tree);
-    compute_children_patches(context, &mut snapshot, tree, id, patch_set);
+    compute_children_patches(context, &mut snapshot, tree, id, patch_set, session);
 }
 
 fn compute_property_patches(
@@ -216,6 +220,7 @@ fn compute_children_patches(
     tree: &RojoTree,
     id: Ref,
     patch_set: &mut PatchSet,
+    session: &super::matching::MatchingSession,
 ) {
     use super::matching::match_forward;
 
@@ -226,12 +231,11 @@ fn compute_children_patches(
     let instance_children = instance.children().to_vec();
     let snapshot_children = take(&mut snapshot.children);
 
-    // Use the recursive change-count scoring + greedy assignment matching algorithm.
-    let match_result = match_forward(snapshot_children, &instance_children, tree);
+    let match_result = match_forward(snapshot_children, &instance_children, tree, session);
 
     // Matched pairs: recursively compute patches.
     for (snapshot_child, tree_child_id) in match_result.matched {
-        compute_patch_set_internal(context, snapshot_child, tree, tree_child_id, patch_set);
+        compute_patch_set_internal(context, snapshot_child, tree, tree_child_id, patch_set, session);
     }
 
     // Unmatched snapshots: new instances to be added.

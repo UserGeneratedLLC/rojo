@@ -13,7 +13,7 @@ local Log = require(Packages.Log)
 local invariant = require(script.Parent.Parent.invariant)
 local Matching = require(script.Parent.matching)
 
-local function hydrate(instanceMap, virtualInstances, rootId, rootInstance)
+local function hydrate(instanceMap, virtualInstances, rootId, rootInstance, session)
 	local virtualInstance = virtualInstances[rootId]
 
 	if virtualInstance == nil then
@@ -40,12 +40,14 @@ local function hydrate(instanceMap, virtualInstances, rootId, rootInstance)
 		end
 	end
 
-	-- Use the 3-pass matching algorithm to pair virtual ↔ studio children
-	local result = Matching.matchChildren(validVirtualIds, existingChildren, virtualInstances)
+	local result = Matching.matchChildren(
+		session, validVirtualIds, existingChildren, virtualInstances,
+		rootId, rootInstance
+	)
 
 	-- Recursively hydrate matched pairs
 	for _, pair in result.matched do
-		hydrate(instanceMap, virtualInstances, pair.virtualId, pair.studioInstance)
+		hydrate(instanceMap, virtualInstances, pair.virtualId, pair.studioInstance, session)
 	end
 
 	-- Log unmatched virtual children (no Studio counterpart found)

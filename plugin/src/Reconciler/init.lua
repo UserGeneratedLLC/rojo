@@ -33,9 +33,9 @@ function Reconciler:applyPatch(patch)
 	return unappliedPatch
 end
 
-function Reconciler:hydrate(virtualInstances, rootId, rootInstance)
+function Reconciler:hydrate(virtualInstances, rootId, rootInstance, session)
 	Timer.start("Reconciler:hydrate")
-	local result = hydrate(self.__instanceMap, virtualInstances, rootId, rootInstance)
+	local result = hydrate(self.__instanceMap, virtualInstances, rootId, rootInstance, session)
 	Timer.stop()
 
 	return result

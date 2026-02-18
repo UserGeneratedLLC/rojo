@@ -200,6 +200,7 @@ fn syncback_matching_ufowave_textures() {
     eprintln!("Expected face distribution: {:?}", expected_faces);
 
     // Run syncback matching
+    let session = librojo::syncback::matching::MatchingSession::new();
     let result = librojo::syncback::matching::match_children(
         &input_textures,
         &expected_textures,
@@ -207,6 +208,7 @@ fn syncback_matching_ufowave_textures() {
         &expected_dom,
         None,
         None,
+        &session,
     );
 
     assert_eq!(
@@ -306,7 +308,8 @@ fn forward_matching_ufowave_textures() {
     assert!(!snap_textures.is_empty(), "No Texture children found");
 
     // Run forward sync matching
-    let result = librojo::snapshot::matching::match_forward(snap_textures, &tree_textures, &tree);
+    let session = librojo::snapshot::matching::MatchingSession::new();
+    let result = librojo::snapshot::matching::match_forward(snap_textures, &tree_textures, &tree, &session);
 
     assert_eq!(
         result.matched.len(),

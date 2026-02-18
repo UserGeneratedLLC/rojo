@@ -1,3 +1,6 @@
+--!strict
+--!native
+--!optimize 2
 --[[
 	Shared value equality check used by both the diff and matching modules.
 
@@ -6,98 +9,96 @@
 	use this same function.
 ]]
 
-local function fuzzyEq(a: number, b: number, epsilon: number): boolean
+local NULL_REF: string = "00000000000000000000000000000000"
+local EPSILON: number = 0.0001
+
+local function fuzzyEq(a: number, b: number): boolean
 	local diff = math.abs(a - b)
-	-- Use both absolute and relative epsilon for better precision handling
-	-- Absolute: for small numbers near zero
-	-- Relative: for larger numbers where absolute epsilon is too tight
 	local maxVal = math.max(math.abs(a), math.abs(b), 1)
-	return diff < epsilon or diff < maxVal * epsilon
+	return diff < EPSILON or diff < maxVal * EPSILON
 end
 
-local function trueEquals(a, b): boolean
-	-- Exit early for simple equality values
-	if a == b then
+local function color3Eq(a: Color3, b: Color3): boolean
+	return math.floor(a.R * 255) == math.floor(b.R * 255)
+		and math.floor(a.G * 255) == math.floor(b.G * 255)
+		and math.floor(a.B * 255) == math.floor(b.B * 255)
+end
+
+local function vector2Eq(a: Vector2, b: Vector2): boolean
+	return fuzzyEq(a.X, b.X) and fuzzyEq(a.Y, b.Y)
+end
+
+local function vector3Eq(a: Vector3, b: Vector3): boolean
+	return fuzzyEq(a.X, b.X) and fuzzyEq(a.Y, b.Y) and fuzzyEq(a.Z, b.Z)
+end
+
+local function cframeEq(a: CFrame, b: CFrame): boolean
+	local ax, ay, az, aR00, aR01, aR02, aR10, aR11, aR12, aR20, aR21, aR22 = a:GetComponents()
+	local bx, by, bz, bR00, bR01, bR02, bR10, bR11, bR12, bR20, bR21, bR22 = b:GetComponents()
+	return fuzzyEq(ax, bx) and fuzzyEq(ay, by) and fuzzyEq(az, bz)
+		and fuzzyEq(aR00, bR00) and fuzzyEq(aR01, bR01) and fuzzyEq(aR02, bR02)
+		and fuzzyEq(aR10, bR10) and fuzzyEq(aR11, bR11) and fuzzyEq(aR12, bR12)
+		and fuzzyEq(aR20, bR20) and fuzzyEq(aR21, bR21) and fuzzyEq(aR22, bR22)
+end
+
+local function trueEquals(a: any, b: any): boolean
+	if rawequal(a, b) then
 		return true
 	end
 
-	-- Treat nil and { Ref = "000...0" } as equal
-	if
-		(a == nil and type(b) == "table" and b.Ref == "00000000000000000000000000000000")
-		or (b == nil and type(a) == "table" and a.Ref == "00000000000000000000000000000000")
-	then
+	if a == nil then
+		return type(b) == "table" and rawget(b, "Ref") == NULL_REF
+	end
+	if b == nil then
+		return type(a) == "table" and rawget(a, "Ref") == NULL_REF
+	end
+
+	local t = typeof(a)
+	if t ~= typeof(b) then
+		if t == "number" and typeof(b) == "EnumItem" then
+			return a == (b :: EnumItem).Value
+		end
+		if t == "EnumItem" and typeof(b) == "number" then
+			return (a :: EnumItem).Value == b
+		end
+		return false
+	end
+
+	if t == "table" then
+		if rawlen(a) ~= rawlen(b) then
+			return false
+		end
+		for k, v in next, a do
+			local ov = rawget(b, k)
+			if ov == nil or not trueEquals(v, ov) then
+				return false
+			end
+		end
+		for k in next, b do
+			if rawget(a, k) == nil then
+				return false
+			end
+		end
 		return true
 	end
 
-	local typeA, typeB = typeof(a), typeof(b)
+	if t == "number" then
+		return fuzzyEq(a, b)
+	end
+	if t == "Color3" then
+		return color3Eq(a, b)
+	end
+	if t == "Vector3" then
+		return vector3Eq(a, b)
+	end
+	if t == "Vector2" then
+		return vector2Eq(a, b)
+	end
+	if t == "CFrame" then
+		return cframeEq(a, b)
+	end
 
-	-- For tables, try recursive deep equality
-	if typeA == "table" and typeB == "table" then
-		local checkedKeys = {}
-		for key, value in a do
-			checkedKeys[key] = true
-			if not trueEquals(value, b[key]) then
-				return false
-			end
-		end
-		for key, value in b do
-			if checkedKeys[key] then
-				continue
-			end
-			if not trueEquals(value, a[key]) then
-				return false
-			end
-		end
-		return true
-
-	-- For NaN, check if both values are not equal to themselves
-	elseif a ~= a and b ~= b then
-		return true
-
-	-- For numbers, compare with epsilon of 0.0001 to avoid floating point inequality
-	elseif typeA == "number" and typeB == "number" then
-		return fuzzyEq(a, b, 0.0001)
-
-	-- For EnumItem->number, compare the EnumItem's value
-	elseif typeA == "number" and typeB == "EnumItem" then
-		return a == b.Value
-	elseif typeA == "EnumItem" and typeB == "number" then
-		return a.Value == b
-
-	-- For Color3s, compare to RGB ints to avoid floating point inequality
-	elseif typeA == "Color3" and typeB == "Color3" then
-		local aR, aG, aB = math.floor(a.R * 255), math.floor(a.G * 255), math.floor(a.B * 255)
-		local bR, bG, bB = math.floor(b.R * 255), math.floor(b.G * 255), math.floor(b.B * 255)
-		return aR == bR and aG == bG and aB == bB
-
-	-- For CFrames, compare to components with epsilon of 0.0001 to avoid floating point inequality
-	elseif typeA == "CFrame" and typeB == "CFrame" then
-		local aComponents, bComponents = { a:GetComponents() }, { b:GetComponents() }
-		for i, aComponent in aComponents do
-			if not fuzzyEq(aComponent, bComponents[i], 0.0001) then
-				return false
-			end
-		end
-		return true
-
-	-- For Vector3s, compare to components with epsilon of 0.0001 to avoid floating point inequality
-	elseif typeA == "Vector3" and typeB == "Vector3" then
-		local aComponents, bComponents = { a.X, a.Y, a.Z }, { b.X, b.Y, b.Z }
-		for i, aComponent in aComponents do
-			if not fuzzyEq(aComponent, bComponents[i], 0.0001) then
-				return false
-			end
-		end
-		return true
-
-	-- For Vector2s, compare to components with epsilon of 0.0001 to avoid floating point inequality
-	elseif typeA == "Vector2" and typeB == "Vector2" then
-		local aComponents, bComponents = { a.X, a.Y }, { b.X, b.Y }
-		for i, aComponent in aComponents do
-			if not fuzzyEq(aComponent, bComponents[i], 0.0001) then
-				return false
-			end
-		end
+	if a ~= a and b ~= b then
 		return true
 	end
 

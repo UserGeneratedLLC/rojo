@@ -17,6 +17,7 @@ local encodePatchUpdate = require(script.Parent.ChangeBatcher.encodePatchUpdate)
 local encodeInstance = require(script.Parent.ChangeBatcher.encodeInstance)
 local InstanceMap = require(script.Parent.InstanceMap)
 local PatchSet = require(script.Parent.PatchSet)
+local Matching = require(script.Parent.Reconciler.matching)
 local Reconciler = require(script.Parent.Reconciler)
 local strict = require(script.Parent.strict)
 local Settings = require(script.Parent.Settings)
@@ -625,7 +626,8 @@ function ServeSession:__computeInitialPatch(serverInfo)
 		-- tracking them in the reconciler.
 		Log.trace("Matching existing Roblox instances to Rojo IDs")
 		self:setLoadingText("Hydrating instance map...")
-		self.__reconciler:hydrate(readResponseBody.instances, serverInfo.rootInstanceId, game)
+		local matchingSession = Matching.newSession()
+		self.__reconciler:hydrate(readResponseBody.instances, serverInfo.rootInstanceId, game, matchingSession)
 
 		-- Calculate the initial patch to apply to the DataModel to catch us
 		-- up to what Rojo thinks the place should look like.

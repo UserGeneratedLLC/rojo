@@ -136,19 +136,39 @@ fn run_live_syncback(project_path: &Path, payload: SyncbackPayload) -> anyhow::R
 }
 
 fn build_dom_from_chunks(payload: SyncbackPayload) -> anyhow::Result<WeakDom> {
+    use crate::syncback::VISIBLE_SERVICES;
+
     let mut dom = WeakDom::new(InstanceBuilder::new("DataModel"));
     let root_ref = dom.root_ref();
 
     let mut global_ref_map: HashMap<Ref, Ref> = HashMap::new();
+    let mut created_services: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for chunk in &payload.services {
-        let chunk_dom = rbx_binary::from_reader(Cursor::new(&chunk.data))
-            .with_context(|| format!("Failed to parse rbxm for service {}", chunk.class_name))?;
-
         let service_ref = dom.insert(root_ref, InstanceBuilder::new(&chunk.class_name));
+        created_services.insert(chunk.class_name.clone());
 
-        for &child_ref in chunk_dom.root().children() {
-            deep_clone_into(&chunk_dom, &mut dom, child_ref, service_ref, &mut global_ref_map);
+        if !chunk.data.is_empty() {
+            let chunk_dom = rbx_binary::from_reader(Cursor::new(&chunk.data))
+                .with_context(|| {
+                    format!("Failed to parse rbxm for service {}", chunk.class_name)
+                })?;
+
+            for &child_ref in chunk_dom.root().children() {
+                deep_clone_into(
+                    &chunk_dom,
+                    &mut dom,
+                    child_ref,
+                    service_ref,
+                    &mut global_ref_map,
+                );
+            }
+        }
+    }
+
+    for &service_name in VISIBLE_SERVICES {
+        if !created_services.contains(service_name) {
+            dom.insert(root_ref, InstanceBuilder::new(service_name));
         }
     }
 

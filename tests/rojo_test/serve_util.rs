@@ -538,6 +538,32 @@ pub fn make_rbxl_from_chunks(chunks: &[librojo::web_api::ServiceChunk]) -> Vec<u
         }
     }
 
+    let visible_services = [
+        "Lighting",
+        "MaterialService",
+        "ReplicatedFirst",
+        "ReplicatedStorage",
+        "ServerScriptService",
+        "ServerStorage",
+        "SoundService",
+        "StarterGui",
+        "StarterPack",
+        "StarterPlayer",
+        "Teams",
+        "TextChatService",
+        "VoiceChatService",
+        "Workspace",
+    ];
+    let existing: std::collections::HashSet<String> = chunks
+        .iter()
+        .map(|c| c.class_name.clone())
+        .collect();
+    for &svc in &visible_services {
+        if !existing.contains(svc) {
+            dom.insert(root_ref, rbx_dom_weak::InstanceBuilder::new(svc));
+        }
+    }
+
     let service_refs: Vec<Ref> = dom.root().children().to_vec();
     let mut buf = Vec::new();
     rbx_binary::to_writer(&mut buf, &dom, &service_refs).unwrap();

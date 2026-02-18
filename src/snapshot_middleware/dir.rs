@@ -208,6 +208,7 @@ pub fn syncback_dir_no_meta<'sync>(
             .collect();
 
         // Run the 3-pass matching algorithm to pair new ↔ old children.
+        let matching_session = crate::syncback::matching::MatchingSession::new();
         let match_result = match_children(
             &eligible_new,
             &eligible_old,
@@ -215,6 +216,7 @@ pub fn syncback_dir_no_meta<'sync>(
             snapshot.old_tree(),
             None, // TODO: pass precomputed hashes for better similarity
             None,
+            &matching_session,
         );
 
         // Pre-seed taken_names from ALL matched old children's filesystem

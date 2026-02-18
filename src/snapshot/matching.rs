@@ -10,6 +10,7 @@
 //! The change count = how many things the reconciler would need to touch
 //! to turn instance A into instance B, including the entire subtree.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use rbx_dom_weak::types::Ref;
@@ -25,6 +26,21 @@ const UNMATCHED_PENALTY: u32 = 10_000;
 /// O(n^k) explosion on deeply nested trees with many same-named instances.
 const MAX_SCORING_DEPTH: u32 = 3;
 
+/// Session-scoped cache for the matching algorithm. Caches
+/// `compute_change_count` results so that recursive scoring work is
+/// reused across calls at different tree levels.
+pub struct MatchingSession {
+    cost_cache: RefCell<HashMap<(Ref, Ref), u32>>,
+}
+
+impl MatchingSession {
+    pub fn new() -> Self {
+        Self {
+            cost_cache: RefCell::new(HashMap::new()),
+        }
+    }
+}
+
 /// Result of the forward sync matching algorithm.
 pub struct ForwardMatchResult {
     /// Pairs of (snapshot_child, tree_ref) that were matched.
@@ -33,6 +49,9 @@ pub struct ForwardMatchResult {
     pub unmatched_snapshot: Vec<InstanceSnapshot>,
     /// Tree children with no match in the snapshot (to be removed).
     pub unmatched_tree: Vec<Ref>,
+    /// Total cost of the matching (sum of all matched pair costs +
+    /// unmatched penalties). Zero means no changes across anything.
+    pub total_cost: u32,
 }
 
 /// Match snapshot children to tree children, minimizing total changes.
@@ -40,12 +59,14 @@ pub fn match_forward(
     snapshot_children: Vec<InstanceSnapshot>,
     tree_children: &[Ref],
     tree: &RojoTree,
+    session: &MatchingSession,
 ) -> ForwardMatchResult {
     if snapshot_children.is_empty() && tree_children.is_empty() {
         return ForwardMatchResult {
             matched: Vec::new(),
             unmatched_snapshot: Vec::new(),
             unmatched_tree: Vec::new(),
+            total_cost: 0,
         };
     }
 
@@ -95,7 +116,7 @@ pub fn match_forward(
     let snap_remaining = snap_matched.iter().filter(|&&m| !m).count();
     let tree_remaining = tree_available.iter().filter(|&&a| a).count();
     if snap_remaining == 0 || tree_remaining == 0 {
-        return build_result(snap_available, tree_children, &tree_available, matched);
+        return build_result(snap_available, tree_children, &tree_available, matched, tree, session);
     }
 
     // ================================================================
@@ -142,7 +163,8 @@ pub fn match_forward(
                 None => continue,
             };
             for &ti in &avail_tree {
-                let cost = compute_change_count(snap, tree_children[ti], tree, best_so_far, 0);
+                let cost =
+                    compute_change_count(snap, tree_children[ti], tree, best_so_far, 0, session);
                 pairs.push((cost, si, ti));
                 if cost < best_so_far {
                     best_so_far = cost;
@@ -164,19 +186,31 @@ pub fn match_forward(
         }
     }
 
-    build_result(snap_available, tree_children, &tree_available, matched)
+    build_result(snap_available, tree_children, &tree_available, matched, tree, session)
 }
 
 /// Build the final result, consuming the snapshot children.
+/// Computes `total_cost` for all matched pairs (using session cache).
 fn build_result(
     mut snap_available: Vec<Option<InstanceSnapshot>>,
     tree_children: &[Ref],
     tree_available: &[bool],
     matched_indices: Vec<(usize, usize)>,
+    tree: &RojoTree,
+    session: &MatchingSession,
 ) -> ForwardMatchResult {
     let mut matched = Vec::with_capacity(matched_indices.len());
+    let mut total_cost: u32 = 0;
     for (si, ti) in matched_indices {
         if let Some(snap) = snap_available[si].take() {
+            total_cost = total_cost.saturating_add(compute_change_count(
+                &snap,
+                tree_children[ti],
+                tree,
+                u32::MAX,
+                0,
+                session,
+            ));
             matched.push((snap, tree_children[ti]));
         }
     }
@@ -190,10 +224,15 @@ fn build_result(
         .map(|(_, r)| *r)
         .collect();
 
+    total_cost = total_cost.saturating_add(
+        (unmatched_snapshot.len() + unmatched_tree.len()) as u32 * UNMATCHED_PENALTY,
+    );
+
     ForwardMatchResult {
         matched,
         unmatched_snapshot,
         unmatched_tree,
+        total_cost,
     }
 }
 
@@ -214,6 +253,7 @@ fn match_children_for_scoring(
     tree_children: &[Ref],
     tree: &RojoTree,
     depth: u32,
+    session: &MatchingSession,
 ) -> ScoringMatchResult {
     let mut snap_matched = vec![false; snap_children.len()];
     let mut tree_matched = vec![false; tree_children.len()];
@@ -298,6 +338,7 @@ fn match_children_for_scoring(
                     tree,
                     best_so_far,
                     depth,
+                    session,
                 );
                 pairs.push((cost, si, ti));
                 if cost < best_so_far {
@@ -341,7 +382,16 @@ fn compute_change_count(
     tree: &RojoTree,
     best_so_far: u32,
     depth: u32,
+    session: &MatchingSession,
 ) -> u32 {
+    let cacheable = snap.snapshot_id.is_some() && tree_ref.is_some();
+    if cacheable {
+        let cache_key = (snap.snapshot_id, tree_ref);
+        if let Some(&cached) = session.cost_cache.borrow().get(&cache_key) {
+            return cached;
+        }
+    }
+
     let inst = match tree.get_instance(tree_ref) {
         Some(i) => i,
         None => return UNMATCHED_PENALTY,
@@ -356,10 +406,17 @@ fn compute_change_count(
     let tree_children = inst.children();
 
     if snap_children.is_empty() && tree_children.is_empty() {
+        if cacheable && cost < best_so_far {
+            session
+                .cost_cache
+                .borrow_mut()
+                .insert((snap.snapshot_id, tree_ref), cost);
+        }
         return cost;
     }
 
-    let scoring = match_children_for_scoring(snap_children, tree_children, tree, depth + 1);
+    let scoring =
+        match_children_for_scoring(snap_children, tree_children, tree, depth + 1, session);
 
     for &(si, ti) in &scoring.matched {
         let remaining = best_so_far.saturating_sub(cost);
@@ -369,6 +426,7 @@ fn compute_change_count(
             tree,
             remaining,
             depth + 1,
+            session,
         );
         if cost >= best_so_far {
             return cost;
@@ -378,6 +436,13 @@ fn compute_change_count(
     cost = cost.saturating_add(
         (scoring.unmatched_snap + scoring.unmatched_tree) as u32 * UNMATCHED_PENALTY,
     );
+
+    if cacheable && cost < best_so_far {
+        session
+            .cost_cache
+            .borrow_mut()
+            .insert((snap.snapshot_id, tree_ref), cost);
+    }
 
     cost
 }
@@ -482,7 +547,7 @@ mod tests {
         ];
         let (tree, children) = make_tree_with_children(&[("Alpha", "Folder"), ("Beta", "Script")]);
 
-        let result = match_forward(snaps, &children, &tree);
+        let result = match_forward(snaps, &children, &tree, &MatchingSession::new());
         assert_eq!(result.matched.len(), 2);
         assert!(result.unmatched_snapshot.is_empty());
         assert!(result.unmatched_tree.is_empty());
@@ -497,7 +562,7 @@ mod tests {
         let (tree, children) =
             make_tree_with_children(&[("Handler", "ModuleScript"), ("Handler", "Script")]);
 
-        let result = match_forward(snaps, &children, &tree);
+        let result = match_forward(snaps, &children, &tree, &MatchingSession::new());
         assert_eq!(result.matched.len(), 2);
 
         for (snap, tree_ref) in &result.matched {
@@ -514,7 +579,7 @@ mod tests {
         ];
         let (tree, children) = make_tree_with_children(&[("A", "Folder"), ("OldOnly", "Folder")]);
 
-        let result = match_forward(snaps, &children, &tree);
+        let result = match_forward(snaps, &children, &tree, &MatchingSession::new());
         assert_eq!(result.matched.len(), 1);
         assert_eq!(result.unmatched_snapshot.len(), 1);
         assert_eq!(result.unmatched_tree.len(), 1);
@@ -529,7 +594,7 @@ mod tests {
         ];
         let (tree, children) = make_tree_with_children(&[("Data", "Folder"), ("Data", "Folder")]);
 
-        let result = match_forward(snaps, &children, &tree);
+        let result = match_forward(snaps, &children, &tree, &MatchingSession::new());
         assert_eq!(result.matched.len(), 2);
         assert!(result.unmatched_snapshot.is_empty());
         assert!(result.unmatched_tree.is_empty());
@@ -540,7 +605,7 @@ mod tests {
         let snaps: Vec<InstanceSnapshot> = vec![];
         let (tree, children) = make_tree_with_children(&[]);
 
-        let result = match_forward(snaps, &children, &tree);
+        let result = match_forward(snaps, &children, &tree, &MatchingSession::new());
         assert!(result.matched.is_empty());
     }
 
@@ -605,7 +670,7 @@ mod tests {
         let root_id = tree.get_root_id();
         let tree_children: Vec<Ref> = tree.get_instance(root_id).unwrap().children().to_vec();
 
-        let result = match_forward(snaps, &tree_children, &tree);
+        let result = match_forward(snaps, &tree_children, &tree, &MatchingSession::new());
 
         assert_eq!(result.matched.len(), count);
         assert!(result.unmatched_snapshot.is_empty());
@@ -635,7 +700,7 @@ mod tests {
         let (tree, children) =
             make_tree_with_children(&(0..count).map(|_| ("Line", "Part")).collect::<Vec<_>>());
 
-        let result = match_forward(snaps, &children, &tree);
+        let result = match_forward(snaps, &children, &tree, &MatchingSession::new());
         assert_eq!(result.matched.len(), count);
         assert!(result.unmatched_snapshot.is_empty());
         assert!(result.unmatched_tree.is_empty());
@@ -714,7 +779,7 @@ mod tests {
         let root_id = tree.get_root_id();
         let tree_children: Vec<Ref> = tree.get_instance(root_id).unwrap().children().to_vec();
 
-        let result = match_forward(snaps, &tree_children, &tree);
+        let result = match_forward(snaps, &tree_children, &tree, &MatchingSession::new());
 
         assert_eq!(result.matched.len(), 2);
         assert!(result.unmatched_snapshot.is_empty());
@@ -852,7 +917,7 @@ mod tests {
         }));
 
         let (tree, tree_refs) = make_tree_from_snapshots(tree_children);
-        let result = match_forward(snaps, &tree_refs, &tree);
+        let result = match_forward(snaps, &tree_refs, &tree, &MatchingSession::new());
 
         assert_eq!(result.matched.len(), 6);
         assert!(result.unmatched_snapshot.is_empty());
@@ -945,7 +1010,7 @@ mod tests {
         tree_children.reverse();
 
         let (tree, tree_refs) = make_tree_from_snapshots(tree_children);
-        let result = match_forward(snaps, &tree_refs, &tree);
+        let result = match_forward(snaps, &tree_refs, &tree, &MatchingSession::new());
 
         assert_eq!(result.matched.len(), 12);
         assert!(result.unmatched_snapshot.is_empty());
@@ -1017,7 +1082,7 @@ mod tests {
         tree_children.reverse();
 
         let (tree, tree_refs) = make_tree_from_snapshots(tree_children);
-        let result = match_forward(snaps, &tree_refs, &tree);
+        let result = match_forward(snaps, &tree_refs, &tree, &MatchingSession::new());
 
         assert_eq!(result.matched.len(), 4);
 
@@ -1074,7 +1139,7 @@ mod tests {
             make_snapshot_with_props("Wall", "Part", tree_props_b),
             make_snapshot_with_props("Wall", "Part", tree_props_a),
         ]);
-        let result = match_forward(vec![snap_a, snap_b], &tree_refs, &tree);
+        let result = match_forward(vec![snap_a, snap_b], &tree_refs, &tree, &MatchingSession::new());
 
         assert_eq!(result.matched.len(), 2, "Both should match");
 
@@ -1139,7 +1204,7 @@ mod tests {
         tree_children.reverse();
 
         let (tree, tree_refs) = make_tree_from_snapshots(tree_children);
-        let result = match_forward(snaps, &tree_refs, &tree);
+        let result = match_forward(snaps, &tree_refs, &tree, &MatchingSession::new());
 
         assert_eq!(result.matched.len(), 10);
         assert!(result.unmatched_snapshot.is_empty());
@@ -1208,7 +1273,7 @@ mod tests {
         let tree_children: Vec<Ref> = tree.get_instance(root_id).unwrap().children().to_vec();
 
         let start = std::time::Instant::now();
-        let result = match_forward(snaps, &tree_children, &tree);
+        let result = match_forward(snaps, &tree_children, &tree, &MatchingSession::new());
         let elapsed = start.elapsed();
 
         assert_eq!(result.matched.len(), 2);
