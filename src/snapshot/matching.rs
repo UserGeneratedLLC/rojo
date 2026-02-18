@@ -772,7 +772,10 @@ mod tests {
         use rbx_dom_weak::types::Variant;
 
         let db = rbx_reflection_database::get().expect("reflection database should load");
-        let texture = db.classes.get("Texture").expect("Texture class should exist");
+        let texture = db
+            .classes
+            .get("Texture")
+            .expect("Texture class should exist");
         let face_default = texture
             .default_properties
             .get("Face")
@@ -842,15 +845,11 @@ mod tests {
                 make_snapshot_with_props("Texture", "Texture", props)
             })
             .collect();
-        tree_children.push(make_snapshot_with_props(
-            "Texture",
-            "Texture",
-            {
-                let mut props = shared_props.clone();
-                props.push(("Face", Variant::Enum(face_front.clone())));
-                props
-            },
-        ));
+        tree_children.push(make_snapshot_with_props("Texture", "Texture", {
+            let mut props = shared_props.clone();
+            props.push(("Face", Variant::Enum(face_front.clone())));
+            props
+        }));
 
         let (tree, tree_refs) = make_tree_from_snapshots(tree_children);
         let result = match_forward(snaps, &tree_refs, &tree);
@@ -1103,13 +1102,13 @@ mod tests {
             Some(Enum::from_u32(1)), // Top
             Some(Enum::from_u32(0)), // Right
             Some(Enum::from_u32(3)), // Left
-            None,                     // Front (default, omitted)
+            None,                    // Front (default, omitted)
             Some(Enum::from_u32(4)), // Bottom
         ];
         let faces_group_b = [
             Some(Enum::from_u32(2)), // Back
             Some(Enum::from_u32(4)), // Bottom
-            None,                     // Front (default, omitted)
+            None,                    // Front (default, omitted)
             Some(Enum::from_u32(1)), // Top
             Some(Enum::from_u32(3)), // Left
         ];
@@ -1132,11 +1131,7 @@ mod tests {
                 }
 
                 snaps.push(make_snapshot_with_props("Texture", "Texture", snap_props));
-                tree_children.push(make_snapshot_with_props(
-                    "Texture",
-                    "Texture",
-                    tree_props,
-                ));
+                tree_children.push(make_snapshot_with_props("Texture", "Texture", tree_props));
             }
         }
 

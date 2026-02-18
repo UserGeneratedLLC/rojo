@@ -26,7 +26,8 @@ fn load_input_rbxm() -> WeakDom {
     let path = Path::new(SYNCBACK_TESTS_PATH)
         .join(FIXTURE_DIR)
         .join("input.rbxm");
-    let data = std::fs::read(&path).unwrap_or_else(|e| panic!("Failed to read {}: {}", path.display(), e));
+    let data =
+        std::fs::read(&path).unwrap_or_else(|e| panic!("Failed to read {}: {}", path.display(), e));
     rbx_binary::from_reader(data.as_slice())
         .unwrap_or_else(|e| panic!("Failed to parse {}: {}", path.display(), e))
 }
@@ -69,12 +70,13 @@ fn rojo_tree_to_weak_dom(tree: &librojo::RojoTree) -> WeakDom {
     }
 
     // Recursively copy children
-    fn copy_children(tree: &librojo::RojoTree, parent_ref: Ref, dom: &mut WeakDom, dom_parent: Ref) {
-        let children: Vec<Ref> = tree
-            .get_instance(parent_ref)
-            .unwrap()
-            .children()
-            .to_vec();
+    fn copy_children(
+        tree: &librojo::RojoTree,
+        parent_ref: Ref,
+        dom: &mut WeakDom,
+        dom_parent: Ref,
+    ) {
+        let children: Vec<Ref> = tree.get_instance(parent_ref).unwrap().children().to_vec();
         for child_ref in children {
             let child = tree.get_instance(child_ref).unwrap();
             let builder = rbx_dom_weak::InstanceBuilder::new(child.class_name().as_str())
@@ -224,7 +226,8 @@ fn syncback_matching_ufowave_textures() {
         let effective_old_face = old_face.or(Some(5));
 
         assert_eq!(
-            new_face, effective_old_face,
+            new_face,
+            effective_old_face,
             "Face mismatch: input {:?} (name={}) matched to expected {:?} (name={})",
             new_face,
             input_dom.get_by_ref(*new_ref).unwrap().name,
@@ -303,8 +306,7 @@ fn forward_matching_ufowave_textures() {
     assert!(!snap_textures.is_empty(), "No Texture children found");
 
     // Run forward sync matching
-    let result =
-        librojo::snapshot::matching::match_forward(snap_textures, &tree_textures, &tree);
+    let result = librojo::snapshot::matching::match_forward(snap_textures, &tree_textures, &tree);
 
     assert_eq!(
         result.matched.len(),
@@ -344,10 +346,7 @@ fn forward_matching_ufowave_textures() {
                 // Both omitted: both at default, fine
             }
             (Some(sv), None) => {
-                panic!(
-                    "Snap has Face={:?} but tree has none",
-                    sv
-                );
+                panic!("Snap has Face={:?} but tree has none", sv);
             }
         }
     }

@@ -301,9 +301,7 @@ function Matching._computeChildrenCost(
 
 	local cost = 0
 	for _, pair in childResult.matched do
-		cost += Matching._computeChangeCount(
-			pair.virtualId, pair.studioInstance, virtualInstances, bestSoFar - cost
-		)
+		cost += Matching._computeChangeCount(pair.virtualId, pair.studioInstance, virtualInstances, bestSoFar - cost)
 		if cost >= bestSoFar then
 			return cost
 		end
@@ -527,9 +525,7 @@ function Matching.matchChildren(
 		local sCaches: { [number]: any } = {}
 		for _, si in sIndices do
 			if not matchedS2[si] then
-				sCaches[si] = Matching._cacheStudio(
-					remainingStudio[si], classKeys, extraPropNamesArray
-				)
+				sCaches[si] = Matching._cacheStudio(remainingStudio[si], classKeys, extraPropNamesArray)
 			end
 		end
 
@@ -569,9 +565,7 @@ function Matching.matchChildren(
 					-- Recursive children cost
 					local vInst = virtualInstances[remainingVirtual[vi]]
 					if vInst then
-						cost += Matching._computeChildrenCost(
-							vInst, sCache, virtualInstances, bestSoFar - cost
-						)
+						cost += Matching._computeChildrenCost(vInst, sCache, virtualInstances, bestSoFar - cost)
 					end
 				end
 
