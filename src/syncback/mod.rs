@@ -175,7 +175,8 @@ pub fn syncback_loop_with_stats(
 
     log::debug!("Collecting referents for new DOM...");
     let mut deferred_referents = collect_referents(&new_tree, &pre_prune_paths, None);
-    let placeholder_map = std::mem::take(&mut deferred_referents.placeholder_to_target);
+    let placeholder_map =
+        std::mem::take(&mut deferred_referents.placeholder_to_source_and_target);
 
     // Remove any properties that are manually blocked from syncback via the
     // project file.
@@ -622,12 +623,17 @@ pub fn syncback_loop_with_stats(
 
         let final_map = ref_path_map.borrow();
         let mut substitutions: Vec<(String, String)> = Vec::new();
-        for (placeholder, target_ref) in &placeholder_map {
-            let final_path = final_map
+        for (placeholder, (source_ref, target_ref)) in &placeholder_map {
+            let source_abs = final_map
+                .get(source_ref)
+                .cloned()
+                .unwrap_or_else(|| tentative_fs_path_public(&new_tree, *source_ref));
+            let target_abs = final_map
                 .get(target_ref)
                 .cloned()
                 .unwrap_or_else(|| tentative_fs_path_public(&new_tree, *target_ref));
-            substitutions.push((placeholder.clone(), final_path));
+            let relative = crate::compute_relative_ref_path(&source_abs, &target_abs);
+            substitutions.push((placeholder.clone(), relative));
         }
         if !substitutions.is_empty() {
             log::debug!(

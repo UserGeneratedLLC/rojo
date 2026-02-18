@@ -417,26 +417,25 @@ impl JobThreadContext {
     /// Uses the `RefPathIndex` for O(affected_files) lookup instead of
     /// scanning the full tree. After updating files, also updates the index
     /// keys and filesystem paths so future renames remain efficient.
-    fn update_ref_paths_after_rename(&self, old_path: &str, new_path: &str) {
+    fn update_ref_paths_after_rename(
+        &self,
+        old_path: &str,
+        new_path: &str,
+        tree: &crate::snapshot::RojoTree,
+    ) {
         if old_path == new_path {
             return;
         }
 
-        // Look up affected files via the pre-computed index.
         let files_from_index = self.ref_path_index.lock().unwrap().find_by_prefix(old_path);
 
         if files_from_index.is_empty() {
             return;
         }
 
-        // The directory may have already been renamed on disk by the time
-        // this function is called. The index still stores old filesystem
-        // paths. Remap them: replace the old directory segment with the
-        // new one so we can find the actual files.
         let old_segment = old_path.rsplit('/').next().unwrap_or(old_path);
         let new_segment = new_path.rsplit('/').next().unwrap_or(new_path);
 
-        // Pre-compute slugified forms for fallback comparison.
         let slugified_old = if name_needs_slugify(old_segment) {
             Some(slugify_name(old_segment))
         } else {
@@ -457,7 +456,6 @@ impl JobThreadContext {
                 if file_path.exists() {
                     return file_path;
                 }
-                // File doesn't exist at old path — remap directory component.
                 let mut result = PathBuf::new();
                 let mut replaced = false;
                 for comp in file_path.components() {
@@ -491,13 +489,20 @@ impl JobThreadContext {
 
         let mut updated_count = 0;
         for file_path in &files_to_check {
+            let source_abs = tree
+                .get_ids_at_path(file_path)
+                .first()
+                .map(|&id| crate::ref_target_path_from_tree(tree, id))
+                .unwrap_or_default();
+
             self.suppress_path(file_path);
-            match crate::syncback::meta::update_ref_paths_in_file(file_path, old_path, new_path) {
+            match crate::syncback::meta::update_ref_paths_in_file(
+                file_path, old_path, new_path, &source_abs,
+            ) {
                 Ok(true) => {
                     updated_count += 1;
                 }
                 Ok(false) => {
-                    // No stale refs in this file; undo suppression
                     self.unsuppress_path(file_path);
                 }
                 Err(err) => {
@@ -1195,7 +1200,9 @@ impl JobThreadContext {
                                     crate::ref_target_path_from_tree(&tree, parent_ref);
                                 let old_prefix = format!("{}/{}", parent_path, old_ref_segment);
                                 let new_prefix = format!("{}/{}", parent_path, new_ref_segment);
-                                self.update_ref_paths_after_rename(&old_prefix, &new_prefix);
+                                self.update_ref_paths_after_rename(
+                                    &old_prefix, &new_prefix, &tree,
+                                );
                             }
 
                             // Fix 1: Update the renamed survivor's in-memory
@@ -1805,7 +1812,9 @@ impl JobThreadContext {
                             segment.clone()
                         };
                         if *old_ref_path != new_ref_path {
-                            self.update_ref_paths_after_rename(old_ref_path, &new_ref_path);
+                            self.update_ref_paths_after_rename(
+                                old_ref_path, &new_ref_path, &tree,
+                            );
                         }
                     } else if update.changed_name.is_some() || update.changed_class_name.is_some() {
                         // Rename or class change was requested but no filesystem

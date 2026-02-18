@@ -535,7 +535,7 @@ mod tests {
             meta_content.as_bytes().to_vec(),
         );
 
-        let substitutions = vec![("Workspace/Foo".to_string(), "Workspace/Foo~2".to_string())];
+        let substitutions = vec![("Workspace/Foo".to_string(), "./Foo~2".to_string())];
         snap.fix_ref_paths(&substitutions);
 
         let result = std::str::from_utf8(
@@ -546,7 +546,7 @@ mod tests {
         .unwrap();
 
         assert!(
-            result.contains(r#""Rojo_Ref_PrimaryPart": "Workspace/Foo~2""#),
+            result.contains(r#""Rojo_Ref_PrimaryPart": "./Foo~2""#),
             "Rojo_Ref line should be updated. Got:\n{}",
             result
         );
@@ -566,7 +566,7 @@ mod tests {
             b"-- Rojo_Ref_PrimaryPart Workspace/Foo".to_vec(),
         );
 
-        let substitutions = vec![("Workspace/Foo".to_string(), "Workspace/Foo~2".to_string())];
+        let substitutions = vec![("Workspace/Foo".to_string(), "./Foo~2".to_string())];
         snap.fix_ref_paths(&substitutions);
 
         let result = std::str::from_utf8(
@@ -581,7 +581,7 @@ mod tests {
             result
         );
         assert!(
-            !result.contains("Workspace/Foo~2"),
+            !result.contains("./Foo~2"),
             "Non-meta file should not have substitution applied"
         );
     }
@@ -618,11 +618,11 @@ mod tests {
         let substitutions = vec![
             (
                 "__ROJO_REF_00000000000000000000000000000001__".to_string(),
-                "Beams1/001~5".to_string(),
+                "./001~5".to_string(),
             ),
             (
                 "__ROJO_REF_00000000000000000000000000000002__".to_string(),
-                "Beams1/002~7.model.json5".to_string(),
+                "./002~7.model.json5".to_string(),
             ),
         ];
         snap.fix_ref_paths(&substitutions);
@@ -635,11 +635,11 @@ mod tests {
         .unwrap();
 
         assert!(
-            result.contains(r#""Rojo_Ref_Attachment0": "Beams1/001~5""#),
+            result.contains(r#""Rojo_Ref_Attachment0": "./001~5""#),
             "Attachment0 should resolve to 001~5. Got:\n{result}"
         );
         assert!(
-            result.contains(r#""Rojo_Ref_Attachment1": "Beams1/002~7.model.json5""#),
+            result.contains(r#""Rojo_Ref_Attachment1": "./002~7.model.json5""#),
             "Attachment1 should resolve to 002~7. Got:\n{result}"
         );
         assert!(
@@ -715,15 +715,15 @@ mod tests {
         let substitutions = vec![
             (
                 "__ROJO_REF_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa__".to_string(),
-                "Beams1/001~2".to_string(),
+                "./001~2".to_string(),
             ),
             (
                 "__ROJO_REF_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb__".to_string(),
-                "Beams1/001~5".to_string(),
+                "./001~5".to_string(),
             ),
             (
                 "__ROJO_REF_cccccccccccccccccccccccccccccccc__".to_string(),
-                "Workspace/Model/Handle.model.json5".to_string(),
+                "@self/Handle.model.json5".to_string(),
             ),
         ];
         snap.fix_ref_paths(&substitutions);
@@ -736,15 +736,15 @@ mod tests {
         .unwrap();
 
         assert!(
-            result.contains(r#""Rojo_Ref_Attachment0": "Beams1/001~2""#),
+            result.contains(r#""Rojo_Ref_Attachment0": "./001~2""#),
             "Attachment0 wrong. Got:\n{result}"
         );
         assert!(
-            result.contains(r#""Rojo_Ref_Attachment1": "Beams1/001~5""#),
+            result.contains(r#""Rojo_Ref_Attachment1": "./001~5""#),
             "Attachment1 wrong. Got:\n{result}"
         );
         assert!(
-            result.contains(r#""Rojo_Ref_PrimaryPart": "Workspace/Model/Handle.model.json5""#),
+            result.contains(r#""Rojo_Ref_PrimaryPart": "@self/Handle.model.json5""#),
             "PrimaryPart wrong. Got:\n{result}"
         );
     }

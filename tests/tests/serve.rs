@@ -857,7 +857,7 @@ fn ref_path_add_attribute_to_existing_meta() {
                     r#"{
                         "className": "Model",
                         "attributes": {
-                            "Rojo_Ref_PrimaryPart": "Workspace/MyModel/OtherPart"
+                            "Rojo_Ref_PrimaryPart": "@self/OtherPart"
                         }
                     }"#,
                 )
@@ -917,7 +917,7 @@ fn ref_path_new_file_with_ref_attr() {
                     r#"{
                         "className": "ObjectValue",
                         "attributes": {
-                            "Rojo_Ref_Value": "Workspace/MyModel/Target"
+                            "Rojo_Ref_Value": "./Target"
                         }
                     }"#,
                 )
@@ -946,7 +946,7 @@ fn ref_path_nonexistent_target_no_crash() {
                     r#"{
                         "className": "Model",
                         "attributes": {
-                            "Rojo_Ref_PrimaryPart": "Workspace/NonExistent/Part"
+                            "Rojo_Ref_PrimaryPart": "./NonExistent/Part"
                         }
                     }"#,
                 )
@@ -976,8 +976,8 @@ fn ref_path_multiple_attributes() {
                     r#"{
                         "className": "Model",
                         "attributes": {
-                            "Rojo_Ref_PrimaryPart": "Workspace/MyModel/Target",
-                            "Rojo_Ref_CustomRef": "Workspace/MyModel/OtherPart"
+                            "Rojo_Ref_PrimaryPart": "@self/Target",
+                            "Rojo_Ref_CustomRef": "@self/OtherPart"
                         }
                     }"#,
                 )

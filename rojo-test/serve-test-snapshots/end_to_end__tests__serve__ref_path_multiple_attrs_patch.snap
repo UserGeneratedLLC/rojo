@@ -15,9 +15,9 @@ body:
             Attributes:
               "!Attributes":
                 Rojo_Ref_CustomRef:
-                  "!String": Workspace/MyModel/OtherPart
+                  "!String": "@self/OtherPart"
                 Rojo_Ref_PrimaryPart:
-                  "!String": Workspace/MyModel/Target
+                  "!String": "@self/Target"
             CustomRef:
               "!Ref": id-4
           id: id-3

@@ -176,7 +176,9 @@ impl ServeSession {
         let suppressed_paths = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let ref_path_index = {
             let mut index = crate::RefPathIndex::new();
-            index.populate_from_dir(root_project.folder_location());
+            let tree_guard = tree.lock().unwrap();
+            index.populate_from_dir(root_project.folder_location(), &tree_guard);
+            drop(tree_guard);
             Arc::new(Mutex::new(index))
         };
 

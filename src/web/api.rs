@@ -2691,15 +2691,13 @@ impl ApiService {
                 Some(Variant::Ref(target_ref)) => {
                     let attr_name = crate::ref_attribute_name(key);
                     if target_ref.is_none() {
-                        // Null ref: mark attribute for removal
                         remove_attributes.push(attr_name);
                     } else if tree.get_instance(*target_ref).is_some() {
-                        // Valid target: compute path and add as Rojo_Ref_* attribute
-                        let path = crate::ref_target_path_from_tree(tree, *target_ref);
+                        let source_abs =
+                            crate::ref_target_path_from_tree(tree, update.id);
+                        let target_abs =
+                            crate::ref_target_path_from_tree(tree, *target_ref);
 
-                        // Warn if the path is ambiguous (duplicate-named siblings
-                        // at any ancestor level). The ref will still be written,
-                        // but may resolve to the wrong target on rebuild.
                         if !Self::is_ref_path_unique(tree, *target_ref) {
                             log::warn!(
                                 "Ref property '{}' for instance {:?} has an ambiguous \
@@ -2707,24 +2705,29 @@ impl ApiService {
                                  resolve to the wrong target on rebuild.",
                                 key,
                                 update.id,
-                                path
+                                target_abs
                             );
                         }
 
-                        ref_attributes.insert(attr_name, serde_json::Value::String(path));
-                    } else if let Some(path) = added_paths.get(target_ref) {
-                        // Target was added in the same /api/write request.
-                        // It's not in the tree yet (VFS watcher hasn't picked it up),
-                        // but we can compute the path from the AddedInstance data.
+                        let relative =
+                            crate::compute_relative_ref_path(&source_abs, &target_abs);
+                        ref_attributes
+                            .insert(attr_name, serde_json::Value::String(relative));
+                    } else if let Some(target_abs) = added_paths.get(target_ref) {
+                        let source_abs =
+                            crate::ref_target_path_from_tree(tree, update.id);
+                        let relative =
+                            crate::compute_relative_ref_path(&source_abs, target_abs);
                         log::info!(
                             "Ref property '{}' for instance {:?}: target {:?} is a \
-                             just-added instance, using pre-computed path '{}'",
+                             just-added instance, computed relative path '{}'",
                             key,
                             update.id,
                             target_ref,
-                            path
+                            relative
                         );
-                        ref_attributes.insert(attr_name, serde_json::Value::String(path.clone()));
+                        ref_attributes
+                            .insert(attr_name, serde_json::Value::String(relative));
                     } else {
                         log::warn!(
                             "Cannot persist Ref property '{}' for instance {:?}: \
@@ -2881,6 +2884,7 @@ impl ApiService {
         // additions/removals (which can miss remaining attrs when one is
         // removed from a file that has multiple).
         {
+            let source_abs = crate::ref_target_path_from_tree(tree, update.id);
             let mut index = self.ref_path_index.lock().unwrap();
             index.remove_all_for_file(&written_meta_path);
 
@@ -2890,7 +2894,12 @@ impl ApiService {
                         for (key, value) in attrs {
                             if key.starts_with(crate::REF_PATH_ATTRIBUTE_PREFIX) {
                                 if let Some(path_str) = value.as_str() {
-                                    index.add(path_str, &written_meta_path);
+                                    let resolved =
+                                        crate::resolve_ref_path_to_absolute(
+                                            path_str, &source_abs,
+                                        )
+                                        .unwrap_or_else(|| path_str.to_string());
+                                    index.add(&resolved, &written_meta_path);
                                 }
                             }
                         }

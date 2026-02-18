@@ -96,10 +96,17 @@ pub fn remove_model_name(model_path: &Path) -> anyhow::Result<RemoveNameOutcome>
 /// For each attribute whose key starts with `Rojo_Ref_` and whose string
 /// value starts with `old_prefix`, replaces the prefix with `new_prefix`.
 /// Returns true if any attribute was updated.
+/// Update `Rojo_Ref_*` attributes in a meta/model file after a rename.
+///
+/// For each attribute, resolves the on-disk relative path to absolute using
+/// `source_abs`, checks if the resolved absolute path is affected by the
+/// rename (`old_prefix` → `new_prefix`), and if so, recomputes the relative
+/// path from `source_abs` to the new absolute target.
 pub fn update_ref_paths_in_file(
     file_path: &Path,
     old_prefix: &str,
     new_prefix: &str,
+    source_abs: &str,
 ) -> anyhow::Result<bool> {
     use crate::REF_PATH_ATTRIBUTE_PREFIX;
 
@@ -118,17 +125,28 @@ pub fn update_ref_paths_in_file(
         );
     }
 
+    let old_prefix_slash = format!("{old_prefix}/");
     let mut updated = false;
     if let Some(attrs) = val.get_mut("attributes").and_then(|a| a.as_object_mut()) {
         for (key, value) in attrs.iter_mut() {
-            if key.starts_with(REF_PATH_ATTRIBUTE_PREFIX) {
-                if let Some(path_str) = value.as_str() {
-                    if path_str == old_prefix || path_str.starts_with(&format!("{old_prefix}/")) {
-                        let new_path = format!("{new_prefix}{}", &path_str[old_prefix.len()..]);
-                        *value = serde_json::Value::String(new_path);
-                        updated = true;
-                    }
-                }
+            if !key.starts_with(REF_PATH_ATTRIBUTE_PREFIX) {
+                continue;
+            }
+            let Some(path_str) = value.as_str() else {
+                continue;
+            };
+            let Some(resolved) =
+                crate::resolve_ref_path_to_absolute(path_str, source_abs)
+            else {
+                continue;
+            };
+            if resolved == old_prefix || resolved.starts_with(&old_prefix_slash) {
+                let new_abs =
+                    format!("{new_prefix}{}", &resolved[old_prefix.len()..]);
+                let new_relative =
+                    crate::compute_relative_ref_path(source_abs, &new_abs);
+                *value = serde_json::Value::String(new_relative);
+                updated = true;
             }
         }
     }

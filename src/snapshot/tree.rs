@@ -285,6 +285,109 @@ impl RojoTree {
         Some(current_ref)
     }
 
+    /// Resolve a Luau require-by-string style ref path to a target instance.
+    ///
+    /// `source_ref` is the instance that owns the `Rojo_Ref_*` attribute.
+    /// Prefix semantics (per Roblox require-by-string):
+    /// - `@game/rest` -- resolve from DataModel root
+    /// - `@self` -- return source_ref
+    /// - `@self/rest` -- resolve from source_ref
+    /// - `./rest` -- resolve from source_ref's parent
+    /// - `../rest` -- resolve from source_ref's grandparent
+    /// - bare path (no prefix) -- legacy fallback, resolve like `@game/`
+    ///
+    /// During segment walk, `..` navigates to the parent.
+    pub fn resolve_ref_path(&self, path: &str, source_ref: Ref) -> Option<Ref> {
+        if let Some(rest) = path.strip_prefix("@game/") {
+            return self.walk_segments(self.get_root_id(), rest);
+        }
+        if path == "@game" {
+            return Some(self.get_root_id());
+        }
+        if path == "@self" {
+            return Some(source_ref);
+        }
+        if let Some(rest) = path.strip_prefix("@self/") {
+            return self.walk_segments(source_ref, rest);
+        }
+        if let Some(rest) = path.strip_prefix("./") {
+            let parent = self.inner.get_by_ref(source_ref)?.parent();
+            if parent.is_none() {
+                return None;
+            }
+            return self.walk_segments(parent, rest);
+        }
+        if let Some(rest) = path.strip_prefix("../") {
+            let parent = self.inner.get_by_ref(source_ref)?.parent();
+            if parent.is_none() {
+                return None;
+            }
+            let grandparent = self.inner.get_by_ref(parent)?.parent();
+            if grandparent.is_none() {
+                return None;
+            }
+            return self.walk_segments(grandparent, rest);
+        }
+
+        // Bare path (no prefix) -- legacy backward compatibility
+        self.walk_segments(self.get_root_id(), path)
+    }
+
+    /// Walk `/`-separated segments from a starting Ref, handling `..` as
+    /// "go to parent". Each non-`..` segment matches a child by filesystem
+    /// name (case-insensitive), falling back to instance name.
+    fn walk_segments(&self, start: Ref, rest: &str) -> Option<Ref> {
+        if rest.is_empty() {
+            return Some(start);
+        }
+
+        let mut current_ref = start;
+        for segment in rest.split('/') {
+            if segment.is_empty() {
+                continue;
+            }
+            if segment == ".." {
+                let inst = self.inner.get_by_ref(current_ref)?;
+                let parent = inst.parent();
+                if parent.is_none() {
+                    return None;
+                }
+                current_ref = parent;
+                continue;
+            }
+
+            let current = self.inner.get_by_ref(current_ref)?;
+            let children = current.children();
+
+            let mut found = false;
+            for &child_ref in children {
+                let fs_name = self.filesystem_name_for(child_ref);
+                if fs_name.eq_ignore_ascii_case(segment) {
+                    current_ref = child_ref;
+                    found = true;
+                    break;
+                }
+            }
+
+            if !found {
+                for &child_ref in children {
+                    let child = self.inner.get_by_ref(child_ref)?;
+                    if child.name.eq_ignore_ascii_case(segment) {
+                        current_ref = child_ref;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+
+            if !found {
+                return None;
+            }
+        }
+
+        Some(current_ref)
+    }
+
     /// Returns the filesystem name for an instance (the filename or directory
     /// name on disk). Derived from `instigating_source` if available, otherwise
     /// falls back to the instance name.

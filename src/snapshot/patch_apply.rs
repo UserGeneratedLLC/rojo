@@ -144,7 +144,7 @@ fn finalize_patch_application(context: PatchApplyContext, tree: &mut RojoTree) -
     let mut path_rewrites = Vec::new();
     for (id, map) in context.path_refs_to_rewrite {
         for (prop_name, path) in map {
-            if let Some(target) = tree.get_instance_by_path(&path) {
+            if let Some(target) = tree.resolve_ref_path(&path, id) {
                 log::debug!(
                     "Resolved path reference {} -> {} (path: {})",
                     prop_name,

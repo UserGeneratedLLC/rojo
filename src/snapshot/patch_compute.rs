@@ -104,7 +104,7 @@ fn compute_property_patches(
     let mut visited_properties = UstrSet::default();
     let mut changed_properties = UstrMap::new();
 
-    let attribute_ref_properties = compute_ref_properties(snapshot, tree);
+    let attribute_ref_properties = compute_ref_properties(snapshot, tree, instance.id());
 
     let changed_name = if snapshot.name == instance.name() {
         None
@@ -251,6 +251,7 @@ fn compute_children_patches(
 fn compute_ref_properties(
     snapshot: &InstanceSnapshot,
     tree: &RojoTree,
+    source_ref: Ref,
 ) -> UstrMap<Option<Variant>> {
     let mut map = UstrMap::new();
     let attributes = match snapshot.properties.get(&ustr("Attributes")) {
@@ -290,7 +291,7 @@ fn compute_ref_properties(
             let Some(path) = crate::variant_as_str(attr_value, attr_name) else {
                 continue;
             };
-            if let Some(target_id) = tree.get_instance_by_path(path) {
+            if let Some(target_id) = tree.resolve_ref_path(path, source_ref) {
                 map.insert(ustr(prop_name), Some(Variant::Ref(target_id)));
             } else {
                 // Path not found yet - will be resolved during patch apply

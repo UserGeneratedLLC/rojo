@@ -7,7 +7,7 @@ expression: container.model.json5
     {
       attributes: {
         Rojo_Id: "value_1",
-        Rojo_Ref_Value: "ReplicatedStorage/container/value_1.model.json5"
+        Rojo_Ref_Value: "@self"
       },
       className: "ObjectValue",
       name: "value_1"
@@ -15,7 +15,7 @@ expression: container.model.json5
     {
       attributes: {
         Rojo_Id: "value_1",
-        Rojo_Ref_Value: "ReplicatedStorage/container/value_2.model.json5"
+        Rojo_Ref_Value: "@self"
       },
       className: "ObjectValue",
       name: "value_2"

@@ -1,6 +1,6 @@
 {
   attributes: {
-    Rojo_Ref_SoundGroup: "ServerStorage/__server_muted.model.json5"
+    Rojo_Ref_SoundGroup: "../../__server_muted.model.json5"
   },
   className: "Sound",
   properties: {

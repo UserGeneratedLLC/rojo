@@ -1,6 +1,6 @@
 {
   attributes: {
-    Rojo_Ref_PrimaryPart: "ServerStorage/UFOWave/TsunamiWave",
+    Rojo_Ref_PrimaryPart: "@self/TsunamiWave",
     Speed: 10,
     ZonesPassed: {
       Float32: 0
