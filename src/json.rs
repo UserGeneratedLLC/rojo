@@ -153,8 +153,8 @@ const F64_FLOAT_OPTIONS: Options = Options::builder()
 
 const F32_BUF_SIZE: usize = F32_FLOAT_OPTIONS.buffer_size_const::<f32, STANDARD>();
 const F64_BUF_SIZE: usize = F64_FLOAT_OPTIONS.buffer_size_const::<f64, STANDARD>();
-const F32_ZERO_CUTOFF: f64 = 0.5e-6;
-const F64_ZERO_CUTOFF: f64 = 0.5e-15;
+const F32_ZERO_CUTOFF: f64 = 1e-6;
+const F64_ZERO_CUTOFF: f64 = 1e-15;
 
 fn format_f32(v: f32) -> String {
     if (v as f64).abs() < F32_ZERO_CUTOFF {
@@ -1060,7 +1060,7 @@ mod tests {
         assert_eq!(format_f32(100.0), "100");
 
         // Negative values
-        assert_eq!(format_f32(-3.14), "-3.14");
+        assert_eq!(format_f32(-3.15), "-3.15");
         assert_eq!(format_f32(-2.5), "-2.5");
 
         // Zero and negative zero
@@ -1094,7 +1094,7 @@ mod tests {
         assert_eq!(format_f64(100.0), "100");
 
         // Negative values
-        assert_eq!(format_f64(-3.14), "-3.14");
+        assert_eq!(format_f64(-3.15), "-3.15");
         assert_eq!(format_f64(-2.5), "-2.5");
 
         // Zero and negative zero
