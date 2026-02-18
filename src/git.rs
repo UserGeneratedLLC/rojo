@@ -163,7 +163,8 @@ pub fn compute_git_metadata(
     tree_handle: &Arc<Mutex<RojoTree>>,
     project_root: &Path,
 ) -> Option<GitMetadata> {
-    let repo_root = git_repo_root(project_root)?;
+    let repo_root_raw = git_repo_root(project_root)?;
+    let repo_root = std::fs::canonicalize(&repo_root_raw).unwrap_or(repo_root_raw);
     let changed_files = git_changed_files(&repo_root)?;
 
     if changed_files.is_empty() {
@@ -226,4 +227,500 @@ pub fn compute_git_metadata(
         changed_ids,
         script_committed_hashes,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn git_init(dir: &Path) {
+        Command::new("git")
+            .args(["-C", &dir.to_string_lossy(), "init"])
+            .output()
+            .expect("git init failed");
+        Command::new("git")
+            .args([
+                "-C",
+                &dir.to_string_lossy(),
+                "config",
+                "user.email",
+                "test@test.com",
+            ])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args([
+                "-C",
+                &dir.to_string_lossy(),
+                "config",
+                "user.name",
+                "Test",
+            ])
+            .output()
+            .unwrap();
+    }
+
+    fn git_commit_all(dir: &Path, msg: &str) {
+        Command::new("git")
+            .args(["-C", &dir.to_string_lossy(), "add", "-A"])
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["-C", &dir.to_string_lossy(), "commit", "-m", msg])
+            .output()
+            .unwrap();
+    }
+
+    fn git_stage(dir: &Path, file: &str) {
+        Command::new("git")
+            .args(["-C", &dir.to_string_lossy(), "add", file])
+            .output()
+            .unwrap();
+    }
+
+    fn git_is_staged(dir: &Path, file: &str) -> bool {
+        let output = Command::new("git")
+            .args([
+                "-C",
+                &dir.to_string_lossy(),
+                "diff",
+                "--cached",
+                "--name-only",
+            ])
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        stdout.lines().any(|l| l.trim() == file)
+    }
+
+    // -----------------------------------------------------------------------
+    // compute_blob_sha1
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn blob_sha1_empty_content() {
+        let hash = compute_blob_sha1("");
+        // git hash-object -t blob --stdin <<< '' produces the hash for empty blob
+        // "blob 0\0" -> SHA1 = e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
+        assert_eq!(hash, "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
+    }
+
+    #[test]
+    fn blob_sha1_hello_world() {
+        // Verify against `echo -n "hello world" | git hash-object --stdin`
+        // "blob 11\0hello world" -> SHA1 = 95d09f2b10159347eece71399a7e2e907ea3df4f
+        let hash = compute_blob_sha1("hello world");
+        assert_eq!(hash, "95d09f2b10159347eece71399a7e2e907ea3df4f");
+    }
+
+    #[test]
+    fn blob_sha1_multiline_script() {
+        let content = "local foo = 1\nlocal bar = 2\nreturn foo + bar\n";
+        let hash = compute_blob_sha1(content);
+        assert_eq!(hash.len(), 40);
+        // Same content must produce same hash
+        assert_eq!(hash, compute_blob_sha1(content));
+    }
+
+    #[test]
+    fn blob_sha1_different_content_different_hash() {
+        let h1 = compute_blob_sha1("version 1");
+        let h2 = compute_blob_sha1("version 2");
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn blob_sha1_matches_git_hash_object() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+
+        let content = "print('test script')\n";
+        fs::write(dir.path().join("test.luau"), content).unwrap();
+
+        let output = Command::new("git")
+            .args([
+                "-C",
+                &dir.path().to_string_lossy(),
+                "hash-object",
+                "test.luau",
+            ])
+            .output()
+            .unwrap();
+        let git_hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+        let our_hash = compute_blob_sha1(content);
+        assert_eq!(our_hash, git_hash);
+    }
+
+    // -----------------------------------------------------------------------
+    // git_repo_root
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn repo_root_not_a_repo() {
+        let dir = tempdir().unwrap();
+        assert!(git_repo_root(dir.path()).is_none());
+    }
+
+    #[test]
+    fn repo_root_valid_repo() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        let root = git_repo_root(dir.path()).unwrap();
+        assert!(root.exists());
+    }
+
+    #[test]
+    fn repo_root_from_subdirectory() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        let sub = dir.path().join("sub").join("deep");
+        fs::create_dir_all(&sub).unwrap();
+        let root = git_repo_root(&sub).unwrap();
+        // Subdirectory should resolve to the same repo root
+        assert_eq!(
+            root.canonicalize().unwrap(),
+            git_repo_root(dir.path())
+                .unwrap()
+                .canonicalize()
+                .unwrap()
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // git_changed_files
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn changed_files_no_changes() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("file.luau"), "content").unwrap();
+        git_commit_all(dir.path(), "init");
+
+        let changed = git_changed_files(dir.path());
+        assert!(changed.is_some());
+        assert!(changed.unwrap().is_empty());
+    }
+
+    #[test]
+    fn changed_files_unstaged_modification() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("script.luau"), "original").unwrap();
+        git_commit_all(dir.path(), "init");
+        fs::write(dir.path().join("script.luau"), "modified").unwrap();
+
+        let changed = git_changed_files(dir.path()).unwrap();
+        assert!(changed.contains(&PathBuf::from("script.luau")));
+    }
+
+    #[test]
+    fn changed_files_staged_modification() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("script.luau"), "original").unwrap();
+        git_commit_all(dir.path(), "init");
+        fs::write(dir.path().join("script.luau"), "staged version").unwrap();
+        git_stage(dir.path(), "script.luau");
+
+        let changed = git_changed_files(dir.path()).unwrap();
+        assert!(changed.contains(&PathBuf::from("script.luau")));
+    }
+
+    #[test]
+    fn changed_files_untracked_file() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("existing.luau"), "content").unwrap();
+        git_commit_all(dir.path(), "init");
+        fs::write(dir.path().join("new_file.luau"), "new").unwrap();
+
+        let changed = git_changed_files(dir.path()).unwrap();
+        assert!(changed.contains(&PathBuf::from("new_file.luau")));
+    }
+
+    #[test]
+    fn changed_files_deleted_file() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("to_delete.luau"), "content").unwrap();
+        git_commit_all(dir.path(), "init");
+        fs::remove_file(dir.path().join("to_delete.luau")).unwrap();
+
+        let changed = git_changed_files(dir.path()).unwrap();
+        assert!(changed.contains(&PathBuf::from("to_delete.luau")));
+    }
+
+    #[test]
+    fn changed_files_multiple_types() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("committed.luau"), "ok").unwrap();
+        fs::write(dir.path().join("will_modify.luau"), "old").unwrap();
+        git_commit_all(dir.path(), "init");
+
+        fs::write(dir.path().join("will_modify.luau"), "new").unwrap();
+        fs::write(dir.path().join("untracked.luau"), "brand new").unwrap();
+
+        let changed = git_changed_files(dir.path()).unwrap();
+        assert!(changed.contains(&PathBuf::from("will_modify.luau")));
+        assert!(changed.contains(&PathBuf::from("untracked.luau")));
+        assert!(!changed.contains(&PathBuf::from("committed.luau")));
+    }
+
+    #[test]
+    fn changed_files_no_head_returns_none() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        // No commits at all, but a file exists
+        fs::write(dir.path().join("new.luau"), "content").unwrap();
+
+        let changed = git_changed_files(dir.path());
+        // Should still return Some with the untracked file
+        assert!(changed.is_some());
+        assert!(changed.unwrap().contains(&PathBuf::from("new.luau")));
+    }
+
+    #[test]
+    fn changed_files_subdirectory() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/module.luau"), "original").unwrap();
+        git_commit_all(dir.path(), "init");
+        fs::write(dir.path().join("src/module.luau"), "modified").unwrap();
+
+        let changed = git_changed_files(dir.path()).unwrap();
+        assert!(changed.contains(&PathBuf::from("src/module.luau")));
+    }
+
+    // -----------------------------------------------------------------------
+    // git_show_head / git_show_staged
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn show_head_committed_file() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("script.luau"), "committed content").unwrap();
+        git_commit_all(dir.path(), "init");
+
+        let content = git_show_head(dir.path(), Path::new("script.luau"));
+        assert_eq!(content.as_deref(), Some("committed content"));
+    }
+
+    #[test]
+    fn show_head_new_file_returns_none() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("dummy.luau"), "x").unwrap();
+        git_commit_all(dir.path(), "init");
+
+        let content = git_show_head(dir.path(), Path::new("nonexistent.luau"));
+        assert!(content.is_none());
+    }
+
+    #[test]
+    fn show_head_returns_committed_not_working_tree() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("script.luau"), "v1").unwrap();
+        git_commit_all(dir.path(), "v1");
+        fs::write(dir.path().join("script.luau"), "v2 modified").unwrap();
+
+        let content = git_show_head(dir.path(), Path::new("script.luau"));
+        assert_eq!(content.as_deref(), Some("v1"));
+    }
+
+    #[test]
+    fn show_staged_returns_staged_content() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("script.luau"), "v1").unwrap();
+        git_commit_all(dir.path(), "v1");
+        fs::write(dir.path().join("script.luau"), "v2 staged").unwrap();
+        git_stage(dir.path(), "script.luau");
+
+        let content = git_show_staged(dir.path(), Path::new("script.luau"));
+        assert_eq!(content.as_deref(), Some("v2 staged"));
+    }
+
+    #[test]
+    fn show_staged_returns_none_for_unstaged() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("script.luau"), "v1").unwrap();
+        git_commit_all(dir.path(), "init");
+
+        // File not staged, show :0: should return committed version (same as HEAD)
+        let staged = git_show_staged(dir.path(), Path::new("script.luau"));
+        let head = git_show_head(dir.path(), Path::new("script.luau"));
+        assert_eq!(staged, head);
+    }
+
+    #[test]
+    fn show_staged_differs_from_head_when_staged() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("script.luau"), "v1").unwrap();
+        git_commit_all(dir.path(), "v1");
+        fs::write(dir.path().join("script.luau"), "v2 staged").unwrap();
+        git_stage(dir.path(), "script.luau");
+
+        let head = git_show_head(dir.path(), Path::new("script.luau")).unwrap();
+        let staged = git_show_staged(dir.path(), Path::new("script.luau")).unwrap();
+        assert_ne!(head, staged);
+        assert_eq!(head, "v1");
+        assert_eq!(staged, "v2 staged");
+    }
+
+    #[test]
+    fn show_head_subdirectory_path() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/init.luau"), "init content").unwrap();
+        git_commit_all(dir.path(), "init");
+
+        let content = git_show_head(dir.path(), Path::new("src/init.luau"));
+        assert_eq!(content.as_deref(), Some("init content"));
+    }
+
+    // -----------------------------------------------------------------------
+    // git_add
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn git_add_stages_file() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("file.luau"), "content").unwrap();
+        git_commit_all(dir.path(), "init");
+        fs::write(dir.path().join("file.luau"), "modified").unwrap();
+
+        assert!(!git_is_staged(dir.path(), "file.luau"));
+        git_add(dir.path(), &[PathBuf::from("file.luau")]);
+        assert!(git_is_staged(dir.path(), "file.luau"));
+    }
+
+    #[test]
+    fn git_add_stages_multiple_files() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("a.luau"), "a").unwrap();
+        fs::write(dir.path().join("b.luau"), "b").unwrap();
+        git_commit_all(dir.path(), "init");
+        fs::write(dir.path().join("a.luau"), "a modified").unwrap();
+        fs::write(dir.path().join("b.luau"), "b modified").unwrap();
+
+        git_add(
+            dir.path(),
+            &[PathBuf::from("a.luau"), PathBuf::from("b.luau")],
+        );
+        assert!(git_is_staged(dir.path(), "a.luau"));
+        assert!(git_is_staged(dir.path(), "b.luau"));
+    }
+
+    #[test]
+    fn git_add_empty_paths_is_noop() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        // Should not panic or error
+        git_add(dir.path(), &[]);
+    }
+
+    #[test]
+    fn git_add_stages_new_file() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("existing.luau"), "x").unwrap();
+        git_commit_all(dir.path(), "init");
+        fs::write(dir.path().join("new.luau"), "new content").unwrap();
+
+        git_add(dir.path(), &[PathBuf::from("new.luau")]);
+        assert!(git_is_staged(dir.path(), "new.luau"));
+    }
+
+    // -----------------------------------------------------------------------
+    // is_script_class
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn script_class_detection() {
+        assert!(is_script_class("Script"));
+        assert!(is_script_class("LocalScript"));
+        assert!(is_script_class("ModuleScript"));
+        assert!(!is_script_class("Folder"));
+        assert!(!is_script_class("Part"));
+        assert!(!is_script_class("Model"));
+        assert!(!is_script_class("StringValue"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Hash consistency: our SHA1 matches git hash-object for various content
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn hash_consistency_empty_file() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("empty.luau"), "").unwrap();
+
+        let output = Command::new("git")
+            .args([
+                "-C",
+                &dir.path().to_string_lossy(),
+                "hash-object",
+                "empty.luau",
+            ])
+            .output()
+            .unwrap();
+        let git_hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert_eq!(compute_blob_sha1(""), git_hash);
+    }
+
+    #[test]
+    fn hash_consistency_unicode_content() {
+        let content = "-- Unicode: 日本語テスト\nlocal x = '🎮'\n";
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("unicode.luau"), content).unwrap();
+
+        let output = Command::new("git")
+            .args([
+                "-C",
+                &dir.path().to_string_lossy(),
+                "hash-object",
+                "unicode.luau",
+            ])
+            .output()
+            .unwrap();
+        let git_hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert_eq!(compute_blob_sha1(content), git_hash);
+    }
+
+    #[test]
+    fn hash_consistency_large_file() {
+        let content: String = (0..10000)
+            .map(|i| format!("local var_{} = {}\n", i, i))
+            .collect();
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("large.luau"), &content).unwrap();
+
+        let output = Command::new("git")
+            .args([
+                "-C",
+                &dir.path().to_string_lossy(),
+                "hash-object",
+                "large.luau",
+            ])
+            .output()
+            .unwrap();
+        let git_hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        assert_eq!(compute_blob_sha1(&content), git_hash);
+    }
 }

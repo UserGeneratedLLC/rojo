@@ -130,6 +130,70 @@ impl TestServeSession {
         }
     }
 
+    /// Creates a test session with a git repo initialized in the project dir.
+    /// The `setup` callback runs after the fixture is copied and git is initialized
+    /// but BEFORE the serve process starts. Use it to commit initial files and
+    /// make modifications that should appear as git changes.
+    pub fn new_with_git(name: &str, setup: impl FnOnce(&Path)) -> Self {
+        let working_dir = get_working_dir_path();
+
+        let source_path = Path::new(SERVE_TESTS_PATH).join(name);
+        let dir = tempdir().expect("Couldn't create temporary directory");
+        let project_path = dir
+            .path()
+            .canonicalize()
+            .expect("Couldn't canonicalize temporary directory path")
+            .join(name);
+
+        fs::create_dir(&project_path).expect("Couldn't create temporary project subdirectory");
+        copy_recursive(&source_path, &project_path)
+            .expect("Couldn't copy project to temporary directory");
+
+        // Initialize git repo and run setup callback
+        Command::new("git")
+            .args(["init"])
+            .current_dir(&project_path)
+            .output()
+            .expect("git init failed");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&project_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&project_path)
+            .output()
+            .unwrap();
+
+        setup(&project_path);
+
+        #[cfg(target_os = "macos")]
+        std::thread::sleep(Duration::from_millis(100));
+
+        let port = get_port_number();
+        let port_string = port.to_string();
+
+        let rojo_process = Command::new(ROJO_PATH)
+            .args([
+                "serve",
+                project_path.to_str().unwrap(),
+                "--port",
+                port_string.as_str(),
+            ])
+            .current_dir(working_dir)
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Couldn't start Rojo");
+
+        TestServeSession {
+            rojo_process: KillOnDrop(rojo_process),
+            _dir: dir,
+            port,
+            project_path,
+        }
+    }
+
     pub fn path(&self) -> &Path {
         &self.project_path
     }
