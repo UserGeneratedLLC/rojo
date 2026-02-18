@@ -391,6 +391,7 @@ mod test {
                 parent_id: root_id,
                 instance: snapshot.clone(),
             }],
+            stage_ids: HashSet::new(),
             ..Default::default()
         };
 
@@ -438,6 +439,7 @@ mod test {
 
         let patch_set = PatchSet {
             updated_instances: vec![patch],
+            stage_ids: HashSet::new(),
             ..Default::default()
         };
 

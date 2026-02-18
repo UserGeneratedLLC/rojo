@@ -1,5 +1,5 @@
 ---
-globs: rbx-dom/**/*.rs,rbx-dom/**/*.lua,rbx-dom/**/*.toml
+globs: rbx-dom/**
 alwaysApply: false
 ---
 

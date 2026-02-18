@@ -119,6 +119,10 @@ pub struct ServeSession {
     /// Shared between ApiService (writes) and ChangeProcessor (rename updates).
     /// `None` for oneshot sessions.
     ref_path_index: Option<Arc<Mutex<crate::RefPathIndex>>>,
+
+    /// Root of the git repository, if the project is inside one.
+    /// Computed once at session start for use by auto-staging.
+    git_repo_root: Option<std::path::PathBuf>,
 }
 
 impl ServeSession {
@@ -172,6 +176,8 @@ impl ServeSession {
         let suppressed_paths = Arc::new(Mutex::new(std::collections::HashMap::new()));
         let ref_path_index = Arc::new(Mutex::new(crate::RefPathIndex::new()));
 
+        let git_repo_root = crate::git::git_repo_root(root_project.folder_location());
+
         log::trace!("Starting ChangeProcessor");
         let change_processor = ChangeProcessor::start(
             Arc::clone(&tree),
@@ -182,6 +188,7 @@ impl ServeSession {
             Arc::clone(&ref_path_index),
             root_project.folder_location().to_path_buf(),
             critical_error_receiver,
+            git_repo_root.clone(),
         );
 
         Ok(Self {
@@ -195,6 +202,7 @@ impl ServeSession {
             vfs,
             suppressed_paths: Some(suppressed_paths),
             ref_path_index: Some(ref_path_index),
+            git_repo_root,
         })
     }
 
@@ -220,6 +228,7 @@ impl ServeSession {
             vfs: Arc::new(vfs),
             suppressed_paths: None,
             ref_path_index: None,
+            git_repo_root: None,
         })
     }
 
@@ -310,6 +319,10 @@ impl ServeSession {
 
     pub fn root_dir(&self) -> &Path {
         self.root_project.folder_location()
+    }
+
+    pub fn git_repo_root(&self) -> Option<&Path> {
+        self.git_repo_root.as_deref()
     }
 
     pub fn root_project(&self) -> &Project {

@@ -188,7 +188,7 @@ function ApiContext:read(ids)
 	end)
 end
 
-function ApiContext:write(patch)
+function ApiContext:write(patch, stageIds)
 	local url = ("%s/api/write"):format(self.__baseUrl)
 
 	-- Log what we're sending to the server (syncback/pull)
@@ -248,6 +248,7 @@ function ApiContext:write(patch)
 		removed = patch.removed,
 		updated = updated,
 		added = added,
+		stageIds = stageIds,
 	}
 
 	body = Http.msgpackEncode(body)

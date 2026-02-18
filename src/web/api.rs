@@ -264,8 +264,7 @@ impl ApiService {
 
     /// Get a summary of information about the server
     async fn handle_api_rojo(&self) -> Response<Full<Bytes>> {
-        let tree = self.serve_session.tree();
-        let root_instance_id = tree.get_root_id();
+        let root_instance_id = self.serve_session.tree().get_root_id();
 
         let ignore_hidden_services = self.serve_session.ignore_hidden_services();
         let visible_services = if ignore_hidden_services {
@@ -273,6 +272,11 @@ impl ApiService {
         } else {
             Vec::new()
         };
+
+        let git_metadata = crate::git::compute_git_metadata(
+            &self.serve_session.tree_handle(),
+            self.serve_session.root_dir(),
+        );
 
         msgpack_ok(&ServerInfoResponse {
             server_version: SERVER_VERSION.to_owned(),
@@ -288,6 +292,7 @@ impl ApiService {
             sync_source_only: true,
             ignore_hidden_services,
             visible_services,
+            git_metadata,
         })
     }
 
@@ -735,13 +740,37 @@ impl ApiService {
             })
             .collect();
 
+        let stage_ids: HashSet<Ref> = request.stage_ids.into_iter().collect();
+
         tree_mutation_sender
             .send(PatchSet {
                 removed_instances: actually_removed,
                 added_instances,
                 updated_instances,
+                stage_ids: stage_ids.clone(),
             })
             .unwrap();
+
+        if let Some(repo_root) = self.serve_session.git_repo_root() {
+            if !stage_ids.is_empty() {
+                let tree = self.serve_session.tree();
+                let paths_to_stage: Vec<PathBuf> = stage_ids
+                    .iter()
+                    .filter_map(|&id| {
+                        tree.get_instance(id).and_then(|inst| {
+                            inst.metadata().instigating_source.as_ref().map(|src| {
+                                src.path().to_path_buf()
+                            })
+                        })
+                    })
+                    .collect();
+                drop(tree);
+
+                if !paths_to_stage.is_empty() {
+                    crate::git::git_add(repo_root, &paths_to_stage);
+                }
+            }
+        }
 
         msgpack_ok(WriteResponse { session_id })
     }

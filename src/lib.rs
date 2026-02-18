@@ -8,6 +8,7 @@ pub mod cli;
 mod tree_view;
 
 mod change_processor;
+pub mod git;
 mod glob;
 mod json;
 mod lua_ast;

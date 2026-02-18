@@ -97,6 +97,7 @@ fn send_update(
         removed: vec![],
         added: HashMap::new(),
         updated: vec![update],
+        stage_ids: Vec::new(),
     };
     session
         .post_api_write(&write_request)
@@ -115,6 +116,7 @@ fn send_removal(
         removed: ids,
         added: HashMap::new(),
         updated: vec![],
+        stage_ids: Vec::new(),
     };
     session
         .post_api_write(&write_request)
@@ -704,6 +706,7 @@ fn echo_suppression_prevents_redundant_patches() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
 
@@ -1127,6 +1130,7 @@ fn add_child_converts_standalone_to_directory() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
@@ -1279,6 +1283,7 @@ fn add_child_to_encoded_module_creates_encoded_directory() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
@@ -1352,6 +1357,7 @@ fn add_child_to_encoded_script_strips_suffix_correctly() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
@@ -1418,6 +1424,7 @@ fn add_child_to_encoded_model_creates_encoded_directory() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
@@ -1521,6 +1528,7 @@ fn send_update_fast(
         removed: vec![],
         added: HashMap::new(),
         updated: vec![update],
+        stage_ids: Vec::new(),
     };
     session
         .post_api_write(&write_request)
@@ -1539,6 +1547,7 @@ fn send_update_no_wait(
         removed: vec![],
         added: HashMap::new(),
         updated: vec![update],
+        stage_ids: Vec::new(),
     };
     session
         .post_api_write(&write_request)
@@ -1556,6 +1565,7 @@ fn send_removal_fast(
         removed: ids,
         added: HashMap::new(),
         updated: vec![],
+        stage_ids: Vec::new(),
     };
     session
         .post_api_write(&write_request)
@@ -2198,6 +2208,7 @@ fn multi_instance_source_update_single_request() {
             removed: vec![],
             added: HashMap::new(),
             updated: updates,
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         wait_for_settle();
@@ -2234,6 +2245,7 @@ fn multi_instance_rename_single_request() {
             removed: vec![],
             added: HashMap::new(),
             updated: updates,
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         wait_for_settle();
@@ -2337,6 +2349,7 @@ fn echo_suppression_rapid_adds_10x() {
                 removed: vec![],
                 added: added_map,
                 updated: vec![],
+                stage_ids: Vec::new(),
             };
             session.post_api_write(&write_request).unwrap();
         }
@@ -2409,6 +2422,7 @@ fn echo_suppression_mixed_operations() {
             removed,
             added: added_map,
             updated: updates,
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         wait_for_settle();
@@ -2758,6 +2772,7 @@ fn fuzz_multi_instance_15_iterations() {
                 removed: vec![],
                 added: HashMap::new(),
                 updated: updates,
+                stage_ids: Vec::new(),
             };
             session.post_api_write(&write_request).unwrap();
             thread::sleep(Duration::from_millis(100));
@@ -4159,6 +4174,7 @@ fn multi_instance_combined_rename_class_source_batch() {
             removed: vec![],
             added: HashMap::new(),
             updated: updates,
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         wait_for_settle();
@@ -5126,6 +5142,7 @@ fn add_instance_with_forbidden_chars_creates_slug_and_meta() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
@@ -5191,6 +5208,7 @@ fn add_two_colliding_instances_deduplicates() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
@@ -5470,6 +5488,7 @@ fn add_three_colliding_instances_deduplicates() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
@@ -5636,6 +5655,7 @@ fn add_case_insensitive_colliding_instances() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
@@ -6753,6 +6773,7 @@ fn ref_to_instance_added_in_same_request() {
                 changed_properties: props,
                 changed_metadata: None,
             }],
+            stage_ids: Vec::new(),
         };
 
         session
@@ -7266,6 +7287,7 @@ fn ref_same_batch_add_target_includes_extension() {
                 changed_properties: update_props,
                 changed_metadata: None,
             }],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
@@ -7320,6 +7342,7 @@ fn ref_same_batch_add_module_target_includes_extension() {
                 changed_properties: update_props,
                 changed_metadata: None,
             }],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
@@ -7367,6 +7390,7 @@ fn ref_same_batch_add_folder_target_no_extension() {
                 changed_properties: update_props,
                 changed_metadata: None,
             }],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
@@ -7430,6 +7454,7 @@ fn delete_deduped_instance_group_to_1_cleanup() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
 
@@ -7515,6 +7540,7 @@ fn delete_base_deduped_instance_promotes_lowest() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
 
@@ -7593,6 +7619,7 @@ fn delete_middle_deduped_instance_tolerates_gap() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
 
@@ -7704,6 +7731,7 @@ fn add_same_named_folders_deduplicates() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
@@ -7844,6 +7872,7 @@ fn ref_through_deduped_instance() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
@@ -7963,6 +7992,7 @@ fn ref_path_updated_after_dedup_cleanup() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
 
@@ -8095,6 +8125,7 @@ fn rename_ref_target_updates_ref_paths() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
 

@@ -13,6 +13,7 @@ local Log = require(Packages.Log)
 
 local ChangeMetadata = require(Plugin.ChangeMetadata)
 local Config = require(Plugin.Config)
+local SHA1 = require(Plugin.SHA1)
 local Timer = require(Plugin.Timer)
 local Types = require(Plugin.Types)
 local decodeValue = require(Plugin.Reconciler.decodeValue)
@@ -212,13 +213,22 @@ local PatchTree = {}
 
 -- Builds a new tree from a patch and instanceMap
 -- uses changeListHeaders in node.changeList
-function PatchTree.build(patch, instanceMap, changeListHeaders)
+-- gitMetadata is optional: { changedIds: {string}, scriptCommittedHashes: {[string]: {string}} }
+function PatchTree.build(patch, instanceMap, changeListHeaders, gitMetadata)
 	Timer.start("PatchTree.build")
 	local clock = os.clock()
 
 	local tree = Tree.new()
 
 	local knownAncestors = {}
+
+	local changedIdSet = nil
+	if gitMetadata and gitMetadata.changedIds then
+		changedIdSet = {}
+		for _, id in gitMetadata.changedIds do
+			changedIdSet[id] = true
+		end
+	end
 
 	Timer.start("patch.updated")
 	for _, change in patch.updated do
@@ -304,8 +314,28 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 			table.insert(changeList, 1, changeListHeaders)
 		end
 
-		-- Add this node to tree
-		-- Default to nil (unselected) - user must explicitly choose Push/Pull/Skip
+		-- Compute default selection from git metadata
+		local defaultSelection = nil
+		if changedIdSet then
+			if not changedIdSet[change.id] then
+				defaultSelection = "pull"
+			elseif instance:IsA("LuaSourceContainer")
+				and gitMetadata.scriptCommittedHashes then
+				local hashes = gitMetadata.scriptCommittedHashes[change.id]
+				if hashes then
+					local source = instance.Source
+					local gitBlob = "blob " .. tostring(#source) .. "\0" .. source
+					local studioHash = SHA1(buffer.fromstring(gitBlob))
+					for _, hash in hashes do
+						if studioHash == hash then
+							defaultSelection = "push"
+							break
+						end
+					end
+				end
+			end
+		end
+
 		tree:addNode(instanceMap.fromInstances[instance.Parent], {
 			id = change.id,
 			patchType = "Edit",
@@ -314,7 +344,7 @@ function PatchTree.build(patch, instanceMap, changeListHeaders)
 			instance = instance,
 			changeInfo = changeInfo,
 			changeList = changeList,
-			defaultSelection = nil,
+			defaultSelection = defaultSelection,
 		})
 	end
 	Timer.stop()

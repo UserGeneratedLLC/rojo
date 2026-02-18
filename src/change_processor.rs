@@ -2,6 +2,7 @@ use crossbeam_channel::{select, Receiver, RecvError, Sender};
 use jod_thread::JoinHandle;
 use memofs::{IoResultExt, Vfs, VfsEvent};
 use rbx_dom_weak::types::{Ref, Variant};
+use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -83,6 +84,7 @@ impl ChangeProcessor {
         ref_path_index: Arc<Mutex<crate::RefPathIndex>>,
         project_root: PathBuf,
         critical_error_receiver: Option<Receiver<memofs::WatcherCriticalError>>,
+        git_repo_root: Option<PathBuf>,
     ) -> Self {
         let (shutdown_sender, shutdown_receiver) = crossbeam_channel::bounded(1);
         let vfs_receiver = vfs.event_receiver();
@@ -101,6 +103,7 @@ impl ChangeProcessor {
             suppressed_paths,
             project_root,
             ref_path_index,
+            git_repo_root,
         };
 
         let job_thread = jod_thread::Builder::new()
@@ -245,6 +248,10 @@ struct JobThreadContext {
     /// Index of meta/model files that contain `Rojo_Ref_*` attributes.
     /// Shared with ApiService for efficient rename path updates.
     ref_path_index: Arc<Mutex<crate::RefPathIndex>>,
+
+    /// Git repository root, if the project is in a git repo.
+    /// Used for auto-staging Source writes.
+    git_repo_root: Option<PathBuf>,
 }
 
 impl JobThreadContext {
@@ -1005,6 +1012,7 @@ impl JobThreadContext {
             added_instances: patch_set.added_instances,
             removed_instances: patch_set.removed_instances,
             updated_instances: Vec::new(),
+            stage_ids: HashSet::new(),
         };
 
         let applied = apply_patch_set(&mut tree, structural_patch);
@@ -1812,6 +1820,10 @@ impl JobThreadContext {
                                             id,
                                             err
                                         );
+                                    } else if patch_set.stage_ids.contains(&id) {
+                                        if let Some(ref repo_root) = self.git_repo_root {
+                                            crate::git::git_add(repo_root, std::slice::from_ref(write_path));
+                                        }
                                     }
                                 } else {
                                     log::warn!("Cannot change Source to non-string value.");

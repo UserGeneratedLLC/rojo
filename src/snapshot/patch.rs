@@ -1,5 +1,7 @@
 //! Defines the data structures used for describing instance patches.
 
+use std::collections::HashSet;
+
 use rbx_dom_weak::{
     types::{Ref, Variant},
     HashMapExt as _, Ustr, UstrMap,
@@ -18,6 +20,10 @@ pub struct PatchSet {
     pub removed_instances: Vec<Ref>,
     pub added_instances: Vec<PatchAdd>,
     pub updated_instances: Vec<PatchUpdate>,
+    /// Instance IDs whose backing files should be staged via git add after writing.
+    /// Populated from WriteRequest.stage_ids, consumed by change_processor.
+    #[serde(default, skip)]
+    pub stage_ids: HashSet<Ref>,
 }
 
 impl PatchSet {
@@ -26,6 +32,7 @@ impl PatchSet {
             removed_instances: Vec::new(),
             added_instances: Vec::new(),
             updated_instances: Vec::new(),
+            stage_ids: HashSet::new(),
         }
     }
 }

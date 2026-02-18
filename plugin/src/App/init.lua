@@ -653,10 +653,12 @@ function App:startSession()
 		})
 	end)
 
+	local cachedServerInfo = nil
+
 	self.cleanupPrecommit = serveSession:hookPrecommit(function(patch, instanceMap)
-		-- Build new tree for patch
+		local gitMetadata = cachedServerInfo and cachedServerInfo.gitMetadata
 		self:setState({
-			patchTree = PatchTree.build(patch, instanceMap, { "Property", "Old", "New" }),
+			patchTree = PatchTree.build(patch, instanceMap, { "Property", "Old", "New" }, gitMetadata),
 		})
 	end)
 	self.cleanupPostcommit = serveSession:hookPostcommit(function(patch, instanceMap, unappliedPatch)
@@ -790,6 +792,8 @@ function App:startSession()
 	local initialSyncConfirmed = false
 
 	serveSession:setConfirmCallback(function(instanceMap, patch, serverInfo)
+		cachedServerInfo = serverInfo
+
 		-- Filter out the DataModel name change from the patch
 		-- The project name (DataModel.Name) is managed by Studio independently
 		PatchSet.removeDataModelName(patch, instanceMap)
@@ -864,7 +868,7 @@ function App:startSession()
 		})
 		self:setState({
 			appStatus = AppStatus.Confirming,
-			patchTree = PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" }),
+			patchTree = PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" }, serverInfo.gitMetadata),
 			confirmData = {
 				serverInfo = serverInfo,
 			},
@@ -914,8 +918,9 @@ function App:startSession()
 		-- Update the patchTree when new changes arrive during confirmation
 		-- The changedIds parameter contains IDs of items that were modified
 		-- so their selections can be reset (user must re-review)
+		local gitMetadata = cachedServerInfo and cachedServerInfo.gitMetadata
 		self:setState({
-			patchTree = PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" }),
+			patchTree = PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" }, gitMetadata),
 			changedIds = changedIds, -- Pass to UI so it can unselect changed items
 		})
 	end)
@@ -1045,7 +1050,19 @@ function App:render()
 							self.confirmationBindable:Fire("Abort")
 						end,
 						onConfirm = function(selections)
-							self.confirmationBindable:Fire({ type = "Confirm", selections = selections })
+							local autoSelectedIds = {}
+							if self.state.patchTree then
+								self.state.patchTree:forEach(function(node)
+									if node.patchType and node.defaultSelection ~= nil then
+										autoSelectedIds[node.id] = true
+									end
+								end)
+							end
+							self.confirmationBindable:Fire({
+								type = "Confirm",
+								selections = selections,
+								autoSelectedIds = autoSelectedIds,
+							})
 						end,
 					}),
 

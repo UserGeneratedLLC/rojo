@@ -1,5 +1,5 @@
 ---
-globs: src/web/**/*.rs,src/serve_session.rs,plugin/src/ServeSession.lua,plugin/src/ChangeBatcher/**/*.lua,plugin/src/ApiContext.lua
+globs: src/web/**,src/serve_session.rs,src/git.rs,,plugin/src/**
 alwaysApply: false
 ---
 
@@ -63,9 +63,21 @@ Studio → ChangeBatcher → Plugin → WebSocket → Server → Filesystem
     "visibleServices": ["Workspace", "ServerScriptService"],
     "placeId": 123456,
     "gameId": 789012,
-    "ignoreHiddenServices": true
+    "ignoreHiddenServices": true,
+    "gitMetadata": {
+        "changedIds": ["ref-1", "ref-2"],
+        "scriptCommittedHashes": {
+            "ref-1": ["a1b2c3...40-char-sha1-hex", "d4e5f6...staged-sha1"]
+        }
+    }
 }
 ```
+
+**`gitMetadata`** is `null` when the project is not in a git repo. Contains:
+- `changedIds`: Instance Refs whose backing files have changes relative to HEAD (staged + unstaged + untracked)
+- `scriptCommittedHashes`: For changed script instances, 1-2 SHA1 hashes (HEAD version and staged version if different) computed using the git blob format (`"blob <size>\0<content>"`). Plugin checks if Studio `script.Source` matches ANY hash to default "Atlas".
+
+Recomputed fresh on each `GET /api/rojo` connect. Uses a two-phase tree lock: snapshot path mappings briefly, then release before running git subprocesses.
 
 ### Write Request (`POST /api/write`)
 
@@ -74,9 +86,12 @@ Studio → ChangeBatcher → Plugin → WebSocket → Server → Filesystem
     "sessionId": "uuid",
     "removed": ["id-1"],
     "added": { "id-2": { "parent": "parent-id", "className": "Folder", "name": "New", "properties": {}, "children": [] } },
-    "updated": [{ "id": "id-3", "changedName": "Renamed", "changedClassName": "Script", "changedProperties": { "Source": "print('hi')" }, "changedMetadata": {} }]
+    "updated": [{ "id": "id-3", "changedName": "Renamed", "changedClassName": "Script", "changedProperties": { "Source": "print('hi')" }, "changedMetadata": {} }],
+    "stageIds": ["ref-1", "ref-2"]
 }
 ```
+
+**`stageIds`**: Instance IDs whose backing files should be staged via `git add` after writing. Includes all push-accepted IDs + auto-selected pull-accepted IDs. The server resolves these to filesystem paths and runs `git add`. Staging is split: `api.rs` stages additions/removals/push files directly; `change_processor` stages Source writes after they complete (via `stage_ids` on PatchSet).
 
 **Format detection:** `Name/init.luau` → directory | `Name.luau` → file | neither → use `has_children` (`.lua` also supported)
 
@@ -603,6 +618,25 @@ end
 - Safe for production environments
 - Team viewing same project simultaneously
 
+### Git-Based Sync Direction Defaults
+
+When the plugin shows the sync confirmation dialog, items get smart default selections based on git status:
+
+- **File has no git changes**: default to "Studio" (pull) -- any diff is because Studio was changed
+- **File has git changes AND is a script AND Studio Source matches committed/staged hash**: default to "Atlas" (push) -- developer changed the file, Studio hasn't diverged
+- **Otherwise**: `nil` -- user must decide (both sides changed, or non-script with changes)
+- **No git repo**: all defaults remain `nil` (feature is no-op)
+
+Only **Updated** items get defaults. Added/Removed items remain `nil`.
+
+**Hash computation**: Both sides use `SHA1("blob <byte_len>\0<content>")` (git blob format). Server sends up to 2 hashes per changed script (HEAD + staged if different). Plugin computes hash of `script.Source` (non-draft version) and checks if ANY hash matches.
+
+**Auto-staging**: After confirmation, accepted files are staged via `git add`:
+- Push-accepted items: always staged (all types, including non-scripts)
+- Pull-accepted items: only staged if auto-selected (`defaultSelection ~= nil`); manually-chosen pulls are left unstaged for manual diff
+
+**Implementation files**: `src/git.rs` (server git helpers), `plugin/src/PatchTree.lua` (default selection logic), `plugin/src/SHA1.luau` (hash computation), `src/web/interface.rs` (`GitMetadata` struct, `stage_ids` on WriteRequest/PatchSet)
+
 ### Known Limitations (Detailed)
 
 | Issue | Cause | Impact |
@@ -671,3 +705,4 @@ Browser: `http://localhost:34872` → Network tab → WebSocket messages
 | `src/serve_session.rs` - Session | `plugin/src/ChangeBatcher/` - Two-way sync |
 | `src/change_processor.rs` - FS writer | `plugin/src/Reconciler/` - Patch application |
 | `src/rojo_ref.rs` - Ref paths | `plugin/src/Reconciler/matching.lua` - Matching |
+| `src/git.rs` - Git integration | `plugin/src/PatchTree.lua` - Default selections |

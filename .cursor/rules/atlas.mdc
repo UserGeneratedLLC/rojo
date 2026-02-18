@@ -323,6 +323,7 @@ src/                     - Rust server/CLI
     meta.rs             - Meta file read/write helpers
   web/                  - HTTP/WebSocket server
   change_processor.rs   - Two-way sync filesystem writer
+  git.rs                - Git integration (changed files, SHA1 hashing, auto-staging)
   rojo_ref.rs           - Ref path system (Rojo_Ref_*, RefPathIndex)
   variant_eq.rs         - Property value comparison
 
@@ -333,6 +334,8 @@ plugin/src/             - Lua Studio plugin
     trueEquals.lua      - Shared value equality module
   ChangeBatcher/        - Two-way sync patch creation
   Config.lua            - Version and protocol config
+  PatchTree.lua         - Patch visualization tree (git-based default selections)
+  SHA1.luau             - SHA1 hash for git blob format comparison
   XXH32.luau            - Hash function for plugin
 
 rbx-dom/                - Git submodule (separate repo)

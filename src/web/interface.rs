@@ -152,6 +152,16 @@ fn property_filter(value: Option<&Variant>) -> bool {
     ty != Some(VariantType::SharedString)
 }
 
+/// Git-related metadata sent to the plugin for smart sync direction defaults.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitMetadata {
+    pub changed_ids: Vec<Ref>,
+    /// SHA1 hashes of prior versions (git blob format) for changed script instances.
+    /// Contains 1-2 hashes per script: HEAD version and staged version (if different).
+    pub script_committed_hashes: HashMap<Ref, Vec<String>>,
+}
+
 /// Response body from /api/rojo
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -202,6 +212,8 @@ pub struct ServerInfoResponse {
     /// Services not in this list should be ignored during sync operations.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub visible_services: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_metadata: Option<GitMetadata>,
 }
 
 // Serialize place IDs as f64 to avoid msgpack uint64 encoding issues with Lua
@@ -287,6 +299,9 @@ pub struct WriteRequest {
     #[serde(default)]
     pub added: HashMap<Ref, AddedInstance>,
     pub updated: Vec<InstanceUpdate>,
+    /// Instance IDs whose backing files should be staged via git add.
+    #[serde(default)]
+    pub stage_ids: Vec<Ref>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

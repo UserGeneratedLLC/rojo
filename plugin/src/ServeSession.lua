@@ -695,6 +695,7 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 	elseif type(userDecision) == "table" and userDecision.type == "Confirm" then
 		-- New: Apply based on per-item selections
 		local selections = userDecision.selections or {}
+		local autoSelectedIds = userDecision.autoSelectedIds or {}
 
 		-- Log selection summary (debug level)
 		local pushCount, pullCount, ignoreCount = 0, 0, 0
@@ -713,6 +714,9 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 		local pushPatch = PatchSet.newEmpty() -- Items to apply to Studio
 		local pullPatch = PatchSet.newEmpty() -- Items to send back to Rojo
 
+		-- Build stage_ids: all push-accepted IDs + auto-selected pull-accepted IDs
+		local stageIds = {}
+
 		-- Process updated items
 		for _, change in catchUpPatch.updated do
 			local selection = selections[change.id]
@@ -723,6 +727,7 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 				-- Apply Rojo changes to Studio
 				Log.info("[Push] Update: {}", instancePath)
 				table.insert(pushPatch.updated, change)
+				table.insert(stageIds, change.id)
 			elseif selection == "pull" and self.__twoWaySync then
 				-- Send Studio state back to Rojo
 				if instance then
@@ -749,6 +754,9 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 					)
 					if update then
 						table.insert(pullPatch.updated, update)
+						if autoSelectedIds[change.id] then
+							table.insert(stageIds, change.id)
+						end
 					end
 				end
 			end
@@ -778,6 +786,9 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 				-- Apply Rojo removal to Studio (delete the instance)
 				Log.info("[Push] Delete: {}", instancePath)
 				table.insert(pushPatch.removed, idOrInstance)
+				if id then
+					table.insert(stageIds, id)
+				end
 			elseif selection == "pull" and self.__twoWaySync then
 				-- Syncback: Create file in Rojo from Studio instance
 				if instance and instance.Parent then
@@ -790,6 +801,9 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 							local guid = HttpService:GenerateGUID(false)
 							local tempRef = string.gsub(guid, "-", ""):lower()
 							pullPatch.added[tempRef] = encoded
+							if id and autoSelectedIds[id] then
+								table.insert(stageIds, tempRef)
+							end
 							-- Note: We intentionally do NOT pre-insert into InstanceMap here.
 							-- The VFS watcher will process the written files and assign a
 							-- server-side Ref ID. Any Ref properties targeting this instance
@@ -818,6 +832,7 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 				-- Apply Rojo addition to Studio
 				Log.info("[Push] Add: {}.{}", parentPath, instanceName)
 				pushPatch.added[id] = change
+				table.insert(stageIds, id)
 			elseif selection == "pull" and self.__twoWaySync then
 				-- Don't add in Studio, remove from Rojo
 				-- Log at info level since this is a major file deletion operation
@@ -846,19 +861,27 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 			self:__applyPatch(pushPatch)
 		end
 
-		-- Send pull items back to Rojo server
-		if self.__twoWaySync and not PatchSet.isEmpty(pullPatch) then
-			local addCount = 0
-			for _ in pairs(pullPatch.added) do
-				addCount += 1
+		-- Send pull items + stage requests to Rojo server
+		local hasPullChanges = self.__twoWaySync and not PatchSet.isEmpty(pullPatch)
+		local hasStageIds = #stageIds > 0
+
+		if hasPullChanges or hasStageIds then
+			if hasPullChanges then
+				local addCount = 0
+				for _ in pairs(pullPatch.added) do
+					addCount += 1
+				end
+				Log.info(
+					"Sending to Rojo: {} file creations, {} file deletions, {} updates",
+					addCount,
+					#pullPatch.removed,
+					#pullPatch.updated
+				)
 			end
-			Log.info(
-				"Sending to Rojo: {} file creations, {} file deletions, {} updates",
-				addCount,
-				#pullPatch.removed,
-				#pullPatch.updated
-			)
-			return self.__apiContext:write(pullPatch)
+			if hasStageIds then
+				Log.info("Requesting git stage for {} files", #stageIds)
+			end
+			return self.__apiContext:write(pullPatch, stageIds)
 		end
 
 		return Promise.resolve()

@@ -1,5 +1,5 @@
 ---
-globs: src/syncback/**/*.rs,src/cli/syncback.rs
+globs: src/syncback/**,src/cli/syncback.rs
 alwaysApply: false
 ---
 

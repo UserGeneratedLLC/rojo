@@ -780,6 +780,7 @@ fn api_write_existing_instance() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
 
         session

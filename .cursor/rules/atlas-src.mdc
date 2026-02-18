@@ -1,5 +1,5 @@
 ---
-globs: src/**/*.rs,crates/**/*.rs
+globs: src/**,crates/**
 alwaysApply: false
 ---
 
@@ -380,6 +380,7 @@ src/
     meta.rs             - Meta file helpers
   web/                  - HTTP/WebSocket
   change_processor.rs   - Two-way sync filesystem writer
+  git.rs                - Git integration (changed files, SHA1 hashing, auto-staging)
   rojo_ref.rs           - Ref path system (Rojo_Ref_*, RefPathIndex)
   variant_eq.rs         - Property value comparison
   lib.rs                - Public API

@@ -849,6 +849,7 @@ fn api_write_then_filesystem_change() {
                 changed_properties: props,
                 changed_metadata: None,
             }],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(500));
