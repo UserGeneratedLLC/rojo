@@ -207,18 +207,21 @@ pub fn syncback_loop_with_stats(
         .unwrap_or(false);
     if !sync_current_camera {
         log::debug!("Removing CurrentCamera from new DOM");
-        let mut camera_ref = None;
+        let mut workspace_ref = None;
+        let mut camera_target = None;
         for child_ref in new_tree.root().children() {
             let inst = new_tree.get_by_ref(*child_ref).unwrap();
             if inst.class == "Workspace" {
-                camera_ref = inst.properties.get(&ustr("CurrentCamera"));
+                workspace_ref = Some(*child_ref);
+                camera_target = inst.properties.get(&ustr("CurrentCamera")).cloned();
                 break;
             }
         }
-        if let Some(Variant::Ref(camera_ref)) = camera_ref {
-            if new_tree.get_by_ref(*camera_ref).is_some() {
-                new_tree.destroy(*camera_ref);
+        if let (Some(ws_ref), Some(Variant::Ref(cam_ref))) = (workspace_ref, camera_target) {
+            if new_tree.get_by_ref(cam_ref).is_some() {
+                new_tree.destroy(cam_ref);
             }
+            deferred_referents.remove_ref(ws_ref, "CurrentCamera");
         }
     }
 

@@ -10,6 +10,68 @@ use serde::{Deserialize, Serialize};
 
 use crate::REF_PATH_ATTRIBUTE_PREFIX;
 
+/// Truncates float components of Variant types to f32 precision, matching the
+/// rbxl binary format which stores most float properties as Float32.
+fn truncate_variant(v: Variant) -> Variant {
+    #[inline]
+    fn t(v: f32) -> f32 {
+        v as f64 as f32
+    }
+
+    match v {
+        Variant::CFrame(cf) => Variant::CFrame(CFrame {
+            position: Vector3::new(t(cf.position.x), t(cf.position.y), t(cf.position.z)),
+            orientation: Matrix3::new(
+                Vector3::new(
+                    t(cf.orientation.x.x),
+                    t(cf.orientation.x.y),
+                    t(cf.orientation.x.z),
+                ),
+                Vector3::new(
+                    t(cf.orientation.y.x),
+                    t(cf.orientation.y.y),
+                    t(cf.orientation.y.z),
+                ),
+                Vector3::new(
+                    t(cf.orientation.z.x),
+                    t(cf.orientation.z.y),
+                    t(cf.orientation.z.z),
+                ),
+            ),
+        }),
+        Variant::OptionalCFrame(Some(cf)) => Variant::OptionalCFrame(Some(CFrame {
+            position: Vector3::new(t(cf.position.x), t(cf.position.y), t(cf.position.z)),
+            orientation: Matrix3::new(
+                Vector3::new(
+                    t(cf.orientation.x.x),
+                    t(cf.orientation.x.y),
+                    t(cf.orientation.x.z),
+                ),
+                Vector3::new(
+                    t(cf.orientation.y.x),
+                    t(cf.orientation.y.y),
+                    t(cf.orientation.y.z),
+                ),
+                Vector3::new(
+                    t(cf.orientation.z.x),
+                    t(cf.orientation.z.y),
+                    t(cf.orientation.z.z),
+                ),
+            ),
+        })),
+        Variant::Vector3(v) => Variant::Vector3(Vector3::new(t(v.x), t(v.y), t(v.z))),
+        Variant::Vector2(v) => Variant::Vector2(Vector2::new(t(v.x), t(v.y))),
+        Variant::UDim(u) => Variant::UDim(rbx_dom_weak::types::UDim::new(t(u.scale), u.offset)),
+        Variant::UDim2(u) => Variant::UDim2(rbx_dom_weak::types::UDim2::new(
+            rbx_dom_weak::types::UDim::new(t(u.x.scale), u.x.offset),
+            rbx_dom_weak::types::UDim::new(t(u.y.scale), u.y.offset),
+        )),
+        Variant::Float32(n) => Variant::Float32(n as f64 as f32),
+        Variant::Float64(n) => Variant::Float64(n as f32 as f64),
+        other => other,
+    }
+}
+
 /// A user-friendly version of `Variant` that supports specifying ambiguous
 /// values. Ambiguous values need a reflection database to be resolved to a
 /// usable value.
@@ -41,6 +103,7 @@ impl UnresolvedValue {
     /// Creates an `UnresolvedValue` from a variant, using a class and property
     /// name to potentially allow for ambiguous Enum variants.
     pub fn from_variant(variant: Variant, class_name: &str, prop_name: &str) -> Self {
+        let variant = truncate_variant(variant);
         let descriptor = find_descriptor(class_name, prop_name);
         if descriptor.is_some() {
             // We can only use an ambiguous syntax if the property is known
@@ -116,6 +179,7 @@ impl UnresolvedValue {
     /// Creates an `UnresolvedValue` from a variant, only returning ambiguous
     /// values if they're able to be resolved in a context-free environment.
     pub fn from_variant_unambiguous(variant: Variant) -> Self {
+        let variant = truncate_variant(variant);
         match variant {
             Variant::String(str) => Self::Ambiguous(AmbiguousValue::String(str)),
             Variant::Float64(number) => Self::Ambiguous(AmbiguousValue::Number(number)),

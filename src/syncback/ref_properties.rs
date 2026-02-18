@@ -149,6 +149,17 @@ pub struct RefLinks {
     pub placeholder_to_source_and_target: HashMap<String, (Ref, Ref)>,
 }
 
+impl RefLinks {
+    pub fn remove_ref(&mut self, source: Ref, prop_name: &str) {
+        if let Some(links) = self.path_links.get_mut(&source) {
+            links.retain(|link| link.name.as_str() != prop_name);
+        }
+        if let Some(links) = self.id_links.get_mut(&source) {
+            links.retain(|link| link.name.as_str() != prop_name);
+        }
+    }
+}
+
 #[derive(PartialEq, Eq)]
 struct PathRefLink {
     name: Ustr,

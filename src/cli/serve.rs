@@ -164,6 +164,9 @@ fn build_dom_from_chunks(payload: SyncbackPayload) -> anyhow::Result<WeakDom> {
     for chunk in &payload.services {
         let mut builder = InstanceBuilder::new(&chunk.class_name);
         for (key, value) in &chunk.properties {
+            if !crate::syncback::should_property_serialize(&chunk.class_name, key) {
+                continue;
+            }
             builder = builder.with_property(key.as_str(), value.clone());
         }
         let service_ref = dom.insert(root_ref, builder);

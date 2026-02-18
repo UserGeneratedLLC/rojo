@@ -21,6 +21,9 @@ return function(service: Instance)
 			if SKIP_PROPERTIES[propertyName] then
 				continue
 			end
+			if propertyName == "Attributes" or propertyName == "Tags" then
+				continue
+			end
 
 			local isReadable = propertyMeta.scriptability == "ReadWrite"
 				or propertyMeta.scriptability == "Read"
@@ -49,6 +52,32 @@ return function(service: Instance)
 						properties[propertyName] = encoded
 					end
 				end
+			end
+		end
+	end
+
+	local attrOk, attrMap = pcall(function()
+		return service:GetAttributes()
+	end)
+	if attrOk and attrMap and next(attrMap) then
+		local descriptor = RbxDom.findCanonicalPropertyDescriptor(service.ClassName, "Attributes")
+		if descriptor then
+			local encodeOk, encoded = encodeProperty(service, "Attributes", descriptor)
+			if encodeOk and encoded ~= nil then
+				properties.Attributes = encoded
+			end
+		end
+	end
+
+	local tagOk, tagList = pcall(function()
+		return service:GetTags()
+	end)
+	if tagOk and tagList and #tagList > 0 then
+		local descriptor = RbxDom.findCanonicalPropertyDescriptor(service.ClassName, "Tags")
+		if descriptor then
+			local encodeOk, encoded = encodeProperty(service, "Tags", descriptor)
+			if encodeOk and encoded ~= nil then
+				properties.Tags = encoded
 			end
 		end
 	end
