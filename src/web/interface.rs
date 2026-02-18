@@ -30,12 +30,16 @@ pub const PROTOCOL_VERSION: u64 = 6;
 /// Metadata for a single service in the live syncback request.
 ///
 /// Children are NOT stored here — they live in the top-level `data` blob
-/// (a single rbxm containing all children from all services). `child_count`
-/// tells the server how many consecutive children in that blob belong to
-/// this service.
+/// (a single rbxm containing all children from all services).
 ///
-/// Attributes and Tags are included in `properties` as
-/// `Variant::Attributes(...)` / `Variant::Tags(...)`.
+/// Each service's range in the blob is `child_count + ref_target_count`
+/// consecutive entries. The first `child_count` are real children (parented
+/// to the service). The next `ref_target_count` are ObjectValue carriers
+/// whose `Value` property holds a Ref to the actual target.
+///
+/// `refs` maps property names to 1-based indices into this combined range
+/// (0 = nil). Indices <= child_count point directly to a child instance.
+/// Indices > child_count point to an ObjectValue carrier.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceChunk {
@@ -43,18 +47,11 @@ pub struct ServiceChunk {
     #[serde(default)]
     pub child_count: u32,
     #[serde(default)]
+    pub ref_target_count: u32,
+    #[serde(default)]
     pub properties: HashMap<String, Variant>,
     #[serde(default)]
-    pub refs: HashMap<String, ServiceRef>,
-}
-
-/// Describes a Ref property target by name and class so the server can resolve
-/// it among the service's cloned children.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ServiceRef {
-    pub name: String,
-    pub class_name: String,
+    pub refs: HashMap<String, u32>,
 }
 
 /// Incoming request from the plugin for live syncback.

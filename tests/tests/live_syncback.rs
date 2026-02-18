@@ -204,6 +204,7 @@ fn parity_lighting_properties() {
             ("ClockTime", Variant::Float32(14.5)),
         ],
         vec![],
+        vec![],
         vec![InstanceBuilder::new("PointLight").with_name("TestLight")],
     )];
     assert_live_matches_cli("live_syncback", chunks, None);
@@ -224,6 +225,7 @@ fn parity_soundservice_properties() {
         ],
         vec![],
         vec![],
+        vec![],
     )];
     assert_live_matches_cli("live_syncback", chunks, None);
 }
@@ -235,6 +237,7 @@ fn parity_starterplayer_properties() {
     let chunks = vec![make_service_chunk_full(
         "StarterPlayer",
         vec![("CameraMaxZoomDistance", Variant::Float32(200.0))],
+        vec![],
         vec![],
         vec![],
     )];
@@ -253,6 +256,7 @@ fn parity_textchatservice_properties() {
         )],
         vec![],
         vec![],
+        vec![],
     )];
     assert_live_matches_cli("live_syncback", chunks, None);
 }
@@ -269,6 +273,7 @@ fn parity_childless_service_with_properties() {
         )],
         vec![],
         vec![],
+        vec![],
     )];
     assert_live_matches_cli("live_syncback", chunks, None);
 }
@@ -283,6 +288,7 @@ fn parity_service_properties_with_children() {
             ("Ambient", Variant::Color3(Color3::new(0.3, 0.3, 0.3))),
             ("Brightness", Variant::Float32(3.0)),
         ],
+        vec![],
         vec![],
         vec![
             InstanceBuilder::new("PointLight").with_name("LightA"),
@@ -304,10 +310,12 @@ fn parity_multiple_services_with_properties() {
             vec![("Ambient", Variant::Color3(Color3::new(0.2, 0.2, 0.2)))],
             vec![],
             vec![],
+            vec![],
         ),
         make_service_chunk_full(
             "SoundService",
             vec![("DistanceFactor", Variant::Float32(10.0))],
+            vec![],
             vec![],
             vec![],
         ),
@@ -345,16 +353,22 @@ fn parity_cross_service_refs() {
 
 #[test]
 fn parity_camera_not_synced() {
+    use rbx_dom_weak::types::Variant;
+
     let camera_child = InstanceBuilder::new("Camera").with_name("Camera");
+    let camera_carrier = InstanceBuilder::new("ObjectValue")
+        .with_name("CurrentCamera")
+        .with_property("Value", Variant::Ref(camera_child.referent()));
     let entries = vec![make_service_chunk_full(
         "Workspace",
         vec![],
-        vec![("CurrentCamera", "Camera", "Camera")],
+        vec![("CurrentCamera", 1)],
+        vec![camera_carrier],
         vec![
             camera_child,
             InstanceBuilder::new("Part")
                 .with_name("Floor")
-                .with_property("Anchored", rbx_dom_weak::types::Variant::Bool(true)),
+                .with_property("Anchored", Variant::Bool(true)),
         ],
     )];
     let (data, chunks) = build_syncback_request(entries);
@@ -654,26 +668,46 @@ fn roundtrip_build_syncback_rebuild() {
         let (_build_dir, rbxl_path_a) = run_rojo_build(session.path(), "build_a.rbxl");
         let rbxl_data_a = fs::read(&rbxl_path_a).unwrap();
 
-        let dom_a = rbx_binary::from_reader(Cursor::new(&rbxl_data_a)).unwrap();
+        let mut dom_a = rbx_binary::from_reader(Cursor::new(&rbxl_data_a)).unwrap();
         let mut all_child_refs = Vec::new();
         let mut chunks = Vec::new();
-        for &service_ref in dom_a.root().children() {
+        let service_refs: Vec<rbx_dom_weak::types::Ref> =
+            dom_a.root().children().to_vec();
+        for &service_ref in &service_refs {
+            let child_refs: Vec<rbx_dom_weak::types::Ref> = dom_a
+                .get_by_ref(service_ref)
+                .unwrap()
+                .children()
+                .to_vec();
+
             let service = dom_a.get_by_ref(service_ref).unwrap();
-            let child_refs: Vec<rbx_dom_weak::types::Ref> = service.children().to_vec();
+            let service_props: Vec<(String, rbx_dom_weak::types::Variant)> = service
+                .properties
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.clone()))
+                .collect();
+            let service_class = service.class.to_string();
 
             let mut properties = std::collections::HashMap::new();
-            let mut refs_map = std::collections::HashMap::new();
-            for (key, value) in &service.properties {
+            let mut refs_map: std::collections::HashMap<String, u32> =
+                std::collections::HashMap::new();
+            let mut carrier_refs: Vec<rbx_dom_weak::types::Ref> = Vec::new();
+
+            for (key, value) in &service_props {
                 match value {
                     rbx_dom_weak::types::Variant::Ref(target) => {
-                        if let Some(target_inst) = dom_a.get_by_ref(*target) {
-                            refs_map.insert(
-                                key.to_string(),
-                                librojo::web_api::ServiceRef {
-                                    name: target_inst.name.to_string(),
-                                    class_name: target_inst.class.to_string(),
-                                },
-                            );
+                        if !target.is_none() && dom_a.get_by_ref(*target).is_some() {
+                            let carrier = rbx_dom_weak::InstanceBuilder::new("ObjectValue")
+                                .with_name(key.as_str())
+                                .with_property(
+                                    "Value",
+                                    rbx_dom_weak::types::Variant::Ref(*target),
+                                );
+                            let carrier_ref =
+                                dom_a.insert(dom_a.root_ref(), carrier);
+                            carrier_refs.push(carrier_ref);
+                            refs_map
+                                .insert(key.to_string(), carrier_refs.len() as u32);
                         }
                     }
                     _ => {
@@ -683,12 +717,14 @@ fn roundtrip_build_syncback_rebuild() {
             }
 
             chunks.push(librojo::web_api::ServiceChunk {
-                class_name: service.class.to_string(),
+                class_name: service_class,
                 child_count: child_refs.len() as u32,
+                ref_target_count: carrier_refs.len() as u32,
                 properties,
                 refs: refs_map,
             });
             all_child_refs.extend(child_refs);
+            all_child_refs.extend(carrier_refs);
         }
 
         let mut data = Vec::new();

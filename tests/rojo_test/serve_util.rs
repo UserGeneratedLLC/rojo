@@ -523,11 +523,13 @@ fn get_port_number() -> usize {
     port
 }
 
-/// A service entry plus its children (before serialization into the shared
-/// rbxm blob). Use `build_syncback_request` to finalize.
+/// A service entry plus its children and ObjectValue ref carriers (before
+/// serialization into the shared rbxm blob). Use `build_syncback_request`
+/// to finalize.
 pub struct ServiceEntry {
     pub chunk: librojo::web_api::ServiceChunk,
     pub children: Vec<rbx_dom_weak::InstanceBuilder>,
+    pub ref_targets: Vec<rbx_dom_weak::InstanceBuilder>,
 }
 
 /// Build a ServiceEntry with children and no extra properties.
@@ -535,14 +537,16 @@ pub fn make_service_chunk(
     class_name: &str,
     children: Vec<rbx_dom_weak::InstanceBuilder>,
 ) -> ServiceEntry {
-    make_service_chunk_full(class_name, vec![], vec![], children)
+    make_service_chunk_full(class_name, vec![], vec![], vec![], children)
 }
 
-/// Build a ServiceEntry with explicit service-level properties and ref hints.
+/// Build a ServiceEntry with explicit service-level properties, ObjectValue
+/// ref carriers, and refs (1-based indices into `ref_targets`).
 pub fn make_service_chunk_full(
     class_name: &str,
     properties: Vec<(&str, rbx_dom_weak::types::Variant)>,
-    refs: Vec<(&str, &str, &str)>,
+    refs: Vec<(&str, u32)>,
+    ref_targets: Vec<rbx_dom_weak::InstanceBuilder>,
     children: Vec<rbx_dom_weak::InstanceBuilder>,
 ) -> ServiceEntry {
     use std::collections::HashMap;
@@ -551,27 +555,21 @@ pub fn make_service_chunk_full(
         .into_iter()
         .map(|(k, v)| (k.to_string(), v))
         .collect();
-    let refs_map: HashMap<String, librojo::web_api::ServiceRef> = refs
+    let refs_map: HashMap<String, u32> = refs
         .into_iter()
-        .map(|(prop, name, class)| {
-            (
-                prop.to_string(),
-                librojo::web_api::ServiceRef {
-                    name: name.to_string(),
-                    class_name: class.to_string(),
-                },
-            )
-        })
+        .map(|(prop, idx)| (prop.to_string(), idx))
         .collect();
 
     ServiceEntry {
         chunk: librojo::web_api::ServiceChunk {
             class_name: class_name.to_string(),
             child_count: children.len() as u32,
+            ref_target_count: ref_targets.len() as u32,
             properties: props_map,
             refs: refs_map,
         },
         children,
+        ref_targets,
     }
 }
 
@@ -586,9 +584,13 @@ pub fn build_syncback_request(
     let root = dom.root_ref();
 
     let mut chunks = Vec::new();
-    for entry in entries {
+    for mut entry in entries {
         for child in entry.children {
             dom.insert(root, child);
+        }
+        entry.chunk.ref_target_count = entry.ref_targets.len() as u32;
+        for carrier in entry.ref_targets {
+            dom.insert(root, carrier);
         }
         chunks.push(entry.chunk);
     }
@@ -662,29 +664,41 @@ pub fn make_rbxl_from_chunks(
         }
         let service_ref = dom.insert(root_ref, builder);
 
-        let count = chunk.child_count as usize;
-        let end = (cursor + count).min(cloned_children.len());
-        for &child_ref in &cloned_children[cursor..end] {
+        let child_count = chunk.child_count as usize;
+        let ref_count = chunk.ref_target_count as usize;
+        let total = child_count + ref_count;
+        let end = (cursor + total).min(cloned_children.len());
+        let service_range: Vec<Ref> = cloned_children[cursor..end].to_vec();
+
+        for &child_ref in &service_range[..child_count.min(service_range.len())] {
             dom.transfer_within(child_ref, service_ref);
         }
-        cursor = end;
 
-        if !chunk.refs.is_empty() {
-            let children: Vec<Ref> = dom.get_by_ref(service_ref).unwrap().children().to_vec();
-            for (prop_name, target) in &chunk.refs {
-                let found = children.iter().find(|&&child_ref| {
-                    let child = dom.get_by_ref(child_ref).unwrap();
-                    child.name.as_str() == target.name
-                        && child.class.as_str() == target.class_name
-                });
-                if let Some(&child_ref) = found {
-                    let service = dom.get_by_ref_mut(service_ref).unwrap();
-                    service
-                        .properties
-                        .insert(prop_name.as_str().into(), Variant::Ref(child_ref));
-                }
+        let carrier_start = child_count;
+        let carrier_end = service_range.len();
+        let carriers: Vec<Ref> = service_range[carrier_start..carrier_end].to_vec();
+
+        for (prop_name, &idx) in &chunk.refs {
+            if idx == 0 || (idx as usize) > carriers.len() {
+                continue;
+            }
+            let carrier_ref = carriers[idx as usize - 1];
+            if let Some(Variant::Ref(actual_target)) = dom
+                .get_by_ref(carrier_ref)
+                .and_then(|inst| inst.properties.get(&rbx_dom_weak::ustr("Value")).cloned())
+            {
+                let service = dom.get_by_ref_mut(service_ref).unwrap();
+                service
+                    .properties
+                    .insert(prop_name.as_str().into(), Variant::Ref(actual_target));
             }
         }
+
+        for carrier_ref in carriers {
+            dom.destroy(carrier_ref);
+        }
+
+        cursor = end;
     }
 
     let existing: std::collections::HashSet<String> =

@@ -10,12 +10,11 @@ use serde::{Deserialize, Serialize};
 
 use crate::REF_PATH_ATTRIBUTE_PREFIX;
 
-/// Truncates float components of Variant types to f32 precision, matching the
-/// rbxl binary format which stores most float properties as Float32.
+/// Rounds float components of Variant types to 6 decimal places.
+/// Uses format-and-reparse for exact decimal representation in json5 output.
 fn truncate_variant(v: Variant) -> Variant {
-    #[inline]
     fn t(v: f32) -> f32 {
-        v as f64 as f32
+        format!("{:.6}", v).parse::<f32>().unwrap_or(v)
     }
 
     match v {
@@ -66,8 +65,6 @@ fn truncate_variant(v: Variant) -> Variant {
             rbx_dom_weak::types::UDim::new(t(u.x.scale), u.x.offset),
             rbx_dom_weak::types::UDim::new(t(u.y.scale), u.y.offset),
         )),
-        Variant::Float32(n) => Variant::Float32(n as f64 as f32),
-        Variant::Float64(n) => Variant::Float64(n as f32 as f64),
         other => other,
     }
 }

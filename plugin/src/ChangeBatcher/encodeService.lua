@@ -11,14 +11,24 @@ local SKIP_PROPERTIES = {
 	Archivable = true,
 }
 
+local EXCLUDE_PROPERTIES = {
+	Lighting = { ClockTime = true },
+}
+
 return function(service: Instance)
 	local properties = {}
 	local refs = {}
+	local children = service:GetChildren()
+	local refTargets = {}
 
 	local classDescriptor = RbxDom.findClassDescriptor(service.ClassName)
 	if classDescriptor then
+		local classExcludes = EXCLUDE_PROPERTIES[service.ClassName]
 		for propertyName, propertyMeta in pairs(classDescriptor.properties) do
 			if SKIP_PROPERTIES[propertyName] then
+				continue
+			end
+			if classExcludes and classExcludes[propertyName] then
 				continue
 			end
 			if propertyName == "Attributes" or propertyName == "Tags" then
@@ -38,11 +48,12 @@ return function(service: Instance)
 
 					if descriptor.dataType == "Ref" then
 						local readOk, target = descriptor:read(service)
-						if readOk and target and target.Parent == service then
-							refs[propertyName] = {
-								name = target.Name,
-								className = target.ClassName,
-							}
+						if readOk and target then
+							local carrier = Instance.new("ObjectValue")
+							carrier.Name = propertyName
+							carrier.Value = target
+							table.insert(refTargets, carrier)
+							refs[propertyName] = #refTargets
 						end
 						continue
 					end
@@ -84,7 +95,8 @@ return function(service: Instance)
 
 	local chunk = {
 		className = service.ClassName,
-		childCount = #service:GetChildren(),
+		childCount = #children,
+		refTargetCount = #refTargets,
 	}
 	if next(properties) then
 		chunk.properties = properties
@@ -92,5 +104,5 @@ return function(service: Instance)
 	if next(refs) then
 		chunk.refs = refs
 	end
-	return chunk
+	return chunk, refTargets
 end

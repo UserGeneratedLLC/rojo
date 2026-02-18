@@ -161,6 +161,9 @@ fn build_dom_from_chunks(payload: SyncbackPayload) -> anyhow::Result<WeakDom> {
     };
 
     let mut cursor = 0usize;
+    let mut all_carriers: Vec<Ref> = Vec::new();
+    let mut deferred_refs: Vec<(Ref, Vec<(String, Ref)>)> = Vec::new();
+
     for chunk in &payload.services {
         let mut builder = InstanceBuilder::new(&chunk.class_name);
         for (key, value) in &chunk.properties {
@@ -172,29 +175,33 @@ fn build_dom_from_chunks(payload: SyncbackPayload) -> anyhow::Result<WeakDom> {
         let service_ref = dom.insert(root_ref, builder);
         created_services.insert(chunk.class_name.clone());
 
-        let count = chunk.child_count as usize;
-        let end = (cursor + count).min(cloned_children.len());
-        for &child_ref in &cloned_children[cursor..end] {
+        let child_count = chunk.child_count as usize;
+        let ref_count = chunk.ref_target_count as usize;
+        let total = child_count + ref_count;
+        let end = (cursor + total).min(cloned_children.len());
+        let service_range: Vec<Ref> = cloned_children[cursor..end].to_vec();
+
+        for &child_ref in &service_range[..child_count.min(service_range.len())] {
             dom.transfer_within(child_ref, service_ref);
         }
-        cursor = end;
 
-        if !chunk.refs.is_empty() {
-            let children: Vec<Ref> = dom.get_by_ref(service_ref).unwrap().children().to_vec();
-            for (prop_name, target) in &chunk.refs {
-                let found = children.iter().find(|&&child_ref| {
-                    let child = dom.get_by_ref(child_ref).unwrap();
-                    child.name.as_str() == target.name
-                        && child.class.as_str() == target.class_name
-                });
-                if let Some(&child_ref) = found {
-                    let service = dom.get_by_ref_mut(service_ref).unwrap();
-                    service
-                        .properties
-                        .insert(prop_name.as_str().into(), Variant::Ref(child_ref));
-                }
+        let carrier_start = child_count;
+        let carrier_end = service_range.len();
+        let carriers = &service_range[carrier_start..carrier_end];
+
+        let mut ref_entries: Vec<(String, Ref)> = Vec::new();
+        for (prop_name, &idx) in &chunk.refs {
+            if idx == 0 || (idx as usize) > carriers.len() {
+                continue;
             }
+            ref_entries.push((prop_name.clone(), carriers[idx as usize - 1]));
         }
+        if !ref_entries.is_empty() {
+            deferred_refs.push((service_ref, ref_entries));
+        }
+
+        all_carriers.extend_from_slice(carriers);
+        cursor = end;
     }
 
     for &service_name in VISIBLE_SERVICES {
@@ -204,6 +211,25 @@ fn build_dom_from_chunks(payload: SyncbackPayload) -> anyhow::Result<WeakDom> {
     }
 
     fixup_ref_properties(&mut dom, &global_ref_map);
+
+    for (service_ref, ref_entries) in deferred_refs {
+        for (prop_name, carrier_ref) in ref_entries {
+            if let Some(Variant::Ref(actual_target)) =
+                dom.get_by_ref(carrier_ref).and_then(|inst| {
+                    inst.properties.get(&rbx_dom_weak::ustr("Value")).cloned()
+                })
+            {
+                let service = dom.get_by_ref_mut(service_ref).unwrap();
+                service
+                    .properties
+                    .insert(prop_name.as_str().into(), Variant::Ref(actual_target));
+            }
+        }
+    }
+
+    for carrier_ref in all_carriers {
+        dom.destroy(carrier_ref);
+    }
 
     Ok(dom)
 }

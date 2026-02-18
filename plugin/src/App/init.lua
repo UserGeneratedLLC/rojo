@@ -642,12 +642,17 @@ function App:performSyncback()
 
 	local services = {}
 	local allChildren = {}
+	local allCarriers = {}
 	for _, className in SYNCBACK_SERVICES do
 		local ok, service = pcall(game.FindService, game, className)
 		if ok and service then
-			local chunk = encodeService(service)
+			local chunk, refTargets = encodeService(service)
 			for _, child in service:GetChildren() do
 				table.insert(allChildren, child)
+			end
+			for _, carrier in refTargets do
+				table.insert(allChildren, carrier)
+				table.insert(allCarriers, carrier)
 			end
 			table.insert(services, chunk)
 		end
@@ -656,6 +661,10 @@ function App:performSyncback()
 	local data = buffer.create(0)
 	if #allChildren > 0 then
 		data = SerializationService:SerializeInstancesAsync(allChildren)
+	end
+
+	for _, carrier in allCarriers do
+		carrier:Destroy()
 	end
 
 	local url = ("http://%s:%s/api/syncback"):format(host, port)
