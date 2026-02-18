@@ -151,7 +151,13 @@ fn build_dom_from_chunks(payload: SyncbackPayload) -> anyhow::Result<WeakDom> {
 
         let mut cloned = Vec::new();
         for &child_ref in chunk_dom.root().children() {
-            deep_clone_into(&chunk_dom, &mut dom, child_ref, root_ref, &mut global_ref_map);
+            deep_clone_into(
+                &chunk_dom,
+                &mut dom,
+                child_ref,
+                root_ref,
+                &mut global_ref_map,
+            );
             let new_ref = *global_ref_map.get(&child_ref).unwrap();
             cloned.push(new_ref);
         }
@@ -214,10 +220,9 @@ fn build_dom_from_chunks(payload: SyncbackPayload) -> anyhow::Result<WeakDom> {
 
     for (service_ref, ref_entries) in deferred_refs {
         for (prop_name, carrier_ref) in ref_entries {
-            if let Some(Variant::Ref(actual_target)) =
-                dom.get_by_ref(carrier_ref).and_then(|inst| {
-                    inst.properties.get(&rbx_dom_weak::ustr("Value")).cloned()
-                })
+            if let Some(Variant::Ref(actual_target)) = dom
+                .get_by_ref(carrier_ref)
+                .and_then(|inst| inst.properties.get(&rbx_dom_weak::ustr("Value")).cloned())
             {
                 let service = dom.get_by_ref_mut(service_ref).unwrap();
                 service

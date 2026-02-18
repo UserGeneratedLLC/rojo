@@ -127,20 +127,34 @@ pub fn from_slice_with_context<T: DeserializeOwned>(
 }
 
 fn trim_float(s: &str) -> String {
-    if !s.contains('.') { return s.to_string(); }
+    if !s.contains('.') {
+        return s.to_string();
+    }
     let s = s.trim_end_matches('0').trim_end_matches('.');
-    if s == "-0" { "0".to_string() } else { s.to_string() }
+    if s == "-0" {
+        "0".to_string()
+    } else {
+        s.to_string()
+    }
 }
 
 fn format_f32(v: f32) -> String {
-    if v.is_nan() { return "NaN".to_string(); }
-    if v.is_infinite() { return if v > 0.0 { "Infinity" } else { "-Infinity" }.to_string(); }
+    if v.is_nan() {
+        return "NaN".to_string();
+    }
+    if v.is_infinite() {
+        return if v > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
+    }
     trim_float(&format!("{:.6}", v))
 }
 
 fn format_f64(v: f64) -> String {
-    if v.is_nan() { return "NaN".to_string(); }
-    if v.is_infinite() { return if v > 0.0 { "Infinity" } else { "-Infinity" }.to_string(); }
+    if v.is_nan() {
+        return "NaN".to_string();
+    }
+    if v.is_infinite() {
+        return if v > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
+    }
     trim_float(&format!("{:.15}", v))
 }
 

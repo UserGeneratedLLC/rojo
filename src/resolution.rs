@@ -78,15 +78,9 @@ impl UnresolvedValue {
                     _ => return Self::FullyQualified(variant),
                 },
                 Variant::ContentId(content) => AmbiguousValue::String(content.into_string()),
-                Variant::Vector2(vector) => {
-                    AmbiguousValue::Array2([vector.x, vector.y])
-                }
-                Variant::Vector3(vector) => {
-                    AmbiguousValue::Array3([vector.x, vector.y, vector.z])
-                }
-                Variant::Color3(color) => {
-                    AmbiguousValue::Array3([color.r, color.g, color.b])
-                }
+                Variant::Vector2(vector) => AmbiguousValue::Array2([vector.x, vector.y]),
+                Variant::Vector3(vector) => AmbiguousValue::Array3([vector.x, vector.y, vector.z]),
+                Variant::Color3(color) => AmbiguousValue::Array3([color.r, color.g, color.b]),
                 Variant::CFrame(cf) => AmbiguousValue::Array12([
                     cf.position.x,
                     cf.position.y,
@@ -197,7 +191,7 @@ impl AmbiguousValue {
             DataType::Value(variant_ty) => match (variant_ty, self) {
                 (VariantType::Bool, AmbiguousValue::Bool(value)) => Ok(value.into()),
 
-                (VariantType::Float32, AmbiguousValue::Number32(value)) => Ok((value as f32).into()),
+                (VariantType::Float32, AmbiguousValue::Number32(value)) => Ok(value.into()),
                 (VariantType::Float32, AmbiguousValue::Number(value)) => Ok((value as f32).into()),
                 (VariantType::Float64, AmbiguousValue::Number(value)) => Ok(value.into()),
                 (VariantType::Int32, AmbiguousValue::Number(value)) => Ok((value as i32).into()),
@@ -215,19 +209,19 @@ impl AmbiguousValue {
                 }
 
                 (VariantType::Vector2, AmbiguousValue::Array2(value)) => {
-                    Ok(Vector2::new(value[0] as f32, value[1] as f32).into())
+                    Ok(Vector2::new(value[0], value[1]).into())
                 }
 
                 (VariantType::Vector3, AmbiguousValue::Array3(value)) => {
-                    Ok(Vector3::new(value[0] as f32, value[1] as f32, value[2] as f32).into())
+                    Ok(Vector3::new(value[0], value[1], value[2]).into())
                 }
 
                 (VariantType::Color3, AmbiguousValue::Array3(value)) => {
-                    Ok(Color3::new(value[0] as f32, value[1] as f32, value[2] as f32).into())
+                    Ok(Color3::new(value[0], value[1], value[2]).into())
                 }
 
                 (VariantType::CFrame, AmbiguousValue::Array12(value)) => {
-                    let value = value.map(|v| v as f32);
+                    let value = value.map(|v| v);
                     let pos = Vector3::new(value[0], value[1], value[2]);
                     let orientation = Matrix3::new(
                         Vector3::new(value[3], value[4], value[5]),

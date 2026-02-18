@@ -12,11 +12,7 @@ use crate::rojo_test::{
 
 use librojo::web_api::{SocketPacketType, PROTOCOL_VERSION};
 
-fn assert_live_matches_cli(
-    fixture_name: &str,
-    entries: Vec<ServiceEntry>,
-    place_id: Option<u64>,
-) {
+fn assert_live_matches_cli(fixture_name: &str, entries: Vec<ServiceEntry>, place_id: Option<u64>) {
     let (data, chunks) = build_syncback_request(entries);
     run_serve_test(fixture_name, |session, _| {
         session.post_api_syncback(place_id, data.clone(), chunks.clone());
@@ -671,14 +667,10 @@ fn roundtrip_build_syncback_rebuild() {
         let mut dom_a = rbx_binary::from_reader(Cursor::new(&rbxl_data_a)).unwrap();
         let mut all_child_refs = Vec::new();
         let mut chunks = Vec::new();
-        let service_refs: Vec<rbx_dom_weak::types::Ref> =
-            dom_a.root().children().to_vec();
+        let service_refs: Vec<rbx_dom_weak::types::Ref> = dom_a.root().children().to_vec();
         for &service_ref in &service_refs {
-            let child_refs: Vec<rbx_dom_weak::types::Ref> = dom_a
-                .get_by_ref(service_ref)
-                .unwrap()
-                .children()
-                .to_vec();
+            let child_refs: Vec<rbx_dom_weak::types::Ref> =
+                dom_a.get_by_ref(service_ref).unwrap().children().to_vec();
 
             let service = dom_a.get_by_ref(service_ref).unwrap();
             let service_props: Vec<(String, rbx_dom_weak::types::Variant)> = service
@@ -699,15 +691,10 @@ fn roundtrip_build_syncback_rebuild() {
                         if !target.is_none() && dom_a.get_by_ref(*target).is_some() {
                             let carrier = rbx_dom_weak::InstanceBuilder::new("ObjectValue")
                                 .with_name(key.as_str())
-                                .with_property(
-                                    "Value",
-                                    rbx_dom_weak::types::Variant::Ref(*target),
-                                );
-                            let carrier_ref =
-                                dom_a.insert(dom_a.root_ref(), carrier);
+                                .with_property("Value", rbx_dom_weak::types::Variant::Ref(*target));
+                            let carrier_ref = dom_a.insert(dom_a.root_ref(), carrier);
                             carrier_refs.push(carrier_ref);
-                            refs_map
-                                .insert(key.to_string(), carrier_refs.len() as u32);
+                            refs_map.insert(key.to_string(), carrier_refs.len() as u32);
                         }
                     }
                     _ => {

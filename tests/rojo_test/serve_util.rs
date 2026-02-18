@@ -606,10 +606,7 @@ pub fn build_syncback_request(
 
 /// Build a complete rbxl file from the single-rbxm data blob + service
 /// chunks, mirroring the same data that live syncback receives.
-pub fn make_rbxl_from_chunks(
-    data: &[u8],
-    chunks: &[librojo::web_api::ServiceChunk],
-) -> Vec<u8> {
+pub fn make_rbxl_from_chunks(data: &[u8], chunks: &[librojo::web_api::ServiceChunk]) -> Vec<u8> {
     use rbx_dom_weak::types::Variant;
     use rbx_dom_weak::WeakDom;
     use std::collections::HashMap;
