@@ -37,12 +37,15 @@ pub struct ServiceChunk {
 }
 
 /// Incoming request from the plugin for live syncback.
+/// Numeric fields use `f64` because Luau has no integer type -- all numbers
+/// are IEEE 754 doubles, and large values (like place IDs) get encoded as
+/// msgpack float64 which rmp_serde cannot coerce into u64.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncbackRequest {
-    pub protocol_version: u64,
+    pub protocol_version: f64,
     pub server_version: String,
-    pub place_id: Option<u64>,
+    pub place_id: Option<f64>,
     pub services: Vec<ServiceChunk>,
 }
 

@@ -194,11 +194,12 @@ async fn handle_api_syncback(
         }
     };
 
-    if syncback_request.protocol_version != PROTOCOL_VERSION {
+    let client_protocol = syncback_request.protocol_version as u64;
+    if client_protocol != PROTOCOL_VERSION {
         return msgpack(
             ErrorResponse::bad_request(format!(
                 "Protocol version mismatch: expected {}, got {}",
-                PROTOCOL_VERSION, syncback_request.protocol_version
+                PROTOCOL_VERSION, client_protocol
             )),
             StatusCode::BAD_REQUEST,
         );
@@ -219,7 +220,8 @@ async fn handle_api_syncback(
         );
     }
 
-    if let Some(place_id) = syncback_request.place_id {
+    if let Some(place_id_f64) = syncback_request.place_id {
+        let place_id = place_id_f64 as u64;
         if let Some(expected) = service.serve_session.serve_place_ids() {
             if !expected.contains(&place_id) {
                 return msgpack(
