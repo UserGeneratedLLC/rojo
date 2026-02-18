@@ -348,6 +348,7 @@ mod test {
             added_instances: Vec::new(),
             removed_instances: Vec::new(),
             stage_ids: std::collections::HashSet::new(),
+            stage_paths: Vec::new(),
         };
 
         assert_eq!(patch_set, expected_patch_set);
@@ -399,6 +400,7 @@ mod test {
             updated_instances: Vec::new(),
             removed_instances: Vec::new(),
             stage_ids: std::collections::HashSet::new(),
+            stage_paths: Vec::new(),
         };
 
         assert_eq!(patch_set, expected_patch_set);

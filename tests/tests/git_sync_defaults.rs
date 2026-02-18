@@ -17,7 +17,7 @@ use std::process::Command;
 use std::time::Duration;
 use std::{fs, thread};
 
-use librojo::web_api::{AddedInstance, InstanceUpdate, WriteRequest};
+use librojo::web_api::{InstanceUpdate, WriteRequest};
 use rbx_dom_weak::types::{Ref, Variant};
 use rbx_dom_weak::{ustr, UstrMap};
 
