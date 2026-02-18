@@ -31,6 +31,46 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+* Implement ambiguous path handling in the Reconciler with a 3-pass matching algorithm (exact match, property-weighted scoring, recursive change-count) that correctly reconciles instances when multiple children share the same name.
+* Add default property caching and enhance property comparison logic for more accurate instance matching during reconciliation.
+* Implement recursive change-count matching as a tiebreaker when property-weighted scoring produces ambiguous results.
+* Refactor Reconciler equality checks and path handling for robustness with duplicate-named siblings.
+* Refactor descendant search functions for `WeakDom` and `RojoTree` to support the new matching algorithm.
+* Expose `snapshot`, `syncback`, and `variant_eq` modules publicly and add integration tests for the matching algorithm.
+* Update ChangeBatcher tests to reflect encoding behavior for duplicate-named children.
+* Enhance deduplication processes and refactor code for improved readability and consistency.
+* Update rbx-dom subproject and reflection database.
+
+<details>
+<summary>Full commit log</summary>
+
+- `ba117f3a` Enhance Reconciler robustness and review dialogue compliance
+- `9d57c8d6` Add support for Ambiguous Path Handling
+- `cc77a2cd` Add comprehensive plan for Ambiguous Path Handling
+- `d6162ac2` Complete implementation of the 3-pass matching algorithm for ambiguous path handling
+- `e313f615` Refactor ChangeBatcher tests to remove skipped count checks
+- `4cb45cd6` Add audit plan for Ambiguous Path Handling feature
+- `1a1d9ce8` Implement new recursive change-count matching algorithm for instance reconciliation
+- `3ad3c21c` Add ref path and dedup integration plan
+- `bb9d2412` Refactor Reconciler tests and update path handling logic
+- `aabbfb23` Update ChangeBatcher tests to reflect encoding behavior for duplicate-named children
+- `e207a398` Refactor Reconciler equality checks and enhance path handling
+- `f2cdb059` Add audit plans for ambiguous paths fixes and follow-up actions
+- `ff48e059` Enhance audit plan for ambiguous paths follow-up actions
+- `ed1f61c0` Complete audit plan updates and enhance deduplication processes
+- `31350cd7` Consolidate glob patterns in MDC files for improved clarity
+- `cc2c8287` update rules
+- `85787f34` Refactor code for improved readability and consistency
+- `0afe6be4` Update reflection database and enhance deduplication processes
+- `e54f5ef4` Update rbx-dom subproject to latest commit for improved functionality
+- `9c6966ac` Add default properties caching and update matching logic
+- `d45b1c5b` Enhance property comparison and caching mechanisms
+- `b6e34b9e` Expose snapshot, syncback, and variant_eq modules publicly; add integration tests for matching algorithm
+- `21b3ee45` Refactor descendant search functions for WeakDom and RojoTree
+- `6ef81cf8` Refactor matching logic for improved readability and consistency
+
+</details>
+
 ## [8.3.0] (February 15th, 2026)
 
 * Add two-way sync support for Ref properties via `Rojo_Ref_*` attributes. The plugin now detects Ref property changes in Studio and encodes them as path-based attributes; the server resolves paths back to instance Refs. ([#2])
