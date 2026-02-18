@@ -758,4 +758,150 @@ mod tests {
             assert_eq!(a, b);
         }
     }
+
+    #[test]
+    fn total_cost_zero_identical() {
+        let (new_dom, new_root, _, _) = build_test_dom();
+        let (old_dom, old_root, _, _) = build_test_dom();
+
+        let new_children: Vec<Ref> = new_dom.get_by_ref(new_root).unwrap().children().to_vec();
+        let old_children: Vec<Ref> = old_dom.get_by_ref(old_root).unwrap().children().to_vec();
+
+        let result = match_children(
+            &new_children,
+            &old_children,
+            &new_dom,
+            &old_dom,
+            None,
+            None,
+            &MatchingSession::new(),
+        );
+        assert_eq!(result.matched.len(), 2);
+        assert_eq!(
+            result.total_cost, 0,
+            "Identical instances should have zero cost"
+        );
+    }
+
+    #[test]
+    fn total_cost_nonzero_different() {
+        use rbx_dom_weak::types::Variant;
+
+        let mut new_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let new_root = new_dom.root_ref();
+        new_dom.insert(
+            new_root,
+            InstanceBuilder::new("Part")
+                .with_name("P")
+                .with_property("Transparency", Variant::Float32(0.5)),
+        );
+
+        let mut old_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let old_root = old_dom.root_ref();
+        old_dom.insert(
+            old_root,
+            InstanceBuilder::new("Part")
+                .with_name("P")
+                .with_property("Transparency", Variant::Float32(0.0)),
+        );
+
+        let new_children: Vec<Ref> = new_dom.get_by_ref(new_root).unwrap().children().to_vec();
+        let old_children: Vec<Ref> = old_dom.get_by_ref(old_root).unwrap().children().to_vec();
+
+        let result = match_children(
+            &new_children,
+            &old_children,
+            &new_dom,
+            &old_dom,
+            None,
+            None,
+            &MatchingSession::new(),
+        );
+        assert_eq!(result.matched.len(), 1);
+        assert!(
+            result.total_cost > 0,
+            "Different properties should produce nonzero cost, got {}",
+            result.total_cost
+        );
+    }
+
+    #[test]
+    fn total_cost_includes_unmatched() {
+        let mut new_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let new_root = new_dom.root_ref();
+        new_dom.insert(
+            new_root,
+            InstanceBuilder::new("Folder").with_name("A"),
+        );
+        new_dom.insert(
+            new_root,
+            InstanceBuilder::new("Folder").with_name("B"),
+        );
+        new_dom.insert(
+            new_root,
+            InstanceBuilder::new("Folder").with_name("C"),
+        );
+
+        let mut old_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let old_root = old_dom.root_ref();
+        old_dom.insert(
+            old_root,
+            InstanceBuilder::new("Folder").with_name("A"),
+        );
+        old_dom.insert(
+            old_root,
+            InstanceBuilder::new("Folder").with_name("B"),
+        );
+
+        let new_children: Vec<Ref> = new_dom.get_by_ref(new_root).unwrap().children().to_vec();
+        let old_children: Vec<Ref> = old_dom.get_by_ref(old_root).unwrap().children().to_vec();
+
+        let result = match_children(
+            &new_children,
+            &old_children,
+            &new_dom,
+            &old_dom,
+            None,
+            None,
+            &MatchingSession::new(),
+        );
+        assert_eq!(result.matched.len(), 2);
+        assert_eq!(result.unmatched_new.len(), 1);
+        assert!(
+            result.total_cost >= UNMATCHED_PENALTY,
+            "Should include penalty for unmatched, got {}",
+            result.total_cost
+        );
+    }
+
+    #[test]
+    fn session_cache_consistent_syncback() {
+        let (new_dom, new_root, _, _) = build_test_dom();
+        let (old_dom, old_root, _, _) = build_test_dom();
+
+        let new_children: Vec<Ref> = new_dom.get_by_ref(new_root).unwrap().children().to_vec();
+        let old_children: Vec<Ref> = old_dom.get_by_ref(old_root).unwrap().children().to_vec();
+        let session = MatchingSession::new();
+
+        let r1 = match_children(
+            &new_children,
+            &old_children,
+            &new_dom,
+            &old_dom,
+            None,
+            None,
+            &session,
+        );
+        let r2 = match_children(
+            &new_children,
+            &old_children,
+            &new_dom,
+            &old_dom,
+            None,
+            None,
+            &session,
+        );
+        assert_eq!(r1.matched.len(), r2.matched.len());
+        assert_eq!(r1.total_cost, r2.total_cost);
+    }
 }

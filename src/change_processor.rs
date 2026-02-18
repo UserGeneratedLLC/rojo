@@ -83,6 +83,7 @@ impl ChangeProcessor {
         suppressed_paths: Arc<Mutex<std::collections::HashMap<PathBuf, (usize, usize)>>>,
         ref_path_index: Arc<Mutex<crate::RefPathIndex>>,
         project_root: PathBuf,
+        project_file_path: PathBuf,
         critical_error_receiver: Option<Receiver<memofs::WatcherCriticalError>>,
         git_repo_root: Option<PathBuf>,
     ) -> Self {
@@ -95,6 +96,8 @@ impl ChangeProcessor {
         // Canonicalize project_root so path comparisons work with the
         // \\?\ prefix that std::fs::canonicalize adds on Windows.
         let project_root = std::fs::canonicalize(&project_root).unwrap_or(project_root);
+        let project_file_path =
+            std::fs::canonicalize(&project_file_path).unwrap_or(project_file_path);
         let task = JobThreadContext {
             tree,
             vfs,
@@ -102,6 +105,7 @@ impl ChangeProcessor {
             pending_recovery: Mutex::new(Vec::new()),
             suppressed_paths,
             project_root,
+            project_file_path,
             ref_path_index,
             git_repo_root,
         };
@@ -239,6 +243,11 @@ struct JobThreadContext {
 
     /// Root directory of the project, used to display relative paths in logs.
     project_root: PathBuf,
+
+    /// Path to the project file (e.g. `plugin.project.json`). Used by
+    /// `reconcile_tree` so that re-snapshotting goes through the project
+    /// middleware instead of walking the directory as a generic Folder.
+    project_file_path: PathBuf,
 
     /// Index of meta/model files that contain `Rojo_Ref_*` attributes.
     /// Shared with ApiService for efficient rename path updates.
@@ -928,7 +937,8 @@ impl JobThreadContext {
         let start = Instant::now();
         let instance_context = InstanceContext::new();
 
-        let snapshot = match snapshot_from_vfs(&instance_context, &self.vfs, &self.project_root) {
+        let snapshot = match snapshot_from_vfs(&instance_context, &self.vfs, &self.project_file_path)
+        {
             Ok(s) => s,
             Err(e) => {
                 log::error!("Tree reconciliation snapshot error: {:?}", e);

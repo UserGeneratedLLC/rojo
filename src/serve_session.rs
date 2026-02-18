@@ -193,6 +193,7 @@ impl ServeSession {
             Arc::clone(&suppressed_paths),
             Arc::clone(&ref_path_index),
             root_project.folder_location().to_path_buf(),
+            root_project.file_location.clone(),
             critical_error_receiver,
             git_repo_root.clone(),
         );
@@ -366,7 +367,7 @@ impl ServeSession {
     /// Does NOT apply corrections — the tree is left unchanged.
     pub fn check_tree_freshness(&self) -> TreeFreshnessReport {
         let start = Instant::now();
-        let start_path = self.root_project.folder_location();
+        let start_path: &Path = &self.root_project.file_location;
         let instance_context = InstanceContext::new();
 
         let snapshot = match snapshot_from_vfs(&instance_context, &self.vfs, start_path) {
@@ -429,7 +430,7 @@ impl ServeSession {
         }
 
         let start = Instant::now();
-        let start_path = self.root_project.folder_location();
+        let start_path: &Path = &self.root_project.file_location;
         let instance_context = InstanceContext::new();
 
         let snapshot = match snapshot_from_vfs(&instance_context, &self.vfs, start_path) {

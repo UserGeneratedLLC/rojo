@@ -1308,4 +1308,136 @@ mod tests {
             elapsed
         );
     }
+
+    #[test]
+    fn total_cost_zero_for_identical() {
+        let snaps = vec![
+            make_snapshot("Alpha", "Folder"),
+            make_snapshot("Beta", "Folder"),
+        ];
+        let (tree, children) = make_tree_with_children(&[("Alpha", "Folder"), ("Beta", "Folder")]);
+        let result = match_forward(snaps, &children, &tree, &MatchingSession::new());
+        assert_eq!(result.matched.len(), 2);
+        assert_eq!(result.total_cost, 0, "Identical instances should have zero cost");
+    }
+
+    #[test]
+    fn total_cost_nonzero_for_different() {
+        use rbx_dom_weak::types::Variant;
+
+        let snaps = vec![make_snapshot_with_props(
+            "Part",
+            "Part",
+            vec![("Transparency", Variant::Float32(0.5))],
+        )];
+        let (tree, children) = make_tree_from_snapshots(vec![make_snapshot_with_props(
+            "Part",
+            "Part",
+            vec![("Transparency", Variant::Float32(0.0))],
+        )]);
+        let result = match_forward(snaps, &children, &tree, &MatchingSession::new());
+        assert_eq!(result.matched.len(), 1);
+        assert!(
+            result.total_cost > 0,
+            "Different properties should produce nonzero cost, got {}",
+            result.total_cost
+        );
+    }
+
+    #[test]
+    fn total_cost_includes_unmatched() {
+        let snaps = vec![
+            make_snapshot("A", "Folder"),
+            make_snapshot("B", "Folder"),
+            make_snapshot("C", "Folder"),
+        ];
+        let (tree, children) = make_tree_with_children(&[("A", "Folder"), ("B", "Folder")]);
+        let result = match_forward(snaps, &children, &tree, &MatchingSession::new());
+        assert_eq!(result.matched.len(), 2);
+        assert_eq!(result.unmatched_snapshot.len(), 1);
+        assert!(
+            result.total_cost >= UNMATCHED_PENALTY,
+            "Should include penalty for unmatched snapshot, got {}",
+            result.total_cost
+        );
+    }
+
+    #[test]
+    fn total_cost_sums_correctly() {
+        use rbx_dom_weak::types::Variant;
+
+        let snaps = vec![
+            make_snapshot("A", "Folder"),
+            make_snapshot_with_props("B", "Part", vec![("Transparency", Variant::Float32(0.5))]),
+            make_snapshot("C", "Folder"),
+        ];
+        let tree_children_snaps = vec![
+            make_snapshot("A", "Folder"),
+            make_snapshot_with_props("B", "Part", vec![("Transparency", Variant::Float32(0.0))]),
+        ];
+        let (tree, children) = make_tree_from_snapshots(tree_children_snaps);
+        let result = match_forward(snaps, &children, &tree, &MatchingSession::new());
+
+        assert_eq!(result.matched.len(), 2);
+        assert_eq!(result.unmatched_snapshot.len(), 1);
+        // total = matched costs (A=0 + B>=1) + unmatched (C=10000)
+        assert!(
+            result.total_cost >= UNMATCHED_PENALTY + 1,
+            "Should be at least penalty + 1 diff, got {}",
+            result.total_cost
+        );
+    }
+
+    #[test]
+    fn session_cache_consistent() {
+        let snaps1 = vec![
+            make_snapshot("X", "Folder"),
+            make_snapshot("Y", "Folder"),
+        ];
+        let snaps2 = vec![
+            make_snapshot("X", "Folder"),
+            make_snapshot("Y", "Folder"),
+        ];
+        let (tree, children) = make_tree_with_children(&[("X", "Folder"), ("Y", "Folder")]);
+        let session = MatchingSession::new();
+
+        let r1 = match_forward(snaps1, &children, &tree, &session);
+        let r2 = match_forward(snaps2, &children, &tree, &session);
+
+        assert_eq!(r1.matched.len(), r2.matched.len());
+        assert_eq!(r1.total_cost, r2.total_cost);
+        assert_eq!(
+            r1.unmatched_snapshot.len(),
+            r2.unmatched_snapshot.len()
+        );
+    }
+
+    #[test]
+    fn session_cache_does_not_corrupt() {
+        use rbx_dom_weak::types::Variant;
+
+        let session = MatchingSession::new();
+
+        // Group A: identical folders
+        let snaps_a = vec![make_snapshot("A", "Folder")];
+        let (tree_a, children_a) = make_tree_with_children(&[("A", "Folder")]);
+        let ra = match_forward(snaps_a, &children_a, &tree_a, &session);
+        assert_eq!(ra.total_cost, 0);
+
+        // Group B: parts with property diff
+        let snaps_b = vec![make_snapshot_with_props(
+            "B",
+            "Part",
+            vec![("Transparency", Variant::Float32(1.0))],
+        )];
+        let (tree_b, children_b) = make_tree_from_snapshots(vec![make_snapshot_with_props(
+            "B",
+            "Part",
+            vec![("Transparency", Variant::Float32(0.0))],
+        )]);
+        let rb = match_forward(snaps_b, &children_b, &tree_b, &session);
+
+        assert_eq!(ra.total_cost, 0, "Group A should still be zero");
+        assert!(rb.total_cost > 0, "Group B should have nonzero cost");
+    }
 }

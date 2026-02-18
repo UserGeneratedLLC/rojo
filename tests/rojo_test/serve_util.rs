@@ -130,6 +130,59 @@ impl TestServeSession {
         }
     }
 
+    /// Creates a test session using a specific (non-default) project file
+    /// inside the fixture directory. The fixture is copied as usual, but
+    /// `atlas serve` is pointed at `project_file` within the copied dir
+    /// instead of the directory itself.
+    pub fn new_with_project_file(name: &str, project_file: &str) -> Self {
+        let working_dir = get_working_dir_path();
+
+        let source_path = Path::new(SERVE_TESTS_PATH).join(name);
+        let dir = tempdir().expect("Couldn't create temporary directory");
+        let fixture_dir = dir
+            .path()
+            .canonicalize()
+            .expect("Couldn't canonicalize temporary directory path")
+            .join(name);
+
+        fs::create_dir(&fixture_dir).expect("Couldn't create temporary project subdirectory");
+        copy_recursive(&source_path, &fixture_dir)
+            .expect("Couldn't copy project to temporary directory");
+
+        let project_path = fixture_dir.join(project_file);
+        assert!(
+            project_path.exists(),
+            "Project file {} does not exist in fixture {}",
+            project_file,
+            name
+        );
+
+        #[cfg(target_os = "macos")]
+        std::thread::sleep(Duration::from_millis(100));
+
+        let port = get_port_number();
+        let port_string = port.to_string();
+
+        let rojo_process = Command::new(ROJO_PATH)
+            .args([
+                "serve",
+                project_path.to_str().unwrap(),
+                "--port",
+                port_string.as_str(),
+            ])
+            .current_dir(working_dir)
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Couldn't start Rojo");
+
+        TestServeSession {
+            rojo_process: KillOnDrop(rojo_process),
+            _dir: dir,
+            port,
+            project_path: fixture_dir,
+        }
+    }
+
     /// Creates a test session with a git repo initialized in the project dir.
     /// The `setup` callback runs after the fixture is copied and git is initialized
     /// but BEFORE the serve process starts. Use it to commit initial files and
