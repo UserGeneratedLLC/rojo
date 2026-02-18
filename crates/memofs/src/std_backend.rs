@@ -352,22 +352,27 @@ impl VfsBackend for StdBackend {
     }
 
     fn unwatch(&mut self, path: &Path) -> io::Result<()> {
-        // Only remove from watches if unwatch succeeds
-        // This keeps state consistent if unwatch fails (e.g., path wasn't directly watched)
+        let was_watched = self.watches.contains(path);
+
         match self.debouncer.unwatch(path) {
             Ok(()) => {
-                log::info!("Unwatched path: {}", path.display());
+                if was_watched {
+                    log::info!("Unwatched path: {}", path.display());
+                } else {
+                    log::trace!(
+                        "Unwatched path (was not actively watched): {}",
+                        path.display()
+                    );
+                }
                 self.watches.remove(path);
                 Ok(())
             }
             Err(err) => {
-                // If the path wasn't being watched (common when parent dir is watched),
-                // still remove from our tracking set but don't propagate the error
                 if matches!(
                     err.kind,
                     notify::ErrorKind::WatchNotFound | notify::ErrorKind::PathNotFound
                 ) {
-                    log::info!(
+                    log::trace!(
                         "Path was not directly watched (likely covered by parent): {}",
                         path.display()
                     );
