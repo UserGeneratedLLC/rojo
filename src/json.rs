@@ -154,6 +154,25 @@ impl Json5Value {
             Json5Value::Array(arr) => {
                 if arr.is_empty() {
                     output.push_str("[]");
+                } else if arr.len() < 12
+                    && arr.iter().all(|v| {
+                        matches!(
+                            v,
+                            Json5Value::Null
+                                | Json5Value::Bool(_)
+                                | Json5Value::Number(_)
+                                | Json5Value::String(_)
+                        )
+                    })
+                {
+                    output.push_str("[ ");
+                    for (i, item) in arr.iter().enumerate() {
+                        if i > 0 {
+                            output.push_str(", ");
+                        }
+                        item.write_to(output, 0);
+                    }
+                    output.push_str(" ]");
                 } else {
                     output.push_str("[\n");
                     for (i, item) in arr.iter().enumerate() {
