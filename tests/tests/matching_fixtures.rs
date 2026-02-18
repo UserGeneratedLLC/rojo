@@ -134,7 +134,7 @@ fn get_texture_children(dom: &WeakDom, parent: Ref) -> Vec<Ref> {
         .iter()
         .filter(|&&r| {
             dom.get_by_ref(r)
-                .map_or(false, |i| i.class.as_str() == "Texture")
+                .is_some_and(|i| i.class.as_str() == "Texture")
         })
         .copied()
         .collect()
@@ -293,7 +293,7 @@ fn forward_matching_ufowave_textures() {
         .iter()
         .filter(|&&r| {
             tree.get_instance(r)
-                .map_or(false, |i| i.class_name().as_str() == "Texture")
+                .is_some_and(|i| i.class_name().as_str() == "Texture")
         })
         .copied()
         .collect();

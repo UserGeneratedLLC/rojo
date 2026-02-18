@@ -2495,7 +2495,7 @@ mod tests {
     fn syncback_idempotency_same_input_same_output() {
         // Run the same set of instances through name_for_inst twice
         // and verify identical output (determinism).
-        let names = vec!["Alpha", "Beta/Gamma", "Beta:Gamma", "Delta", "CON"];
+        let names = ["Alpha", "Beta/Gamma", "Beta:Gamma", "Delta", "CON"];
         let mw = crate::snapshot_middleware::Middleware::ModuleScript;
 
         let mut dom = rbx_dom_weak::WeakDom::new(rbx_dom_weak::InstanceBuilder::new("Folder"));

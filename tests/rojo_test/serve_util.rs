@@ -134,6 +134,7 @@ impl TestServeSession {
         &self.project_path
     }
 
+    #[allow(dead_code)]
     pub fn port(&self) -> usize {
         self.port
     }
@@ -516,16 +517,13 @@ pub fn fresh_rebuild_read(project_path: &Path) -> NormalizedInstance {
         }
 
         let url = format!("http://localhost:{}/api/rojo", port);
-        match reqwest::blocking::get(&url) {
-            Ok(resp) => {
-                if let Ok(body) = resp.bytes() {
-                    if let Ok(server_info) = deserialize_msgpack::<ServerInfoResponse>(&body) {
-                        info = Some(server_info);
-                        break;
-                    }
+        if let Ok(resp) = reqwest::blocking::get(&url) {
+            if let Ok(body) = resp.bytes() {
+                if let Ok(server_info) = deserialize_msgpack::<ServerInfoResponse>(&body) {
+                    info = Some(server_info);
+                    break;
                 }
             }
-            Err(_) => {}
         }
         let retry_time_ms = BASE_DURATION_MS * (i as f32).powf(EXP_BACKOFF_FACTOR);
         thread::sleep(Duration::from_millis(retry_time_ms as u64));

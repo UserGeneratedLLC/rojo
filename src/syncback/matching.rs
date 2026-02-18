@@ -332,6 +332,7 @@ fn match_children_for_scoring(
 /// recursive subtree scoring. Hash fast-path: if hashes match, return 0.
 ///
 /// Mutually recursive with `match_children_for_scoring`.
+#[allow(clippy::too_many_arguments)]
 fn compute_change_count(
     new_ref: Ref,
     old_ref: Ref,

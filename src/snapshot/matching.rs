@@ -825,7 +825,7 @@ mod tests {
             .iter()
             .map(|(_, face_enum)| {
                 let mut props = shared_props.clone();
-                props.push(("Face", Variant::Enum(face_enum.clone())));
+                props.push(("Face", Variant::Enum(*face_enum)));
                 make_snapshot_with_props("Texture", "Texture", props)
             })
             .collect();
@@ -841,13 +841,13 @@ mod tests {
             .iter()
             .map(|(_, face_enum)| {
                 let mut props = shared_props.clone();
-                props.push(("Face", Variant::Enum(face_enum.clone())));
+                props.push(("Face", Variant::Enum(*face_enum)));
                 make_snapshot_with_props("Texture", "Texture", props)
             })
             .collect();
         tree_children.push(make_snapshot_with_props("Texture", "Texture", {
             let mut props = shared_props.clone();
-            props.push(("Face", Variant::Enum(face_front.clone())));
+            props.push(("Face", Variant::Enum(face_front)));
             props
         }));
 
@@ -876,7 +876,7 @@ mod tests {
                 None => {
                     // Snapshot omitted Face = must match tree Face=Front (5)
                     assert!(
-                        variant_eq(tree_face, &Variant::Enum(face_front.clone())),
+                        variant_eq(tree_face, &Variant::Enum(face_front)),
                         "Snapshot without Face should match Front, got {:?}",
                         tree_face
                     );
@@ -913,7 +913,7 @@ mod tests {
                     "Texture",
                     vec![
                         ("Transparency", Variant::Float32(group_transparency)),
-                        ("Face", Variant::Enum(face.clone())),
+                        ("Face", Variant::Enum(*face)),
                     ],
                 ));
                 tree_children.push(make_snapshot_with_props(
@@ -921,7 +921,7 @@ mod tests {
                     "Texture",
                     vec![
                         ("Transparency", Variant::Float32(group_transparency)),
-                        ("Face", Variant::Enum(face.clone())),
+                        ("Face", Variant::Enum(*face)),
                     ],
                 ));
             }
@@ -936,7 +936,7 @@ mod tests {
                 "Texture",
                 vec![
                     ("Transparency", Variant::Float32(group_transparency)),
-                    ("Face", Variant::Enum(face_front.clone())),
+                    ("Face", Variant::Enum(face_front)),
                 ],
             ));
         }
@@ -974,7 +974,7 @@ mod tests {
                     tree_face
                 ),
                 None => assert!(
-                    variant_eq(tree_face, &Variant::Enum(face_front.clone())),
+                    variant_eq(tree_face, &Variant::Enum(face_front)),
                     "Omitted Face should match Front, got {:?}",
                     tree_face
                 ),
@@ -1123,11 +1123,11 @@ mod tests {
                 let mut tree_props = vec![("Transparency", Variant::Float32(group_t))];
 
                 if let Some(face) = face_opt {
-                    snap_props.push(("Face", Variant::Enum(face.clone())));
-                    tree_props.push(("Face", Variant::Enum(face.clone())));
+                    snap_props.push(("Face", Variant::Enum(*face)));
+                    tree_props.push(("Face", Variant::Enum(*face)));
                 } else {
                     // Snapshot omits Face; tree has Front
-                    tree_props.push(("Face", Variant::Enum(face_front.clone())));
+                    tree_props.push(("Face", Variant::Enum(face_front)));
                 }
 
                 snaps.push(make_snapshot_with_props("Texture", "Texture", snap_props));
@@ -1169,7 +1169,7 @@ mod tests {
                     tree_face
                 ),
                 None => assert!(
-                    variant_eq(tree_face, &Variant::Enum(face_front.clone())),
+                    variant_eq(tree_face, &Variant::Enum(face_front)),
                     "Omitted Face should match Front, got {:?}",
                     tree_face
                 ),

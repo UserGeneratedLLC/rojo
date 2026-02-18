@@ -111,7 +111,7 @@ pub struct ServeSession {
     /// Values are `(remove_count, create_write_count)` — each API write increments
     /// the appropriate counter, each suppressed VFS event decrements it.
     /// `None` for oneshot sessions.
-    #[allow(dead_code)]
+    #[allow(dead_code, clippy::type_complexity)]
     suppressed_paths:
         Option<Arc<Mutex<std::collections::HashMap<std::path::PathBuf, (usize, usize)>>>>,
 
