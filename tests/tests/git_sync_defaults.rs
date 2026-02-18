@@ -899,3 +899,53 @@ fn batch_mixed_stage_and_source_write() {
         );
     }
 }
+
+// ===========================================================================
+// stage_ids survives rename (Fix 2 from audit)
+// ===========================================================================
+
+#[test]
+fn stage_ids_stages_new_path_after_rename() {
+    let mut session = TestServeSession::new_with_git("git_sync_defaults", |path| {
+        git_commit_all(path, "initial commit");
+    });
+    let info = session.wait_to_come_online();
+    let read = session.get_api_read(info.root_instance_id).unwrap();
+
+    let (module_id, _) =
+        find_instance_by_name(&read.instances, "ModuleA").expect("ModuleA should exist");
+
+    let old_path = session.path().join("src/ModuleA.luau");
+    let new_path = session.path().join("src/RenamedModule.luau");
+    assert!(old_path.exists(), "ModuleA.luau should exist before rename");
+
+    let write_request = WriteRequest {
+        session_id: info.session_id,
+        removed: vec![],
+        added: HashMap::new(),
+        updated: vec![InstanceUpdate {
+            id: module_id,
+            changed_name: Some("RenamedModule".to_string()),
+            changed_class_name: None,
+            changed_properties: UstrMap::default(),
+            changed_metadata: None,
+        }],
+        stage_ids: vec![module_id],
+    };
+    session.post_api_write(&write_request).unwrap();
+    thread::sleep(Duration::from_millis(1000));
+
+    assert!(
+        new_path.exists(),
+        "RenamedModule.luau should exist after rename"
+    );
+    assert!(
+        !old_path.exists(),
+        "ModuleA.luau should be gone after rename"
+    );
+
+    assert!(
+        git_is_staged(session.path(), "src/RenamedModule.luau"),
+        "New file (RenamedModule.luau) should be staged after rename + stage_ids"
+    );
+}

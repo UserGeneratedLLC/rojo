@@ -5,10 +5,20 @@ local ServerStorage = game:GetService("ServerStorage")
 local RunService = game:GetService("RunService")
 
 local SYNCBACK_SERVICES = {
-	"Lighting", "MaterialService", "ReplicatedFirst", "ReplicatedStorage",
-	"ServerScriptService", "ServerStorage", "SoundService", "StarterGui",
-	"StarterPack", "StarterPlayer", "Teams", "TextChatService",
-	"VoiceChatService", "Workspace",
+	"Lighting",
+	"MaterialService",
+	"ReplicatedFirst",
+	"ReplicatedStorage",
+	"ServerScriptService",
+	"ServerStorage",
+	"SoundService",
+	"StarterGui",
+	"StarterPack",
+	"StarterPlayer",
+	"Teams",
+	"TextChatService",
+	"VoiceChatService",
+	"Workspace",
 }
 
 local Rojo = script:FindFirstAncestor("Rojo")
@@ -628,39 +638,27 @@ function App:performSyncback()
 		port = Config.defaultPort
 	end
 
-	Promise.new(function(resolve, reject)
-		local services = {}
-		for _, className in SYNCBACK_SERVICES do
-			local ok, service = pcall(game.FindService, game, className)
-			if ok and service and #service:GetChildren() > 0 then
-				local buf = SerializationService:SerializeInstancesAsync(service:GetChildren())
-				table.insert(services, {
-					className = className,
-					data = buf,
-				})
-			end
+	local services = {}
+	for _, className in SYNCBACK_SERVICES do
+		local ok, service = pcall(game.FindService, game, className)
+		if ok and service and #service:GetChildren() > 0 then
+			local buf = SerializationService:SerializeInstancesAsync(service:GetChildren())
+			table.insert(services, {
+				className = className,
+				data = buf,
+			})
 		end
+	end
 
-		local url = ("http://%s:%s/api/syncback"):format(host, port)
-		local body = Http.msgpackEncode({
-			protocolVersion = Config.protocolVersion,
-			serverVersion = Config.expectedServerVersionString,
-			placeId = game.PlaceId,
-			services = services,
-		})
+	local url = ("http://%s:%s/api/syncback"):format(host, port)
+	local body = Http.msgpackEncode({
+		protocolVersion = Config.protocolVersion,
+		serverVersion = Config.expectedServerVersionString,
+		placeId = game.PlaceId,
+		services = services,
+	})
 
-		Http.post(url, body)
-			:andThen(function(response)
-				if response.StatusCode >= 200 and response.StatusCode < 300 then
-					resolve()
-				else
-					reject(
-						`Syncback request failed ({response.StatusCode}): {response.Body or "unknown error"}`
-					)
-				end
-			end)
-			:catch(reject)
-	end)
+	Http.post(url, body)
 		:andThen(function()
 			Log.info("Syncback data sent to server.")
 			self:addNotification({
@@ -1100,29 +1098,29 @@ function App:render()
 				}, {
 					Tooltips = e(Tooltip.Container, nil),
 
-				NotConnectedPage = createPageElement(AppStatus.NotConnected, {
-					host = self.host,
-					onHostChange = self.setHost,
-					port = self.port,
-					onPortChange = self.setPort,
+					NotConnectedPage = createPageElement(AppStatus.NotConnected, {
+						host = self.host,
+						onHostChange = self.setHost,
+						port = self.port,
+						onPortChange = self.setPort,
 
-					onConnect = function()
-						self:startSession()
-					end,
+						onConnect = function()
+							self:startSession()
+						end,
 
-					onSyncback = function()
-						self:setState({
-							showingSyncbackConfirm = true,
-						})
-					end,
+						onSyncback = function()
+							self:setState({
+								showingSyncbackConfirm = true,
+							})
+						end,
 
-					onNavigateSettings = function()
-						self.backPage = AppStatus.NotConnected
-						self:setState({
-							appStatus = AppStatus.Settings,
-						})
-					end,
-				}),
+						onNavigateSettings = function()
+							self.backPage = AppStatus.NotConnected
+							self:setState({
+								appStatus = AppStatus.Settings,
+							})
+						end,
+					}),
 
 					ConfirmingPage = createPageElement(AppStatus.Confirming, {
 						confirmData = self.state.confirmData,
@@ -1196,106 +1194,106 @@ function App:render()
 					}),
 				}),
 
-			RojoNotifications = e("ScreenGui", {
-				ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
-				ResetOnSpawn = false,
-				DisplayOrder = 100,
-			}, {
-				Notifications = e(Notifications, {
-					soundPlayer = self.props.soundPlayer,
-					notifications = self.state.notifications,
-					onClose = function(id)
-						self:closeNotification(id)
-					end,
+				RojoNotifications = e("ScreenGui", {
+					ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+					ResetOnSpawn = false,
+					DisplayOrder = 100,
+				}, {
+					Notifications = e(Notifications, {
+						soundPlayer = self.props.soundPlayer,
+						notifications = self.state.notifications,
+						onClose = function(id)
+							self:closeNotification(id)
+						end,
+					}),
 				}),
 			}),
-		}),
 
-	SyncbackConfirm = e(Theme.StudioProvider, nil, {
-		e(StudioPluginGui, {
-			id = "Atlas_SyncbackConfirm",
-			title = "Full Syncback",
-			active = self.state.showingSyncbackConfirm == true,
-			isEphemeral = true,
+			SyncbackConfirm = e(Theme.StudioProvider, nil, {
+				e(StudioPluginGui, {
+					id = "Atlas_SyncbackConfirm",
+					title = "Full Syncback",
+					active = self.state.showingSyncbackConfirm == true,
+					isEphemeral = true,
 
-			initDockState = Enum.InitialDockState.Float,
-			overridePreviousState = true,
-			floatingSize = Vector2.new(400, 150),
-			minimumSize = Vector2.new(300, 120),
+					initDockState = Enum.InitialDockState.Float,
+					overridePreviousState = true,
+					floatingSize = Vector2.new(400, 150),
+					minimumSize = Vector2.new(300, 120),
 
-			zIndexBehavior = Enum.ZIndexBehavior.Sibling,
+					zIndexBehavior = Enum.ZIndexBehavior.Sibling,
 
-			onClose = function()
-				self:setState({ showingSyncbackConfirm = false })
-			end,
-		}, {
-			Content = Theme.with(function(theme)
-				local noTransparency = Roact.createBinding(0)
-
-				return e("Frame", {
-					Size = UDim2.fromScale(1, 1),
-					BackgroundColor3 = theme.BackgroundColor,
-					BorderSizePixel = 0,
+					onClose = function()
+						self:setState({ showingSyncbackConfirm = false })
+					end,
 				}, {
-					Padding = e("UIPadding", {
-						PaddingLeft = UDim.new(0, 16),
-						PaddingRight = UDim.new(0, 16),
-						PaddingTop = UDim.new(0, 16),
-						PaddingBottom = UDim.new(0, 16),
-					}),
-					Layout = e("UIListLayout", {
-						FillDirection = Enum.FillDirection.Vertical,
-						SortOrder = Enum.SortOrder.LayoutOrder,
-						Padding = UDim.new(0, 16),
-						VerticalAlignment = Enum.VerticalAlignment.Center,
-					}),
-					Message = e("TextLabel", {
-						Text = "This will overwrite your project files with the current Studio state. This cannot be undone.",
-						TextWrapped = true,
-						FontFace = theme.Font.Main,
-						TextSize = theme.TextSize.Body,
-						TextColor3 = theme.TextColor,
-						Size = UDim2.new(1, 0, 0, 0),
-						AutomaticSize = Enum.AutomaticSize.Y,
-						BackgroundTransparency = 1,
-						LayoutOrder = 1,
-					}),
-					Buttons = e("Frame", {
-						Size = UDim2.new(1, 0, 0, 34),
-						BackgroundTransparency = 1,
-						LayoutOrder = 2,
-					}, {
-						Layout = e("UIListLayout", {
-							HorizontalAlignment = Enum.HorizontalAlignment.Right,
-							FillDirection = Enum.FillDirection.Horizontal,
-							SortOrder = Enum.SortOrder.LayoutOrder,
-							Padding = UDim.new(0, 10),
-						}),
-						Cancel = e(TextButton, {
-							text = "Cancel",
-							style = "Bordered",
-							transparency = noTransparency,
-							layoutOrder = 1,
-							onClick = function()
-								self:setState({ showingSyncbackConfirm = false })
-							end,
-						}),
-						Confirm = e(TextButton, {
-							text = "Syncback",
-							style = "Danger",
-							transparency = noTransparency,
-							layoutOrder = 2,
-							onClick = function()
-								self:performSyncback()
-							end,
-						}),
-					}),
-				})
-			end),
-		}),
-	}),
+					Content = Theme.with(function(theme)
+						local noTransparency = Roact.createBinding(0)
 
-		toggleAction = e(StudioPluginAction, {
+						return e("Frame", {
+							Size = UDim2.fromScale(1, 1),
+							BackgroundColor3 = theme.BackgroundColor,
+							BorderSizePixel = 0,
+						}, {
+							Padding = e("UIPadding", {
+								PaddingLeft = UDim.new(0, 16),
+								PaddingRight = UDim.new(0, 16),
+								PaddingTop = UDim.new(0, 16),
+								PaddingBottom = UDim.new(0, 16),
+							}),
+							Layout = e("UIListLayout", {
+								FillDirection = Enum.FillDirection.Vertical,
+								SortOrder = Enum.SortOrder.LayoutOrder,
+								Padding = UDim.new(0, 16),
+								VerticalAlignment = Enum.VerticalAlignment.Center,
+							}),
+							Message = e("TextLabel", {
+								Text = "This will overwrite your project files with the current Studio state. This cannot be undone.",
+								TextWrapped = true,
+								FontFace = theme.Font.Main,
+								TextSize = theme.TextSize.Body,
+								TextColor3 = theme.TextColor,
+								Size = UDim2.new(1, 0, 0, 0),
+								AutomaticSize = Enum.AutomaticSize.Y,
+								BackgroundTransparency = 1,
+								LayoutOrder = 1,
+							}),
+							Buttons = e("Frame", {
+								Size = UDim2.new(1, 0, 0, 34),
+								BackgroundTransparency = 1,
+								LayoutOrder = 2,
+							}, {
+								Layout = e("UIListLayout", {
+									HorizontalAlignment = Enum.HorizontalAlignment.Right,
+									FillDirection = Enum.FillDirection.Horizontal,
+									SortOrder = Enum.SortOrder.LayoutOrder,
+									Padding = UDim.new(0, 10),
+								}),
+								Cancel = e(TextButton, {
+									text = "Cancel",
+									style = "Bordered",
+									transparency = noTransparency,
+									layoutOrder = 1,
+									onClick = function()
+										self:setState({ showingSyncbackConfirm = false })
+									end,
+								}),
+								Confirm = e(TextButton, {
+									text = "Syncback",
+									style = "Danger",
+									transparency = noTransparency,
+									layoutOrder = 2,
+									onClick = function()
+										self:performSyncback()
+									end,
+								}),
+							}),
+						})
+					end),
+				}),
+			}),
+
+			toggleAction = e(StudioPluginAction, {
 				name = "AtlasConnection",
 				title = "Atlas: Connect/Disconnect",
 				description = "Toggles the server for an Atlas sync session",

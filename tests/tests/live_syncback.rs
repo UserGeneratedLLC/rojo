@@ -9,11 +9,7 @@ use crate::rojo_test::{
 
 use librojo::web_api::{ServiceChunk, SocketPacketType, PROTOCOL_VERSION};
 
-fn assert_live_matches_cli(
-    fixture_name: &str,
-    chunks: &[ServiceChunk],
-    place_id: Option<u64>,
-) {
+fn assert_live_matches_cli(fixture_name: &str, chunks: &[ServiceChunk], place_id: Option<u64>) {
     run_serve_test(fixture_name, |session, _| {
         session.post_api_syncback(place_id, chunks.to_vec());
         session.wait_to_come_back_online();
@@ -32,10 +28,16 @@ fn parity_scripts() {
         vec![
             InstanceBuilder::new("ModuleScript")
                 .with_name("Utils")
-                .with_property("Source", rbx_dom_weak::types::Variant::String("return {}".into())),
+                .with_property(
+                    "Source",
+                    rbx_dom_weak::types::Variant::String("return {}".into()),
+                ),
             InstanceBuilder::new("Script")
                 .with_name("Main")
-                .with_property("Source", rbx_dom_weak::types::Variant::String("print('hi')".into()))
+                .with_property(
+                    "Source",
+                    rbx_dom_weak::types::Variant::String("print('hi')".into()),
+                )
                 .with_property(
                     "RunContext",
                     rbx_dom_weak::types::Variant::Enum(rbx_dom_weak::types::Enum::from_u32(1)),
@@ -117,7 +119,10 @@ fn parity_mixed_file_types() {
         vec![
             InstanceBuilder::new("StringValue")
                 .with_name("MyString")
-                .with_property("Value", rbx_dom_weak::types::Variant::String("hello world".into())),
+                .with_property(
+                    "Value",
+                    rbx_dom_weak::types::Variant::String("hello world".into()),
+                ),
             InstanceBuilder::new("Folder").with_name("Container"),
             InstanceBuilder::new("ModuleScript")
                 .with_name("DataModule")

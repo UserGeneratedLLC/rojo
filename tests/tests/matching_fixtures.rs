@@ -309,7 +309,8 @@ fn forward_matching_ufowave_textures() {
 
     // Run forward sync matching
     let session = librojo::snapshot::matching::MatchingSession::new();
-    let result = librojo::snapshot::matching::match_forward(snap_textures, &tree_textures, &tree, &session);
+    let result =
+        librojo::snapshot::matching::match_forward(snap_textures, &tree_textures, &tree, &session);
 
     assert_eq!(
         result.matched.len(),

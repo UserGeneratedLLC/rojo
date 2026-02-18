@@ -1350,6 +1350,13 @@ impl JobThreadContext {
                                                             Some(new_dir_path.join(file_name));
                                                         new_ref_segment =
                                                             Some(slugified_new_name.clone());
+                                                        if patch_set.stage_ids.contains(&id) {
+                                                            let old_init = dir_path.join(file_name);
+                                                            pending_stage_paths
+                                                                .retain(|p| *p != old_init);
+                                                            pending_stage_paths
+                                                                .push(new_dir_path.join(file_name));
+                                                        }
                                                         let old_meta = grandparent.join(format!(
                                                             "{}.meta.json5",
                                                             dir_name
@@ -1511,6 +1518,10 @@ impl JobThreadContext {
                                                 } else {
                                                     overridden_source_path = Some(new_path.clone());
                                                     new_ref_segment = Some(new_file_name.clone());
+                                                    if patch_set.stage_ids.contains(&id) {
+                                                        pending_stage_paths.retain(|p| *p != *path);
+                                                        pending_stage_paths.push(new_path.clone());
+                                                    }
                                                     let old_meta = parent
                                                         .join(format!("{}.meta.json5", old_base));
                                                     let new_meta = parent.join(format!(
@@ -1689,6 +1700,11 @@ impl JobThreadContext {
                                                     );
                                                 } else {
                                                     overridden_source_path = Some(new_path.clone());
+                                                    if patch_set.stage_ids.contains(&id) {
+                                                        pending_stage_paths
+                                                            .retain(|p| *p != actual_file);
+                                                        pending_stage_paths.push(new_path.clone());
+                                                    }
                                                     // For standalone files, the ref path
                                                     // segment changes with the extension.
                                                     // For init files, the directory name

@@ -19,9 +19,7 @@ local function fuzzyEq(a: number, b: number): boolean
 end
 
 local function color3Eq(a: Color3, b: Color3): boolean
-	return math.floor(a.R * 255) == math.floor(b.R * 255)
-		and math.floor(a.G * 255) == math.floor(b.G * 255)
-		and math.floor(a.B * 255) == math.floor(b.B * 255)
+	return fuzzyEq(a.R, b.R) and fuzzyEq(a.G, b.G) and fuzzyEq(a.B, b.B)
 end
 
 local function vector2Eq(a: Vector2, b: Vector2): boolean
@@ -35,10 +33,18 @@ end
 local function cframeEq(a: CFrame, b: CFrame): boolean
 	local ax, ay, az, aR00, aR01, aR02, aR10, aR11, aR12, aR20, aR21, aR22 = a:GetComponents()
 	local bx, by, bz, bR00, bR01, bR02, bR10, bR11, bR12, bR20, bR21, bR22 = b:GetComponents()
-	return fuzzyEq(ax, bx) and fuzzyEq(ay, by) and fuzzyEq(az, bz)
-		and fuzzyEq(aR00, bR00) and fuzzyEq(aR01, bR01) and fuzzyEq(aR02, bR02)
-		and fuzzyEq(aR10, bR10) and fuzzyEq(aR11, bR11) and fuzzyEq(aR12, bR12)
-		and fuzzyEq(aR20, bR20) and fuzzyEq(aR21, bR21) and fuzzyEq(aR22, bR22)
+	return fuzzyEq(ax, bx)
+		and fuzzyEq(ay, by)
+		and fuzzyEq(az, bz)
+		and fuzzyEq(aR00, bR00)
+		and fuzzyEq(aR01, bR01)
+		and fuzzyEq(aR02, bR02)
+		and fuzzyEq(aR10, bR10)
+		and fuzzyEq(aR11, bR11)
+		and fuzzyEq(aR12, bR12)
+		and fuzzyEq(aR20, bR20)
+		and fuzzyEq(aR21, bR21)
+		and fuzzyEq(aR22, bR22)
 end
 
 local function trueEquals(a: any, b: any): boolean
@@ -54,11 +60,12 @@ local function trueEquals(a: any, b: any): boolean
 	end
 
 	local t = typeof(a)
-	if t ~= typeof(b) then
-		if t == "number" and typeof(b) == "EnumItem" then
+	local tb = typeof(b)
+	if t ~= tb then
+		if t == "number" and tb == "EnumItem" then
 			return a == (b :: EnumItem).Value
 		end
-		if t == "EnumItem" and typeof(b) == "number" then
+		if t == "EnumItem" and tb == "number" then
 			return (a :: EnumItem).Value == b
 		end
 		return false

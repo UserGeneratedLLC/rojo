@@ -41,12 +41,15 @@ impl SyncbackSignal {
     }
 
     pub fn fire(&self, payload: SyncbackPayload) {
-        *self.payload.lock().unwrap() = Some(payload);
+        *self.payload.lock().unwrap_or_else(|e| e.into_inner()) = Some(payload);
         self.notify.notify_one();
     }
 
     pub fn take_payload(&self) -> Option<SyncbackPayload> {
-        self.payload.lock().unwrap().take()
+        self.payload
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
     }
 }
 

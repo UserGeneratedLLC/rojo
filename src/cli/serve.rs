@@ -72,8 +72,11 @@ impl ServeCommand {
 
         loop {
             let (vfs, critical_errors) = Vfs::new_default_with_errors();
-            let session =
-                Arc::new(ServeSession::new(vfs, project_path.clone(), Some(critical_errors))?);
+            let session = Arc::new(ServeSession::new(
+                vfs,
+                project_path.clone(),
+                Some(critical_errors),
+            )?);
             let server = LiveServer::new(session);
 
             log::info!("Listening: http://{}:{}", host, port);
@@ -94,7 +97,7 @@ fn run_live_syncback(project_path: &Path, payload: SyncbackPayload) -> anyhow::R
     let new_dom = build_dom_from_chunks(payload)?;
 
     let vfs = Vfs::new_oneshot();
-    let session_old = ServeSession::new_oneshot(vfs, project_path.to_path_buf())?;
+    let session_old = ServeSession::new_oneshot(vfs, project_path)?;
 
     let mut dom_old = session_old.tree();
 
@@ -149,8 +152,8 @@ fn build_dom_from_chunks(payload: SyncbackPayload) -> anyhow::Result<WeakDom> {
         created_services.insert(chunk.class_name.clone());
 
         if !chunk.data.is_empty() {
-            let chunk_dom = rbx_binary::from_reader(Cursor::new(&chunk.data))
-                .with_context(|| {
+            let chunk_dom =
+                rbx_binary::from_reader(Cursor::new(&chunk.data)).with_context(|| {
                     format!("Failed to parse rbxm for service {}", chunk.class_name)
                 })?;
 

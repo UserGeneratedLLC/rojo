@@ -40,10 +40,8 @@ local function hydrate(instanceMap, virtualInstances, rootId, rootInstance, sess
 		end
 	end
 
-	local result = Matching.matchChildren(
-		session, validVirtualIds, existingChildren, virtualInstances,
-		rootId, rootInstance
-	)
+	local result =
+		Matching.matchChildren(session, validVirtualIds, existingChildren, virtualInstances, rootId, rootInstance)
 
 	-- Recursively hydrate matched pairs
 	for _, pair in result.matched do

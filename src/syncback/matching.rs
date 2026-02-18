@@ -30,6 +30,12 @@ pub struct MatchingSession {
     cost_cache: RefCell<HashMap<(Ref, Ref), u32>>,
 }
 
+impl Default for MatchingSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MatchingSession {
     pub fn new() -> Self {
         Self {
@@ -122,12 +128,19 @@ pub fn match_children(
         let mut total_cost: u32 = 0;
         for &(new_ref, old_ref) in &matched {
             total_cost = total_cost.saturating_add(compute_change_count(
-                new_ref, old_ref, new_dom, old_dom, new_hashes, old_hashes, u32::MAX, 0, session,
+                new_ref,
+                old_ref,
+                new_dom,
+                old_dom,
+                new_hashes,
+                old_hashes,
+                u32::MAX,
+                0,
+                session,
             ));
         }
-        total_cost = total_cost.saturating_add(
-            (remaining_new.len() + remaining_old.len()) as u32 * UNMATCHED_PENALTY,
-        );
+        total_cost = total_cost
+            .saturating_add((remaining_new.len() + remaining_old.len()) as u32 * UNMATCHED_PENALTY);
         return MatchResult {
             matched,
             unmatched_new: remaining_new,
@@ -178,7 +191,14 @@ pub fn match_children(
         for &new_ref in &avail_new {
             for &old_ref in &avail_old {
                 let cost = compute_change_count(
-                    new_ref, old_ref, new_dom, old_dom, new_hashes, old_hashes, best_so_far, 0,
+                    new_ref,
+                    old_ref,
+                    new_dom,
+                    old_dom,
+                    new_hashes,
+                    old_hashes,
+                    best_so_far,
+                    0,
                     session,
                 );
                 pairs.push((cost, new_ref, old_ref));
@@ -208,12 +228,19 @@ pub fn match_children(
     let mut total_cost: u32 = 0;
     for &(new_ref, old_ref) in &matched {
         total_cost = total_cost.saturating_add(compute_change_count(
-            new_ref, old_ref, new_dom, old_dom, new_hashes, old_hashes, u32::MAX, 0, session,
+            new_ref,
+            old_ref,
+            new_dom,
+            old_dom,
+            new_hashes,
+            old_hashes,
+            u32::MAX,
+            0,
+            session,
         ));
     }
-    total_cost = total_cost.saturating_add(
-        (remaining_new.len() + remaining_old.len()) as u32 * UNMATCHED_PENALTY,
-    );
+    total_cost = total_cost
+        .saturating_add((remaining_new.len() + remaining_old.len()) as u32 * UNMATCHED_PENALTY);
 
     MatchResult {
         matched,
@@ -545,7 +572,15 @@ mod tests {
         let new_children: Vec<Ref> = new_dom.get_by_ref(new_root).unwrap().children().to_vec();
         let old_children: Vec<Ref> = old_dom.get_by_ref(old_root).unwrap().children().to_vec();
 
-        let result = match_children(&new_children, &old_children, &new_dom, &old_dom, None, None, &MatchingSession::new());
+        let result = match_children(
+            &new_children,
+            &old_children,
+            &new_dom,
+            &old_dom,
+            None,
+            None,
+            &MatchingSession::new(),
+        );
 
         assert_eq!(result.matched.len(), 2);
         assert!(result.unmatched_new.is_empty());
@@ -585,7 +620,15 @@ mod tests {
         let new_children: Vec<Ref> = new_dom.get_by_ref(new_root).unwrap().children().to_vec();
         let old_children: Vec<Ref> = old_dom.get_by_ref(old_root).unwrap().children().to_vec();
 
-        let result = match_children(&new_children, &old_children, &new_dom, &old_dom, None, None, &MatchingSession::new());
+        let result = match_children(
+            &new_children,
+            &old_children,
+            &new_dom,
+            &old_dom,
+            None,
+            None,
+            &MatchingSession::new(),
+        );
 
         assert_eq!(result.matched.len(), 2);
         for (new_ref, old_ref) in &result.matched {
@@ -616,7 +659,15 @@ mod tests {
         let new_children: Vec<Ref> = new_dom.get_by_ref(new_root).unwrap().children().to_vec();
         let old_children: Vec<Ref> = old_dom.get_by_ref(old_root).unwrap().children().to_vec();
 
-        let result = match_children(&new_children, &old_children, &new_dom, &old_dom, None, None, &MatchingSession::new());
+        let result = match_children(
+            &new_children,
+            &old_children,
+            &new_dom,
+            &old_dom,
+            None,
+            None,
+            &MatchingSession::new(),
+        );
 
         assert_eq!(result.matched.len(), 1);
         assert_eq!(result.unmatched_new.len(), 1);
@@ -638,7 +689,15 @@ mod tests {
         let new_children: Vec<Ref> = new_dom.get_by_ref(new_root).unwrap().children().to_vec();
         let old_children: Vec<Ref> = old_dom.get_by_ref(old_root).unwrap().children().to_vec();
 
-        let result = match_children(&new_children, &old_children, &new_dom, &old_dom, None, None, &MatchingSession::new());
+        let result = match_children(
+            &new_children,
+            &old_children,
+            &new_dom,
+            &old_dom,
+            None,
+            None,
+            &MatchingSession::new(),
+        );
         assert_eq!(result.matched.len(), 2);
         assert!(result.unmatched_new.is_empty());
         assert!(result.unmatched_old.is_empty());
@@ -648,7 +707,15 @@ mod tests {
     fn empty_children() {
         let new_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
         let old_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
-        let result = match_children(&[], &[], &new_dom, &old_dom, None, None, &MatchingSession::new());
+        let result = match_children(
+            &[],
+            &[],
+            &new_dom,
+            &old_dom,
+            None,
+            None,
+            &MatchingSession::new(),
+        );
         assert!(result.matched.is_empty());
     }
 
@@ -667,8 +734,24 @@ mod tests {
         let new_children: Vec<Ref> = new_dom.get_by_ref(new_root).unwrap().children().to_vec();
         let old_children: Vec<Ref> = old_dom.get_by_ref(old_root).unwrap().children().to_vec();
 
-        let r1 = match_children(&new_children, &old_children, &new_dom, &old_dom, None, None, &MatchingSession::new());
-        let r2 = match_children(&new_children, &old_children, &new_dom, &old_dom, None, None, &MatchingSession::new());
+        let r1 = match_children(
+            &new_children,
+            &old_children,
+            &new_dom,
+            &old_dom,
+            None,
+            None,
+            &MatchingSession::new(),
+        );
+        let r2 = match_children(
+            &new_children,
+            &old_children,
+            &new_dom,
+            &old_dom,
+            None,
+            None,
+            &MatchingSession::new(),
+        );
 
         assert_eq!(r1.matched.len(), r2.matched.len());
         for (a, b) in r1.matched.iter().zip(r2.matched.iter()) {

@@ -29,9 +29,9 @@ use crate::{
     web::{
         interface::{
             ErrorResponse, Instance, InstanceMetadata, MessagesPacket, OpenResponse, ReadResponse,
-            ServerInfoResponse, SocketPacket, SocketPacketBody, SocketPacketType,
-            SubscribeMessage, SyncbackPayload, SyncbackRequest, WriteRequest, WriteResponse,
-            PROTOCOL_VERSION, SERVER_VERSION,
+            ServerInfoResponse, SocketPacket, SocketPacketBody, SocketPacketType, SubscribeMessage,
+            SyncbackPayload, SyncbackRequest, WriteRequest, WriteResponse, PROTOCOL_VERSION,
+            SERVER_VERSION,
         },
         util::{deserialize_msgpack, msgpack, msgpack_ok, serialize_msgpack},
     },
@@ -256,7 +256,7 @@ async fn handle_api_syncback(
     };
     syncback_signal.fire(payload);
 
-    msgpack_ok(&serde_json::json!({"status": "syncback_initiated"}))
+    msgpack_ok(serde_json::json!({"status": "syncback_initiated"}))
 }
 
 pub struct ApiService {

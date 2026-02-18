@@ -505,8 +505,10 @@ pub fn make_rbxl_from_chunks(chunks: &[librojo::web_api::ServiceChunk]) -> Vec<u
         let chunk_dom = rbx_binary::from_reader(Cursor::new(&chunk.data))
             .unwrap_or_else(|e| panic!("Failed to parse rbxm for {}: {e}", chunk.class_name));
 
-        let service_ref =
-            dom.insert(root_ref, rbx_dom_weak::InstanceBuilder::new(&chunk.class_name));
+        let service_ref = dom.insert(
+            root_ref,
+            rbx_dom_weak::InstanceBuilder::new(&chunk.class_name),
+        );
 
         let mut ref_map: HashMap<Ref, Ref> = HashMap::new();
         for &child_ref in chunk_dom.root().children() {
@@ -554,10 +556,8 @@ pub fn make_rbxl_from_chunks(chunks: &[librojo::web_api::ServiceChunk]) -> Vec<u
         "VoiceChatService",
         "Workspace",
     ];
-    let existing: std::collections::HashSet<String> = chunks
-        .iter()
-        .map(|c| c.class_name.clone())
-        .collect();
+    let existing: std::collections::HashSet<String> =
+        chunks.iter().map(|c| c.class_name.clone()).collect();
     for &svc in &visible_services {
         if !existing.contains(svc) {
             dom.insert(root_ref, rbx_dom_weak::InstanceBuilder::new(svc));

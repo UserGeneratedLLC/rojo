@@ -235,7 +235,14 @@ fn compute_children_patches(
 
     // Matched pairs: recursively compute patches.
     for (snapshot_child, tree_child_id) in match_result.matched {
-        compute_patch_set_internal(context, snapshot_child, tree, tree_child_id, patch_set, session);
+        compute_patch_set_internal(
+            context,
+            snapshot_child,
+            tree,
+            tree_child_id,
+            patch_set,
+            session,
+        );
     }
 
     // Unmatched snapshots: new instances to be added.

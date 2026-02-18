@@ -33,6 +33,12 @@ pub struct MatchingSession {
     cost_cache: RefCell<HashMap<(Ref, Ref), u32>>,
 }
 
+impl Default for MatchingSession {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MatchingSession {
     pub fn new() -> Self {
         Self {
@@ -116,7 +122,14 @@ pub fn match_forward(
     let snap_remaining = snap_matched.iter().filter(|&&m| !m).count();
     let tree_remaining = tree_available.iter().filter(|&&a| a).count();
     if snap_remaining == 0 || tree_remaining == 0 {
-        return build_result(snap_available, tree_children, &tree_available, matched, tree, session);
+        return build_result(
+            snap_available,
+            tree_children,
+            &tree_available,
+            matched,
+            tree,
+            session,
+        );
     }
 
     // ================================================================
@@ -186,7 +199,14 @@ pub fn match_forward(
         }
     }
 
-    build_result(snap_available, tree_children, &tree_available, matched, tree, session)
+    build_result(
+        snap_available,
+        tree_children,
+        &tree_available,
+        matched,
+        tree,
+        session,
+    )
 }
 
 /// Build the final result, consuming the snapshot children.
@@ -1139,7 +1159,12 @@ mod tests {
             make_snapshot_with_props("Wall", "Part", tree_props_b),
             make_snapshot_with_props("Wall", "Part", tree_props_a),
         ]);
-        let result = match_forward(vec![snap_a, snap_b], &tree_refs, &tree, &MatchingSession::new());
+        let result = match_forward(
+            vec![snap_a, snap_b],
+            &tree_refs,
+            &tree,
+            &MatchingSession::new(),
+        );
 
         assert_eq!(result.matched.len(), 2, "Both should match");
 
