@@ -497,7 +497,10 @@ impl JobThreadContext {
 
             self.suppress_path(file_path);
             match crate::syncback::meta::update_ref_paths_in_file(
-                file_path, old_path, new_path, &source_abs,
+                file_path,
+                old_path,
+                new_path,
+                &source_abs,
             ) {
                 Ok(true) => {
                     updated_count += 1;
@@ -1200,9 +1203,7 @@ impl JobThreadContext {
                                     crate::ref_target_path_from_tree(&tree, parent_ref);
                                 let old_prefix = format!("{}/{}", parent_path, old_ref_segment);
                                 let new_prefix = format!("{}/{}", parent_path, new_ref_segment);
-                                self.update_ref_paths_after_rename(
-                                    &old_prefix, &new_prefix, &tree,
-                                );
+                                self.update_ref_paths_after_rename(&old_prefix, &new_prefix, &tree);
                             }
 
                             // Fix 1: Update the renamed survivor's in-memory
@@ -1812,9 +1813,7 @@ impl JobThreadContext {
                             segment.clone()
                         };
                         if *old_ref_path != new_ref_path {
-                            self.update_ref_paths_after_rename(
-                                old_ref_path, &new_ref_path, &tree,
-                            );
+                            self.update_ref_paths_after_rename(old_ref_path, &new_ref_path, &tree);
                         }
                     } else if update.changed_name.is_some() || update.changed_class_name.is_some() {
                         // Rename or class change was requested but no filesystem

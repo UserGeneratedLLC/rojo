@@ -175,8 +175,7 @@ pub fn syncback_loop_with_stats(
 
     log::debug!("Collecting referents for new DOM...");
     let mut deferred_referents = collect_referents(&new_tree, &pre_prune_paths, None);
-    let placeholder_map =
-        std::mem::take(&mut deferred_referents.placeholder_to_source_and_target);
+    let placeholder_map = std::mem::take(&mut deferred_referents.placeholder_to_source_and_target);
 
     // Remove any properties that are manually blocked from syncback via the
     // project file.

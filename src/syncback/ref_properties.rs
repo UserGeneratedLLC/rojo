@@ -494,8 +494,7 @@ mod tests {
 
         let links = collect_referents(&dom2, &HashMap::new(), None);
 
-        let placeholders: Vec<&String> =
-            links.placeholder_to_source_and_target.keys().collect();
+        let placeholders: Vec<&String> = links.placeholder_to_source_and_target.keys().collect();
 
         assert!(
             placeholders.len() >= 2,

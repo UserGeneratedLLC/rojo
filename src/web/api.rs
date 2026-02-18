@@ -2693,10 +2693,8 @@ impl ApiService {
                     if target_ref.is_none() {
                         remove_attributes.push(attr_name);
                     } else if tree.get_instance(*target_ref).is_some() {
-                        let source_abs =
-                            crate::ref_target_path_from_tree(tree, update.id);
-                        let target_abs =
-                            crate::ref_target_path_from_tree(tree, *target_ref);
+                        let source_abs = crate::ref_target_path_from_tree(tree, update.id);
+                        let target_abs = crate::ref_target_path_from_tree(tree, *target_ref);
 
                         if !Self::is_ref_path_unique(tree, *target_ref) {
                             log::warn!(
@@ -2709,15 +2707,11 @@ impl ApiService {
                             );
                         }
 
-                        let relative =
-                            crate::compute_relative_ref_path(&source_abs, &target_abs);
-                        ref_attributes
-                            .insert(attr_name, serde_json::Value::String(relative));
+                        let relative = crate::compute_relative_ref_path(&source_abs, &target_abs);
+                        ref_attributes.insert(attr_name, serde_json::Value::String(relative));
                     } else if let Some(target_abs) = added_paths.get(target_ref) {
-                        let source_abs =
-                            crate::ref_target_path_from_tree(tree, update.id);
-                        let relative =
-                            crate::compute_relative_ref_path(&source_abs, target_abs);
+                        let source_abs = crate::ref_target_path_from_tree(tree, update.id);
+                        let relative = crate::compute_relative_ref_path(&source_abs, target_abs);
                         log::info!(
                             "Ref property '{}' for instance {:?}: target {:?} is a \
                              just-added instance, computed relative path '{}'",
@@ -2726,8 +2720,7 @@ impl ApiService {
                             target_ref,
                             relative
                         );
-                        ref_attributes
-                            .insert(attr_name, serde_json::Value::String(relative));
+                        ref_attributes.insert(attr_name, serde_json::Value::String(relative));
                     } else {
                         log::warn!(
                             "Cannot persist Ref property '{}' for instance {:?}: \
@@ -2895,10 +2888,8 @@ impl ApiService {
                             if key.starts_with(crate::REF_PATH_ATTRIBUTE_PREFIX) {
                                 if let Some(path_str) = value.as_str() {
                                     let resolved =
-                                        crate::resolve_ref_path_to_absolute(
-                                            path_str, &source_abs,
-                                        )
-                                        .unwrap_or_else(|| path_str.to_string());
+                                        crate::resolve_ref_path_to_absolute(path_str, &source_abs)
+                                            .unwrap_or_else(|| path_str.to_string());
                                     index.add(&resolved, &written_meta_path);
                                 }
                             }

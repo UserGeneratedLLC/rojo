@@ -6423,11 +6423,7 @@ fn ref_with_name_change() {
         poll_file_exists(&new_meta, "Meta file should exist at new location");
 
         // The ref path should be updated to reflect the renamed parent
-        assert_meta_has_ref_attr(
-            &new_meta,
-            "Rojo_Ref_PrimaryPart",
-            "@self/Part1.model.json5",
-        );
+        assert_meta_has_ref_attr(&new_meta, "Rojo_Ref_PrimaryPart", "@self/Part1.model.json5");
     });
 }
 
@@ -6859,11 +6855,7 @@ fn ref_ambiguous_path_no_crash() {
         let meta_path = session
             .path()
             .join("src/Workspace/DupParent/init.meta.json5");
-        poll_meta_has_ref_attr(
-            &meta_path,
-            "Rojo_Ref_PrimaryPart",
-            "./Target.model.json5",
-        );
+        poll_meta_has_ref_attr(&meta_path, "Rojo_Ref_PrimaryPart", "./Target.model.json5");
     });
 }
 
@@ -7024,11 +7016,7 @@ fn ref_partial_removal_preserves_remaining_index_entry() {
             "@self/Part1.model.json5",
         );
         // Verify second ref is there too
-        assert_meta_has_ref_attr(
-            &meta_path,
-            "Rojo_Ref_Adornee",
-            "@self/Part2.model.json5",
-        );
+        assert_meta_has_ref_attr(&meta_path, "Rojo_Ref_Adornee", "@self/Part2.model.json5");
 
         // Step 2: Remove PrimaryPart (set to nil), keep Adornee
         let mut props2 = UstrMap::default();
@@ -7048,11 +7036,7 @@ fn ref_partial_removal_preserves_remaining_index_entry() {
         thread::sleep(Duration::from_millis(300));
         assert_meta_no_ref_attr(&meta_path, "Rojo_Ref_PrimaryPart");
         // Adornee should still be there
-        assert_meta_has_ref_attr(
-            &meta_path,
-            "Rojo_Ref_Adornee",
-            "@self/Part2.model.json5",
-        );
+        assert_meta_has_ref_attr(&meta_path, "Rojo_Ref_Adornee", "@self/Part2.model.json5");
 
         // Step 3: Rename Part2. The RefPathIndex should still have the entry
         // for Adornee (not overbroad-removed when PrimaryPart was deleted).
@@ -7350,11 +7334,7 @@ fn ref_same_batch_add_module_target_includes_extension() {
         let meta_path = session
             .path()
             .join("src/Workspace/TestModel/init.meta.json5");
-        poll_meta_has_ref_attr(
-            &meta_path,
-            "Rojo_Ref_PrimaryPart",
-            "./ModuleTarget.luau",
-        );
+        poll_meta_has_ref_attr(&meta_path, "Rojo_Ref_PrimaryPart", "./ModuleTarget.luau");
     });
 }
 

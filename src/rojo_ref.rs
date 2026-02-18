@@ -271,9 +271,7 @@ pub fn resolve_ref_path_to_absolute(path: &str, source_abs: &str) -> Option<Stri
     } else if let Some(rest) = path.strip_prefix("../") {
         let mut p: Vec<&str> = source_abs.split('/').collect();
         p.pop();
-        if p.pop().is_none() {
-            return None;
-        }
+        p.pop()?;
         (p, rest)
     } else {
         return Some(path.to_string());
@@ -281,9 +279,7 @@ pub fn resolve_ref_path_to_absolute(path: &str, source_abs: &str) -> Option<Stri
 
     for segment in rest.split('/') {
         if segment == ".." {
-            if parts.pop().is_none() {
-                return None;
-            }
+            parts.pop()?;
         } else if !segment.is_empty() {
             parts.push(segment);
         }
@@ -401,11 +397,7 @@ impl RefPathIndex {
     /// Relative paths (prefixed with `@self/`, `./`, `../`) are resolved to
     /// absolute using `tree` so the index always stores absolute target paths.
     /// This ensures prefix-based lookup works correctly for rename updates.
-    pub fn populate_from_dir(
-        &mut self,
-        root: &Path,
-        tree: &crate::snapshot::RojoTree,
-    ) {
+    pub fn populate_from_dir(&mut self, root: &Path, tree: &crate::snapshot::RojoTree) {
         let mut count = 0usize;
         let mut dirs_to_visit = vec![root.to_path_buf()];
         while let Some(dir) = dirs_to_visit.pop() {
@@ -893,10 +885,7 @@ mod tests {
     #[test]
     fn relative_self_slugified_child() {
         assert_eq!(
-            compute_relative_ref_path(
-                "Workspace/Model",
-                "Workspace/Model/Hey_Bro.server.luau"
-            ),
+            compute_relative_ref_path("Workspace/Model", "Workspace/Model/Hey_Bro.server.luau"),
             "@self/Hey_Bro.server.luau"
         );
     }
@@ -1290,10 +1279,7 @@ mod tests {
 
     #[test]
     fn relative_edge_service_self_ref() {
-        assert_eq!(
-            compute_relative_ref_path("Workspace", "Workspace"),
-            "@self"
-        );
+        assert_eq!(compute_relative_ref_path("Workspace", "Workspace"), "@self");
     }
 
     #[test]
@@ -1424,10 +1410,7 @@ mod tests {
     #[test]
     fn resolve_abs_bare_path_legacy() {
         assert_eq!(
-            resolve_ref_path_to_absolute(
-                "Workspace/Model/Handle.model.json5",
-                "anything/here"
-            ),
+            resolve_ref_path_to_absolute("Workspace/Model/Handle.model.json5", "anything/here"),
             Some("Workspace/Model/Handle.model.json5".to_string())
         );
     }
@@ -1442,10 +1425,7 @@ mod tests {
 
     #[test]
     fn resolve_abs_dotdot_above_root_returns_none() {
-        assert_eq!(
-            resolve_ref_path_to_absolute("../../X", "Workspace"),
-            None
-        );
+        assert_eq!(resolve_ref_path_to_absolute("../../X", "Workspace"), None);
     }
 
     #[test]

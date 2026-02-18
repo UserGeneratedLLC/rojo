@@ -135,16 +135,12 @@ pub fn update_ref_paths_in_file(
             let Some(path_str) = value.as_str() else {
                 continue;
             };
-            let Some(resolved) =
-                crate::resolve_ref_path_to_absolute(path_str, source_abs)
-            else {
+            let Some(resolved) = crate::resolve_ref_path_to_absolute(path_str, source_abs) else {
                 continue;
             };
             if resolved == old_prefix || resolved.starts_with(&old_prefix_slash) {
-                let new_abs =
-                    format!("{new_prefix}{}", &resolved[old_prefix.len()..]);
-                let new_relative =
-                    crate::compute_relative_ref_path(source_abs, &new_abs);
+                let new_abs = format!("{new_prefix}{}", &resolved[old_prefix.len()..]);
+                let new_relative = crate::compute_relative_ref_path(source_abs, &new_abs);
                 *value = serde_json::Value::String(new_relative);
                 updated = true;
             }
