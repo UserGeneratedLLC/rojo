@@ -126,6 +126,24 @@ pub fn from_slice_with_context<T: DeserializeOwned>(
     from_str_with_context(text, context)
 }
 
+fn trim_float(s: &str) -> String {
+    if !s.contains('.') { return s.to_string(); }
+    let s = s.trim_end_matches('0').trim_end_matches('.');
+    if s == "-0" { "0".to_string() } else { s.to_string() }
+}
+
+fn format_f32(v: f32) -> String {
+    if v.is_nan() { return "NaN".to_string(); }
+    if v.is_infinite() { return if v > 0.0 { "Infinity" } else { "-Infinity" }.to_string(); }
+    trim_float(&format!("{:.6}", v))
+}
+
+fn format_f64(v: f64) -> String {
+    if v.is_nan() { return "NaN".to_string(); }
+    if v.is_infinite() { return if v > 0.0 { "Infinity" } else { "-Infinity" }.to_string(); }
+    trim_float(&format!("{:.15}", v))
+}
+
 /// A JSON5 value that uses BTreeMap for sorted keys and supports NaN/Infinity.
 /// Uses String for numbers to preserve exact representation (including scientific notation).
 #[derive(Debug, Clone, PartialEq)]
@@ -154,7 +172,7 @@ impl Json5Value {
             Json5Value::Array(arr) => {
                 if arr.is_empty() {
                     output.push_str("[]");
-                } else if arr.len() < 12
+                } else if arr.len() <= 20
                     && arr.iter().all(|v| {
                         matches!(
                             v,
@@ -360,27 +378,12 @@ impl<'a> serde::Serializer for &mut CompactJson5Serializer<'a> {
     }
 
     fn serialize_f32(self, v: f32) -> Result<(), Self::Error> {
-        self.serialize_f64(v as f64)
+        self.output.push_str(&format_f32(v));
+        Ok(())
     }
 
     fn serialize_f64(self, v: f64) -> Result<(), Self::Error> {
-        if v.is_nan() {
-            self.output.push_str("NaN");
-        } else if v.is_infinite() {
-            if v.is_sign_positive() {
-                self.output.push_str("Infinity");
-            } else {
-                self.output.push_str("-Infinity");
-            }
-        } else {
-            // Use scientific notation for very large or very small numbers
-            let abs = v.abs();
-            if abs != 0.0 && !(1e-6..1e15).contains(&abs) {
-                self.output.push_str(&format!("{:e}", v));
-            } else {
-                self.output.push_str(&v.to_string());
-            }
-        }
+        self.output.push_str(&format_f64(v));
         Ok(())
     }
 
@@ -708,29 +711,11 @@ impl serde::Serializer for Json5ValueSerializer {
     }
 
     fn serialize_f32(self, v: f32) -> Result<Self::Ok, Self::Error> {
-        self.serialize_f64(v as f64)
+        Ok(Json5Value::Number(format_f32(v)))
     }
 
     fn serialize_f64(self, v: f64) -> Result<Self::Ok, Self::Error> {
-        let s = if v.is_nan() {
-            "NaN".to_string()
-        } else if v.is_infinite() {
-            if v.is_sign_positive() {
-                "Infinity".to_string()
-            } else {
-                "-Infinity".to_string()
-            }
-        } else {
-            // Use scientific notation for very large or very small numbers
-            // to ensure they can be parsed back by json5
-            let abs = v.abs();
-            if abs != 0.0 && !(1e-6..1e15).contains(&abs) {
-                format!("{:e}", v)
-            } else {
-                v.to_string()
-            }
-        };
-        Ok(Json5Value::Number(s))
+        Ok(Json5Value::Number(format_f64(v)))
     }
 
     fn serialize_char(self, v: char) -> Result<Self::Ok, Self::Error> {
@@ -1028,6 +1013,45 @@ impl serde::ser::SerializeStructVariant for Json5StructVariantSerializer {
 mod tests {
     use super::*;
     use serde::Deserialize;
+
+    #[test]
+    fn test_trim_float() {
+        assert_eq!(trim_float("6.670000"), "6.67");
+        assert_eq!(trim_float("6.000000"), "6");
+        assert_eq!(trim_float("-0.000000"), "0");
+        assert_eq!(trim_float("0.000000"), "0");
+        assert_eq!(trim_float("1.500000"), "1.5");
+        assert_eq!(trim_float("-3.140000"), "-3.14");
+        assert_eq!(trim_float("100"), "100");
+    }
+
+    #[test]
+    fn test_format_f32() {
+        assert_eq!(format_f32(6.67), "6.67");
+        assert_eq!(format_f32(6.0), "6");
+        assert_eq!(format_f32(0.0), "0");
+        assert_eq!(format_f32(-0.0), "0");
+        assert_eq!(format_f32(0.5), "0.5");
+        assert_eq!(format_f32(-3.14), "-3.14");
+        assert_eq!(format_f32(1.0 / 3.0), "0.333333");
+        assert_eq!(format_f32(f32::NAN), "NaN");
+        assert_eq!(format_f32(f32::INFINITY), "Infinity");
+        assert_eq!(format_f32(f32::NEG_INFINITY), "-Infinity");
+    }
+
+    #[test]
+    fn test_format_f64() {
+        assert_eq!(format_f64(6.67), "6.67");
+        assert_eq!(format_f64(6.0), "6");
+        assert_eq!(format_f64(0.0), "0");
+        assert_eq!(format_f64(-0.0), "0");
+        assert_eq!(format_f64(0.5), "0.5");
+        assert_eq!(format_f64(-3.14), "-3.14");
+        assert_eq!(format_f64(1.0 / 3.0), "0.333333333333333");
+        assert_eq!(format_f64(f64::NAN), "NaN");
+        assert_eq!(format_f64(f64::INFINITY), "Infinity");
+        assert_eq!(format_f64(f64::NEG_INFINITY), "-Infinity");
+    }
 
     #[test]
     fn test_parse_value() {

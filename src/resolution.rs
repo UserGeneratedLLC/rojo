@@ -10,65 +10,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::REF_PATH_ATTRIBUTE_PREFIX;
 
-/// Rounds float components of Variant types to 6 decimal places.
-/// Uses format-and-reparse for exact decimal representation in json5 output.
-fn truncate_variant(v: Variant) -> Variant {
-    fn t(v: f32) -> f32 {
-        format!("{:.6}", v).parse::<f32>().unwrap_or(v)
-    }
-
-    match v {
-        Variant::CFrame(cf) => Variant::CFrame(CFrame {
-            position: Vector3::new(t(cf.position.x), t(cf.position.y), t(cf.position.z)),
-            orientation: Matrix3::new(
-                Vector3::new(
-                    t(cf.orientation.x.x),
-                    t(cf.orientation.x.y),
-                    t(cf.orientation.x.z),
-                ),
-                Vector3::new(
-                    t(cf.orientation.y.x),
-                    t(cf.orientation.y.y),
-                    t(cf.orientation.y.z),
-                ),
-                Vector3::new(
-                    t(cf.orientation.z.x),
-                    t(cf.orientation.z.y),
-                    t(cf.orientation.z.z),
-                ),
-            ),
-        }),
-        Variant::OptionalCFrame(Some(cf)) => Variant::OptionalCFrame(Some(CFrame {
-            position: Vector3::new(t(cf.position.x), t(cf.position.y), t(cf.position.z)),
-            orientation: Matrix3::new(
-                Vector3::new(
-                    t(cf.orientation.x.x),
-                    t(cf.orientation.x.y),
-                    t(cf.orientation.x.z),
-                ),
-                Vector3::new(
-                    t(cf.orientation.y.x),
-                    t(cf.orientation.y.y),
-                    t(cf.orientation.y.z),
-                ),
-                Vector3::new(
-                    t(cf.orientation.z.x),
-                    t(cf.orientation.z.y),
-                    t(cf.orientation.z.z),
-                ),
-            ),
-        })),
-        Variant::Vector3(v) => Variant::Vector3(Vector3::new(t(v.x), t(v.y), t(v.z))),
-        Variant::Vector2(v) => Variant::Vector2(Vector2::new(t(v.x), t(v.y))),
-        Variant::UDim(u) => Variant::UDim(rbx_dom_weak::types::UDim::new(t(u.scale), u.offset)),
-        Variant::UDim2(u) => Variant::UDim2(rbx_dom_weak::types::UDim2::new(
-            rbx_dom_weak::types::UDim::new(t(u.x.scale), u.x.offset),
-            rbx_dom_weak::types::UDim::new(t(u.y.scale), u.y.offset),
-        )),
-        other => other,
-    }
-}
-
 /// A user-friendly version of `Variant` that supports specifying ambiguous
 /// values. Ambiguous values need a reflection database to be resolved to a
 /// usable value.
@@ -100,7 +41,6 @@ impl UnresolvedValue {
     /// Creates an `UnresolvedValue` from a variant, using a class and property
     /// name to potentially allow for ambiguous Enum variants.
     pub fn from_variant(variant: Variant, class_name: &str, prop_name: &str) -> Self {
-        let variant = truncate_variant(variant);
         let descriptor = find_descriptor(class_name, prop_name);
         if descriptor.is_some() {
             // We can only use an ambiguous syntax if the property is known
@@ -124,7 +64,7 @@ impl UnresolvedValue {
                     return Self::FullyQualified(variant);
                 }
                 Variant::Bool(bool) => AmbiguousValue::Bool(bool),
-                Variant::Float32(n) => AmbiguousValue::Number(n as f64),
+                Variant::Float32(n) => AmbiguousValue::Number32(n),
                 Variant::Float64(n) => AmbiguousValue::Number(n),
                 Variant::Int32(n) => AmbiguousValue::Number(n as f64),
                 Variant::Int64(n) => AmbiguousValue::Number(n as f64),
@@ -139,27 +79,27 @@ impl UnresolvedValue {
                 },
                 Variant::ContentId(content) => AmbiguousValue::String(content.into_string()),
                 Variant::Vector2(vector) => {
-                    AmbiguousValue::Array2([vector.x as f64, vector.y as f64])
+                    AmbiguousValue::Array2([vector.x, vector.y])
                 }
                 Variant::Vector3(vector) => {
-                    AmbiguousValue::Array3([vector.x as f64, vector.y as f64, vector.z as f64])
+                    AmbiguousValue::Array3([vector.x, vector.y, vector.z])
                 }
                 Variant::Color3(color) => {
-                    AmbiguousValue::Array3([color.r as f64, color.g as f64, color.b as f64])
+                    AmbiguousValue::Array3([color.r, color.g, color.b])
                 }
                 Variant::CFrame(cf) => AmbiguousValue::Array12([
-                    cf.position.x as f64,
-                    cf.position.y as f64,
-                    cf.position.z as f64,
-                    cf.orientation.x.x as f64,
-                    cf.orientation.x.y as f64,
-                    cf.orientation.x.z as f64,
-                    cf.orientation.y.x as f64,
-                    cf.orientation.y.y as f64,
-                    cf.orientation.y.z as f64,
-                    cf.orientation.z.x as f64,
-                    cf.orientation.z.y as f64,
-                    cf.orientation.z.z as f64,
+                    cf.position.x,
+                    cf.position.y,
+                    cf.position.z,
+                    cf.orientation.x.x,
+                    cf.orientation.x.y,
+                    cf.orientation.x.z,
+                    cf.orientation.y.x,
+                    cf.orientation.y.y,
+                    cf.orientation.y.z,
+                    cf.orientation.z.x,
+                    cf.orientation.z.y,
+                    cf.orientation.z.z,
                 ]),
                 Variant::Attributes(attr) => AmbiguousValue::Attributes(attr),
                 Variant::Font(font) => AmbiguousValue::Font(font),
@@ -176,7 +116,6 @@ impl UnresolvedValue {
     /// Creates an `UnresolvedValue` from a variant, only returning ambiguous
     /// values if they're able to be resolved in a context-free environment.
     pub fn from_variant_unambiguous(variant: Variant) -> Self {
-        let variant = truncate_variant(variant);
         match variant {
             Variant::String(str) => Self::Ambiguous(AmbiguousValue::String(str)),
             Variant::Float64(number) => Self::Ambiguous(AmbiguousValue::Number(number)),
@@ -199,10 +138,11 @@ pub enum AmbiguousValue {
     String(String),
     StringArray(Vec<String>),
     Number(f64),
-    Array2([f64; 2]),
-    Array3([f64; 3]),
-    Array4([f64; 4]),
-    Array12([f64; 12]),
+    Number32(f32),
+    Array2([f32; 2]),
+    Array3([f32; 3]),
+    Array4([f32; 4]),
+    Array12([f32; 12]),
     Attributes(Attributes),
     Font(Font),
     MaterialColors(MaterialColors),
@@ -257,6 +197,7 @@ impl AmbiguousValue {
             DataType::Value(variant_ty) => match (variant_ty, self) {
                 (VariantType::Bool, AmbiguousValue::Bool(value)) => Ok(value.into()),
 
+                (VariantType::Float32, AmbiguousValue::Number32(value)) => Ok((value as f32).into()),
                 (VariantType::Float32, AmbiguousValue::Number(value)) => Ok((value as f32).into()),
                 (VariantType::Float64, AmbiguousValue::Number(value)) => Ok(value.into()),
                 (VariantType::Int32, AmbiguousValue::Number(value)) => Ok((value as i32).into()),
@@ -341,6 +282,7 @@ impl AmbiguousValue {
             AmbiguousValue::String(_) => "a string",
             AmbiguousValue::StringArray(_) => "an array of strings",
             AmbiguousValue::Number(_) => "a number",
+            AmbiguousValue::Number32(_) => "a number",
             AmbiguousValue::Array2(_) => "an array of two numbers",
             AmbiguousValue::Array3(_) => "an array of three numbers",
             AmbiguousValue::Array4(_) => "an array of four numbers",
@@ -476,6 +418,12 @@ mod test {
 
         assert_eq!(resolve("Part", "Transparency", "1"), Variant::Float32(1.0));
         assert_eq!(resolve("NumberValue", "Value", "1"), Variant::Float64(1.0));
+        assert_eq!(
+            UnresolvedValue::from_variant(Variant::Float32(0.125), "Part", "Transparency")
+                .resolve("Part", "Transparency")
+                .unwrap(),
+            Variant::Float32(0.125),
+        );
 
         assert_eq!(resolve_unambiguous("12.5"), Variant::Float64(12.5));
     }
