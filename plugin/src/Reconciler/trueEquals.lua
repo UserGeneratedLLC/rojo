@@ -90,6 +90,9 @@ local function trueEquals(a: any, b: any): boolean
 	end
 
 	if t == "number" then
+		if a ~= a then
+			return b ~= b
+		end
 		return fuzzyEq(a, b)
 	end
 	if t == "Color3" then
@@ -103,10 +106,6 @@ local function trueEquals(a: any, b: any): boolean
 	end
 	if t == "CFrame" then
 		return cframeEq(a, b)
-	end
-
-	if a ~= a and b ~= b then
-		return true
 	end
 
 	return false

@@ -14,6 +14,10 @@ local invariant = require(script.Parent.Parent.invariant)
 local Matching = require(script.Parent.matching)
 
 local function hydrate(instanceMap, virtualInstances, rootId, rootInstance, session)
+	if not session then
+		session = Matching.newSession()
+	end
+
 	local virtualInstance = virtualInstances[rootId]
 
 	if virtualInstance == nil then

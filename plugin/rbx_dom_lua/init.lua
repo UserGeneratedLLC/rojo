@@ -44,6 +44,7 @@ end
 local EXCLUDED_PROP_NAMES: { [string]: boolean } = {
 	Tags = true,
 	Attributes = true,
+	Name = true,
 }
 
 -- Encoded value type keys that cannot be compared during matching.

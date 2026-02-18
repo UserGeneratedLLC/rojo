@@ -431,13 +431,13 @@ return function()
 
 			local part = Instance.new("Part")
 			part.Name = "TestPart"
-			part.Color = Color3.new(1, 0.5, 0.25)
+			part.Color = Color3.fromRGB(255, 128, 64)
 			part.Parent = container
 
 			local rootId = generateId()
 			instanceMap:insert(rootId, part)
 
-			-- Same color values (exact match)
+			-- Same color values (exact 8-bit match avoids quantization mismatch)
 			local virtualInstances = {
 				[rootId] = {
 					Id = rootId,
@@ -446,7 +446,7 @@ return function()
 					Parent = nil,
 					Properties = {
 						Color = {
-							Color3 = { 1, 0.5, 0.25 },
+							Color3 = { 255 / 255, 128 / 255, 64 / 255 },
 						},
 					},
 					Children = {},

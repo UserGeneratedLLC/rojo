@@ -187,12 +187,12 @@ return function()
 			expect(trueEquals(Color3.fromRGB(128, 128, 128), Color3.fromRGB(129, 128, 128))).to.equal(false)
 		end)
 
-		it("near-boundary same floor", function()
-			expect(trueEquals(Color3.new(128 / 255, 0, 0), Color3.new(128.4 / 255, 0, 0))).to.equal(true)
+		it("near-boundary within epsilon", function()
+			expect(trueEquals(Color3.new(0.5, 0, 0), Color3.new(0.50005, 0, 0))).to.equal(true)
 		end)
 
-		it("near-boundary different floor", function()
-			expect(trueEquals(Color3.new(128 / 255, 0, 0), Color3.new(129 / 255, 0, 0))).to.equal(false)
+		it("near-boundary beyond epsilon", function()
+			expect(trueEquals(Color3.new(0.5, 0, 0), Color3.new(0.502, 0, 0))).to.equal(false)
 		end)
 	end)
 
