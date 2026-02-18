@@ -27,6 +27,36 @@ pub(crate) const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Current protocol version, which is required to match.
 pub const PROTOCOL_VERSION: u64 = 6;
 
+/// A single service's children serialized as rbxm binary data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceChunk {
+    pub class_name: String,
+    #[serde(with = "serde_bytes")]
+    pub data: Vec<u8>,
+}
+
+/// Incoming request from the plugin for live syncback.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncbackRequest {
+    pub protocol_version: u64,
+    pub server_version: String,
+    pub place_id: Option<u64>,
+    pub services: Vec<ServiceChunk>,
+}
+
+/// Payload passed from the API handler to the serve loop after validation.
+#[derive(Debug)]
+pub struct SyncbackPayload {
+    pub services: Vec<ServiceChunk>,
+}
+
+/// Why the live server exited its accept loop.
+pub enum ServerExitReason {
+    SyncbackRequested(SyncbackPayload),
+}
+
 /// Message returned by Rojo API when a change has occurred.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

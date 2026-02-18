@@ -470,6 +470,221 @@ fn get_port_number() -> usize {
     port
 }
 
+/// Build a ServiceChunk by serializing child instances into rbxm format.
+pub fn make_service_chunk(
+    class_name: &str,
+    children: Vec<rbx_dom_weak::InstanceBuilder>,
+) -> librojo::web_api::ServiceChunk {
+    use rbx_dom_weak::WeakDom;
+
+    let mut dom = WeakDom::new(rbx_dom_weak::InstanceBuilder::new("DataModel"));
+    let root = dom.root_ref();
+    for child in children {
+        dom.insert(root, child);
+    }
+    let refs: Vec<Ref> = dom.root().children().to_vec();
+    let mut buf = Vec::new();
+    rbx_binary::to_writer(&mut buf, &dom, &refs).unwrap();
+    librojo::web_api::ServiceChunk {
+        class_name: class_name.to_string(),
+        data: buf,
+    }
+}
+
+/// Build a complete rbxl file from service chunks, mirroring the same data
+/// that live syncback receives. Used for CLI parity testing.
+pub fn make_rbxl_from_chunks(chunks: &[librojo::web_api::ServiceChunk]) -> Vec<u8> {
+    use rbx_dom_weak::WeakDom;
+    use std::collections::HashMap;
+    use std::io::Cursor;
+
+    let mut dom = WeakDom::new(rbx_dom_weak::InstanceBuilder::new("DataModel"));
+    let root_ref = dom.root_ref();
+
+    for chunk in chunks {
+        let chunk_dom = rbx_binary::from_reader(Cursor::new(&chunk.data))
+            .unwrap_or_else(|e| panic!("Failed to parse rbxm for {}: {e}", chunk.class_name));
+
+        let service_ref =
+            dom.insert(root_ref, rbx_dom_weak::InstanceBuilder::new(&chunk.class_name));
+
+        let mut ref_map: HashMap<Ref, Ref> = HashMap::new();
+        for &child_ref in chunk_dom.root().children() {
+            deep_clone_into_test(&chunk_dom, &mut dom, child_ref, service_ref, &mut ref_map);
+        }
+
+        let all_refs: Vec<Ref> = ref_map.values().copied().collect();
+        for inst_ref in all_refs {
+            let props_to_fix: Vec<(String, Ref)> = {
+                let inst = dom.get_by_ref(inst_ref).unwrap();
+                inst.properties
+                    .iter()
+                    .filter_map(|(key, value)| {
+                        if let rbx_dom_weak::types::Variant::Ref(r) = value {
+                            ref_map.get(r).map(|&mapped| (key.to_string(), mapped))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            };
+            if !props_to_fix.is_empty() {
+                let inst = dom.get_by_ref_mut(inst_ref).unwrap();
+                for (key, new_ref) in props_to_fix {
+                    inst.properties
+                        .insert(key.into(), rbx_dom_weak::types::Variant::Ref(new_ref));
+                }
+            }
+        }
+    }
+
+    let service_refs: Vec<Ref> = dom.root().children().to_vec();
+    let mut buf = Vec::new();
+    rbx_binary::to_writer(&mut buf, &dom, &service_refs).unwrap();
+    buf
+}
+
+fn deep_clone_into_test(
+    source: &rbx_dom_weak::WeakDom,
+    target: &mut rbx_dom_weak::WeakDom,
+    source_ref: Ref,
+    target_parent: Ref,
+    ref_map: &mut std::collections::HashMap<Ref, Ref>,
+) {
+    let inst = source.get_by_ref(source_ref).unwrap();
+    let mut builder =
+        rbx_dom_weak::InstanceBuilder::new(inst.class.as_str()).with_name(inst.name.as_str());
+
+    for (key, value) in &inst.properties {
+        builder = builder.with_property(key.as_str(), value.clone());
+    }
+
+    let new_ref = target.insert(target_parent, builder);
+    ref_map.insert(source_ref, new_ref);
+
+    for &child_ref in inst.children() {
+        deep_clone_into_test(source, target, child_ref, new_ref, ref_map);
+    }
+}
+
+/// Run CLI syncback on a fresh copy of a fixture using the same data
+/// that was sent to live syncback. Returns the temp dir (keep alive) and
+/// project path.
+pub fn run_cli_syncback_on_chunks(
+    fixture_name: &str,
+    chunks: &[librojo::web_api::ServiceChunk],
+) -> (TempDir, PathBuf) {
+    use crate::rojo_test::io_util::{copy_recursive, ROJO_PATH, SERVE_TESTS_PATH};
+
+    let source_path = Path::new(SERVE_TESTS_PATH).join(fixture_name);
+    let dir = tempdir().expect("Couldn't create temp dir for CLI syncback");
+    let project_path = dir.path().join(fixture_name);
+    fs::create_dir(&project_path).expect("Couldn't create project subdirectory");
+    copy_recursive(&source_path, &project_path).expect("Couldn't copy fixture");
+
+    let rbxl_data = make_rbxl_from_chunks(chunks);
+    let rbxl_path = dir.path().join("input.rbxl");
+    fs::write(&rbxl_path, rbxl_data).expect("Failed to write rbxl");
+
+    let output = std::process::Command::new(ROJO_PATH)
+        .args([
+            "syncback",
+            project_path.to_str().unwrap(),
+            "--input",
+            rbxl_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to run atlas syncback");
+
+    if !output.status.success() {
+        panic!(
+            "atlas syncback failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    (dir, project_path)
+}
+
+impl TestServeSession {
+    /// Post to /api/syncback with raw bytes. Returns the full response
+    /// for status code inspection.
+    pub fn post_api_syncback_raw(&self, body: Vec<u8>) -> reqwest::blocking::Response {
+        let url = format!("http://localhost:{}/api/syncback", self.port);
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .build()
+            .expect("Failed to build reqwest client");
+        client
+            .post(url)
+            .body(body)
+            .send()
+            .expect("Failed to send syncback request")
+    }
+
+    /// Post to /api/syncback with correct version/protocol info.
+    /// Panics if the response is not 200.
+    pub fn post_api_syncback(
+        &self,
+        place_id: Option<u64>,
+        services: Vec<librojo::web_api::ServiceChunk>,
+    ) {
+        use serde::Serialize;
+
+        let request = serde_json::json!({
+            "protocolVersion": librojo::web_api::PROTOCOL_VERSION,
+            "serverVersion": env!("CARGO_PKG_VERSION"),
+            "placeId": place_id,
+            "services": services,
+        });
+
+        let mut body = Vec::new();
+        let mut serializer = rmp_serde::Serializer::new(&mut body)
+            .with_human_readable()
+            .with_struct_map();
+        request
+            .serialize(&mut serializer)
+            .expect("Failed to serialize syncback request");
+
+        let response = self.post_api_syncback_raw(body);
+        assert!(
+            response.status().is_success(),
+            "Syncback request failed with status {}: {}",
+            response.status(),
+            response.text().unwrap_or_default()
+        );
+    }
+
+    /// Wait for the server to come back online after a syncback-triggered
+    /// restart. Uses longer timeouts than initial startup since syncback
+    /// runs between teardown and restart.
+    pub fn wait_to_come_back_online(&self) -> ServerInfoResponse {
+        const BASE_DURATION_MS: f32 = 200.0;
+        const EXP_BACKOFF_FACTOR: f32 = 1.3;
+        const MAX_TRIES: u32 = 20;
+
+        for i in 1..=MAX_TRIES {
+            let info = match self.get_api_rojo() {
+                Ok(info) => info,
+                Err(_) => {
+                    let retry_time_ms = BASE_DURATION_MS * (i as f32).powf(EXP_BACKOFF_FACTOR);
+                    let retry_time = Duration::from_millis(retry_time_ms as u64);
+                    thread::sleep(retry_time);
+                    continue;
+                }
+            };
+
+            return info;
+        }
+
+        panic!(
+            "Server did not come back online after syncback ({} tries)",
+            MAX_TRIES
+        );
+    }
+}
+
 /// Extract the message cursor from a SocketPacket for use in subsequent
 /// WebSocket subscriptions when chaining multi-step tests.
 pub fn get_message_cursor(packet: &SocketPacket) -> u32 {

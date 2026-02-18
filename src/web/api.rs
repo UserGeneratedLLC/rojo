@@ -29,8 +29,9 @@ use crate::{
     web::{
         interface::{
             ErrorResponse, Instance, InstanceMetadata, MessagesPacket, OpenResponse, ReadResponse,
-            ServerInfoResponse, SocketPacket, SocketPacketBody, SocketPacketType, SubscribeMessage,
-            WriteRequest, WriteResponse, PROTOCOL_VERSION, SERVER_VERSION,
+            ServerInfoResponse, SocketPacket, SocketPacketBody, SocketPacketType,
+            SubscribeMessage, SyncbackPayload, SyncbackRequest, WriteRequest, WriteResponse,
+            PROTOCOL_VERSION, SERVER_VERSION,
         },
         util::{deserialize_msgpack, msgpack, msgpack_ok, serialize_msgpack},
     },
@@ -122,6 +123,7 @@ fn variant_to_json(variant: &Variant) -> Option<serde_json::Value> {
 pub async fn call(
     serve_session: Arc<ServeSession>,
     mut request: Request<Incoming>,
+    syncback_signal: Arc<super::SyncbackSignal>,
 ) -> Response<Full<Bytes>> {
     let service = ApiService::new(serve_session);
 
@@ -153,6 +155,9 @@ pub async fn call(
             service.handle_api_open(request).await
         }
         (&Method::POST, "/api/write") => service.handle_api_write(request).await,
+        (&Method::POST, "/api/syncback") => {
+            handle_api_syncback(request, &service, syncback_signal).await
+        }
         (&Method::GET, "/api/validate-tree") => service.handle_api_validate_tree().await,
 
         (_method, path) => msgpack(
@@ -160,6 +165,96 @@ pub async fn call(
             StatusCode::NOT_FOUND,
         ),
     }
+}
+
+async fn handle_api_syncback(
+    request: Request<Incoming>,
+    service: &ApiService,
+    syncback_signal: Arc<super::SyncbackSignal>,
+) -> Response<Full<Bytes>> {
+    let body = match request.into_body().collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(err) => {
+            return msgpack(
+                ErrorResponse::bad_request(format!("Failed to read request body: {err}")),
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    };
+
+    let syncback_request: SyncbackRequest = match deserialize_msgpack(&body) {
+        Ok(req) => req,
+        Err(err) => {
+            return msgpack(
+                ErrorResponse::bad_request(format!(
+                    "Failed to deserialize syncback request: {err}"
+                )),
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    };
+
+    if syncback_request.protocol_version != PROTOCOL_VERSION {
+        return msgpack(
+            ErrorResponse::bad_request(format!(
+                "Protocol version mismatch: expected {}, got {}",
+                PROTOCOL_VERSION, syncback_request.protocol_version
+            )),
+            StatusCode::BAD_REQUEST,
+        );
+    }
+
+    let server_semver = SERVER_VERSION;
+    let server_parts: Vec<&str> = server_semver.split('.').collect();
+    let client_parts: Vec<&str> = syncback_request.server_version.split('.').collect();
+    let server_major_minor = server_parts.get(..2);
+    let client_major_minor = client_parts.get(..2);
+    if server_major_minor != client_major_minor {
+        return msgpack(
+            ErrorResponse::bad_request(format!(
+                "Server version mismatch: server is {}, plugin expects {}",
+                SERVER_VERSION, syncback_request.server_version
+            )),
+            StatusCode::BAD_REQUEST,
+        );
+    }
+
+    if let Some(place_id) = syncback_request.place_id {
+        if let Some(expected) = service.serve_session.serve_place_ids() {
+            if !expected.contains(&place_id) {
+                return msgpack(
+                    ErrorResponse::bad_request(format!(
+                        "Place ID {} is not in the servePlaceIds whitelist",
+                        place_id
+                    )),
+                    StatusCode::FORBIDDEN,
+                );
+            }
+        }
+        if let Some(blocked) = service.serve_session.blocked_place_ids() {
+            if blocked.contains(&place_id) {
+                return msgpack(
+                    ErrorResponse::bad_request(format!(
+                        "Place ID {} is in the blockedPlaceIds list",
+                        place_id
+                    )),
+                    StatusCode::FORBIDDEN,
+                );
+            }
+        }
+    }
+
+    log::info!(
+        "Live syncback requested with {} service chunks",
+        syncback_request.services.len()
+    );
+
+    let payload = SyncbackPayload {
+        services: syncback_request.services,
+    };
+    syncback_signal.fire(payload);
+
+    msgpack_ok(&serde_json::json!({"status": "syncback_initiated"}))
 }
 
 pub struct ApiService {

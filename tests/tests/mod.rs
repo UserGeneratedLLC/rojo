@@ -3,6 +3,7 @@ mod clean_mode;
 mod clean_mode_stress;
 mod connected_mode;
 mod git_sync_defaults;
+mod live_syncback;
 mod matching_fixtures;
 mod serve;
 mod syncback;

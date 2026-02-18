@@ -1,0 +1,16 @@
+{
+  "name": "live_syncback_place_ids",
+  "servePlaceIds": [123],
+  "blockedPlaceIds": [999],
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "$className": "ReplicatedStorage",
+      "$path": "src/shared"
+    },
+    "ServerScriptService": {
+      "$className": "ServerScriptService",
+      "$path": "src/server"
+    }
+  }
+}
