@@ -24,8 +24,7 @@ return function(service: Instance)
 				continue
 			end
 
-			local isReadable = propertyMeta.scriptability == "ReadWrite"
-				or propertyMeta.scriptability == "Read"
+			local isReadable = propertyMeta.scriptability == "ReadWrite" or propertyMeta.scriptability == "Read"
 			local doesSerialize = propertyMeta.serialization ~= "DoesNotSerialize"
 
 			if isReadable and doesSerialize then
@@ -66,10 +65,15 @@ return function(service: Instance)
 		end
 	end
 
-	return {
+	local chunk = {
 		className = service.ClassName,
 		data = data,
-		properties = properties,
-		refs = refs,
 	}
+	if next(properties) then
+		chunk.properties = properties
+	end
+	if next(refs) then
+		chunk.refs = refs
+	end
+	return chunk
 end

@@ -25,6 +25,7 @@ local RbxDom = require(Packages.RbxDom)
 local trueEquals = require(script.Parent.trueEquals)
 
 local UNMATCHED_PENALTY = 10000
+local MAX_SCORING_DEPTH = 3
 
 -- ================================================================
 -- Types
@@ -341,7 +342,8 @@ local function computePairCost(
 	virtualId: string,
 	studioInstance: Instance,
 	virtualInstances: VirtualInstances,
-	bestSoFar: number
+	bestSoFar: number,
+	depth: number
 ): number
 	local vc = session.costCache[virtualId]
 	if vc then
@@ -365,7 +367,7 @@ local function computePairCost(
 	local sCache = cacheStudio(studioInstance, classKeys, vCache.extraProps, refPropNames)
 
 	local cost = countOwnDiffs(vCache, sCache, classKeys)
-	if cost >= bestSoFar then
+	if cost >= bestSoFar or depth >= MAX_SCORING_DEPTH then
 		return cost
 	end
 
@@ -378,8 +380,15 @@ local function computePairCost(
 		elseif #studioKids == 0 then
 			cost += #validVChildren * UNMATCHED_PENALTY
 		else
-			local childResult =
-				matchChildren(session, validVChildren, studioKids, virtualInstances, virtualId, studioInstance)
+			local childResult = matchChildren(
+				session,
+				validVChildren,
+				studioKids,
+				virtualInstances,
+				virtualId,
+				studioInstance,
+				depth + 1
+			)
 			cost += childResult.totalCost
 		end
 	end
@@ -400,8 +409,10 @@ matchChildren = function(
 	studioChildren: { Instance },
 	virtualInstances: VirtualInstances,
 	parentVirtualId: string?,
-	parentStudioInstance: Instance?
+	parentStudioInstance: Instance?,
+	depth: number?
 ): MatchResult
+	depth = depth or 0
 	if parentVirtualId and parentStudioInstance then
 		local pc = session.matchCache[parentVirtualId]
 		if pc then
@@ -522,7 +533,7 @@ matchChildren = function(
 				pairIdx += 1
 				local cost = countOwnDiffs(vCache, sCache, classKeys)
 
-				if cost < bestSoFar then
+				if cost < bestSoFar and depth < MAX_SCORING_DEPTH then
 					local validVChildren = vCache.validChildren
 					local studioKids = sCache.children
 
@@ -538,7 +549,8 @@ matchChildren = function(
 								studioKids,
 								virtualInstances,
 								virtualChildren[vi],
-								sCache.instance
+								sCache.instance,
+								depth + 1
 							)
 							cost += childResult.totalCost
 						end
@@ -591,7 +603,7 @@ matchChildren = function(
 
 	local totalCost = 0
 	for _, pair in ipairs(matched) do
-		totalCost += computePairCost(session, pair.virtualId, pair.studioInstance, virtualInstances, math.huge)
+		totalCost += computePairCost(session, pair.virtualId, pair.studioInstance, virtualInstances, math.huge, depth)
 	end
 	totalCost += (#unmatchedVirtual + #unmatchedStudio) * UNMATCHED_PENALTY
 

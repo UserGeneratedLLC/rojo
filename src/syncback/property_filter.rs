@@ -62,11 +62,7 @@ pub fn filter_properties_with_stats<'inst>(
         }
         if !sync_unscriptable {
             let mut current = class_data;
-            loop {
-                let data = match current {
-                    Some(d) => d,
-                    None => break,
-                };
+            while let Some(data) = current {
                 if let Some(prop_data) = data.properties.get(prop_name.as_str()) {
                     if matches!(prop_data.scriptability, Scriptability::None) {
                         return true;

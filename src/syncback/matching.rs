@@ -251,6 +251,7 @@ struct ScoringMatchResult {
 /// Match children by reference for scoring purposes (non-consuming).
 /// Groups by (Name, ClassName), instant-matches 1:1 groups, and scores
 /// ambiguous groups using `compute_change_count` (mutually recursive).
+#[allow(clippy::too_many_arguments)]
 fn match_children_for_scoring(
     new_children: &[Ref],
     old_children: &[Ref],

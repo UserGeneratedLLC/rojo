@@ -316,7 +316,7 @@ fn parity_multiple_services_with_properties() {
 #[test]
 fn parity_camera_not_synced() {
     let camera_child = InstanceBuilder::new("Camera").with_name("Camera");
-    let chunks = vec![make_service_chunk_full(
+    let chunks = [make_service_chunk_full(
         "Workspace",
         vec![],
         vec![("CurrentCamera", "Camera", "Camera")],
@@ -698,7 +698,7 @@ fn roundtrip_build_syncback_rebuild() {
                 .iter()
                 .map(|&r| {
                     let c = dom_a.get_by_ref(r).unwrap();
-                    (c.name.clone(), c.class.clone(), r)
+                    (c.name.clone(), c.class, r)
                 })
                 .collect();
             children_a.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
@@ -708,7 +708,7 @@ fn roundtrip_build_syncback_rebuild() {
                 .iter()
                 .map(|&r| {
                     let c = dom_b.get_by_ref(r).unwrap();
-                    (c.name.clone(), c.class.clone(), r)
+                    (c.name.clone(), c.class, r)
                 })
                 .collect();
             children_b.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
