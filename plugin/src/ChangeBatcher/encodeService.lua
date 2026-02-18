@@ -90,12 +90,23 @@ return function(service: Instance)
 		end
 	end
 
-	return {
+	local result = {
 		className = service.ClassName,
 		data = data,
-		properties = properties,
-		attributes = attributes,
-		tags = tags,
-		refs = refs,
 	}
+
+	if next(properties) then
+		result.properties = properties
+	end
+	if next(attributes) then
+		result.attributes = attributes
+	end
+	if #tags > 0 then
+		result.tags = tags
+	end
+	if next(refs) then
+		result.refs = refs
+	end
+
+	return result
 end
