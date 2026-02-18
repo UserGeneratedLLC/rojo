@@ -212,8 +212,9 @@ fn build_result(
     old_children: &[Ref],
     new_matched: &[bool],
     old_matched: &[bool],
-    matched_indices: Vec<(usize, usize)>,
+    mut matched_indices: Vec<(usize, usize)>,
 ) -> MatchResult {
+    matched_indices.sort_by_key(|&(ni, _)| ni); // TODO: this seems sketchy?
     let matched: Vec<(Ref, Ref)> = matched_indices
         .into_iter()
         .map(|(ni, oi)| (new_children[ni], old_children[oi]))

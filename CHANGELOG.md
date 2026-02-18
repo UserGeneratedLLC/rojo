@@ -40,6 +40,19 @@ Making a new release? Simply add the new header with the version and date undern
 * Update ChangeBatcher tests to reflect encoding behavior for duplicate-named children.
 * Enhance deduplication processes and refactor code for improved readability and consistency.
 * Update rbx-dom subproject and reflection database.
+* Implement live syncback via the Studio plugin with service properties encoding, allowing Roblox→filesystem sync during `atlas serve` sessions without the CLI command.
+* Add `SyncbackRequest` structure and API protocol validation for plugin-initiated syncback.
+* Add `SyncbackConfirm` UI component for reviewing and confirming live syncback operations in the plugin.
+* Implement git-based sync direction defaults: use `git status` metadata to auto-select sync direction for changed files, with `stage_paths` support in `PatchSet` for automatic git staging.
+* Enhance matching module with reference identity checks, matching session caching, valid children tracking, and `@native` codegen annotations.
+* Sort syncback matched indices by new-child index for stable output ordering.
+* Update deduplication suffix numbering to start at `~2` instead of `~1`.
+* Refactor `RefPathIndex` initialization and attribute indexing; add regression tests for unique placeholder handling in reference paths.
+* Update syncback rules and property filter defaults.
+* Compact JSON5 array formatting for property values.
+* Update color handling and enhance session management in the Reconciler.
+* Refactor animation goal settings to use instant transitions in the plugin UI.
+* Refactor version rejection logic in `ApiContext`.
 
 <details>
 <summary>Full commit log</summary>
@@ -68,6 +81,37 @@ Making a new release? Simply add the new header with the version and date undern
 - `b6e34b9e` Expose snapshot, syncback, and variant_eq modules publicly; add integration tests for matching algorithm
 - `21b3ee45` Refactor descendant search functions for WeakDom and RojoTree
 - `6ef81cf8` Refactor matching logic for improved readability and consistency
+- `5c4fd801` Enhance Reconciler with ambiguous path handling and improved matching logic
+- `dea60eb4` Add formatting and static analysis scripts with usage instructions
+- `df225001` Refactor code for improved clarity and maintainability
+- `7ba04f7f` Update dependencies and implement git-based sync direction defaults
+- `6c0098d8` Add git metadata handling and integration tests for sync direction defaults
+- `dcd92537` Refactor version rejection logic in ApiContext
+- `91c599ec` Enhance documentation and refactor syncback logic
+- `6dec0686` Refactor code for improved readability and maintainability
+- `bb4d40c4` Enhance git metadata handling in compute_git_metadata function
+- `6de088be` Add batch script files and enhance git staging logic
+- `a59d9d49` Add stage_paths field to PatchSet struct in tests
+- `d836ebdd` Update deduplication logic and documentation for suffix handling
+- `7c3cb8ab` Add deduplication plan to start suffix numbering at ~2
+- `a17852f9` Update syncback rules and property filter defaults
+- `fe5852f9` Add compact JSON5 array formatting plan and update JSON serialization logic
+- `201b9711` Refactor animation goal settings to use instant transitions
+- `c5a5e973` Refactor RefPathIndex initialization and attribute indexing
+- `a741f573` Add regression tests for unique placeholder handling in reference paths
+- `d6169c6d` Refactor test assertions and improve code formatting
+- `b8c3520d` Add Luau-style ref paths migration plan and update related tests
+- `6f8e5a5c` Refactor code for improved readability and consistency
+- `307ac81a` Implement live syncback feature and enhance API for service data transfer
+- `b39c01e5` Add matching session caching and native codegen improvements
+- `fa2b86c3` Refactor SyncbackConfirm component and enhance UI responsiveness
+- `372a422b` Update SyncbackRequest structure and API protocol validation
+- `93ea0bde` Refactor syncback process and improve code readability
+- `bf4aef6e` Update sourcemap generator command in VSCode settings
+- `b687c886` Enhance matching module with reference identity and caching improvements
+- `ddd47b9a` Enhance matching module with valid children tracking and code readability improvements
+- `30e032b2` Update color handling and enhance session management in the Reconciler
+- `72ad84b5` Implement live syncback service properties encoding and enhance syncback functionality
 
 </details>
 
