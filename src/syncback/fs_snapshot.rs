@@ -744,9 +744,7 @@ mod tests {
             "Attachment1 wrong. Got:\n{result}"
         );
         assert!(
-            result.contains(
-                r#""Rojo_Ref_PrimaryPart": "Workspace/Model/Handle.model.json5""#
-            ),
+            result.contains(r#""Rojo_Ref_PrimaryPart": "Workspace/Model/Handle.model.json5""#),
             "PrimaryPart wrong. Got:\n{result}"
         );
     }

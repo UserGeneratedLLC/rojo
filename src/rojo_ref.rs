@@ -329,9 +329,7 @@ impl RefPathIndex {
                     continue;
                 }
                 if let Ok(bytes) = std::fs::read(&path) {
-                    if let Ok(val) =
-                        crate::json::from_slice::<serde_json::Value>(&bytes)
-                    {
+                    if let Ok(val) = crate::json::from_slice::<serde_json::Value>(&bytes) {
                         if let Some(attrs) = val.get("attributes").and_then(|a| a.as_object()) {
                             for (key, value) in attrs {
                                 if key.starts_with(crate::REF_PATH_ATTRIBUTE_PREFIX) {

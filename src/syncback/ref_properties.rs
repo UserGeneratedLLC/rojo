@@ -435,8 +435,10 @@ mod tests {
 
         let mut attachments = Vec::new();
         for _ in 0..4 {
-            let att =
-                dom.insert(container, InstanceBuilder::new("Attachment").with_name("001"));
+            let att = dom.insert(
+                container,
+                InstanceBuilder::new("Attachment").with_name("001"),
+            );
             attachments.push(att);
         }
 
@@ -489,12 +491,12 @@ mod tests {
 
         let links = collect_referents(&dom2, &HashMap::new(), None);
 
-        let placeholders: Vec<&String> = links
-            .placeholder_to_target
-            .keys()
-            .collect();
+        let placeholders: Vec<&String> = links.placeholder_to_target.keys().collect();
 
-        assert!(placeholders.len() >= 2, "should have at least 2 placeholders");
+        assert!(
+            placeholders.len() >= 2,
+            "should have at least 2 placeholders"
+        );
 
         let targets: HashSet<&Ref> = links.placeholder_to_target.values().collect();
         assert!(
