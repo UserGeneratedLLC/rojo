@@ -298,6 +298,62 @@ impl RefPathIndex {
         }
     }
 
+    /// Scan all `.meta.json5`, `.model.json5`, `.meta.json`, `.model.json`
+    /// files under `root` for existing `Rojo_Ref_*` attributes and index them.
+    /// This ensures pre-existing ref attributes (from CLI syncback, manual
+    /// edits, or previous sessions) are indexed so rename path updates work
+    /// from the first rename.
+    pub fn populate_from_dir(&mut self, root: &Path) {
+        let mut count = 0usize;
+        let mut dirs_to_visit = vec![root.to_path_buf()];
+        while let Some(dir) = dirs_to_visit.pop() {
+            let entries = match std::fs::read_dir(&dir) {
+                Ok(entries) => entries,
+                Err(_) => continue,
+            };
+            for entry in entries.filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if path.is_dir() {
+                    dirs_to_visit.push(path);
+                    continue;
+                }
+                let name = match path.file_name().and_then(|n| n.to_str()) {
+                    Some(n) => n,
+                    None => continue,
+                };
+                if !(name.ends_with(".meta.json5")
+                    || name.ends_with(".model.json5")
+                    || name.ends_with(".meta.json")
+                    || name.ends_with(".model.json"))
+                {
+                    continue;
+                }
+                if let Ok(bytes) = std::fs::read(&path) {
+                    if let Ok(val) =
+                        crate::json::from_slice::<serde_json::Value>(&bytes)
+                    {
+                        if let Some(attrs) = val.get("attributes").and_then(|a| a.as_object()) {
+                            for (key, value) in attrs {
+                                if key.starts_with(crate::REF_PATH_ATTRIBUTE_PREFIX) {
+                                    if let Some(path_str) = value.as_str() {
+                                        self.add(path_str, &path);
+                                        count += 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if count > 0 {
+            log::info!(
+                "RefPathIndex: populated {} Rojo_Ref_* entries from existing meta/model files",
+                count
+            );
+        }
+    }
+
     /// Find all meta/model files that contain a `Rojo_Ref_*` attribute whose
     /// value equals `prefix` or starts with `prefix/`. These are the files
     /// that need updating when an instance at `prefix` is renamed.

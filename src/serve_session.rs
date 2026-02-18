@@ -174,7 +174,11 @@ impl ServeSession {
 
         let (tree_mutation_sender, tree_mutation_receiver) = crossbeam_channel::unbounded();
         let suppressed_paths = Arc::new(Mutex::new(std::collections::HashMap::new()));
-        let ref_path_index = Arc::new(Mutex::new(crate::RefPathIndex::new()));
+        let ref_path_index = {
+            let mut index = crate::RefPathIndex::new();
+            index.populate_from_dir(root_project.folder_location());
+            Arc::new(Mutex::new(index))
+        };
 
         let git_repo_root = crate::git::git_repo_root(root_project.folder_location());
 
