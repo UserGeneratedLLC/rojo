@@ -187,7 +187,16 @@ pub fn compute_git_metadata(tree_handle: &Arc<Mutex<RojoTree>>, repo_root: &Path
 
         for rel_path in &changed_files {
             let abs_path = repo_root.join(rel_path);
-            let ids = tree.get_ids_at_path(&abs_path);
+            let canonical_path = std::fs::canonicalize(&abs_path).ok();
+
+            let first = tree.get_ids_at_path(&abs_path);
+            let ids = if !first.is_empty() {
+                first
+            } else if let Some(ref canon) = canonical_path {
+                tree.get_ids_at_path(canon)
+            } else {
+                first
+            };
 
             for &id in ids {
                 if let Some(instance) = tree.get_instance(id) {
