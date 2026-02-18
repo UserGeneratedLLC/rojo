@@ -153,13 +153,8 @@ const F64_FLOAT_OPTIONS: Options = Options::builder()
 
 const F32_BUF_SIZE: usize = F32_FLOAT_OPTIONS.buffer_size_const::<f32, STANDARD>();
 const F64_BUF_SIZE: usize = F64_FLOAT_OPTIONS.buffer_size_const::<f64, STANDARD>();
-const F32_ZERO_CUTOFF: f64 = 1e-6;
-const F64_ZERO_CUTOFF: f64 = 1e-15;
 
 fn format_f32(v: f32) -> String {
-    if (v as f64).abs() < F32_ZERO_CUTOFF {
-        return "0".into();
-    }
     let mut buffer = [0u8; F32_BUF_SIZE];
     let digits = v.to_lexical_with_options::<STANDARD>(&mut buffer, &F32_FLOAT_OPTIONS);
     std::str::from_utf8(digits)
@@ -168,9 +163,6 @@ fn format_f32(v: f32) -> String {
 }
 
 fn format_f64(v: f64) -> String {
-    if v.abs() < F64_ZERO_CUTOFF {
-        return "0".into();
-    }
     if v.is_finite() && v.abs() >= 1e308 {
         return format!("{v:e}");
     }
