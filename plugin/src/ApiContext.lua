@@ -24,20 +24,28 @@ local function rejectFailedRequests(response)
 	return response
 end
 
-local function rejectWrongProtocolVersion(infoResponseBody)
+local function rejectWrongVersion(infoResponseBody)
+	local pluginVersion = Version.display(Config.version)
+	local serverVersion = infoResponseBody.serverVersion
+
+	if serverVersion ~= pluginVersion then
+		local message = (
+			"Found a server, but it's a different version than this plugin."
+			.. "\nThe Atlas plugin requires an exact version match with the server."
+			.. "\n\nYour plugin is version %s."
+			.. "\nYour server is version %s."
+			.. "\n\nPlease update your plugin or server so both are the same version."
+		):format(pluginVersion, serverVersion)
+
+		return Promise.reject(message)
+	end
+
 	if infoResponseBody.protocolVersion ~= Config.protocolVersion then
 		local message = (
-			"Found a server, but it's using a different protocol version, and is incompatible."
-			.. "\nMake sure you have matching versions of both the Atlas plugin and server!"
-			.. "\n\nYour client is version %s, with protocol version %s. It expects server version %s."
-			.. "\nYour server is version %s, with protocol version %s."
-		):format(
-			Version.display(Config.version),
-			Config.protocolVersion,
-			Config.expectedServerVersionString,
-			infoResponseBody.serverVersion,
-			infoResponseBody.protocolVersion
-		)
+			"Found a server with the same version, but a different protocol version."
+			.. "\nThis should not happen — please report this as a bug."
+			.. "\n\nPlugin protocol: %s, Server protocol: %s"
+		):format(Config.protocolVersion, infoResponseBody.protocolVersion)
 
 		return Promise.reject(message)
 	end
@@ -159,7 +167,7 @@ function ApiContext:connect()
 	return Http.get(url)
 		:andThen(rejectFailedRequests)
 		:andThen(Http.Response.msgpack)
-		:andThen(rejectWrongProtocolVersion)
+		:andThen(rejectWrongVersion)
 		:andThen(rejectWrongFork)
 		:andThen(function(body)
 			assert(validateApiInfo(body))
