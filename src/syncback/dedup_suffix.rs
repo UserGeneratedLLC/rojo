@@ -1,12 +1,12 @@
 //! Dedup suffix lifecycle management.
 //!
 //! When instances have duplicate names, they receive `~N` suffixes on the
-//! filesystem (e.g., `Foo`, `Foo~1`, `Foo~2`). This module provides shared
+//! filesystem (e.g., `Foo`, `Foo~2`, `Foo~3`). This module provides shared
 //! helpers for managing suffix cleanup when instances are deleted.
 //!
 //! Rules:
 //! - **Gap-tolerant:** deleting a suffixed instance does NOT renumber remaining
-//!   siblings. Gaps (`Foo`, `Foo~2` without `~1`) are harmless.
+//!   siblings. Gaps (`Foo`, `Foo~3` without `~2`) are harmless.
 //! - **Base-name promotion:** when the base-name holder is deleted and multiple
 //!   siblings remain, the lowest-numbered suffix is promoted to base name.
 //! - **Group-to-1 cleanup:** when a deletion reduces the dedup group to exactly

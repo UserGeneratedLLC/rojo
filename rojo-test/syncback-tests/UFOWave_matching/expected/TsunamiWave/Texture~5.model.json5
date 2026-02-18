@@ -7,7 +7,7 @@
       0,
       1
     ],
-    Face: "Back",
+    Face: "Bottom",
     StudsPerTileU: 200,
     StudsPerTileV: 200,
     TextureContent: "rbxassetid://10025668350",

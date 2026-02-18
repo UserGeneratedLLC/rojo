@@ -181,7 +181,7 @@ pub fn collect_all_paths(dom: &WeakDom) -> HashMap<Ref, String> {
 ///
 /// The `final_paths` parameter, when provided, contains the definitive
 /// filesystem-name-based paths assigned during the syncback walk (including
-/// dedup suffixes like `~1`). These take priority over `tentative_fs_path()`.
+/// dedup suffixes like `~2`). These take priority over `tentative_fs_path()`.
 pub fn collect_referents(
     dom: &WeakDom,
     pre_prune_paths: &HashMap<Ref, String>,

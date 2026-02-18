@@ -237,7 +237,7 @@ impl RojoTree {
     /// instances (derived from `instigating_source` path), falling back to
     /// the instance name for instances without filesystem backing.
     ///
-    /// Path format: `"Workspace/Model.model.json5/Attachment~1.luau"`
+    /// Path format: `"Workspace/Model.model.json5/Attachment~2.luau"`
     /// Segments are separated by `/` (no escaping needed since filesystem
     /// names can't contain `/`).
     pub fn get_instance_by_path(&self, path: &str) -> Option<Ref> {

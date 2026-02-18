@@ -491,7 +491,7 @@ function DomLabel:render()
 			end
 		end
 
-		if depth ~= 1 then
+		if depth > 1 then
 			lineGuides["Connector"] = e("Frame", {
 				Size = UDim2.new(0, 8, 0, 2),
 				Position = UDim2.new(0, 2 + (12 * props.depth), 0, 12),

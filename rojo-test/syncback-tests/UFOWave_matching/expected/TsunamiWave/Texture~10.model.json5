@@ -7,7 +7,7 @@
       0,
       1
     ],
-    Face: "Right",
+    Face: "Left",
     StudsPerTileU: 200,
     StudsPerTileV: 200,
     TextureContent: "rbxassetid://10023635072",

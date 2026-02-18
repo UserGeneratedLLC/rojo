@@ -535,7 +535,7 @@ mod tests {
             meta_content.as_bytes().to_vec(),
         );
 
-        let substitutions = vec![("Workspace/Foo".to_string(), "Workspace/Foo~1".to_string())];
+        let substitutions = vec![("Workspace/Foo".to_string(), "Workspace/Foo~2".to_string())];
         snap.fix_ref_paths(&substitutions);
 
         let result = std::str::from_utf8(
@@ -546,7 +546,7 @@ mod tests {
         .unwrap();
 
         assert!(
-            result.contains(r#""Rojo_Ref_PrimaryPart": "Workspace/Foo~1""#),
+            result.contains(r#""Rojo_Ref_PrimaryPart": "Workspace/Foo~2""#),
             "Rojo_Ref line should be updated. Got:\n{}",
             result
         );
@@ -566,7 +566,7 @@ mod tests {
             b"-- Rojo_Ref_PrimaryPart Workspace/Foo".to_vec(),
         );
 
-        let substitutions = vec![("Workspace/Foo".to_string(), "Workspace/Foo~1".to_string())];
+        let substitutions = vec![("Workspace/Foo".to_string(), "Workspace/Foo~2".to_string())];
         snap.fix_ref_paths(&substitutions);
 
         let result = std::str::from_utf8(
@@ -581,7 +581,7 @@ mod tests {
             result
         );
         assert!(
-            !result.contains("Workspace/Foo~1"),
+            !result.contains("Workspace/Foo~2"),
             "Non-meta file should not have substitution applied"
         );
     }

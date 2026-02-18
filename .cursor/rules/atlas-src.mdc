@@ -74,7 +74,7 @@ pub struct InstanceContext {
 
 Instance names with forbidden filesystem chars (`<>:"/\|?*~`) are handled by:
 1. `slugify_name()` -- replaces forbidden chars with `_` (pure, stateless)
-2. `deduplicate_name_with_ext()` -- dedup key = full filesystem name (slug + extension), case-insensitive; appends `~1`, `~2`, etc. on collision (stateful)
+2. `deduplicate_name_with_ext()` -- dedup key = full filesystem name (slug + extension), case-insensitive; appends `~2`, `~3`, etc. on collision (stateful)
 3. Metadata `name` field -- stores the real instance name in `.meta.json5`/`.model.json5` when the slug differs
 
 ### 3. Commands (`src/cli/`)

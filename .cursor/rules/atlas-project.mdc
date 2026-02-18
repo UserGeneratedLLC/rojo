@@ -247,7 +247,7 @@ Add metadata to file-based instances. Meta files use **camelCase keys** (no `$` 
 
 **Key differences from ProjectNode:** Meta uses `className`, `properties`, `attributes` (camelCase, no `$` prefix). Adjacent meta does NOT support `className`.
 
-**`name` field (slugify support):** When an instance name contains forbidden filesystem characters (`: / ? * < > | " \`), syncback slugifies the filename (forbidden chars → `_`) and stores the real name in the `name` field. On forward sync, `name` overrides the filename-derived instance name. On collisions (e.g. `A/B` and `A_B` both slugify to `A_B`), `~1`, `~2` suffixes are appended and meta `name` fields distinguish them.
+**`name` field (slugify support):** When an instance name contains forbidden filesystem characters (`: / ? * < > | " \`), syncback slugifies the filename (forbidden chars → `_`) and stores the real name in the `name` field. On forward sync, `name` overrides the filename-derived instance name. On collisions (e.g. `A/B` and `A_B` both slugify to `A_B`), `~2`, `~3` suffixes are appended and meta `name` fields distinguish them.
 
 **`Rojo_Ref_*` attributes:** Meta files may also contain `Rojo_Ref_PropertyName` attributes written by syncback/two-way sync for Ref property linking. These are managed automatically and should not be hand-edited.
 

@@ -134,7 +134,7 @@ pub fn ref_target_path(dom: &WeakDom, target_ref: Ref) -> String {
 /// - `Folder "Foo"` → `"Foo"` (directory name)
 /// - `ModuleScript "Foo"` → `"Foo.luau"` (slug + extension)
 /// - `Script "Foo"` (server) → `"Foo.server.luau"`
-/// - Dedup'd `ModuleScript "Foo"` → `"Foo~1.luau"`
+/// - Dedup'd `ModuleScript "Foo"` → `"Foo~2.luau"`
 ///
 /// Filesystem names are derived from `instigating_source` paths (the actual
 /// file/dir on disk). For instances without filesystem backing (inside .rbxm

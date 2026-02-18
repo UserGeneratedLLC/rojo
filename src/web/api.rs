@@ -553,7 +553,7 @@ impl ApiService {
                 // Pre-seed sibling_slugs from the tree's existing children
                 // of this parent so new instances dedup against existing ones.
                 // We derive slugs from actual filesystem paths (via instigating_source)
-                // to correctly account for dedup suffixes (e.g., Hey_Bro~1).
+                // to correctly account for dedup suffixes (e.g., Hey_Bro~2).
                 let mut sibling_slugs: HashSet<String> = if *parent_ref != Ref::none() {
                     if let Some(parent_inst) = tree.get_instance(*parent_ref) {
                         use crate::snapshot::InstigatingSource;
@@ -6436,7 +6436,7 @@ mod tests {
         #[test]
         fn dir_clean_name_collides_with_existing() {
             let (f, m) = simulate_dir_dedup(&["NewFolder"], "NewFolder");
-            assert_eq!(f, "NewFolder~1");
+            assert_eq!(f, "NewFolder~2");
             assert_eq!(m.unwrap(), "NewFolder");
         }
 
@@ -6450,21 +6450,21 @@ mod tests {
         #[test]
         fn dir_forbidden_collides_with_existing() {
             let (f, m) = simulate_dir_dedup(&["Hey_Bro"], "Hey/Bro");
-            assert_eq!(f, "Hey_Bro~1");
+            assert_eq!(f, "Hey_Bro~2");
             assert_eq!(m.unwrap(), "Hey/Bro");
         }
 
         #[test]
         fn dir_natural_collides_with_slug() {
             let (f, m) = simulate_dir_dedup(&["A_B"], "A_B");
-            assert_eq!(f, "A_B~1");
+            assert_eq!(f, "A_B~2");
             assert_eq!(m.unwrap(), "A_B");
         }
 
         #[test]
         fn dir_case_insensitive_collision() {
             let (f, m) = simulate_dir_dedup(&["MyFolder"], "myfolder");
-            assert_eq!(f, "myfolder~1");
+            assert_eq!(f, "myfolder~2");
             assert_eq!(m.unwrap(), "myfolder");
         }
 
@@ -6490,7 +6490,7 @@ mod tests {
         #[test]
         fn dir_dangerous_suffix_collides() {
             let (f, m) = simulate_dir_dedup(&["config_meta"], "config.meta");
-            assert_eq!(f, "config_meta~1");
+            assert_eq!(f, "config_meta~2");
             assert_eq!(m.unwrap(), "config.meta");
         }
 
@@ -6504,7 +6504,7 @@ mod tests {
         #[test]
         fn dir_nul_collides_with_existing() {
             let (f, _) = simulate_dir_dedup(&["NUL_"], "NUL");
-            assert_eq!(f, "NUL_~1");
+            assert_eq!(f, "NUL_~2");
         }
 
         // ── Batch add: directory siblings ─────────────────────────────
@@ -6523,24 +6523,24 @@ mod tests {
             let r = simulate_dir_batch(&[], &["Script", "Script", "Script"]);
             assert_eq!(r[0].0, "Script");
             assert!(r[0].1.is_none());
-            assert_eq!(r[1].0, "Script~1");
+            assert_eq!(r[1].0, "Script~2");
             assert_eq!(r[1].1.as_deref(), Some("Script"));
-            assert_eq!(r[2].0, "Script~2");
+            assert_eq!(r[2].0, "Script~3");
         }
 
         #[test]
         fn batch_dir_slug_collision_siblings() {
             let r = simulate_dir_batch(&[], &["X/Y", "X:Y", "X*Y"]);
             assert_eq!(r[0].0, "X_Y");
-            assert_eq!(r[1].0, "X_Y~1");
-            assert_eq!(r[2].0, "X_Y~2");
+            assert_eq!(r[1].0, "X_Y~2");
+            assert_eq!(r[2].0, "X_Y~3");
         }
 
         #[test]
         fn batch_dir_with_existing_and_collisions() {
             let r = simulate_dir_batch(&["Utils", "Config"], &["Utils", "Config", "NewThing"]);
-            assert_eq!(r[0].0, "Utils~1");
-            assert_eq!(r[1].0, "Config~1");
+            assert_eq!(r[0].0, "Utils~2");
+            assert_eq!(r[1].0, "Config~2");
             assert_eq!(r[2].0, "NewThing");
             assert!(r[2].1.is_none());
         }
@@ -6549,8 +6549,8 @@ mod tests {
         fn batch_dir_dangerous_then_natural_then_slug() {
             let r = simulate_dir_batch(&[], &["foo.server", "foo_server", "foo/server"]);
             assert_eq!(r[0].0, "foo_server");
-            assert_eq!(r[1].0, "foo_server~1");
-            assert_eq!(r[2].0, "foo_server~2");
+            assert_eq!(r[1].0, "foo_server~2");
+            assert_eq!(r[2].0, "foo_server~3");
         }
 
         #[test]
@@ -6558,9 +6558,9 @@ mod tests {
             let r = simulate_dir_batch(&[], &["CON", "CON_", "con"]);
             assert_eq!(r[0].0, "CON_");
             assert_eq!(r[0].1.as_deref(), Some("CON"));
-            assert_eq!(r[1].0, "CON_~1");
+            assert_eq!(r[1].0, "CON_~2");
             assert_eq!(r[1].1.as_deref(), Some("CON_"));
-            assert_eq!(r[2].0, "con_~2");
+            assert_eq!(r[2].0, "con_~3");
             assert_eq!(r[2].1.as_deref(), Some("con"));
         }
 
@@ -6568,8 +6568,8 @@ mod tests {
         fn batch_dir_empty_names() {
             let r = simulate_dir_batch(&[], &["", "", ""]);
             assert_eq!(r[0].0, "instance");
-            assert_eq!(r[1].0, "instance~1");
-            assert_eq!(r[2].0, "instance~2");
+            assert_eq!(r[1].0, "instance~2");
+            assert_eq!(r[2].0, "instance~3");
         }
 
         #[test]
@@ -6578,7 +6578,7 @@ mod tests {
             let r = simulate_dir_batch(&[], &children);
             assert_eq!(r[0].0, "Spam");
             for (i, entry) in r.iter().enumerate().skip(1) {
-                assert_eq!(entry.0, format!("Spam~{i}"));
+                assert_eq!(entry.0, format!("Spam~{}", i + 1));
             }
             let unique: HashSet<String> = r.iter().map(|(f, _)| f.to_lowercase()).collect();
             assert_eq!(unique.len(), 20);
@@ -6594,7 +6594,7 @@ mod tests {
             let taken: HashSet<String> = ["foo".to_string()].into_iter().collect();
             // Bare slug "Foo" matches "foo" in taken
             let deduped = deduplicate_name("Foo", &taken);
-            assert_eq!(deduped, "Foo~1", "bare slug collides with existing sibling");
+            assert_eq!(deduped, "Foo~2", "bare slug collides with existing sibling");
         }
 
         #[test]
@@ -6605,7 +6605,7 @@ mod tests {
             let slug = slugify_name("Hey/Bro");
             assert_eq!(slug, "Hey_Bro");
             let deduped = deduplicate_name(&slug, &taken);
-            assert_eq!(deduped, "Hey_Bro~1", "slug collision correctly detected");
+            assert_eq!(deduped, "Hey_Bro~2", "slug collision correctly detected");
         }
 
         // ── Rename → re-add cycle (the critical slug safety test) ────
@@ -6656,7 +6656,7 @@ mod tests {
         #[test]
         fn dir_add_to_populated_no_overwrite() {
             // Dir has: Helper/ and Helper.meta.json5
-            // Add new "Helper" dir → must get Helper~1
+            // Add new "Helper" dir → must get Helper~2
             let temp = tempdir().expect("Failed to create temp dir");
             fs::create_dir(temp.path().join("Helper")).unwrap();
             File::create(temp.path().join("Helper.meta.json5"))
@@ -6672,7 +6672,7 @@ mod tests {
                 .collect();
 
             let deduped = deduplicate_name("Helper", &taken);
-            assert_eq!(deduped, "Helper~1");
+            assert_eq!(deduped, "Helper~2");
         }
 
         // ── Nightmare batch scenarios ────────────────────────────────
@@ -6685,15 +6685,15 @@ mod tests {
                     "A/B", "A:B", "A*B", "A?B", "A<B", "A>B", "A|B", "A\\B", "A\"B",
                 ],
             );
-            assert_eq!(r[0].0, "A_B~1");
-            assert_eq!(r[1].0, "A_B~2");
-            assert_eq!(r[2].0, "A_B~3");
-            assert_eq!(r[3].0, "A_B~4");
-            assert_eq!(r[4].0, "A_B~5");
-            assert_eq!(r[5].0, "A_B~6");
-            assert_eq!(r[6].0, "A_B~7");
-            assert_eq!(r[7].0, "A_B~8");
-            assert_eq!(r[8].0, "A_B~9");
+            assert_eq!(r[0].0, "A_B~2");
+            assert_eq!(r[1].0, "A_B~3");
+            assert_eq!(r[2].0, "A_B~4");
+            assert_eq!(r[3].0, "A_B~5");
+            assert_eq!(r[4].0, "A_B~6");
+            assert_eq!(r[5].0, "A_B~7");
+            assert_eq!(r[6].0, "A_B~8");
+            assert_eq!(r[7].0, "A_B~9");
+            assert_eq!(r[8].0, "A_B~10");
         }
 
         #[test]
@@ -6701,16 +6701,16 @@ mod tests {
             let r = simulate_dir_batch(&[], &["CON", "PRN", "CON/", "PRN/"]);
             assert_eq!(r[0].0, "CON_");
             assert_eq!(r[1].0, "PRN_");
-            assert_eq!(r[2].0, "CON_~1"); // "CON/" slug "CON_" collides
-            assert_eq!(r[3].0, "PRN_~1");
+            assert_eq!(r[2].0, "CON_~2"); // "CON/" slug "CON_" collides
+            assert_eq!(r[3].0, "PRN_~2");
         }
 
         #[test]
         fn batch_dir_unicode_plus_forbidden() {
             let r = simulate_dir_batch(&[], &["カフェ/Bar", "カフェ:Bar", "カフェ_Bar"]);
             assert_eq!(r[0].0, "カフェ_Bar");
-            assert_eq!(r[1].0, "カフェ_Bar~1");
-            assert_eq!(r[2].0, "カフェ_Bar~2");
+            assert_eq!(r[1].0, "カフェ_Bar~2");
+            assert_eq!(r[2].0, "カフェ_Bar~3");
         }
 
         #[test]

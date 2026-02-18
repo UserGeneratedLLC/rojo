@@ -137,6 +137,11 @@ function PatchVisualizer:render()
 			end
 		end
 
+		-- Add ROOT as the first visible node (project summary)
+		if patchTree.ROOT.changeInfo then
+			table.insert(visibleNodes, { node = patchTree.ROOT, depth = 0 })
+		end
+
 		-- Collect from root children in alphabetical order
 		local rootChildren = {}
 		for _, child in patchTree.ROOT.children do

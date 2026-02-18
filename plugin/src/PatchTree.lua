@@ -79,8 +79,9 @@ function Tree.new()
 	local tree = {
 		idToNode = {},
 		ROOT = {
+			id = "ROOT",
 			className = "DataModel",
-			name = "ROOT",
+			name = "game",
 			children = {},
 		},
 	}
@@ -207,6 +208,41 @@ function Tree:buildAncestryNodes(previousId: string?, ancestryIds: { string }, p
 		})
 		previousId = ancestorId
 	end
+end
+
+local function computeRootChangeInfo(tree)
+	local totalLinesAdded = 0
+	local totalLinesRemoved = 0
+	local totalPropChanges = 0
+	local hasLineData = false
+
+	tree:forEach(function(node)
+		if not node.changeInfo then
+			return
+		end
+		if node.changeInfo.linesAdded then
+			totalLinesAdded += node.changeInfo.linesAdded
+			hasLineData = true
+		end
+		if node.changeInfo.linesRemoved then
+			totalLinesRemoved += node.changeInfo.linesRemoved
+			hasLineData = true
+		end
+		if node.changeInfo.propChanges then
+			totalPropChanges += node.changeInfo.propChanges
+		end
+	end)
+
+	if not hasLineData and totalPropChanges == 0 then
+		return nil
+	end
+
+	return {
+		linesAdded = if hasLineData then totalLinesAdded else nil,
+		linesRemoved = if hasLineData then totalLinesRemoved else nil,
+		isWhitespaceOnly = false,
+		propChanges = if totalPropChanges > 0 then totalPropChanges else nil,
+	}
 end
 
 local PatchTree = {}
@@ -482,6 +518,8 @@ function PatchTree.build(patch, instanceMap, changeListHeaders, gitMetadata)
 	end
 	Timer.stop()
 
+	tree.ROOT.changeInfo = computeRootChangeInfo(tree)
+
 	Timer.stop()
 	return tree
 end
@@ -652,6 +690,8 @@ function PatchTree.updateMetadata(tree, patch, instanceMap, unappliedPatch)
 		end
 	end)
 	Timer.stop()
+
+	tree.ROOT.changeInfo = computeRootChangeInfo(tree)
 
 	Timer.stop()
 	return tree

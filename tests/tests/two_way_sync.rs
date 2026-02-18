@@ -5164,7 +5164,7 @@ fn add_instance_with_forbidden_chars_creates_slug_and_meta() {
 }
 
 /// Adding two instances whose names slugify to the same string should produce
-/// dedup suffixes (~1) and both should have correct meta `name` fields.
+/// dedup suffixes (~2) and both should have correct meta `name` fields.
 #[test]
 fn add_two_colliding_instances_deduplicates() {
     run_serve_test("syncback_encoded_names", |session, _redactions| {
@@ -5215,12 +5215,12 @@ fn add_two_colliding_instances_deduplicates() {
 
         let src = session.path().join("src");
         let base = src.join("X_Y.luau");
-        let deduped = src.join("X_Y~1.luau");
+        let deduped = src.join("X_Y~2.luau");
 
-        // One should get X_Y.luau, the other X_Y~1.luau
+        // One should get X_Y.luau, the other X_Y~2.luau
         assert!(
             base.exists() && deduped.exists(),
-            "Both X_Y.luau and X_Y~1.luau should exist. \
+            "Both X_Y.luau and X_Y~2.luau should exist. \
              base exists: {}, deduped exists: {}",
             base.exists(),
             deduped.exists()
@@ -5228,9 +5228,9 @@ fn add_two_colliding_instances_deduplicates() {
 
         // Both should have meta files with correct names
         let base_meta = src.join("X_Y.meta.json5");
-        let deduped_meta = src.join("X_Y~1.meta.json5");
+        let deduped_meta = src.join("X_Y~2.meta.json5");
         assert_file_exists(&base_meta, "Meta for base slug instance");
-        assert_file_exists(&deduped_meta, "Meta for deduped ~1 instance");
+        assert_file_exists(&deduped_meta, "Meta for deduped ~2 instance");
 
         // Read both meta files and verify they contain the correct names
         let meta1 = fs::read_to_string(&base_meta).unwrap();
@@ -5456,7 +5456,7 @@ fn rename_model_json_to_clean_name() {
 // ---------------------------------------------------------------------------
 
 /// Adding 3 instances that all slug to the same name (X/Y, X:Y, X|Y → X_Y)
-/// should produce X_Y.luau, X_Y~1.luau, X_Y~2.luau with correct meta files.
+/// should produce X_Y.luau, X_Y~2.luau, X_Y~3.luau with correct meta files.
 #[test]
 fn add_three_colliding_instances_deduplicates() {
     run_serve_test("syncback_encoded_names", |session, _redactions| {
@@ -5495,13 +5495,13 @@ fn add_three_colliding_instances_deduplicates() {
 
         let src = session.path().join("src");
         let base = src.join("X_Y.luau");
-        let dedup1 = src.join("X_Y~1.luau");
-        let dedup2 = src.join("X_Y~2.luau");
+        let dedup1 = src.join("X_Y~2.luau");
+        let dedup2 = src.join("X_Y~3.luau");
 
         assert!(
             base.exists() && dedup1.exists() && dedup2.exists(),
             "All three slugified files should exist.\n\
-             X_Y.luau: {}, X_Y~1.luau: {}, X_Y~2.luau: {}",
+             X_Y.luau: {}, X_Y~2.luau: {}, X_Y~3.luau: {}",
             base.exists(),
             dedup1.exists(),
             dedup2.exists()
@@ -5509,11 +5509,11 @@ fn add_three_colliding_instances_deduplicates() {
 
         // All three should have meta files with the original names
         let base_meta = src.join("X_Y.meta.json5");
-        let dedup1_meta = src.join("X_Y~1.meta.json5");
-        let dedup2_meta = src.join("X_Y~2.meta.json5");
+        let dedup1_meta = src.join("X_Y~2.meta.json5");
+        let dedup2_meta = src.join("X_Y~3.meta.json5");
         assert_file_exists(&base_meta, "Meta for base slug");
-        assert_file_exists(&dedup1_meta, "Meta for ~1 dedup");
-        assert_file_exists(&dedup2_meta, "Meta for ~2 dedup");
+        assert_file_exists(&dedup1_meta, "Meta for ~2 dedup");
+        assert_file_exists(&dedup2_meta, "Meta for ~3 dedup");
 
         // Each meta should contain one of the original names
         let all_metas = [
@@ -5662,13 +5662,13 @@ fn add_case_insensitive_colliding_instances() {
 
         let src = session.path().join("src");
 
-        // One should get the base name, the other should get ~1
+        // One should get the base name, the other should get ~2
         // The exact casing depends on processing order, but both files
         // must exist with distinct names.
         let base = src.join("CaseTest.luau");
         let base_lower = src.join("casetest.luau");
-        let dedup = src.join("CaseTest~1.luau");
-        let dedup_lower = src.join("casetest~1.luau");
+        let dedup = src.join("CaseTest~2.luau");
+        let dedup_lower = src.join("casetest~2.luau");
 
         let base_exists = base.exists() || base_lower.exists();
         let dedup_exists = dedup.exists() || dedup_lower.exists();
@@ -5676,7 +5676,7 @@ fn add_case_insensitive_colliding_instances() {
         assert!(
             base_exists && dedup_exists,
             "Both case-insensitive colliding instances should exist as separate files.\n\
-             CaseTest.luau: {}, casetest.luau: {}, CaseTest~1.luau: {}, casetest~1.luau: {}",
+             CaseTest.luau: {}, casetest.luau: {}, CaseTest~2.luau: {}, casetest~2.luau: {}",
             base.exists(),
             base_lower.exists(),
             dedup.exists(),
@@ -7406,7 +7406,7 @@ fn ref_same_batch_add_folder_target_no_extension() {
 // Tests: Dedup suffix cleanup
 // ---------------------------------------------------------------------------
 
-/// Add two colliding ModuleScripts (creates X_Y.luau + X_Y~1.luau), then
+/// Add two colliding ModuleScripts (creates X_Y.luau + X_Y~2.luau), then
 /// delete one. The remaining instance should lose its dedup suffix (group-to-1
 /// cleanup rule).
 #[test]
@@ -7460,10 +7460,10 @@ fn delete_deduped_instance_group_to_1_cleanup() {
 
         let src = session.path().join("src");
         let base = src.join("X_Y.luau");
-        let deduped = src.join("X_Y~1.luau");
+        let deduped = src.join("X_Y~2.luau");
 
         poll_file_exists(&base, "X_Y.luau after add");
-        poll_file_exists(&deduped, "X_Y~1.luau after add");
+        poll_file_exists(&deduped, "X_Y~2.luau after add");
 
         // Wait for VFS to settle
         thread::sleep(Duration::from_millis(500));
@@ -7485,7 +7485,7 @@ fn delete_deduped_instance_group_to_1_cleanup() {
             }
         } else {
             // Base file has the survivor source -- the other one is doomed
-            let dedup_meta = src.join("X_Y~1.meta.json5");
+            let dedup_meta = src.join("X_Y~2.meta.json5");
             let meta_content = fs::read_to_string(&dedup_meta).unwrap();
             if meta_content.contains("\"X/Y\"") {
                 "X/Y"
@@ -7497,8 +7497,8 @@ fn delete_deduped_instance_group_to_1_cleanup() {
         let (doomed_id, _) = find_by_name(&rs_read.instances, doomed_name);
         send_removal(&session, &info.session_id, vec![doomed_id]);
 
-        // After group-to-1 cleanup: only X_Y.luau should remain, no ~1 suffix
-        poll_not_exists(&deduped, "X_Y~1.luau after group-to-1 cleanup");
+        // After group-to-1 cleanup: only X_Y.luau should remain, no ~2 suffix
+        poll_not_exists(&deduped, "X_Y~2.luau after group-to-1 cleanup");
         assert_file_exists(&base, "X_Y.luau should survive");
 
         // The survivor's meta should still have a name field (since it's slugified)
@@ -7508,7 +7508,7 @@ fn delete_deduped_instance_group_to_1_cleanup() {
 }
 
 /// Add three colliding ModuleScripts, then delete the base instance.
-/// The ~1 instance should be promoted to base (base-name promotion rule).
+/// The ~2 instance should be promoted to base (base-name promotion rule).
 #[test]
 fn delete_base_deduped_instance_promotes_lowest() {
     run_serve_test("syncback_encoded_names", |session, _redactions| {
@@ -7546,12 +7546,12 @@ fn delete_base_deduped_instance_promotes_lowest() {
 
         let src = session.path().join("src");
         let base = src.join("X_Y.luau");
-        let dedup1 = src.join("X_Y~1.luau");
-        let dedup2 = src.join("X_Y~2.luau");
+        let dedup1 = src.join("X_Y~2.luau");
+        let dedup2 = src.join("X_Y~3.luau");
 
         poll_file_exists(&base, "X_Y.luau after add");
-        poll_file_exists(&dedup1, "X_Y~1.luau after add");
-        poll_file_exists(&dedup2, "X_Y~2.luau after add");
+        poll_file_exists(&dedup1, "X_Y~2.luau after add");
+        poll_file_exists(&dedup2, "X_Y~3.luau after add");
 
         // Wait for VFS to settle
         thread::sleep(Duration::from_millis(500));
@@ -7575,19 +7575,19 @@ fn delete_base_deduped_instance_promotes_lowest() {
         // Delete the base instance
         send_removal(&session, &info.session_id, vec![base_id]);
 
-        // After base-name promotion: ~1 should be promoted to base
-        // X_Y.luau should exist (promoted from ~1)
-        // X_Y~2.luau should still exist (unchanged)
-        // X_Y~1.luau should NOT exist (promoted away)
-        poll_not_exists(&dedup1, "X_Y~1.luau after promotion");
+        // After base-name promotion: ~2 should be promoted to base
+        // X_Y.luau should exist (promoted from ~2)
+        // X_Y~3.luau should still exist (unchanged)
+        // X_Y~2.luau should NOT exist (promoted away)
+        poll_not_exists(&dedup1, "X_Y~2.luau after promotion");
         thread::sleep(Duration::from_millis(300));
         assert_file_exists(&base, "X_Y.luau should exist (promoted)");
-        assert_file_exists(&dedup2, "X_Y~2.luau should remain");
+        assert_file_exists(&dedup2, "X_Y~3.luau should remain");
     });
 }
 
-/// Add three colliding ModuleScripts, then delete the ~1 instance.
-/// Gap should be tolerated: X_Y.luau and X_Y~2.luau remain unchanged.
+/// Add three colliding ModuleScripts, then delete the ~2 instance.
+/// Gap should be tolerated: X_Y.luau and X_Y~3.luau remain unchanged.
 #[test]
 fn delete_middle_deduped_instance_tolerates_gap() {
     run_serve_test("syncback_encoded_names", |session, _redactions| {
@@ -7625,18 +7625,18 @@ fn delete_middle_deduped_instance_tolerates_gap() {
 
         let src = session.path().join("src");
         let base = src.join("X_Y.luau");
-        let dedup1 = src.join("X_Y~1.luau");
-        let dedup2 = src.join("X_Y~2.luau");
+        let dedup1 = src.join("X_Y~2.luau");
+        let dedup2 = src.join("X_Y~3.luau");
 
         poll_file_exists(&base, "X_Y.luau after add");
-        poll_file_exists(&dedup1, "X_Y~1.luau after add");
-        poll_file_exists(&dedup2, "X_Y~2.luau after add");
+        poll_file_exists(&dedup1, "X_Y~2.luau after add");
+        poll_file_exists(&dedup2, "X_Y~3.luau after add");
 
         thread::sleep(Duration::from_millis(500));
 
-        // Find which instance maps to ~1
+        // Find which instance maps to ~2
         let rs_read = session.get_api_read(rs_id).unwrap();
-        let dedup1_meta = src.join("X_Y~1.meta.json5");
+        let dedup1_meta = src.join("X_Y~2.meta.json5");
         let dedup1_meta_content = fs::read_to_string(&dedup1_meta).unwrap();
         let middle_name = if dedup1_meta_content.contains("\"X/Y\"") {
             "X/Y"
@@ -7648,16 +7648,16 @@ fn delete_middle_deduped_instance_tolerates_gap() {
 
         let (middle_id, _) = find_by_name(&rs_read.instances, middle_name);
 
-        // Delete the ~1 instance
+        // Delete the ~2 instance
         send_removal(&session, &info.session_id, vec![middle_id]);
 
-        // Gap tolerance: base and ~2 remain, ~1 is gone
-        poll_not_exists(&dedup1, "X_Y~1.luau after deletion");
-        // Also verify the ~1 meta is gone
-        poll_not_exists(&dedup1_meta, "X_Y~1.meta.json5 after deletion");
+        // Gap tolerance: base and ~3 remain, ~2 is gone
+        poll_not_exists(&dedup1, "X_Y~2.luau after deletion");
+        // Also verify the ~2 meta is gone
+        poll_not_exists(&dedup1_meta, "X_Y~2.meta.json5 after deletion");
         thread::sleep(Duration::from_millis(300));
         assert_file_exists(&base, "X_Y.luau should remain");
-        assert_file_exists(&dedup2, "X_Y~2.luau should remain (gap tolerated)");
+        assert_file_exists(&dedup2, "X_Y~3.luau should remain (gap tolerated)");
     });
 }
 
@@ -7738,7 +7738,7 @@ fn add_same_named_folders_deduplicates() {
 
         let src = session.path().join("src");
         let data_dir = src.join("Data");
-        let data_dedup = src.join("Data~1");
+        let data_dedup = src.join("Data~2");
 
         // Both directories should exist
         assert!(
@@ -7748,7 +7748,7 @@ fn add_same_named_folders_deduplicates() {
         );
         assert!(
             data_dedup.is_dir(),
-            "Data~1/ directory should exist at {}",
+            "Data~2/ directory should exist at {}",
             data_dedup.display()
         );
 
@@ -7756,7 +7756,7 @@ fn add_same_named_folders_deduplicates() {
         let dedup_meta = data_dedup.join("init.meta.json5");
         assert!(
             dedup_meta.exists(),
-            "Data~1/init.meta.json5 should exist for name override"
+            "Data~2/init.meta.json5 should exist for name override"
         );
         let meta_content = fs::read_to_string(&dedup_meta).unwrap();
         assert!(
@@ -7907,7 +7907,7 @@ fn ref_through_deduped_instance() {
         );
 
         // The Container's init.meta.json5 should have a Rojo_Ref_PrimaryPart
-        // attribute with a path that includes X_Y (base or ~1 suffix)
+        // attribute with a path that includes X_Y (base or ~2 suffix)
         let init_meta = container.join("init.meta.json5");
         poll_file_exists(&init_meta, "Container init.meta.json5 after ref set");
         thread::sleep(Duration::from_millis(300));
@@ -7998,15 +7998,15 @@ fn ref_path_updated_after_dedup_cleanup() {
 
         let src = session.path().join("src");
         let base = src.join("X_Y.luau");
-        let deduped = src.join("X_Y~1.luau");
+        let deduped = src.join("X_Y~2.luau");
 
         poll_file_exists(&base, "X_Y.luau after add");
-        poll_file_exists(&deduped, "X_Y~1.luau after add");
+        poll_file_exists(&deduped, "X_Y~2.luau after add");
         thread::sleep(Duration::from_millis(500));
 
-        // Step 2: Find the ~1 instance and point Pointer's child ObjectValue at it
+        // Step 2: Find the ~2 instance and point Pointer's child ObjectValue at it
         let rs_read = session.get_api_read(rs_id).unwrap();
-        let dedup_meta_path = src.join("X_Y~1.meta.json5");
+        let dedup_meta_path = src.join("X_Y~2.meta.json5");
         let dedup_meta_content = fs::read_to_string(&dedup_meta_path).unwrap();
         let target_name = if dedup_meta_content.contains("\"X/Y\"") {
             "X/Y"
@@ -8023,7 +8023,7 @@ fn ref_path_updated_after_dedup_cleanup() {
         let pointer_read = session.get_api_read(pointer_id).unwrap();
         let (ptr_child_id, _) = find_by_name(&pointer_read.instances, "Ptr");
 
-        // Set ObjectValue.Value to the ~1 target
+        // Set ObjectValue.Value to the ~2 target
         let mut props = UstrMap::default();
         props.insert(ustr("Value"), Some(Variant::Ref(target_id)));
         send_update(
@@ -8038,32 +8038,32 @@ fn ref_path_updated_after_dedup_cleanup() {
             },
         );
 
-        // Verify the ref was written with the ~1 path
+        // Verify the ref was written with the ~2 path
         let pointer_dir = src.join("Pointer");
         let ptr_model_path = pointer_dir.join("Ptr.model.json5");
         poll_file_exists(&ptr_model_path, "Ptr.model.json5 after ref set");
         thread::sleep(Duration::from_millis(300));
         let ref_content = fs::read_to_string(&ptr_model_path).unwrap();
         assert!(
-            ref_content.contains("X_Y~1"),
-            "Before cleanup: ref should point to X_Y~1, got: {}",
+            ref_content.contains("X_Y~2"),
+            "Before cleanup: ref should point to X_Y~2, got: {}",
             ref_content
         );
 
         // Step 3: Delete the OTHER instance (not the target) to trigger
-        // group-to-1 cleanup, which renames X_Y~1 → X_Y
+        // group-to-1 cleanup, which renames X_Y~2 → X_Y
         send_removal(&session, &info.session_id, vec![other_id]);
 
-        // After cleanup: X_Y~1.luau renamed to X_Y.luau
-        poll_not_exists(&deduped, "X_Y~1.luau after cleanup");
+        // After cleanup: X_Y~2.luau renamed to X_Y.luau
+        poll_not_exists(&deduped, "X_Y~2.luau after cleanup");
         thread::sleep(Duration::from_millis(300));
         assert_file_exists(&base, "X_Y.luau after cleanup");
 
         // The ref in Ptr.model.json5 should now point to the non-suffixed path
         let updated_ref = fs::read_to_string(&ptr_model_path).unwrap();
         assert!(
-            !updated_ref.contains("X_Y~1"),
-            "After cleanup: ref should NOT contain X_Y~1 (old path), got: {}",
+            !updated_ref.contains("X_Y~2"),
+            "After cleanup: ref should NOT contain X_Y~2 (old path), got: {}",
             updated_ref
         );
         assert!(

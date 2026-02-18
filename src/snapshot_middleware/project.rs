@@ -763,7 +763,7 @@ pub fn syncback_project<'sync>(
 
         // Sort remaining children by name for deterministic dedup ordering.
         // Without this, HashMap iteration order determines which sibling gets
-        // the base slug vs ~1, causing non-deterministic output across runs.
+        // the base slug vs ~2, causing non-deterministic output across runs.
         let mut remaining_children: Vec<_> = new_child_map.drain().collect();
         remaining_children.sort_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
         for (name, new_child) in remaining_children {

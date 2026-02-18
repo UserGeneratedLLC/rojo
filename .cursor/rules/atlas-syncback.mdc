@@ -145,8 +145,8 @@ Manages `~N` suffix cleanup after instance deletions during two-way sync.
 - `compute_cleanup_action(removed_stem, remaining_stems) -> DedupCleanupAction` - Determine what to do after a deletion
 
 **Cleanup rules:**
-- **Gap-tolerant:** Deleting `~1` from `{Foo, Foo~1, Foo~2}` leaves `{Foo, Foo~2}`. No renumbering.
-- **Base-name promotion:** Deleting `Foo` (base) from `{Foo, Foo~1, Foo~2}` promotes `Foo~1` to `Foo`. `Foo~2` stays.
+- **Gap-tolerant:** Deleting `~2` from `{Foo, Foo~2, Foo~3}` leaves `{Foo, Foo~3}`. No renumbering.
+- **Base-name promotion:** Deleting `Foo` (base) from `{Foo, Foo~2, Foo~3}` promotes `Foo~2` to `Foo`. `Foo~3` stays.
 - **Group-to-1 cleanup:** If group shrinks to 1 member, remove its suffix entirely.
 
 ## Syncback Rules
@@ -285,12 +285,12 @@ snapshot.with_new_path(path, new_ref, old_ref)
 
 **Filename generation** (`file_names.rs`):
 - `slugify_name()`: forbidden chars (`<>:"/\|?*~`) → `_`. Also strips leading/trailing spaces/dots, neutralizes dangerous suffixes (`.server`, `.meta`, etc.), handles Windows reserved names (`CON`, `PRN`, etc.)
-- `deduplicate_name_with_ext()`: Dedup key = full filesystem name (slug + extension), case-insensitive. `Folder "Foo"` (key `"foo"`) and `Script "Foo"` (key `"foo.server.luau"`) do NOT collide. Appends `~1`, `~2`, etc. on collision, with suffix inserted before compound extension: `Foo~1.server.luau`
+- `deduplicate_name_with_ext()`: Dedup key = full filesystem name (slug + extension), case-insensitive. `Folder "Foo"` (key `"foo"`) and `Script "Foo"` (key `"foo.server.luau"`) do NOT collide. Appends `~2`, `~3`, etc. on collision, with suffix inserted before compound extension: `Foo~2.server.luau`
 - `name_for_inst()` returns `(filename, needs_meta_name, dedup_key)`. `needs_meta_name` is true when the filesystem name differs from the real instance name.
 - `~` is in `SLUGIFY_CHARS` so natural tilde names (e.g., `"Foo~1"`) get slugified to `"Foo_1"`, avoiding confusion with dedup suffixes.
 - Example: `Script` named "My Script" → `My Script.server.luau`
 - Example: `Script` named "Hey/Bro" → `Hey_Bro.server.luau` + meta with `name: "Hey/Bro"`
-- Example: Two `Folder "Data"` → `Data/` + `Data~1/` (meta: `name: "Data"`)
+- Example: Two `Folder "Data"` → `Data/` + `Data~2/` (meta: `name: "Data"`)
 
 ### Property Filtering
 
