@@ -94,13 +94,31 @@ fn rojo_tree_to_weak_dom(tree: &librojo::RojoTree) -> WeakDom {
     dom
 }
 
-/// Find a descendant by path (e.g., "TsunamiWave") in a WeakDom.
-fn find_by_name(dom: &WeakDom, parent: Ref, name: &str) -> Option<Ref> {
+/// Recursively find a descendant by name in a WeakDom.
+fn find_descendant(dom: &WeakDom, parent: Ref, name: &str) -> Option<Ref> {
     let parent_inst = dom.get_by_ref(parent)?;
     for &child in parent_inst.children() {
         let child_inst = dom.get_by_ref(child)?;
         if child_inst.name == name {
             return Some(child);
+        }
+        if let Some(found) = find_descendant(dom, child, name) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Recursively find a descendant by name in a RojoTree.
+fn find_descendant_by_name(tree: &librojo::RojoTree, parent: Ref, name: &str) -> Option<Ref> {
+    let parent_inst = tree.get_instance(parent)?;
+    for &child in parent_inst.children() {
+        let child_inst = tree.get_instance(child)?;
+        if child_inst.name() == name {
+            return Some(child);
+        }
+        if let Some(found) = find_descendant_by_name(tree, child, name) {
+            return Some(found);
         }
     }
     None
@@ -151,35 +169,11 @@ fn syncback_matching_ufowave_textures() {
 
     // Find TsunamiWave in both trees
     let input_root = input_dom.root_ref();
-    let input_tsunami = find_by_name(&input_dom, input_root, "TsunamiWave")
-        .or_else(|| {
-            // input.rbxm root might be UFOWave, with TsunamiWave as child
-            let ufo = input_dom.root_ref();
-            let ufo_children = input_dom.get_by_ref(ufo).unwrap().children();
-            for &c in ufo_children {
-                if let Some(found) = find_by_name(&input_dom, c, "TsunamiWave") {
-                    return Some(found);
-                }
-                let inst = input_dom.get_by_ref(c).unwrap();
-                if inst.name == "TsunamiWave" {
-                    return Some(c);
-                }
-            }
-            None
-        })
+    let input_tsunami = find_descendant(&input_dom, input_root, "TsunamiWave")
         .expect("TsunamiWave not found in input.rbxm");
 
     let expected_root = expected_dom.root_ref();
-    let expected_tsunami = find_by_name(&expected_dom, expected_root, "TsunamiWave")
-        .or_else(|| {
-            let root_children = expected_dom.get_by_ref(expected_root).unwrap().children();
-            for &c in root_children {
-                if let Some(found) = find_by_name(&expected_dom, c, "TsunamiWave") {
-                    return Some(found);
-                }
-            }
-            None
-        })
+    let expected_tsunami = find_descendant(&expected_dom, expected_root, "TsunamiWave")
         .expect("TsunamiWave not found in expected/");
 
     let input_textures = get_texture_children(&input_dom, input_tsunami);
@@ -276,18 +270,9 @@ fn forward_matching_ufowave_textures() {
         .find(|c| c.name == "TsunamiWave")
         .expect("TsunamiWave not found in snapshot");
 
-    // Find TsunamiWave in the tree
-    let tree_tsunami = {
-        let root = tree.get_instance(tree_root).unwrap();
-        root.children()
-            .iter()
-            .find(|&&r| {
-                tree.get_instance(r)
-                    .map_or(false, |i| i.name() == "TsunamiWave")
-            })
-            .copied()
-            .expect("TsunamiWave not found in tree")
-    };
+    // Find TsunamiWave in the tree (may be nested under root → UFOWave → TsunamiWave)
+    let tree_tsunami = find_descendant_by_name(&tree, tree_root, "TsunamiWave")
+        .expect("TsunamiWave not found in tree");
 
     // Extract Texture children from snapshot (filesystem side, sparse)
     let snap_textures: Vec<librojo::InstanceSnapshot> = snap_tsunami
