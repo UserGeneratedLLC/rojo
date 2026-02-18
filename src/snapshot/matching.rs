@@ -14,6 +14,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use rbx_dom_weak::types::Ref;
+use rbx_dom_weak::Ustr;
 
 use crate::variant_eq::variant_eq;
 
@@ -55,9 +56,6 @@ pub struct ForwardMatchResult {
     pub unmatched_snapshot: Vec<InstanceSnapshot>,
     /// Tree children with no match in the snapshot (to be removed).
     pub unmatched_tree: Vec<Ref>,
-    /// Total cost of the matching (sum of all matched pair costs +
-    /// unmatched penalties). Zero means no changes across anything.
-    pub total_cost: u32,
 }
 
 /// Match snapshot children to tree children, minimizing total changes.
@@ -72,34 +70,35 @@ pub fn match_forward(
             matched: Vec::new(),
             unmatched_snapshot: Vec::new(),
             unmatched_tree: Vec::new(),
-            total_cost: 0,
         };
     }
 
     let snap_available: Vec<Option<InstanceSnapshot>> =
         snapshot_children.into_iter().map(Some).collect();
-    let mut snap_matched: Vec<bool> = vec![false; snap_available.len()];
-    let mut tree_available: Vec<bool> = vec![true; tree_children.len()];
-    let mut matched: Vec<(usize, usize)> = Vec::new();
+    let snap_len = snap_available.len();
+    let tree_len = tree_children.len();
+    let mut snap_matched: Vec<bool> = vec![false; snap_len];
+    let mut tree_available: Vec<bool> = vec![true; tree_len];
+    let mut matched: Vec<(usize, usize)> = Vec::with_capacity(snap_len.min(tree_len));
 
     // ================================================================
     // Fast-path: Group by (Name, ClassName) -- 1:1 groups instant-match
     // ================================================================
-    let mut snap_by_key: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    let mut snap_by_key: HashMap<(String, Ustr), Vec<usize>> = HashMap::with_capacity(snap_len);
     for (i, snap_opt) in snap_available.iter().enumerate() {
         if let Some(snap) = snap_opt {
             snap_by_key
-                .entry((snap.name.to_string(), snap.class_name.to_string()))
+                .entry((snap.name.to_string(), snap.class_name))
                 .or_default()
                 .push(i);
         }
     }
 
-    let mut tree_by_key: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    let mut tree_by_key: HashMap<(String, Ustr), Vec<usize>> = HashMap::with_capacity(tree_len);
     for (i, &child_ref) in tree_children.iter().enumerate() {
         if let Some(inst) = tree.get_instance(child_ref) {
             tree_by_key
-                .entry((inst.name().to_string(), inst.class_name().to_string()))
+                .entry((inst.name().to_string(), inst.class_name()))
                 .or_default()
                 .push(i);
         }
@@ -122,14 +121,7 @@ pub fn match_forward(
     let snap_remaining = snap_matched.iter().filter(|&&m| !m).count();
     let tree_remaining = tree_available.iter().filter(|&&a| a).count();
     if snap_remaining == 0 || tree_remaining == 0 {
-        return build_result(
-            snap_available,
-            tree_children,
-            &tree_available,
-            matched,
-            tree,
-            session,
-        );
+        return build_result(snap_available, tree_children, &tree_available, matched);
     }
 
     // ================================================================
@@ -168,7 +160,8 @@ pub fn match_forward(
         }
 
         // Score all (A, B) pairs using recursive change-count scoring
-        let mut pairs: Vec<(u32, usize, usize)> = Vec::new();
+        let mut pairs: Vec<(u32, usize, usize)> =
+            Vec::with_capacity(avail_snap.len() * avail_tree.len());
         let mut best_so_far = u32::MAX;
         for &si in &avail_snap {
             let snap = match &snap_available[si] {
@@ -199,38 +192,19 @@ pub fn match_forward(
         }
     }
 
-    build_result(
-        snap_available,
-        tree_children,
-        &tree_available,
-        matched,
-        tree,
-        session,
-    )
+    build_result(snap_available, tree_children, &tree_available, matched)
 }
 
 /// Build the final result, consuming the snapshot children.
-/// Computes `total_cost` for all matched pairs (using session cache).
 fn build_result(
     mut snap_available: Vec<Option<InstanceSnapshot>>,
     tree_children: &[Ref],
     tree_available: &[bool],
     matched_indices: Vec<(usize, usize)>,
-    tree: &RojoTree,
-    session: &MatchingSession,
 ) -> ForwardMatchResult {
     let mut matched = Vec::with_capacity(matched_indices.len());
-    let mut total_cost: u32 = 0;
     for (si, ti) in matched_indices {
         if let Some(snap) = snap_available[si].take() {
-            total_cost = total_cost.saturating_add(compute_change_count(
-                &snap,
-                tree_children[ti],
-                tree,
-                u32::MAX,
-                0,
-                session,
-            ));
             matched.push((snap, tree_children[ti]));
         }
     }
@@ -244,15 +218,10 @@ fn build_result(
         .map(|(_, r)| *r)
         .collect();
 
-    total_cost = total_cost.saturating_add(
-        (unmatched_snapshot.len() + unmatched_tree.len()) as u32 * UNMATCHED_PENALTY,
-    );
-
     ForwardMatchResult {
         matched,
         unmatched_snapshot,
         unmatched_tree,
-        total_cost,
     }
 }
 
@@ -275,32 +244,34 @@ fn match_children_for_scoring(
     depth: u32,
     session: &MatchingSession,
 ) -> ScoringMatchResult {
-    let mut snap_matched = vec![false; snap_children.len()];
-    let mut tree_matched = vec![false; tree_children.len()];
-    let mut matched = Vec::new();
-
     if snap_children.is_empty() && tree_children.is_empty() {
         return ScoringMatchResult {
-            matched,
+            matched: Vec::new(),
             unmatched_snap: 0,
             unmatched_tree: 0,
         };
     }
 
+    let snap_len = snap_children.len();
+    let tree_len = tree_children.len();
+    let mut snap_matched = vec![false; snap_len];
+    let mut tree_matched = vec![false; tree_len];
+    let mut matched: Vec<(usize, usize)> = Vec::with_capacity(snap_len.min(tree_len));
+
     // Group by (Name, ClassName)
-    let mut snap_by_key: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    let mut snap_by_key: HashMap<(String, Ustr), Vec<usize>> = HashMap::with_capacity(snap_len);
     for (i, snap) in snap_children.iter().enumerate() {
         snap_by_key
-            .entry((snap.name.to_string(), snap.class_name.to_string()))
+            .entry((snap.name.to_string(), snap.class_name))
             .or_default()
             .push(i);
     }
 
-    let mut tree_by_key: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    let mut tree_by_key: HashMap<(String, Ustr), Vec<usize>> = HashMap::with_capacity(tree_len);
     for (i, &child_ref) in tree_children.iter().enumerate() {
         if let Some(inst) = tree.get_instance(child_ref) {
             tree_by_key
-                .entry((inst.name().to_string(), inst.class_name().to_string()))
+                .entry((inst.name().to_string(), inst.class_name()))
                 .or_default()
                 .push(i);
         }
@@ -348,7 +319,8 @@ fn match_children_for_scoring(
             continue;
         }
 
-        let mut pairs: Vec<(u32, usize, usize)> = Vec::new();
+        let mut pairs: Vec<(u32, usize, usize)> =
+            Vec::with_capacity(avail_snap.len() * avail_tree.len());
         let mut best_so_far = u32::MAX;
         for &si in &avail_snap {
             for &ti in &avail_tree {
@@ -476,6 +448,7 @@ fn compute_change_count(
 /// Studio via two-way sync) has at their class defaults. To avoid inflating
 /// match costs with phantom diffs, properties present on only one side are
 /// skipped when their value matches the class default.
+#[inline]
 fn count_own_diffs(snap: &InstanceSnapshot, inst: &InstanceWithMeta) -> u32 {
     let mut cost: u32 = 0;
 
@@ -1310,88 +1283,6 @@ mod tests {
     }
 
     #[test]
-    fn total_cost_zero_for_identical() {
-        let snaps = vec![
-            make_snapshot("Alpha", "Folder"),
-            make_snapshot("Beta", "Folder"),
-        ];
-        let (tree, children) = make_tree_with_children(&[("Alpha", "Folder"), ("Beta", "Folder")]);
-        let result = match_forward(snaps, &children, &tree, &MatchingSession::new());
-        assert_eq!(result.matched.len(), 2);
-        assert_eq!(
-            result.total_cost, 0,
-            "Identical instances should have zero cost"
-        );
-    }
-
-    #[test]
-    fn total_cost_nonzero_for_different() {
-        use rbx_dom_weak::types::Variant;
-
-        let snaps = vec![make_snapshot_with_props(
-            "Part",
-            "Part",
-            vec![("Transparency", Variant::Float32(0.5))],
-        )];
-        let (tree, children) = make_tree_from_snapshots(vec![make_snapshot_with_props(
-            "Part",
-            "Part",
-            vec![("Transparency", Variant::Float32(0.0))],
-        )]);
-        let result = match_forward(snaps, &children, &tree, &MatchingSession::new());
-        assert_eq!(result.matched.len(), 1);
-        assert!(
-            result.total_cost > 0,
-            "Different properties should produce nonzero cost, got {}",
-            result.total_cost
-        );
-    }
-
-    #[test]
-    fn total_cost_includes_unmatched() {
-        let snaps = vec![
-            make_snapshot("A", "Folder"),
-            make_snapshot("B", "Folder"),
-            make_snapshot("C", "Folder"),
-        ];
-        let (tree, children) = make_tree_with_children(&[("A", "Folder"), ("B", "Folder")]);
-        let result = match_forward(snaps, &children, &tree, &MatchingSession::new());
-        assert_eq!(result.matched.len(), 2);
-        assert_eq!(result.unmatched_snapshot.len(), 1);
-        assert!(
-            result.total_cost >= UNMATCHED_PENALTY,
-            "Should include penalty for unmatched snapshot, got {}",
-            result.total_cost
-        );
-    }
-
-    #[test]
-    fn total_cost_sums_correctly() {
-        use rbx_dom_weak::types::Variant;
-
-        let snaps = vec![
-            make_snapshot("A", "Folder"),
-            make_snapshot_with_props("B", "Part", vec![("Transparency", Variant::Float32(0.5))]),
-            make_snapshot("C", "Folder"),
-        ];
-        let tree_children_snaps = vec![
-            make_snapshot("A", "Folder"),
-            make_snapshot_with_props("B", "Part", vec![("Transparency", Variant::Float32(0.0))]),
-        ];
-        let (tree, children) = make_tree_from_snapshots(tree_children_snaps);
-        let result = match_forward(snaps, &children, &tree, &MatchingSession::new());
-
-        assert_eq!(result.matched.len(), 2);
-        assert_eq!(result.unmatched_snapshot.len(), 1);
-        // total = matched costs (A=0 + B>=1) + unmatched (C=10000)
-        assert!(
-            result.total_cost >= UNMATCHED_PENALTY + 1,
-            "Should be at least penalty + 1 diff, got {}",
-            result.total_cost
-        );
-    }
-
-    #[test]
     fn session_cache_consistent() {
         let snaps1 = vec![make_snapshot("X", "Folder"), make_snapshot("Y", "Folder")];
         let snaps2 = vec![make_snapshot("X", "Folder"), make_snapshot("Y", "Folder")];
@@ -1402,36 +1293,6 @@ mod tests {
         let r2 = match_forward(snaps2, &children, &tree, &session);
 
         assert_eq!(r1.matched.len(), r2.matched.len());
-        assert_eq!(r1.total_cost, r2.total_cost);
         assert_eq!(r1.unmatched_snapshot.len(), r2.unmatched_snapshot.len());
-    }
-
-    #[test]
-    fn session_cache_does_not_corrupt() {
-        use rbx_dom_weak::types::Variant;
-
-        let session = MatchingSession::new();
-
-        // Group A: identical folders
-        let snaps_a = vec![make_snapshot("A", "Folder")];
-        let (tree_a, children_a) = make_tree_with_children(&[("A", "Folder")]);
-        let ra = match_forward(snaps_a, &children_a, &tree_a, &session);
-        assert_eq!(ra.total_cost, 0);
-
-        // Group B: parts with property diff
-        let snaps_b = vec![make_snapshot_with_props(
-            "B",
-            "Part",
-            vec![("Transparency", Variant::Float32(1.0))],
-        )];
-        let (tree_b, children_b) = make_tree_from_snapshots(vec![make_snapshot_with_props(
-            "B",
-            "Part",
-            vec![("Transparency", Variant::Float32(0.0))],
-        )]);
-        let rb = match_forward(snaps_b, &children_b, &tree_b, &session);
-
-        assert_eq!(ra.total_cost, 0, "Group A should still be zero");
-        assert!(rb.total_cost > 0, "Group B should have nonzero cost");
     }
 }

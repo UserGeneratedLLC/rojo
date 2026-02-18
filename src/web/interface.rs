@@ -27,13 +27,31 @@ pub(crate) const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Current protocol version, which is required to match.
 pub const PROTOCOL_VERSION: u64 = 6;
 
-/// A single service's children serialized as rbxm binary data.
+/// A single service's children serialized as rbxm binary data, plus the
+/// service's own properties, attributes, tags, and Ref property hints.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceChunk {
     pub class_name: String,
     #[serde(with = "serde_bytes")]
     pub data: Vec<u8>,
+    #[serde(default)]
+    pub properties: HashMap<String, Variant>,
+    #[serde(default)]
+    pub attributes: HashMap<String, Variant>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub refs: HashMap<String, ServiceRef>,
+}
+
+/// Describes a Ref property target by name and class so the server can resolve
+/// it among the service's cloned children.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceRef {
+    pub name: String,
+    pub class_name: String,
 }
 
 /// Incoming request from the plugin for live syncback.

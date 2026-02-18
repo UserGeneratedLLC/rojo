@@ -12,6 +12,7 @@ macro_rules! approx_eq {
 
 /// Compares two variants to determine if they're equal. This correctly takes
 /// float comparisons into account.
+#[inline]
 pub fn variant_eq(variant_a: &Variant, variant_b: &Variant) -> bool {
     if variant_a.ty() != variant_b.ty() {
         return false;

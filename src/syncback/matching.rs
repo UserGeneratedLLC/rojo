@@ -12,10 +12,11 @@
 //! to turn instance A into instance B.
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use blake3::Hash;
-use rbx_dom_weak::{types::Ref, WeakDom};
+use rbx_dom_weak::types::Ref;
+use rbx_dom_weak::{Ustr, WeakDom};
 
 use crate::variant_eq::variant_eq;
 
@@ -50,7 +51,6 @@ pub struct MatchResult {
     pub matched: Vec<(Ref, Ref)>,
     pub unmatched_new: Vec<Ref>,
     pub unmatched_old: Vec<Ref>,
-    pub total_cost: u32,
 }
 
 /// Match new children to old children, minimizing total changes.
@@ -68,106 +68,80 @@ pub fn match_children(
             matched: Vec::new(),
             unmatched_new: Vec::new(),
             unmatched_old: Vec::new(),
-            total_cost: 0,
         };
     }
 
-    let mut matched: Vec<(Ref, Ref)> = Vec::new();
-    let mut remaining_new: Vec<Ref> = new_children.to_vec();
-    let mut remaining_old: Vec<Ref> = old_children.to_vec();
+    let new_len = new_children.len();
+    let old_len = old_children.len();
+    let mut new_matched = vec![false; new_len];
+    let mut old_matched = vec![false; old_len];
+    let mut matched: Vec<(usize, usize)> = Vec::with_capacity(new_len.min(old_len));
 
     // ================================================================
     // Fast-path: Group by (Name, ClassName) -- 1:1 groups instant-match
     // ================================================================
-    let mut new_by_key: HashMap<(String, String), Vec<Ref>> = HashMap::new();
-    for &r in &remaining_new {
+    let mut new_by_key: HashMap<(String, Ustr), Vec<usize>> = HashMap::with_capacity(new_len);
+    for (i, &r) in new_children.iter().enumerate() {
         if let Some(inst) = new_dom.get_by_ref(r) {
             new_by_key
-                .entry((inst.name.clone(), inst.class.to_string()))
+                .entry((inst.name.clone(), inst.class))
                 .or_default()
-                .push(r);
+                .push(i);
         }
     }
 
-    let mut old_by_key: HashMap<(String, String), Vec<Ref>> = HashMap::new();
-    for &r in &remaining_old {
+    let mut old_by_key: HashMap<(String, Ustr), Vec<usize>> = HashMap::with_capacity(old_len);
+    for (i, &r) in old_children.iter().enumerate() {
         if let Some(inst) = old_dom.get_by_ref(r) {
             old_by_key
-                .entry((inst.name.clone(), inst.class.to_string()))
+                .entry((inst.name.clone(), inst.class))
                 .or_default()
-                .push(r);
+                .push(i);
         }
     }
-
-    let mut matched_new: HashSet<Ref> = HashSet::new();
-    let mut matched_old: HashSet<Ref> = HashSet::new();
 
     // 1:1 groups: instant match
-    // Sort keys for deterministic iteration
-    let mut sorted_keys: Vec<_> = new_by_key.keys().cloned().collect();
-    sorted_keys.sort();
-
-    for key in &sorted_keys {
-        let Some(new_refs) = new_by_key.get(key) else {
-            continue;
-        };
-        let Some(old_refs) = old_by_key.get(key) else {
-            continue;
-        };
-        if new_refs.len() == 1 && old_refs.len() == 1 {
-            matched.push((new_refs[0], old_refs[0]));
-            matched_new.insert(new_refs[0]);
-            matched_old.insert(old_refs[0]);
+    for (key, new_indices) in &new_by_key {
+        if let Some(old_indices) = old_by_key.get(key) {
+            if new_indices.len() == 1 && old_indices.len() == 1 {
+                let ni = new_indices[0];
+                let oi = old_indices[0];
+                matched.push((ni, oi));
+                new_matched[ni] = true;
+                old_matched[oi] = true;
+            }
         }
     }
 
-    remaining_new.retain(|r| !matched_new.contains(r));
-    remaining_old.retain(|r| !matched_old.contains(r));
+    let new_remaining = new_matched.iter().filter(|&&m| !m).count();
+    let old_remaining = old_matched.iter().filter(|&&m| !m).count();
 
-    if remaining_new.is_empty() || remaining_old.is_empty() {
-        let mut total_cost: u32 = 0;
-        for &(new_ref, old_ref) in &matched {
-            total_cost = total_cost.saturating_add(compute_change_count(
-                new_ref,
-                old_ref,
-                new_dom,
-                old_dom,
-                new_hashes,
-                old_hashes,
-                u32::MAX,
-                0,
-                session,
-            ));
-        }
-        total_cost = total_cost
-            .saturating_add((remaining_new.len() + remaining_old.len()) as u32 * UNMATCHED_PENALTY);
-        return MatchResult {
+    if new_remaining == 0 || old_remaining == 0 {
+        return build_result(
+            new_children,
+            old_children,
+            &new_matched,
+            &old_matched,
             matched,
-            unmatched_new: remaining_new,
-            unmatched_old: remaining_old,
-            total_cost,
-        };
+        );
     }
 
     // ================================================================
     // Ambiguous groups: change-count scoring + greedy assignment
     // ================================================================
-    for key in &sorted_keys {
-        let Some(new_refs) = new_by_key.get(key) else {
-            continue;
-        };
-        let Some(old_refs) = old_by_key.get(key) else {
+    for (key, new_indices) in &new_by_key {
+        let Some(old_indices) = old_by_key.get(key) else {
             continue;
         };
 
-        let avail_new: Vec<Ref> = new_refs
+        let avail_new: Vec<usize> = new_indices
             .iter()
-            .filter(|r| !matched_new.contains(r))
+            .filter(|&&ni| !new_matched[ni])
             .copied()
             .collect();
-        let avail_old: Vec<Ref> = old_refs
+        let avail_old: Vec<usize> = old_indices
             .iter()
-            .filter(|r| !matched_old.contains(r))
+            .filter(|&&oi| !old_matched[oi])
             .copied()
             .collect();
 
@@ -175,24 +149,25 @@ pub fn match_children(
             continue;
         }
 
-        // Handle remaining 1:1 (from groups that had multiple but some were
-        // already matched, leaving 1 on each side)
         if avail_new.len() == 1 && avail_old.len() == 1 {
-            matched.push((avail_new[0], avail_old[0]));
-            matched_new.insert(avail_new[0]);
-            matched_old.insert(avail_old[0]);
+            let ni = avail_new[0];
+            let oi = avail_old[0];
+            matched.push((ni, oi));
+            new_matched[ni] = true;
+            old_matched[oi] = true;
             continue;
         }
 
         // Score all (A, B) pairs using recursive change-count scoring
-        let mut pairs: Vec<(u32, Ref, Ref)> = Vec::new();
+        let mut pairs: Vec<(u32, usize, usize)> =
+            Vec::with_capacity(avail_new.len() * avail_old.len());
         let mut best_so_far = u32::MAX;
 
-        for &new_ref in &avail_new {
-            for &old_ref in &avail_old {
+        for &ni in &avail_new {
+            for &oi in &avail_old {
                 let cost = compute_change_count(
-                    new_ref,
-                    old_ref,
+                    new_children[ni],
+                    old_children[oi],
                     new_dom,
                     old_dom,
                     new_hashes,
@@ -201,7 +176,7 @@ pub fn match_children(
                     0,
                     session,
                 );
-                pairs.push((cost, new_ref, old_ref));
+                pairs.push((cost, ni, oi));
                 if cost < best_so_far {
                     best_so_far = cost;
                 }
@@ -212,41 +187,56 @@ pub fn match_children(
         pairs.sort_by_key(|&(cost, _, _)| cost);
 
         // Greedy assign
-        for &(_, new_ref, old_ref) in &pairs {
-            if matched_new.contains(&new_ref) || matched_old.contains(&old_ref) {
+        for &(_, ni, oi) in &pairs {
+            if new_matched[ni] || old_matched[oi] {
                 continue;
             }
-            matched.push((new_ref, old_ref));
-            matched_new.insert(new_ref);
-            matched_old.insert(old_ref);
+            matched.push((ni, oi));
+            new_matched[ni] = true;
+            old_matched[oi] = true;
         }
     }
 
-    remaining_new.retain(|r| !matched_new.contains(r));
-    remaining_old.retain(|r| !matched_old.contains(r));
+    build_result(
+        new_children,
+        old_children,
+        &new_matched,
+        &old_matched,
+        matched,
+    )
+}
 
-    let mut total_cost: u32 = 0;
-    for &(new_ref, old_ref) in &matched {
-        total_cost = total_cost.saturating_add(compute_change_count(
-            new_ref,
-            old_ref,
-            new_dom,
-            old_dom,
-            new_hashes,
-            old_hashes,
-            u32::MAX,
-            0,
-            session,
-        ));
-    }
-    total_cost = total_cost
-        .saturating_add((remaining_new.len() + remaining_old.len()) as u32 * UNMATCHED_PENALTY);
+/// Convert index-based matching results back to Ref-based MatchResult.
+fn build_result(
+    new_children: &[Ref],
+    old_children: &[Ref],
+    new_matched: &[bool],
+    old_matched: &[bool],
+    matched_indices: Vec<(usize, usize)>,
+) -> MatchResult {
+    let matched: Vec<(Ref, Ref)> = matched_indices
+        .into_iter()
+        .map(|(ni, oi)| (new_children[ni], old_children[oi]))
+        .collect();
+
+    let unmatched_new: Vec<Ref> = new_matched
+        .iter()
+        .enumerate()
+        .filter(|(_, &m)| !m)
+        .map(|(i, _)| new_children[i])
+        .collect();
+
+    let unmatched_old: Vec<Ref> = old_matched
+        .iter()
+        .enumerate()
+        .filter(|(_, &m)| !m)
+        .map(|(i, _)| old_children[i])
+        .collect();
 
     MatchResult {
         matched,
-        unmatched_new: remaining_new,
-        unmatched_old: remaining_old,
-        total_cost,
+        unmatched_new,
+        unmatched_old,
     }
 }
 
@@ -270,34 +260,36 @@ fn match_children_for_scoring(
     depth: u32,
     session: &MatchingSession,
 ) -> ScoringMatchResult {
-    let mut new_matched = vec![false; new_children.len()];
-    let mut old_matched = vec![false; old_children.len()];
-    let mut matched = Vec::new();
-
     if new_children.is_empty() && old_children.is_empty() {
         return ScoringMatchResult {
-            matched,
+            matched: Vec::new(),
             unmatched_new: 0,
             unmatched_old: 0,
         };
     }
 
+    let new_len = new_children.len();
+    let old_len = old_children.len();
+    let mut new_matched = vec![false; new_len];
+    let mut old_matched = vec![false; old_len];
+    let mut matched: Vec<(usize, usize)> = Vec::with_capacity(new_len.min(old_len));
+
     // Group by (Name, ClassName)
-    let mut new_by_key: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    let mut new_by_key: HashMap<(String, Ustr), Vec<usize>> = HashMap::with_capacity(new_len);
     for (i, &r) in new_children.iter().enumerate() {
         if let Some(inst) = new_dom.get_by_ref(r) {
             new_by_key
-                .entry((inst.name.clone(), inst.class.to_string()))
+                .entry((inst.name.clone(), inst.class))
                 .or_default()
                 .push(i);
         }
     }
 
-    let mut old_by_key: HashMap<(String, String), Vec<usize>> = HashMap::new();
+    let mut old_by_key: HashMap<(String, Ustr), Vec<usize>> = HashMap::with_capacity(old_len);
     for (i, &r) in old_children.iter().enumerate() {
         if let Some(inst) = old_dom.get_by_ref(r) {
             old_by_key
-                .entry((inst.name.clone(), inst.class.to_string()))
+                .entry((inst.name.clone(), inst.class))
                 .or_default()
                 .push(i);
         }
@@ -345,7 +337,8 @@ fn match_children_for_scoring(
             continue;
         }
 
-        let mut pairs: Vec<(u32, usize, usize)> = Vec::new();
+        let mut pairs: Vec<(u32, usize, usize)> =
+            Vec::with_capacity(avail_new.len() * avail_old.len());
         let mut best_so_far = u32::MAX;
         for &ni in &avail_new {
             for &oi in &avail_old {
@@ -502,6 +495,7 @@ fn compute_change_count(
 ///
 /// Properties present on only one side are skipped when their value matches
 /// the class default (see `src/snapshot/matching.rs` for full rationale).
+#[inline]
 fn count_own_diffs(new_ref: Ref, old_ref: Ref, new_dom: &WeakDom, old_dom: &WeakDom) -> u32 {
     let new_inst = match new_dom.get_by_ref(new_ref) {
         Some(i) => i,
@@ -760,106 +754,6 @@ mod tests {
     }
 
     #[test]
-    fn total_cost_zero_identical() {
-        let (new_dom, new_root, _, _) = build_test_dom();
-        let (old_dom, old_root, _, _) = build_test_dom();
-
-        let new_children: Vec<Ref> = new_dom.get_by_ref(new_root).unwrap().children().to_vec();
-        let old_children: Vec<Ref> = old_dom.get_by_ref(old_root).unwrap().children().to_vec();
-
-        let result = match_children(
-            &new_children,
-            &old_children,
-            &new_dom,
-            &old_dom,
-            None,
-            None,
-            &MatchingSession::new(),
-        );
-        assert_eq!(result.matched.len(), 2);
-        assert_eq!(
-            result.total_cost, 0,
-            "Identical instances should have zero cost"
-        );
-    }
-
-    #[test]
-    fn total_cost_nonzero_different() {
-        use rbx_dom_weak::types::Variant;
-
-        let mut new_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
-        let new_root = new_dom.root_ref();
-        new_dom.insert(
-            new_root,
-            InstanceBuilder::new("Part")
-                .with_name("P")
-                .with_property("Transparency", Variant::Float32(0.5)),
-        );
-
-        let mut old_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
-        let old_root = old_dom.root_ref();
-        old_dom.insert(
-            old_root,
-            InstanceBuilder::new("Part")
-                .with_name("P")
-                .with_property("Transparency", Variant::Float32(0.0)),
-        );
-
-        let new_children: Vec<Ref> = new_dom.get_by_ref(new_root).unwrap().children().to_vec();
-        let old_children: Vec<Ref> = old_dom.get_by_ref(old_root).unwrap().children().to_vec();
-
-        let result = match_children(
-            &new_children,
-            &old_children,
-            &new_dom,
-            &old_dom,
-            None,
-            None,
-            &MatchingSession::new(),
-        );
-        assert_eq!(result.matched.len(), 1);
-        assert!(
-            result.total_cost > 0,
-            "Different properties should produce nonzero cost, got {}",
-            result.total_cost
-        );
-    }
-
-    #[test]
-    fn total_cost_includes_unmatched() {
-        let mut new_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
-        let new_root = new_dom.root_ref();
-        new_dom.insert(new_root, InstanceBuilder::new("Folder").with_name("A"));
-        new_dom.insert(new_root, InstanceBuilder::new("Folder").with_name("B"));
-        new_dom.insert(new_root, InstanceBuilder::new("Folder").with_name("C"));
-
-        let mut old_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
-        let old_root = old_dom.root_ref();
-        old_dom.insert(old_root, InstanceBuilder::new("Folder").with_name("A"));
-        old_dom.insert(old_root, InstanceBuilder::new("Folder").with_name("B"));
-
-        let new_children: Vec<Ref> = new_dom.get_by_ref(new_root).unwrap().children().to_vec();
-        let old_children: Vec<Ref> = old_dom.get_by_ref(old_root).unwrap().children().to_vec();
-
-        let result = match_children(
-            &new_children,
-            &old_children,
-            &new_dom,
-            &old_dom,
-            None,
-            None,
-            &MatchingSession::new(),
-        );
-        assert_eq!(result.matched.len(), 2);
-        assert_eq!(result.unmatched_new.len(), 1);
-        assert!(
-            result.total_cost >= UNMATCHED_PENALTY,
-            "Should include penalty for unmatched, got {}",
-            result.total_cost
-        );
-    }
-
-    #[test]
     fn session_cache_consistent_syncback() {
         let (new_dom, new_root, _, _) = build_test_dom();
         let (old_dom, old_root, _, _) = build_test_dom();
@@ -887,6 +781,5 @@ mod tests {
             &session,
         );
         assert_eq!(r1.matched.len(), r2.matched.len());
-        assert_eq!(r1.total_cost, r2.total_cost);
     }
 }

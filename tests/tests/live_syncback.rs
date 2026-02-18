@@ -4,7 +4,9 @@ use rbx_dom_weak::InstanceBuilder;
 
 use crate::rojo_test::{
     roundtrip_util::assert_dirs_equal,
-    serve_util::{make_service_chunk, run_cli_syncback_on_chunks, run_serve_test},
+    serve_util::{
+        make_service_chunk, make_service_chunk_full, run_cli_syncback_on_chunks, run_serve_test,
+    },
 };
 
 use librojo::web_api::{ServiceChunk, SocketPacketType, PROTOCOL_VERSION};
@@ -180,6 +182,189 @@ fn parity_empty_services_mixed() {
         make_service_chunk("ServerScriptService", vec![]),
     ];
     assert_live_matches_cli("live_syncback", &chunks, None);
+}
+
+// ── Service property parity tests ────────────────────────────────
+
+#[test]
+fn parity_lighting_properties() {
+    use rbx_dom_weak::types::{Color3, Variant};
+
+    let chunks = vec![make_service_chunk_full(
+        "Lighting",
+        vec![
+            ("Ambient", Variant::Color3(Color3::new(0.5, 0.5, 0.5))),
+            ("Brightness", Variant::Float32(2.0)),
+            ("ClockTime", Variant::Float32(14.5)),
+        ],
+        vec![],
+        vec![],
+        vec![],
+        vec![InstanceBuilder::new("PointLight").with_name("TestLight")],
+    )];
+    assert_live_matches_cli("live_syncback", &chunks, None);
+}
+
+#[test]
+fn parity_soundservice_properties() {
+    use rbx_dom_weak::types::Variant;
+
+    let chunks = vec![make_service_chunk_full(
+        "SoundService",
+        vec![
+            (
+                "AmbientReverb",
+                Variant::Enum(rbx_dom_weak::types::Enum::from_u32(2)),
+            ),
+            ("DistanceFactor", Variant::Float32(5.0)),
+        ],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+    )];
+    assert_live_matches_cli("live_syncback", &chunks, None);
+}
+
+#[test]
+fn parity_starterplayer_properties() {
+    use rbx_dom_weak::types::Variant;
+
+    let chunks = vec![make_service_chunk_full(
+        "StarterPlayer",
+        vec![("CameraMaxZoomDistance", Variant::Float32(200.0))],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+    )];
+    assert_live_matches_cli("live_syncback", &chunks, None);
+}
+
+#[test]
+fn parity_textchatservice_properties() {
+    use rbx_dom_weak::types::Variant;
+
+    let chunks = vec![make_service_chunk_full(
+        "TextChatService",
+        vec![(
+            "ChatVersion",
+            Variant::Enum(rbx_dom_weak::types::Enum::from_u32(2)),
+        )],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+    )];
+    assert_live_matches_cli("live_syncback", &chunks, None);
+}
+
+#[test]
+fn parity_childless_service_with_properties() {
+    use rbx_dom_weak::types::Variant;
+
+    let chunks = vec![make_service_chunk_full(
+        "VoiceChatService",
+        vec![(
+            "UseAudioApi",
+            Variant::Enum(rbx_dom_weak::types::Enum::from_u32(2)),
+        )],
+        vec![],
+        vec![],
+        vec![],
+        vec![],
+    )];
+    assert_live_matches_cli("live_syncback", &chunks, None);
+}
+
+#[test]
+fn parity_service_properties_with_children() {
+    use rbx_dom_weak::types::{Color3, Variant};
+
+    let chunks = vec![make_service_chunk_full(
+        "Lighting",
+        vec![
+            ("Ambient", Variant::Color3(Color3::new(0.3, 0.3, 0.3))),
+            ("Brightness", Variant::Float32(3.0)),
+        ],
+        vec![],
+        vec![],
+        vec![],
+        vec![
+            InstanceBuilder::new("PointLight").with_name("LightA"),
+            InstanceBuilder::new("ModuleScript")
+                .with_name("LightingConfig")
+                .with_property("Source", Variant::String("return {}".into())),
+        ],
+    )];
+    assert_live_matches_cli("live_syncback", &chunks, None);
+}
+
+#[test]
+fn parity_multiple_services_with_properties() {
+    use rbx_dom_weak::types::{Color3, Variant};
+
+    let chunks = vec![
+        make_service_chunk_full(
+            "Lighting",
+            vec![("Ambient", Variant::Color3(Color3::new(0.2, 0.2, 0.2)))],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        ),
+        make_service_chunk_full(
+            "SoundService",
+            vec![("DistanceFactor", Variant::Float32(10.0))],
+            vec![],
+            vec![],
+            vec![],
+            vec![],
+        ),
+        make_service_chunk(
+            "ReplicatedStorage",
+            vec![InstanceBuilder::new("Folder").with_name("Assets")],
+        ),
+    ];
+    assert_live_matches_cli("live_syncback", &chunks, None);
+}
+
+#[test]
+fn parity_camera_not_synced() {
+    let camera_child = InstanceBuilder::new("Camera").with_name("Camera");
+    let chunks = vec![make_service_chunk_full(
+        "Workspace",
+        vec![],
+        vec![],
+        vec![],
+        vec![("CurrentCamera", "Camera", "Camera")],
+        vec![
+            camera_child,
+            InstanceBuilder::new("Part")
+                .with_name("Floor")
+                .with_property("Anchored", rbx_dom_weak::types::Variant::Bool(true)),
+        ],
+    )];
+
+    run_serve_test("live_syncback", |session, _| {
+        session.post_api_syncback(None, chunks.to_vec());
+        session.wait_to_come_back_online();
+
+        let workspace_dir = session.path().join("src/workspace");
+        let has_camera = workspace_dir.join("Camera").exists()
+            || workspace_dir.join("Camera.rbxm").exists()
+            || workspace_dir.join("Camera.model.json5").exists();
+
+        assert!(
+            !has_camera,
+            "Camera should not appear on disk (syncCurrentCamera defaults to false)"
+        );
+
+        assert!(
+            workspace_dir.join("Floor.model.json5").exists(),
+            "Non-camera children should still be written"
+        );
+    });
 }
 
 // ── Validation / rejection tests ─────────────────────────────────
@@ -461,14 +646,59 @@ fn roundtrip_build_syncback_rebuild() {
         for &service_ref in dom_a.root().children() {
             let service = dom_a.get_by_ref(service_ref).unwrap();
             let child_refs: Vec<rbx_dom_weak::types::Ref> = service.children().to_vec();
-            if child_refs.is_empty() {
-                continue;
+
+            let mut data = Vec::new();
+            if !child_refs.is_empty() {
+                rbx_binary::to_writer(&mut data, &dom_a, &child_refs).unwrap();
             }
-            let mut buf = Vec::new();
-            rbx_binary::to_writer(&mut buf, &dom_a, &child_refs).unwrap();
+
+            let mut properties = std::collections::HashMap::new();
+            let mut refs_map = std::collections::HashMap::new();
+            for (key, value) in &service.properties {
+                match value {
+                    rbx_dom_weak::types::Variant::Ref(target) => {
+                        if let Some(target_inst) = dom_a.get_by_ref(*target) {
+                            refs_map.insert(
+                                key.to_string(),
+                                librojo::web_api::ServiceRef {
+                                    name: target_inst.name.to_string(),
+                                    class_name: target_inst.class.to_string(),
+                                },
+                            );
+                        }
+                    }
+                    rbx_dom_weak::types::Variant::Attributes(_)
+                    | rbx_dom_weak::types::Variant::Tags(_) => {}
+                    _ => {
+                        properties.insert(key.to_string(), value.clone());
+                    }
+                }
+            }
+
+            let mut attributes_map = std::collections::HashMap::new();
+            if let Some(rbx_dom_weak::types::Variant::Attributes(attrs)) =
+                service.properties.get(&rbx_dom_weak::ustr("Attributes"))
+            {
+                for (k, v) in attrs.iter() {
+                    attributes_map.insert(k.to_string(), v.clone());
+                }
+            }
+
+            let tags_vec = if let Some(rbx_dom_weak::types::Variant::Tags(tags)) =
+                service.properties.get(&rbx_dom_weak::ustr("Tags"))
+            {
+                tags.iter().map(|s| s.to_string()).collect()
+            } else {
+                vec![]
+            };
+
             chunks.push(ServiceChunk {
                 class_name: service.class.to_string(),
-                data: buf,
+                data,
+                properties,
+                attributes: attributes_map,
+                tags: tags_vec,
+                refs: refs_map,
             });
         }
 

@@ -13,6 +13,26 @@
     "Workspace": {
       "$className": "Workspace",
       "$path": "src/workspace"
+    },
+    "Lighting": {
+      "$className": "Lighting",
+      "$path": "src/lighting"
+    },
+    "SoundService": {
+      "$className": "SoundService",
+      "$path": "src/soundservice"
+    },
+    "StarterPlayer": {
+      "$className": "StarterPlayer",
+      "$path": "src/starterplayer"
+    },
+    "TextChatService": {
+      "$className": "TextChatService",
+      "$path": "src/textchatservice"
+    },
+    "VoiceChatService": {
+      "$className": "VoiceChatService",
+      "$path": "src/voicechatservice"
     }
   }
 }

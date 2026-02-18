@@ -139,6 +139,7 @@ fn run_live_syncback(project_path: &Path, payload: SyncbackPayload) -> anyhow::R
 
 fn build_dom_from_chunks(payload: SyncbackPayload) -> anyhow::Result<WeakDom> {
     use crate::syncback::VISIBLE_SERVICES;
+    use rbx_dom_weak::types::{Attributes, Tags};
 
     let mut dom = WeakDom::new(InstanceBuilder::new("DataModel"));
     let root_ref = dom.root_ref();
@@ -147,7 +148,26 @@ fn build_dom_from_chunks(payload: SyncbackPayload) -> anyhow::Result<WeakDom> {
     let mut created_services: std::collections::HashSet<String> = std::collections::HashSet::new();
 
     for chunk in &payload.services {
-        let service_ref = dom.insert(root_ref, InstanceBuilder::new(&chunk.class_name));
+        let mut builder = InstanceBuilder::new(&chunk.class_name);
+
+        for (key, value) in &chunk.properties {
+            builder = builder.with_property(key.as_str(), value.clone());
+        }
+
+        if !chunk.attributes.is_empty() {
+            let mut attrs = Attributes::new();
+            for (key, value) in &chunk.attributes {
+                attrs.insert(key.clone(), value.clone());
+            }
+            builder = builder.with_property("Attributes", Variant::Attributes(attrs));
+        }
+
+        if !chunk.tags.is_empty() {
+            let tags: Tags = chunk.tags.iter().map(|s| s.as_str()).collect();
+            builder = builder.with_property("Tags", Variant::Tags(tags));
+        }
+
+        let service_ref = dom.insert(root_ref, builder);
         created_services.insert(chunk.class_name.clone());
 
         if !chunk.data.is_empty() {
@@ -164,6 +184,22 @@ fn build_dom_from_chunks(payload: SyncbackPayload) -> anyhow::Result<WeakDom> {
                     service_ref,
                     &mut global_ref_map,
                 );
+            }
+        }
+
+        if !chunk.refs.is_empty() {
+            let children: Vec<Ref> = dom.get_by_ref(service_ref).unwrap().children().to_vec();
+            for (prop_name, target) in &chunk.refs {
+                let found = children.iter().find(|&&child_ref| {
+                    let child = dom.get_by_ref(child_ref).unwrap();
+                    child.name.as_str() == target.name && child.class.as_str() == target.class_name
+                });
+                if let Some(&child_ref) = found {
+                    let service = dom.get_by_ref_mut(service_ref).unwrap();
+                    service
+                        .properties
+                        .insert(prop_name.as_str().into(), Variant::Ref(child_ref));
+                }
             }
         }
     }

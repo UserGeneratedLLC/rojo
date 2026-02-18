@@ -1,6 +1,5 @@
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local Players = game:GetService("Players")
-local SerializationService = game:GetService("SerializationService")
 local ServerStorage = game:GetService("ServerStorage")
 local RunService = game:GetService("RunService")
 
@@ -46,6 +45,8 @@ local timeUtil = require(Plugin.timeUtil)
 local Theme = require(script.Theme)
 
 local Http = require(Packages.Http)
+
+local encodeService = require(Plugin.ChangeBatcher.encodeService)
 
 local Page = require(script.Page)
 local Notifications = require(script.Components.Notifications)
@@ -641,12 +642,8 @@ function App:performSyncback()
 	local services = {}
 	for _, className in SYNCBACK_SERVICES do
 		local ok, service = pcall(game.FindService, game, className)
-		if ok and service and #service:GetChildren() > 0 then
-			local buf = SerializationService:SerializeInstancesAsync(service:GetChildren())
-			table.insert(services, {
-				className = className,
-				data = buf,
-			})
+		if ok and service then
+			table.insert(services, encodeService(service))
 		end
 	end
 
