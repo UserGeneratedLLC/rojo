@@ -27,18 +27,21 @@ pub(crate) const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Current protocol version, which is required to match.
 pub const PROTOCOL_VERSION: u64 = 6;
 
-/// A single service's children serialized as rbxm binary data, plus the
-/// service's own properties and Ref property hints.
+/// Metadata for a single service in the live syncback request.
 ///
-/// Attributes and Tags are included in the `properties` map as
-/// `Variant::Attributes(...)` and `Variant::Tags(...)` respectively,
-/// matching the encoding used by the existing `/api/write` path.
+/// Children are NOT stored here — they live in the top-level `data` blob
+/// (a single rbxm containing all children from all services). `child_count`
+/// tells the server how many consecutive children in that blob belong to
+/// this service.
+///
+/// Attributes and Tags are included in `properties` as
+/// `Variant::Attributes(...)` / `Variant::Tags(...)`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceChunk {
     pub class_name: String,
-    #[serde(with = "serde_bytes")]
-    pub data: Vec<u8>,
+    #[serde(default)]
+    pub child_count: u32,
     #[serde(default)]
     pub properties: HashMap<String, Variant>,
     #[serde(default)]
@@ -64,12 +67,15 @@ pub struct SyncbackRequest {
     pub protocol_version: f64,
     pub server_version: String,
     pub place_id: Option<f64>,
+    #[serde(with = "serde_bytes", default)]
+    pub data: Vec<u8>,
     pub services: Vec<ServiceChunk>,
 }
 
 /// Payload passed from the API handler to the serve loop after validation.
 #[derive(Debug)]
 pub struct SyncbackPayload {
+    pub data: Vec<u8>,
     pub services: Vec<ServiceChunk>,
 }
 

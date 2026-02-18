@@ -247,11 +247,13 @@ async fn handle_api_syncback(
     }
 
     log::info!(
-        "Live syncback requested with {} service chunks",
-        syncback_request.services.len()
+        "Live syncback requested with {} service chunks, {} bytes of rbxm data",
+        syncback_request.services.len(),
+        syncback_request.data.len()
     );
 
     let payload = SyncbackPayload {
+        data: syncback_request.data,
         services: syncback_request.services,
     };
     syncback_signal.fire(payload);

@@ -142,43 +142,47 @@ fn build_dom_from_chunks(payload: SyncbackPayload) -> anyhow::Result<WeakDom> {
 
     let mut dom = WeakDom::new(InstanceBuilder::new("DataModel"));
     let root_ref = dom.root_ref();
-
     let mut global_ref_map: HashMap<Ref, Ref> = HashMap::new();
     let mut created_services: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+    let cloned_children: Vec<Ref> = if !payload.data.is_empty() {
+        let chunk_dom = rbx_binary::from_reader(Cursor::new(&payload.data))
+            .context("Failed to parse rbxm data blob")?;
+
+        let mut cloned = Vec::new();
+        for &child_ref in chunk_dom.root().children() {
+            deep_clone_into(&chunk_dom, &mut dom, child_ref, root_ref, &mut global_ref_map);
+            let new_ref = *global_ref_map.get(&child_ref).unwrap();
+            cloned.push(new_ref);
+        }
+        cloned
+    } else {
+        Vec::new()
+    };
+
+    let mut cursor = 0usize;
     for chunk in &payload.services {
         let mut builder = InstanceBuilder::new(&chunk.class_name);
-
         for (key, value) in &chunk.properties {
             builder = builder.with_property(key.as_str(), value.clone());
         }
-
         let service_ref = dom.insert(root_ref, builder);
         created_services.insert(chunk.class_name.clone());
 
-        if !chunk.data.is_empty() {
-            let chunk_dom =
-                rbx_binary::from_reader(Cursor::new(&chunk.data)).with_context(|| {
-                    format!("Failed to parse rbxm for service {}", chunk.class_name)
-                })?;
-
-            for &child_ref in chunk_dom.root().children() {
-                deep_clone_into(
-                    &chunk_dom,
-                    &mut dom,
-                    child_ref,
-                    service_ref,
-                    &mut global_ref_map,
-                );
-            }
+        let count = chunk.child_count as usize;
+        let end = (cursor + count).min(cloned_children.len());
+        for &child_ref in &cloned_children[cursor..end] {
+            dom.transfer_within(child_ref, service_ref);
         }
+        cursor = end;
 
         if !chunk.refs.is_empty() {
             let children: Vec<Ref> = dom.get_by_ref(service_ref).unwrap().children().to_vec();
             for (prop_name, target) in &chunk.refs {
                 let found = children.iter().find(|&&child_ref| {
                     let child = dom.get_by_ref(child_ref).unwrap();
-                    child.name.as_str() == target.name && child.class.as_str() == target.class_name
+                    child.name.as_str() == target.name
+                        && child.class.as_str() == target.class_name
                 });
                 if let Some(&child_ref) = found {
                     let service = dom.get_by_ref_mut(service_ref).unwrap();

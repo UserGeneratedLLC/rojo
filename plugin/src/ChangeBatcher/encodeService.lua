@@ -1,5 +1,3 @@
-local SerializationService = game:GetService("SerializationService")
-
 local Packages = script.Parent.Parent.Parent.Packages
 local Log = require(Packages.Log)
 local RbxDom = require(Packages.RbxDom)
@@ -24,7 +22,8 @@ return function(service: Instance)
 				continue
 			end
 
-			local isReadable = propertyMeta.scriptability == "ReadWrite" or propertyMeta.scriptability == "Read"
+			local isReadable = propertyMeta.scriptability == "ReadWrite"
+				or propertyMeta.scriptability == "Read"
 			local doesSerialize = propertyMeta.serialization ~= "DoesNotSerialize"
 
 			if isReadable and doesSerialize then
@@ -54,20 +53,9 @@ return function(service: Instance)
 		end
 	end
 
-	local children = service:GetChildren()
-	local data = buffer.create(0)
-	if #children > 0 then
-		local serializeOk, result = pcall(SerializationService.SerializeInstancesAsync, SerializationService, children)
-		if serializeOk then
-			data = result
-		else
-			Log.warn("Failed to serialize children of {}: {}", service.ClassName, tostring(result))
-		end
-	end
-
 	local chunk = {
 		className = service.ClassName,
-		data = data,
+		childCount = #service:GetChildren(),
 	}
 	if next(properties) then
 		chunk.properties = properties

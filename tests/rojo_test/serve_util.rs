@@ -523,36 +523,29 @@ fn get_port_number() -> usize {
     port
 }
 
-/// Build a ServiceChunk by serializing child instances into rbxm format.
+/// A service entry plus its children (before serialization into the shared
+/// rbxm blob). Use `build_syncback_request` to finalize.
+pub struct ServiceEntry {
+    pub chunk: librojo::web_api::ServiceChunk,
+    pub children: Vec<rbx_dom_weak::InstanceBuilder>,
+}
+
+/// Build a ServiceEntry with children and no extra properties.
 pub fn make_service_chunk(
     class_name: &str,
     children: Vec<rbx_dom_weak::InstanceBuilder>,
-) -> librojo::web_api::ServiceChunk {
+) -> ServiceEntry {
     make_service_chunk_full(class_name, vec![], vec![], children)
 }
 
-/// Build a ServiceChunk with explicit service-level properties and ref hints
-/// alongside the serialized children. Attributes and Tags should be included
-/// in the `properties` vec as `Variant::Attributes(...)` / `Variant::Tags(...)`.
+/// Build a ServiceEntry with explicit service-level properties and ref hints.
 pub fn make_service_chunk_full(
     class_name: &str,
     properties: Vec<(&str, rbx_dom_weak::types::Variant)>,
     refs: Vec<(&str, &str, &str)>,
     children: Vec<rbx_dom_weak::InstanceBuilder>,
-) -> librojo::web_api::ServiceChunk {
-    use rbx_dom_weak::WeakDom;
+) -> ServiceEntry {
     use std::collections::HashMap;
-
-    let mut dom = WeakDom::new(rbx_dom_weak::InstanceBuilder::new("DataModel"));
-    let root = dom.root_ref();
-    for child in children {
-        dom.insert(root, child);
-    }
-    let child_refs: Vec<Ref> = dom.root().children().to_vec();
-    let mut buf = Vec::new();
-    if !child_refs.is_empty() {
-        rbx_binary::to_writer(&mut buf, &dom, &child_refs).unwrap();
-    }
 
     let props_map: HashMap<String, rbx_dom_weak::types::Variant> = properties
         .into_iter()
@@ -571,17 +564,50 @@ pub fn make_service_chunk_full(
         })
         .collect();
 
-    librojo::web_api::ServiceChunk {
-        class_name: class_name.to_string(),
-        data: buf,
-        properties: props_map,
-        refs: refs_map,
+    ServiceEntry {
+        chunk: librojo::web_api::ServiceChunk {
+            class_name: class_name.to_string(),
+            child_count: children.len() as u32,
+            properties: props_map,
+            refs: refs_map,
+        },
+        children,
     }
 }
 
-/// Build a complete rbxl file from service chunks, mirroring the same data
-/// that live syncback receives. Used for CLI parity testing.
-pub fn make_rbxl_from_chunks(chunks: &[librojo::web_api::ServiceChunk]) -> Vec<u8> {
+/// Serialize all ServiceEntries into the final wire format: a single rbxm
+/// data blob and a Vec of ServiceChunks (metadata only).
+pub fn build_syncback_request(
+    entries: Vec<ServiceEntry>,
+) -> (Vec<u8>, Vec<librojo::web_api::ServiceChunk>) {
+    use rbx_dom_weak::WeakDom;
+
+    let mut dom = WeakDom::new(rbx_dom_weak::InstanceBuilder::new("DataModel"));
+    let root = dom.root_ref();
+
+    let mut chunks = Vec::new();
+    for entry in entries {
+        for child in entry.children {
+            dom.insert(root, child);
+        }
+        chunks.push(entry.chunk);
+    }
+
+    let all_refs: Vec<Ref> = dom.root().children().to_vec();
+    let mut data = Vec::new();
+    if !all_refs.is_empty() {
+        rbx_binary::to_writer(&mut data, &dom, &all_refs).unwrap();
+    }
+
+    (data, chunks)
+}
+
+/// Build a complete rbxl file from the single-rbxm data blob + service
+/// chunks, mirroring the same data that live syncback receives.
+pub fn make_rbxl_from_chunks(
+    data: &[u8],
+    chunks: &[librojo::web_api::ServiceChunk],
+) -> Vec<u8> {
     use rbx_dom_weak::types::Variant;
     use rbx_dom_weak::WeakDom;
     use std::collections::HashMap;
@@ -590,54 +616,66 @@ pub fn make_rbxl_from_chunks(chunks: &[librojo::web_api::ServiceChunk]) -> Vec<u
     let mut dom = WeakDom::new(rbx_dom_weak::InstanceBuilder::new("DataModel"));
     let root_ref = dom.root_ref();
 
-    for chunk in chunks {
-        let mut builder = rbx_dom_weak::InstanceBuilder::new(&chunk.class_name);
+    let cloned_children: Vec<Ref> = if !data.is_empty() {
+        let chunk_dom = rbx_binary::from_reader(Cursor::new(data))
+            .unwrap_or_else(|e| panic!("Failed to parse rbxm data blob: {e}"));
 
-        for (key, value) in &chunk.properties {
-            builder = builder.with_property(key.as_str(), value.clone());
+        let mut ref_map: HashMap<Ref, Ref> = HashMap::new();
+        let mut cloned = Vec::new();
+        for &child_ref in chunk_dom.root().children() {
+            deep_clone_into_test(&chunk_dom, &mut dom, child_ref, root_ref, &mut ref_map);
+            cloned.push(*ref_map.get(&child_ref).unwrap());
         }
 
-        let service_ref = dom.insert(root_ref, builder);
-
-        if !chunk.data.is_empty() {
-            let chunk_dom = rbx_binary::from_reader(Cursor::new(&chunk.data))
-                .unwrap_or_else(|e| panic!("Failed to parse rbxm for {}: {e}", chunk.class_name));
-
-            let mut ref_map: HashMap<Ref, Ref> = HashMap::new();
-            for &child_ref in chunk_dom.root().children() {
-                deep_clone_into_test(&chunk_dom, &mut dom, child_ref, service_ref, &mut ref_map);
-            }
-
-            let all_refs: Vec<Ref> = ref_map.values().copied().collect();
-            for inst_ref in all_refs {
-                let props_to_fix: Vec<(String, Ref)> = {
-                    let inst = dom.get_by_ref(inst_ref).unwrap();
-                    inst.properties
-                        .iter()
-                        .filter_map(|(key, value)| {
-                            if let Variant::Ref(r) = value {
-                                ref_map.get(r).map(|&mapped| (key.to_string(), mapped))
-                            } else {
-                                None
-                            }
-                        })
-                        .collect()
-                };
-                if !props_to_fix.is_empty() {
-                    let inst = dom.get_by_ref_mut(inst_ref).unwrap();
-                    for (key, new_ref) in props_to_fix {
-                        inst.properties.insert(key.into(), Variant::Ref(new_ref));
-                    }
+        let all_refs: Vec<Ref> = ref_map.values().copied().collect();
+        for inst_ref in all_refs {
+            let props_to_fix: Vec<(String, Ref)> = {
+                let inst = dom.get_by_ref(inst_ref).unwrap();
+                inst.properties
+                    .iter()
+                    .filter_map(|(key, value)| {
+                        if let Variant::Ref(r) = value {
+                            ref_map.get(r).map(|&mapped| (key.to_string(), mapped))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            };
+            if !props_to_fix.is_empty() {
+                let inst = dom.get_by_ref_mut(inst_ref).unwrap();
+                for (key, new_ref) in props_to_fix {
+                    inst.properties.insert(key.into(), Variant::Ref(new_ref));
                 }
             }
         }
+        cloned
+    } else {
+        Vec::new()
+    };
+
+    let mut cursor = 0usize;
+    for chunk in chunks {
+        let mut builder = rbx_dom_weak::InstanceBuilder::new(&chunk.class_name);
+        for (key, value) in &chunk.properties {
+            builder = builder.with_property(key.as_str(), value.clone());
+        }
+        let service_ref = dom.insert(root_ref, builder);
+
+        let count = chunk.child_count as usize;
+        let end = (cursor + count).min(cloned_children.len());
+        for &child_ref in &cloned_children[cursor..end] {
+            dom.transfer_within(child_ref, service_ref);
+        }
+        cursor = end;
 
         if !chunk.refs.is_empty() {
             let children: Vec<Ref> = dom.get_by_ref(service_ref).unwrap().children().to_vec();
             for (prop_name, target) in &chunk.refs {
                 let found = children.iter().find(|&&child_ref| {
                     let child = dom.get_by_ref(child_ref).unwrap();
-                    child.name.as_str() == target.name && child.class.as_str() == target.class_name
+                    child.name.as_str() == target.name
+                        && child.class.as_str() == target.class_name
                 });
                 if let Some(&child_ref) = found {
                     let service = dom.get_by_ref_mut(service_ref).unwrap();
@@ -691,6 +729,7 @@ fn deep_clone_into_test(
 /// project path.
 pub fn run_cli_syncback_on_chunks(
     fixture_name: &str,
+    data: &[u8],
     chunks: &[librojo::web_api::ServiceChunk],
 ) -> (TempDir, PathBuf) {
     use crate::rojo_test::io_util::{copy_recursive, ROJO_PATH, SERVE_TESTS_PATH};
@@ -701,7 +740,7 @@ pub fn run_cli_syncback_on_chunks(
     fs::create_dir(&project_path).expect("Couldn't create project subdirectory");
     copy_recursive(&source_path, &project_path).expect("Couldn't copy fixture");
 
-    let rbxl_data = make_rbxl_from_chunks(chunks);
+    let rbxl_data = make_rbxl_from_chunks(data, chunks);
     let rbxl_path = dir.path().join("input.rbxl");
     fs::write(&rbxl_path, rbxl_data).expect("Failed to write rbxl");
 
@@ -743,20 +782,34 @@ impl TestServeSession {
     }
 
     /// Post to /api/syncback with correct version/protocol info.
+    /// `data` is the single rbxm blob; `services` are the metadata chunks.
     /// Panics if the response is not 200.
     pub fn post_api_syncback(
         &self,
         place_id: Option<u64>,
+        data: Vec<u8>,
         services: Vec<librojo::web_api::ServiceChunk>,
     ) {
         use serde::Serialize;
 
-        let request = serde_json::json!({
-            "protocolVersion": librojo::web_api::PROTOCOL_VERSION,
-            "serverVersion": env!("CARGO_PKG_VERSION"),
-            "placeId": place_id,
-            "services": services,
-        });
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Req {
+            protocol_version: u64,
+            server_version: String,
+            place_id: Option<u64>,
+            #[serde(with = "serde_bytes")]
+            data: Vec<u8>,
+            services: Vec<librojo::web_api::ServiceChunk>,
+        }
+
+        let request = Req {
+            protocol_version: librojo::web_api::PROTOCOL_VERSION,
+            server_version: env!("CARGO_PKG_VERSION").to_string(),
+            place_id,
+            data,
+            services,
+        };
 
         let mut body = Vec::new();
         let mut serializer = rmp_serde::Serializer::new(&mut body)

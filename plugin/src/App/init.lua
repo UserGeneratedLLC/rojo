@@ -1,5 +1,6 @@
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local Players = game:GetService("Players")
+local SerializationService = game:GetService("SerializationService")
 local ServerStorage = game:GetService("ServerStorage")
 local RunService = game:GetService("RunService")
 
@@ -640,11 +641,21 @@ function App:performSyncback()
 	end
 
 	local services = {}
+	local allChildren = {}
 	for _, className in SYNCBACK_SERVICES do
 		local ok, service = pcall(game.FindService, game, className)
 		if ok and service then
-			table.insert(services, encodeService(service))
+			local chunk = encodeService(service)
+			for _, child in service:GetChildren() do
+				table.insert(allChildren, child)
+			end
+			table.insert(services, chunk)
 		end
+	end
+
+	local data = buffer.create(0)
+	if #allChildren > 0 then
+		data = SerializationService:SerializeInstancesAsync(allChildren)
 	end
 
 	local url = ("http://%s:%s/api/syncback"):format(host, port)
@@ -652,6 +663,7 @@ function App:performSyncback()
 		protocolVersion = Config.protocolVersion,
 		serverVersion = Config.expectedServerVersionString,
 		placeId = game.PlaceId,
+		data = data,
 		services = services,
 	})
 

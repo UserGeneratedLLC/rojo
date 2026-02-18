@@ -5,18 +5,24 @@ use rbx_dom_weak::InstanceBuilder;
 use crate::rojo_test::{
     roundtrip_util::assert_dirs_equal,
     serve_util::{
-        make_service_chunk, make_service_chunk_full, run_cli_syncback_on_chunks, run_serve_test,
+        build_syncback_request, make_service_chunk, make_service_chunk_full,
+        run_cli_syncback_on_chunks, run_serve_test, ServiceEntry,
     },
 };
 
-use librojo::web_api::{ServiceChunk, SocketPacketType, PROTOCOL_VERSION};
+use librojo::web_api::{SocketPacketType, PROTOCOL_VERSION};
 
-fn assert_live_matches_cli(fixture_name: &str, chunks: &[ServiceChunk], place_id: Option<u64>) {
+fn assert_live_matches_cli(
+    fixture_name: &str,
+    entries: Vec<ServiceEntry>,
+    place_id: Option<u64>,
+) {
+    let (data, chunks) = build_syncback_request(entries);
     run_serve_test(fixture_name, |session, _| {
-        session.post_api_syncback(place_id, chunks.to_vec());
+        session.post_api_syncback(place_id, data.clone(), chunks.clone());
         session.wait_to_come_back_online();
 
-        let (_cli_dir, cli_path) = run_cli_syncback_on_chunks(fixture_name, chunks);
+        let (_cli_dir, cli_path) = run_cli_syncback_on_chunks(fixture_name, &data, &chunks);
         assert_dirs_equal(session.path(), &cli_path);
     });
 }
@@ -46,7 +52,7 @@ fn parity_scripts() {
                 ),
         ],
     )];
-    assert_live_matches_cli("live_syncback", &chunks, None);
+    assert_live_matches_cli("live_syncback", chunks, None);
 }
 
 #[test]
@@ -63,7 +69,7 @@ fn parity_models_with_properties() {
                 )),
             )],
     )];
-    assert_live_matches_cli("live_syncback", &chunks, None);
+    assert_live_matches_cli("live_syncback", chunks, None);
 }
 
 #[test]
@@ -76,7 +82,7 @@ fn parity_special_names() {
             InstanceBuilder::new("Folder").with_name("A/B"),
         ],
     )];
-    assert_live_matches_cli("live_syncback", &chunks, None);
+    assert_live_matches_cli("live_syncback", chunks, None);
 }
 
 #[test]
@@ -89,7 +95,7 @@ fn parity_duplicate_names() {
             InstanceBuilder::new("Folder").with_name("Data"),
         ],
     )];
-    assert_live_matches_cli("live_syncback", &chunks, None);
+    assert_live_matches_cli("live_syncback", chunks, None);
 }
 
 #[test]
@@ -111,7 +117,7 @@ fn parity_deep_hierarchy() {
                                 rbx_dom_weak::types::Variant::String("return true".into()),
                             )])])])])],
     )];
-    assert_live_matches_cli("live_syncback", &chunks, None);
+    assert_live_matches_cli("live_syncback", chunks, None);
 }
 
 #[test]
@@ -134,7 +140,7 @@ fn parity_mixed_file_types() {
                 ),
         ],
     )];
-    assert_live_matches_cli("live_syncback", &chunks, None);
+    assert_live_matches_cli("live_syncback", chunks, None);
 }
 
 #[test]
@@ -169,7 +175,7 @@ fn parity_multi_service() {
                 .with_property("Anchored", rbx_dom_weak::types::Variant::Bool(true))],
         ),
     ];
-    assert_live_matches_cli("live_syncback", &chunks, None);
+    assert_live_matches_cli("live_syncback", chunks, None);
 }
 
 #[test]
@@ -181,7 +187,7 @@ fn parity_empty_services_mixed() {
         ),
         make_service_chunk("ServerScriptService", vec![]),
     ];
-    assert_live_matches_cli("live_syncback", &chunks, None);
+    assert_live_matches_cli("live_syncback", chunks, None);
 }
 
 // ── Service property parity tests ────────────────────────────────
@@ -200,7 +206,7 @@ fn parity_lighting_properties() {
         vec![],
         vec![InstanceBuilder::new("PointLight").with_name("TestLight")],
     )];
-    assert_live_matches_cli("live_syncback", &chunks, None);
+    assert_live_matches_cli("live_syncback", chunks, None);
 }
 
 #[test]
@@ -219,7 +225,7 @@ fn parity_soundservice_properties() {
         vec![],
         vec![],
     )];
-    assert_live_matches_cli("live_syncback", &chunks, None);
+    assert_live_matches_cli("live_syncback", chunks, None);
 }
 
 #[test]
@@ -232,7 +238,7 @@ fn parity_starterplayer_properties() {
         vec![],
         vec![],
     )];
-    assert_live_matches_cli("live_syncback", &chunks, None);
+    assert_live_matches_cli("live_syncback", chunks, None);
 }
 
 #[test]
@@ -248,7 +254,7 @@ fn parity_textchatservice_properties() {
         vec![],
         vec![],
     )];
-    assert_live_matches_cli("live_syncback", &chunks, None);
+    assert_live_matches_cli("live_syncback", chunks, None);
 }
 
 #[test]
@@ -264,7 +270,7 @@ fn parity_childless_service_with_properties() {
         vec![],
         vec![],
     )];
-    assert_live_matches_cli("live_syncback", &chunks, None);
+    assert_live_matches_cli("live_syncback", chunks, None);
 }
 
 #[test]
@@ -285,7 +291,7 @@ fn parity_service_properties_with_children() {
                 .with_property("Source", Variant::String("return {}".into())),
         ],
     )];
-    assert_live_matches_cli("live_syncback", &chunks, None);
+    assert_live_matches_cli("live_syncback", chunks, None);
 }
 
 #[test]
@@ -310,13 +316,37 @@ fn parity_multiple_services_with_properties() {
             vec![InstanceBuilder::new("Folder").with_name("Assets")],
         ),
     ];
-    assert_live_matches_cli("live_syncback", &chunks, None);
+    assert_live_matches_cli("live_syncback", chunks, None);
+}
+
+#[test]
+fn parity_cross_service_refs() {
+    use rbx_dom_weak::types::Variant;
+
+    let target_part = InstanceBuilder::new("Part")
+        .with_name("TargetPart")
+        .with_property("Anchored", Variant::Bool(true));
+
+    let obj_value = InstanceBuilder::new("ObjectValue")
+        .with_name("Pointer")
+        .with_property("Value", Variant::Ref(target_part.referent()));
+
+    let chunks = vec![
+        make_service_chunk("Workspace", vec![target_part]),
+        make_service_chunk(
+            "ReplicatedStorage",
+            vec![InstanceBuilder::new("Folder")
+                .with_name("Refs")
+                .with_child(obj_value)],
+        ),
+    ];
+    assert_live_matches_cli("live_syncback", chunks, None);
 }
 
 #[test]
 fn parity_camera_not_synced() {
     let camera_child = InstanceBuilder::new("Camera").with_name("Camera");
-    let chunks = [make_service_chunk_full(
+    let entries = vec![make_service_chunk_full(
         "Workspace",
         vec![],
         vec![("CurrentCamera", "Camera", "Camera")],
@@ -327,9 +357,10 @@ fn parity_camera_not_synced() {
                 .with_property("Anchored", rbx_dom_weak::types::Variant::Bool(true)),
         ],
     )];
+    let (data, chunks) = build_syncback_request(entries);
 
     run_serve_test("live_syncback", |session, _| {
-        session.post_api_syncback(None, chunks.to_vec());
+        session.post_api_syncback(None, data.clone(), chunks.clone());
         session.wait_to_come_back_online();
 
         let workspace_dir = session.path().join("src/workspace");
@@ -485,12 +516,12 @@ fn rejects_unlisted_place() {
 
 #[test]
 fn allows_whitelisted_place() {
-    let chunks = vec![make_service_chunk(
+    let (data, chunks) = build_syncback_request(vec![make_service_chunk(
         "ReplicatedStorage",
         vec![InstanceBuilder::new("Folder").with_name("Allowed")],
-    )];
+    )]);
     run_serve_test("live_syncback_place_ids", |session, _| {
-        session.post_api_syncback(Some(123), chunks);
+        session.post_api_syncback(Some(123), data, chunks);
         let new_info = session.wait_to_come_back_online();
         assert!(
             !new_info.project_name.is_empty(),
@@ -501,12 +532,12 @@ fn allows_whitelisted_place() {
 
 #[test]
 fn allows_any_place_when_unrestricted() {
-    let chunks = vec![make_service_chunk(
+    let (data, chunks) = build_syncback_request(vec![make_service_chunk(
         "ReplicatedStorage",
         vec![InstanceBuilder::new("Folder").with_name("Any")],
-    )];
+    )]);
     run_serve_test("live_syncback", |session, _| {
-        session.post_api_syncback(Some(99999), chunks);
+        session.post_api_syncback(Some(99999), data, chunks);
         session.wait_to_come_back_online();
     });
 }
@@ -515,7 +546,7 @@ fn allows_any_place_when_unrestricted() {
 
 #[test]
 fn server_comes_back_functional() {
-    let chunks = vec![make_service_chunk(
+    let (data, chunks) = build_syncback_request(vec![make_service_chunk(
         "ReplicatedStorage",
         vec![InstanceBuilder::new("ModuleScript")
             .with_name("TestModule")
@@ -523,10 +554,10 @@ fn server_comes_back_functional() {
                 "Source",
                 rbx_dom_weak::types::Variant::String("return 42".into()),
             )],
-    )];
+    )]);
 
     run_serve_test("live_syncback", |session, _| {
-        session.post_api_syncback(None, chunks);
+        session.post_api_syncback(None, data, chunks);
         let new_info = session.wait_to_come_back_online();
 
         let read = session.get_api_read(new_info.root_instance_id).unwrap();
@@ -548,17 +579,17 @@ fn server_comes_back_functional() {
 
 #[test]
 fn syncback_twice_different_data() {
-    let chunks_a = vec![make_service_chunk(
+    let (data_a, chunks_a) = build_syncback_request(vec![make_service_chunk(
         "ReplicatedStorage",
         vec![InstanceBuilder::new("Folder").with_name("DataA")],
-    )];
-    let chunks_b = vec![make_service_chunk(
+    )]);
+    let (data_b, chunks_b) = build_syncback_request(vec![make_service_chunk(
         "ReplicatedStorage",
         vec![InstanceBuilder::new("Folder").with_name("DataB")],
-    )];
+    )]);
 
     run_serve_test("live_syncback", |session, _| {
-        session.post_api_syncback(None, chunks_a);
+        session.post_api_syncback(None, data_a, chunks_a);
         session.wait_to_come_back_online();
 
         assert!(
@@ -566,7 +597,7 @@ fn syncback_twice_different_data() {
             "First syncback should create DataA"
         );
 
-        session.post_api_syncback(None, chunks_b);
+        session.post_api_syncback(None, data_b, chunks_b);
         session.wait_to_come_back_online();
 
         assert!(
@@ -582,7 +613,7 @@ fn syncback_twice_different_data() {
 
 #[test]
 fn syncback_replaces_all_old_files() {
-    let chunks = vec![make_service_chunk(
+    let (data, chunks) = build_syncback_request(vec![make_service_chunk(
         "ReplicatedStorage",
         vec![InstanceBuilder::new("ModuleScript")
             .with_name("NewFile")
@@ -590,7 +621,7 @@ fn syncback_replaces_all_old_files() {
                 "Source",
                 rbx_dom_weak::types::Variant::String("return 'new'".into()),
             )],
-    )];
+    )]);
 
     run_serve_test("live_syncback", |session, _| {
         assert!(
@@ -598,7 +629,7 @@ fn syncback_replaces_all_old_files() {
             "OldModule should exist before syncback"
         );
 
-        session.post_api_syncback(None, chunks);
+        session.post_api_syncback(None, data, chunks);
         session.wait_to_come_back_online();
 
         assert!(
@@ -624,15 +655,11 @@ fn roundtrip_build_syncback_rebuild() {
         let rbxl_data_a = fs::read(&rbxl_path_a).unwrap();
 
         let dom_a = rbx_binary::from_reader(Cursor::new(&rbxl_data_a)).unwrap();
+        let mut all_child_refs = Vec::new();
         let mut chunks = Vec::new();
         for &service_ref in dom_a.root().children() {
             let service = dom_a.get_by_ref(service_ref).unwrap();
             let child_refs: Vec<rbx_dom_weak::types::Ref> = service.children().to_vec();
-
-            let mut data = Vec::new();
-            if !child_refs.is_empty() {
-                rbx_binary::to_writer(&mut data, &dom_a, &child_refs).unwrap();
-            }
 
             let mut properties = std::collections::HashMap::new();
             let mut refs_map = std::collections::HashMap::new();
@@ -655,15 +682,21 @@ fn roundtrip_build_syncback_rebuild() {
                 }
             }
 
-            chunks.push(ServiceChunk {
+            chunks.push(librojo::web_api::ServiceChunk {
                 class_name: service.class.to_string(),
-                data,
+                child_count: child_refs.len() as u32,
                 properties,
                 refs: refs_map,
             });
+            all_child_refs.extend(child_refs);
         }
 
-        session.post_api_syncback(None, chunks);
+        let mut data = Vec::new();
+        if !all_child_refs.is_empty() {
+            rbx_binary::to_writer(&mut data, &dom_a, &all_child_refs).unwrap();
+        }
+
+        session.post_api_syncback(None, data, chunks);
         session.wait_to_come_back_online();
 
         thread::sleep(Duration::from_millis(500));
