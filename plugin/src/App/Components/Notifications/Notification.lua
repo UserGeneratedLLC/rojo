@@ -40,17 +40,11 @@ function Notification:dismiss()
 	end
 	self.dismissed = true
 
-	self.motor:setGoal(Flipper.Spring.new(0, {
-		frequency = 5,
-		dampingRatio = 1,
-	}))
+	self.motor:setGoal(Flipper.Instant.new(0))
 end
 
 function Notification:didMount()
-	self.motor:setGoal(Flipper.Spring.new(1, {
-		frequency = 3,
-		dampingRatio = 1,
-	}))
+	self.motor:setGoal(Flipper.Instant.new(1))
 
 	self.props.soundPlayer:play(Assets.Sounds.Notification)
 

@@ -62,10 +62,7 @@ end
 
 function Page:didUpdate(lastProps)
 	if self.props.active ~= lastProps.active then
-		self.motor:setGoal(Flipper.Spring.new(self.props.active and 1 or 0, {
-			frequency = 6,
-			dampingRatio = 1,
-		}))
+		self.motor:setGoal(Flipper.Instant.new(self.props.active and 1 or 0))
 	end
 end
 

@@ -8,11 +8,6 @@ local Flipper = require(Packages.Flipper)
 local Assets = require(Plugin.Assets)
 local bindingUtil = require(Plugin.App.bindingUtil)
 
-local HOVER_SPRING_PROPS = {
-	frequency = 5,
-	dampingRatio = 1.1,
-}
-
 local e = Roact.createElement
 
 local IconButton = Roact.Component:extend("IconButton")
@@ -38,11 +33,11 @@ function IconButton:render()
 		[Roact.Event.Activated] = self.props.onClick,
 
 		[Roact.Event.MouseEnter] = function()
-			self.motor:setGoal(Flipper.Spring.new(1, HOVER_SPRING_PROPS))
+			self.motor:setGoal(Flipper.Instant.new(1))
 		end,
 
 		[Roact.Event.MouseLeave] = function()
-			self.motor:setGoal(Flipper.Spring.new(0, HOVER_SPRING_PROPS))
+			self.motor:setGoal(Flipper.Instant.new(0))
 		end,
 	}, {
 		Icon = e("ImageLabel", {
