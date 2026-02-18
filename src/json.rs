@@ -147,7 +147,6 @@ const F64_FLOAT_OPTIONS: Options = Options::builder()
     .inf_string(Some(b"Infinity"))
     .positive_exponent_break(SCI_POSITIVE_BREAK)
     .negative_exponent_break(SCI_NEGATIVE_BREAK)
-    .max_significant_digits(NonZeroUsize::new(15))
     .round_mode(RoundMode::Round)
     .build_strict();
 
@@ -163,9 +162,6 @@ fn format_f32(v: f32) -> String {
 }
 
 fn format_f64(v: f64) -> String {
-    if v.is_finite() && v.abs() >= 1e308 {
-        return format!("{v:e}");
-    }
     let mut buffer = [0u8; F64_BUF_SIZE];
     let digits = v.to_lexical_with_options::<STANDARD>(&mut buffer, &F64_FLOAT_OPTIONS);
     std::str::from_utf8(digits)
