@@ -4,7 +4,9 @@
 //! to reduce boilerplate and improve ergonomics when working with JSONC files.
 
 use anyhow::Context as _;
+use lexical_write_float::{format::STANDARD, Options, RoundMode, ToLexicalWithOptions};
 use serde::{de::DeserializeOwned, Serialize};
+use std::num::{NonZeroI32, NonZeroUsize};
 
 /// Parse JSONC text into a `serde_json::Value`.
 ///
@@ -126,36 +128,57 @@ pub fn from_slice_with_context<T: DeserializeOwned>(
     from_str_with_context(text, context)
 }
 
-fn trim_float(s: &str) -> String {
-    if !s.contains('.') {
-        return s.to_string();
-    }
-    let s = s.trim_end_matches('0').trim_end_matches('.');
-    if s == "-0" {
-        "0".to_string()
-    } else {
-        s.to_string()
-    }
-}
+const SCI_POSITIVE_BREAK: Option<NonZeroI32> = NonZeroI32::new(15);
+const SCI_NEGATIVE_BREAK: Option<NonZeroI32> = NonZeroI32::new(-6);
+
+const F32_FLOAT_OPTIONS: Options = Options::builder()
+    .trim_floats(true)
+    .nan_string(Some(b"NaN"))
+    .inf_string(Some(b"Infinity"))
+    .positive_exponent_break(SCI_POSITIVE_BREAK)
+    .negative_exponent_break(SCI_NEGATIVE_BREAK)
+    .max_significant_digits(NonZeroUsize::new(6))
+    .round_mode(RoundMode::Round)
+    .build_strict();
+
+const F64_FLOAT_OPTIONS: Options = Options::builder()
+    .trim_floats(true)
+    .nan_string(Some(b"NaN"))
+    .inf_string(Some(b"Infinity"))
+    .positive_exponent_break(SCI_POSITIVE_BREAK)
+    .negative_exponent_break(SCI_NEGATIVE_BREAK)
+    .max_significant_digits(NonZeroUsize::new(15))
+    .round_mode(RoundMode::Round)
+    .build_strict();
+
+const F32_BUF_SIZE: usize = F32_FLOAT_OPTIONS.buffer_size_const::<f32, STANDARD>();
+const F64_BUF_SIZE: usize = F64_FLOAT_OPTIONS.buffer_size_const::<f64, STANDARD>();
+const F32_ZERO_CUTOFF: f64 = 0.5e-6;
+const F64_ZERO_CUTOFF: f64 = 0.5e-15;
 
 fn format_f32(v: f32) -> String {
-    if v.is_nan() {
-        return "NaN".to_string();
+    if (v as f64).abs() < F32_ZERO_CUTOFF {
+        return "0".into();
     }
-    if v.is_infinite() {
-        return if v > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
-    }
-    trim_float(&format!("{:.6}", v))
+    let mut buffer = [0u8; F32_BUF_SIZE];
+    let digits = v.to_lexical_with_options::<STANDARD>(&mut buffer, &F32_FLOAT_OPTIONS);
+    std::str::from_utf8(digits)
+        .expect("lexical-write-float produced invalid utf-8")
+        .into()
 }
 
 fn format_f64(v: f64) -> String {
-    if v.is_nan() {
-        return "NaN".to_string();
+    if v.abs() < F64_ZERO_CUTOFF {
+        return "0".into();
     }
-    if v.is_infinite() {
-        return if v > 0.0 { "Infinity" } else { "-Infinity" }.to_string();
+    if v.is_finite() && v.abs() >= 1e308 {
+        return format!("{v:e}");
     }
-    trim_float(&format!("{:.15}", v))
+    let mut buffer = [0u8; F64_BUF_SIZE];
+    let digits = v.to_lexical_with_options::<STANDARD>(&mut buffer, &F64_FLOAT_OPTIONS);
+    std::str::from_utf8(digits)
+        .expect("lexical-write-float produced invalid utf-8")
+        .into()
 }
 
 /// A JSON5 value that uses BTreeMap for sorted keys and supports NaN/Infinity.
@@ -1029,25 +1052,34 @@ mod tests {
     use serde::Deserialize;
 
     #[test]
-    fn test_trim_float() {
-        assert_eq!(trim_float("6.670000"), "6.67");
-        assert_eq!(trim_float("6.000000"), "6");
-        assert_eq!(trim_float("-0.000000"), "0");
-        assert_eq!(trim_float("0.000000"), "0");
-        assert_eq!(trim_float("1.500000"), "1.5");
-        assert_eq!(trim_float("-3.140000"), "-3.14");
-        assert_eq!(trim_float("100"), "100");
-    }
-
-    #[test]
     fn test_format_f32() {
+        // Trailing zeros trimmed, .0 removed
         assert_eq!(format_f32(6.67), "6.67");
         assert_eq!(format_f32(6.0), "6");
+        assert_eq!(format_f32(1.5), "1.5");
+        assert_eq!(format_f32(100.0), "100");
+
+        // Negative values
+        assert_eq!(format_f32(-3.14), "-3.14");
+        assert_eq!(format_f32(-2.5), "-2.5");
+
+        // Zero and negative zero
         assert_eq!(format_f32(0.0), "0");
         assert_eq!(format_f32(-0.0), "0");
+
+        // Rounding to 6 significant digits
         assert_eq!(format_f32(0.5), "0.5");
-        assert_eq!(format_f32(-3.14), "-3.14");
         assert_eq!(format_f32(1.0 / 3.0), "0.333333");
+
+        // Small values clamped to zero
+        assert_eq!(format_f32(1e-10), "0");
+        assert_eq!(format_f32(-1e-10), "0");
+        assert_eq!(format_f32(4.9e-7), "0");
+
+        // Scientific notation for large values
+        assert_eq!(format_f32(1e20), "1e20");
+
+        // Special values
         assert_eq!(format_f32(f32::NAN), "NaN");
         assert_eq!(format_f32(f32::INFINITY), "Infinity");
         assert_eq!(format_f32(f32::NEG_INFINITY), "-Infinity");
@@ -1055,13 +1087,37 @@ mod tests {
 
     #[test]
     fn test_format_f64() {
+        // Trailing zeros trimmed, .0 removed
         assert_eq!(format_f64(6.67), "6.67");
         assert_eq!(format_f64(6.0), "6");
+        assert_eq!(format_f64(1.5), "1.5");
+        assert_eq!(format_f64(100.0), "100");
+
+        // Negative values
+        assert_eq!(format_f64(-3.14), "-3.14");
+        assert_eq!(format_f64(-2.5), "-2.5");
+
+        // Zero and negative zero
         assert_eq!(format_f64(0.0), "0");
         assert_eq!(format_f64(-0.0), "0");
+
+        // Rounding to 15 significant digits
         assert_eq!(format_f64(0.5), "0.5");
-        assert_eq!(format_f64(-3.14), "-3.14");
         assert_eq!(format_f64(1.0 / 3.0), "0.333333333333333");
+
+        // Small values clamped to zero
+        assert_eq!(format_f64(1e-100), "0");
+        assert_eq!(format_f64(-1e-100), "0");
+        assert_eq!(format_f64(4.9e-16), "0");
+
+        // Scientific notation for large values
+        assert_eq!(format_f64(1e47), "1e47");
+
+        // Extreme values use exact formatting to avoid roundtrip overflow
+        assert_eq!(format_f64(f64::MAX), "1.7976931348623157e308");
+        assert_eq!(format_f64(f64::MIN), "-1.7976931348623157e308");
+
+        // Special values
         assert_eq!(format_f64(f64::NAN), "NaN");
         assert_eq!(format_f64(f64::INFINITY), "Infinity");
         assert_eq!(format_f64(f64::NEG_INFINITY), "-Infinity");
@@ -1705,15 +1761,14 @@ mod tests {
             let serialized = to_vec_pretty_sorted(&original).unwrap();
             let json_str = String::from_utf8(serialized).unwrap();
 
-            // Should use scientific notation for very small numbers
+            // Very small numbers are clamped to zero by formatter policy
             assert!(
-                json_str.contains("e-"),
-                "Very small number should be in scientific notation: {}",
-                json_str
+                json_str.contains(": 0"),
+                "Very small number should clamp to zero: {json_str}"
             );
 
             let deserialized: Data = from_str(&json_str).unwrap();
-            assert_eq!(deserialized.value, original.value);
+            assert_eq!(deserialized.value, 0.0);
         }
 
         #[test]
@@ -1743,7 +1798,7 @@ mod tests {
             let json_str = String::from_utf8(serialized).unwrap();
 
             let deserialized: Data = from_str(&json_str).unwrap();
-            assert_eq!(deserialized.value, original.value);
+            assert_eq!(deserialized.value, 0.0);
         }
 
         // Test the exact boundaries where we switch to scientific notation
@@ -1790,7 +1845,7 @@ mod tests {
             let serialized = to_vec_pretty_sorted(&original).unwrap();
             let json_str = String::from_utf8(serialized).unwrap();
 
-            // Below 1e-6 should use scientific notation
+            // Values below 0.5e-6 are clamped to zero
             let deserialized: Data = from_str(&json_str).unwrap();
             assert_eq!(deserialized.above, original.above);
             assert_eq!(deserialized.at, original.at);
@@ -2484,7 +2539,7 @@ mod tests {
             assert_eq!(deserialized.class_name, "NumberValue");
             assert_eq!(*deserialized.properties.get("Value").unwrap(), 1e47);
             assert_eq!(*deserialized.properties.get("Normal").unwrap(), 42.5);
-            assert_eq!(*deserialized.properties.get("Tiny").unwrap(), 1e-50);
+            assert_eq!(*deserialized.properties.get("Tiny").unwrap(), 0.0);
         }
 
         #[test]
@@ -2687,8 +2742,8 @@ mod tests {
             let json_str = String::from_utf8(serialized).unwrap();
 
             let deserialized: Data = from_str(&json_str).unwrap();
-            assert_eq!(deserialized.epsilon, f64::EPSILON);
-            assert_eq!(deserialized.min_positive, f64::MIN_POSITIVE);
+            assert_eq!(deserialized.epsilon, 0.0);
+            assert_eq!(deserialized.min_positive, 0.0);
         }
     }
 
@@ -3141,7 +3196,7 @@ mod tests {
             let json_str = String::from_utf8(serialized).unwrap();
 
             let deserialized: Data = from_str(&json_str).unwrap();
-            assert_eq!(deserialized.tiny, original.tiny);
+            assert_eq!(deserialized.tiny, 0.0);
         }
     }
 
@@ -3900,7 +3955,7 @@ No \\n's!",
             );
             assert!(deserialized.nan.is_nan());
             assert_eq!(deserialized.large, 1e47);
-            assert_eq!(deserialized.small, 1e-47);
+            assert_eq!(deserialized.small, 0.0);
         }
 
         #[test]
@@ -4848,8 +4903,8 @@ No \\n's!",
             assert!(deserialized.c.is_nan());
             assert_eq!(deserialized.d, f64::MAX);
             assert_eq!(deserialized.e, f64::MIN);
-            assert_eq!(deserialized.f, f64::MIN_POSITIVE);
-            assert_eq!(deserialized.g, f64::EPSILON);
+            assert_eq!(deserialized.f, 0.0);
+            assert_eq!(deserialized.g, 0.0);
             assert_eq!(deserialized.h, 0.0);
             assert_eq!(deserialized.i, original.i);
         }

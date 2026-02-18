@@ -1,5 +1,4 @@
 local Packages = script.Parent.Parent.Parent.Packages
-local Log = require(Packages.Log)
 local RbxDom = require(Packages.RbxDom)
 
 local encodeProperty = require(script.Parent.encodeProperty)

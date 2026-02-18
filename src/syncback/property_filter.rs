@@ -116,6 +116,12 @@ pub fn should_property_serialize_with_stats(
     prop_name: &str,
     stats: Option<&SyncbackStats>,
 ) -> bool {
+    // Live syncback service chunks cannot provide this hidden property, so
+    // dedicated syncback must also skip it to preserve parity.
+    if class_name == "Workspace" && prop_name == "WorldPivotData" {
+        return false;
+    }
+
     let database = rbx_reflection_database::get().unwrap();
     let mut current_class_name = class_name;
 
@@ -158,4 +164,19 @@ pub fn should_property_serialize_with_stats(
     }
 
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_property_serialize;
+
+    #[test]
+    fn workspace_world_pivot_data_is_not_serialized() {
+        assert!(!should_property_serialize("Workspace", "WorldPivotData"));
+    }
+
+    #[test]
+    fn model_world_pivot_data_still_serializes() {
+        assert!(should_property_serialize("Model", "WorldPivotData"));
+    }
 }
