@@ -1211,7 +1211,8 @@ function App:render()
 			}),
 		}),
 
-		SyncbackConfirm = e(StudioPluginGui, {
+	SyncbackConfirm = e(Theme.StudioProvider, nil, {
+		e(StudioPluginGui, {
 			id = "Atlas_SyncbackConfirm",
 			title = "Full Syncback",
 			active = self.state.showingSyncbackConfirm == true,
@@ -1229,6 +1230,8 @@ function App:render()
 			end,
 		}, {
 			Content = Theme.with(function(theme)
+				local noTransparency = Roact.createBinding(0)
+
 				return e("Frame", {
 					Size = UDim2.fromScale(1, 1),
 					BackgroundColor3 = theme.BackgroundColor,
@@ -1271,6 +1274,7 @@ function App:render()
 						Cancel = e(TextButton, {
 							text = "Cancel",
 							style = "Bordered",
+							transparency = noTransparency,
 							layoutOrder = 1,
 							onClick = function()
 								self:setState({ showingSyncbackConfirm = false })
@@ -1279,6 +1283,7 @@ function App:render()
 						Confirm = e(TextButton, {
 							text = "Syncback",
 							style = "Danger",
+							transparency = noTransparency,
 							layoutOrder = 2,
 							onClick = function()
 								self:performSyncback()
@@ -1288,6 +1293,7 @@ function App:render()
 				})
 			end),
 		}),
+	}),
 
 		toggleAction = e(StudioPluginAction, {
 				name = "AtlasConnection",
