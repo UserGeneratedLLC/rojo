@@ -13,7 +13,7 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use rbx_dom_weak::types::Ref;
+use rbx_dom_weak::types::{Ref, Variant};
 use rbx_dom_weak::Ustr;
 
 use crate::variant_eq::variant_eq;
@@ -200,8 +200,9 @@ fn build_result(
     mut snap_available: Vec<Option<InstanceSnapshot>>,
     tree_children: &[Ref],
     tree_available: &[bool],
-    matched_indices: Vec<(usize, usize)>,
+    mut matched_indices: Vec<(usize, usize)>,
 ) -> ForwardMatchResult {
+    matched_indices.sort_by_key(|&(si, _)| si);
     let mut matched = Vec::with_capacity(matched_indices.len());
     for (si, ti) in matched_indices {
         if let Some(snap) = snap_available[si].take() {
@@ -389,7 +390,7 @@ fn compute_change_count(
         None => return UNMATCHED_PENALTY,
     };
 
-    let mut cost = count_own_diffs(snap, &inst);
+    let mut cost = count_own_diffs(snap, &inst, tree);
     if cost >= best_so_far || depth >= MAX_SCORING_DEPTH {
         return cost;
     }
@@ -440,8 +441,9 @@ fn compute_change_count(
 }
 
 /// Count own property diffs between a snapshot and a tree instance.
-/// Each differing property = +1. Tags and Attributes counted granularly.
-/// Children count diff = +1.
+/// Each differing property = +1. Tags and Attributes counted granularly
+/// (per-tag and per-attribute diffs). Ref properties compared by target
+/// Name+ClassName at UNMATCHED_PENALTY per mismatch. Children count diff = +1.
 ///
 /// Syncback strips default-valued properties from model/meta files, so
 /// filesystem snapshots may omit properties that the tree (populated from
@@ -449,7 +451,7 @@ fn compute_change_count(
 /// match costs with phantom diffs, properties present on only one side are
 /// skipped when their value matches the class default.
 #[inline]
-fn count_own_diffs(snap: &InstanceSnapshot, inst: &InstanceWithMeta) -> u32 {
+fn count_own_diffs(snap: &InstanceSnapshot, inst: &InstanceWithMeta, tree: &RojoTree) -> u32 {
     let mut cost: u32 = 0;
 
     let snap_props = &snap.properties;
@@ -459,39 +461,135 @@ fn count_own_diffs(snap: &InstanceSnapshot, inst: &InstanceWithMeta) -> u32 {
         .ok()
         .and_then(|db| db.classes.get(snap.class_name.as_str()));
 
-    // Properties present on the snapshot side
     for (key, snap_val) in snap_props.iter() {
         if let Some(inst_val) = inst_props.get(key) {
-            if !variant_eq(snap_val, inst_val) {
-                cost += 1;
-            }
+            cost += diff_variant_pair(snap_val, inst_val, tree);
         } else {
             let is_default = class_data
                 .and_then(|cd| cd.default_properties.get(key.as_str()))
                 .is_some_and(|default| variant_eq(snap_val, default));
             if !is_default {
-                cost += 1;
+                cost += count_variant_one_sided(snap_val);
             }
         }
     }
 
-    // Properties present only on the tree side
     for (key, inst_val) in inst_props.iter() {
         if !snap_props.contains_key(key) {
             let is_default = class_data
                 .and_then(|cd| cd.default_properties.get(key.as_str()))
                 .is_some_and(|default| variant_eq(inst_val, default));
             if !is_default {
-                cost += 1;
+                cost += count_variant_one_sided(inst_val);
             }
         }
     }
 
-    // Children count diff
     if snap.children.len() != inst.children().len() {
         cost += 1;
     }
 
+    cost
+}
+
+/// Compare two Variant values with type-aware scoring:
+/// - Ref: compare target Name+ClassName, cost UNMATCHED_PENALTY if different
+/// - Tags: +1 per tag in symmetric difference
+/// - Attributes: +1 per differing or one-sided attribute
+/// - Other: +1 if not equal
+#[inline]
+fn diff_variant_pair(a: &Variant, b: &Variant, tree: &RojoTree) -> u32 {
+    match (a, b) {
+        (Variant::Ref(ref_a), Variant::Ref(ref_b)) => {
+            if ref_a == ref_b {
+                return 0;
+            }
+            let a_none = !ref_a.is_some();
+            let b_none = !ref_b.is_some();
+            if a_none != b_none {
+                return UNMATCHED_PENALTY;
+            }
+            if a_none && b_none {
+                return 0;
+            }
+            let target_a = tree.get_instance(*ref_a);
+            let target_b = tree.get_instance(*ref_b);
+            match (target_a, target_b) {
+                (Some(ta), Some(tb)) => {
+                    if ta.name() == tb.name() && ta.class_name() == tb.class_name() {
+                        0
+                    } else {
+                        UNMATCHED_PENALTY
+                    }
+                }
+                (None, None) => 0,
+                _ => UNMATCHED_PENALTY,
+            }
+        }
+        (Variant::Tags(tags_a), Variant::Tags(tags_b)) => count_tags_diff(tags_a, tags_b),
+        (Variant::Attributes(attrs_a), Variant::Attributes(attrs_b)) => {
+            count_attributes_diff(attrs_a, attrs_b)
+        }
+        _ => {
+            if variant_eq(a, b) {
+                0
+            } else {
+                1
+            }
+        }
+    }
+}
+
+/// Cost for a one-sided Variant (property present on only one side).
+/// Tags/Attributes contribute their element count; Refs cost UNMATCHED_PENALTY;
+/// other types cost 1.
+#[inline]
+fn count_variant_one_sided(val: &Variant) -> u32 {
+    match val {
+        Variant::Ref(r) => {
+            if r.is_some() {
+                UNMATCHED_PENALTY
+            } else {
+                0
+            }
+        }
+        Variant::Tags(tags) => tags.len() as u32,
+        Variant::Attributes(attrs) => attrs.len() as u32,
+        _ => 1,
+    }
+}
+
+/// Count tag diffs as symmetric difference (matching Lua per-tag scoring).
+fn count_tags_diff(a: &rbx_dom_weak::types::Tags, b: &rbx_dom_weak::types::Tags) -> u32 {
+    use std::collections::HashSet;
+    let set_a: HashSet<&str> = a.iter().collect();
+    let set_b: HashSet<&str> = b.iter().collect();
+    let only_a = set_a.difference(&set_b).count();
+    let only_b = set_b.difference(&set_a).count();
+    (only_a + only_b) as u32
+}
+
+/// Count attribute diffs granularly (matching Lua per-attribute scoring).
+fn count_attributes_diff(
+    a: &rbx_dom_weak::types::Attributes,
+    b: &rbx_dom_weak::types::Attributes,
+) -> u32 {
+    let mut cost: u32 = 0;
+    for (key, a_val) in a.iter() {
+        match b.get(key.as_str()) {
+            Some(b_val) => {
+                if !variant_eq(a_val, b_val) {
+                    cost += 1;
+                }
+            }
+            None => cost += 1,
+        }
+    }
+    for (key, _) in b.iter() {
+        if a.get(key.as_str()).is_none() {
+            cost += 1;
+        }
+    }
     cost
 }
 
@@ -1294,5 +1392,208 @@ mod tests {
 
         assert_eq!(r1.matched.len(), r2.matched.len());
         assert_eq!(r1.unmatched_snapshot.len(), r2.unmatched_snapshot.len());
+    }
+
+    #[test]
+    fn tags_granular_scoring() {
+        use rbx_dom_weak::types::{Tags, Variant};
+
+        fn make_tags(names: &[&str]) -> Tags {
+            let mut t = Tags::new();
+            for &n in names {
+                t.push(n);
+            }
+            t
+        }
+
+        let snap_a = make_snapshot_with_props(
+            "Item",
+            "Part",
+            vec![("Tags", Variant::Tags(make_tags(&["A", "B", "C"])))],
+        );
+        let snap_b = make_snapshot_with_props(
+            "Item",
+            "Part",
+            vec![("Tags", Variant::Tags(make_tags(&["X", "Y"])))],
+        );
+
+        let tree_a = make_snapshot_with_props(
+            "Item",
+            "Part",
+            vec![("Tags", Variant::Tags(make_tags(&["A", "B", "C"])))],
+        );
+        let tree_b = make_snapshot_with_props(
+            "Item",
+            "Part",
+            vec![("Tags", Variant::Tags(make_tags(&["X", "Y"])))],
+        );
+
+        let (tree, tree_refs) = make_tree_from_snapshots(vec![tree_b, tree_a]);
+        let result = match_forward(
+            vec![snap_a, snap_b],
+            &tree_refs,
+            &tree,
+            &MatchingSession::new(),
+        );
+
+        assert_eq!(result.matched.len(), 2);
+        for (snap, tree_ref) in &result.matched {
+            let inst = tree.get_instance(*tree_ref).unwrap();
+            let snap_tags = snap.properties.get(&ustr("Tags"));
+            let tree_tags = inst.properties().get(&ustr("Tags"));
+            assert!(
+                variant_eq(snap_tags.unwrap(), tree_tags.unwrap()),
+                "Tags mismatch: snap={:?}, tree={:?}",
+                snap_tags,
+                tree_tags
+            );
+        }
+    }
+
+    #[test]
+    fn attributes_granular_scoring() {
+        use rbx_dom_weak::types::{Attributes, Variant};
+
+        let mut attrs_a = Attributes::new();
+        attrs_a.insert("Health".into(), Variant::Float32(100.0));
+        attrs_a.insert("Speed".into(), Variant::Float32(16.0));
+
+        let mut attrs_b = Attributes::new();
+        attrs_b.insert("Health".into(), Variant::Float32(50.0));
+        attrs_b.insert("Damage".into(), Variant::Float32(25.0));
+
+        let snap_a = make_snapshot_with_props(
+            "Mob",
+            "Part",
+            vec![("Attributes", Variant::Attributes(attrs_a.clone()))],
+        );
+        let snap_b = make_snapshot_with_props(
+            "Mob",
+            "Part",
+            vec![("Attributes", Variant::Attributes(attrs_b.clone()))],
+        );
+
+        let tree_a = make_snapshot_with_props(
+            "Mob",
+            "Part",
+            vec![("Attributes", Variant::Attributes(attrs_a))],
+        );
+        let tree_b = make_snapshot_with_props(
+            "Mob",
+            "Part",
+            vec![("Attributes", Variant::Attributes(attrs_b))],
+        );
+
+        let (tree, tree_refs) = make_tree_from_snapshots(vec![tree_b, tree_a]);
+        let result = match_forward(
+            vec![snap_a, snap_b],
+            &tree_refs,
+            &tree,
+            &MatchingSession::new(),
+        );
+
+        assert_eq!(result.matched.len(), 2);
+        for (snap, tree_ref) in &result.matched {
+            let inst = tree.get_instance(*tree_ref).unwrap();
+            let snap_attrs = snap.properties.get(&ustr("Attributes"));
+            let tree_attrs = inst.properties().get(&ustr("Attributes"));
+            assert!(
+                variant_eq(snap_attrs.unwrap(), tree_attrs.unwrap()),
+                "Attributes mismatch"
+            );
+        }
+    }
+
+    #[test]
+    fn ref_scoring_forward_sync() {
+        use rbx_dom_weak::types::Variant;
+
+        // Build a tree with 2 Models ("Weapon"), each containing a differently
+        // named child Part. A Ref property on each Model points to its child.
+        // The matching must pair each snapshot Model to the tree Model whose
+        // Ref target has the same Name+ClassName.
+
+        // Build a tree with 2 Models ("Weapon"), each containing a
+        // differently-named child Part. Ref property on each Model points
+        // to its child. Tree order is reversed relative to snapshots.
+        let tree_child_handle = {
+            let mut s = make_snapshot("Handle", "Part");
+            s.properties
+                .insert(ustr("Transparency"), Variant::Float32(0.0));
+            s
+        };
+        let tree_child_grip = {
+            let mut s = make_snapshot("Grip", "Part");
+            s.properties
+                .insert(ustr("Transparency"), Variant::Float32(0.0));
+            s
+        };
+        let tree_model_grip_snap = make_snapshot_with_children(
+            "Weapon",
+            "Model",
+            vec![tree_child_grip],
+        );
+        let tree_model_handle_snap = make_snapshot_with_children(
+            "Weapon",
+            "Model",
+            vec![tree_child_handle],
+        );
+
+        let (tree2, tree_refs2) =
+            make_tree_from_snapshots(vec![tree_model_grip_snap, tree_model_handle_snap]);
+
+        let tree2_model_0 = tree2.get_instance(tree_refs2[0]).unwrap();
+        let tree2_model_1 = tree2.get_instance(tree_refs2[1]).unwrap();
+        let tree2_grip_ref = tree2_model_0.children()[0];
+        let tree2_handle_ref = tree2_model_1.children()[0];
+
+        // Rebuild snapshots with Refs pointing into tree2
+        let snap_handle2 = {
+            let mut s = make_snapshot_with_children(
+                "Weapon",
+                "Model",
+                vec![make_snapshot("Handle", "Part")],
+            );
+            s.properties
+                .insert(ustr("PrimaryPart"), Variant::Ref(tree2_handle_ref));
+            s
+        };
+        let snap_grip2 = {
+            let mut s = make_snapshot_with_children(
+                "Weapon",
+                "Model",
+                vec![make_snapshot("Grip", "Part")],
+            );
+            s.properties
+                .insert(ustr("PrimaryPart"), Variant::Ref(tree2_grip_ref));
+            s
+        };
+
+        let result = match_forward(
+            vec![snap_handle2, snap_grip2],
+            &tree_refs2,
+            &tree2,
+            &MatchingSession::new(),
+        );
+
+        assert_eq!(result.matched.len(), 2);
+        assert!(result.unmatched_snapshot.is_empty());
+        assert!(result.unmatched_tree.is_empty());
+
+        // Verify correct pairing: each snap should match the tree model
+        // whose child has the same name as the snap's child.
+        for (snap, tree_ref) in &result.matched {
+            let snap_child_name = &snap.children[0].name;
+            let tree_inst = tree2.get_instance(*tree_ref).unwrap();
+            let tree_child_ref = tree_inst.children()[0];
+            let tree_child = tree2.get_instance(tree_child_ref).unwrap();
+            assert_eq!(
+                snap_child_name.as_ref(),
+                tree_child.name(),
+                "Ref scoring failed: snap with child '{}' matched tree with child '{}'",
+                snap_child_name,
+                tree_child.name()
+            );
+        }
     }
 }

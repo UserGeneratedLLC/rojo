@@ -544,4 +544,44 @@ return function()
 			expect(result.totalCost).to.equal(0)
 		end)
 	end)
+
+	describe("parity with Rust fixture", function()
+		it("4 Parts with different Transparency values in reversed order", function()
+			local session = Matching.newSession()
+			local transparencies = { 0, 0.3, 0.6, 0.9 }
+
+			local virtualInstances = {}
+			local virtualChildren = {}
+			for i, t in ipairs(transparencies) do
+				local id = "V" .. tostring(i)
+				virtualInstances[id] = makeVirtualInstance("Line", "Part", {
+					Transparency = { Float32 = t },
+				}, {})
+				table.insert(virtualChildren, id)
+			end
+
+			local studioChildren = {}
+			for i = #transparencies, 1, -1 do
+				local inst = Instance.new("Part")
+				inst.Name = "Line"
+				inst.Transparency = transparencies[i]
+				inst.Parent = container
+				table.insert(studioChildren, inst)
+			end
+
+			local result =
+				Matching.matchChildren(session, virtualChildren, studioChildren, virtualInstances, "ROOT", container)
+
+			expect(#result.matched).to.equal(4)
+			expect(#result.unmatchedVirtual).to.equal(0)
+			expect(#result.unmatchedStudio).to.equal(0)
+
+			for _, pair in ipairs(result.matched) do
+				local vInst = virtualInstances[pair.virtualId]
+				local vT = vInst.Properties.Transparency.Float32
+				local sT = pair.studioInstance.Transparency
+				expect(math.abs(vT - sT) < 0.001).to.equal(true)
+			end
+		end)
+	end)
 end

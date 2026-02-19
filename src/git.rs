@@ -786,10 +786,7 @@ mod tests {
         fs::write(dir.path().join("a.luau"), "content a").unwrap();
         git_commit_all(dir.path(), "init");
 
-        let refs = vec![
-            "HEAD:a.luau".to_string(),
-            ":0:a.luau".to_string(),
-        ];
+        let refs = vec!["HEAD:a.luau".to_string(), ":0:a.luau".to_string()];
         let results = git_batch_check_hashes(dir.path(), &refs);
         assert_eq!(results.len(), 2);
         assert!(results[0].is_some());
@@ -809,19 +806,13 @@ mod tests {
         fs::write(dir.path().join("b.luau"), "staged version").unwrap();
         git_stage(dir.path(), "b.luau");
 
-        let refs = vec![
-            "HEAD:b.luau".to_string(),
-            ":0:b.luau".to_string(),
-        ];
+        let refs = vec!["HEAD:b.luau".to_string(), ":0:b.luau".to_string()];
         let results = git_batch_check_hashes(dir.path(), &refs);
         assert_eq!(results.len(), 2);
         assert!(results[0].is_some());
         assert!(results[1].is_some());
         assert_ne!(results[0], results[1]);
-        assert_eq!(
-            results[0].as_ref().unwrap(),
-            &compute_blob_sha1("original")
-        );
+        assert_eq!(results[0].as_ref().unwrap(), &compute_blob_sha1("original"));
         assert_eq!(
             results[1].as_ref().unwrap(),
             &compute_blob_sha1("staged version")

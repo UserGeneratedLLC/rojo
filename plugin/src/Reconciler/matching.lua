@@ -46,6 +46,7 @@ type MatchResult = {
 type MatchingSession = {
 	matchCache: { [string]: { [Instance]: MatchResult } },
 	costCache: { [string]: { [Instance]: number } },
+	vCacheStore: { [string]: VCache },
 }
 
 type RefIdentity = {
@@ -103,6 +104,7 @@ local function newSession(): MatchingSession
 	return {
 		matchCache = {},
 		costCache = {},
+		vCacheStore = {},
 	}
 end
 
@@ -359,7 +361,11 @@ local function computePairCost(
 	end
 
 	local classKeys = RbxDom.getClassComparisonKeys(vInst.ClassName)
-	local vCache = cacheVirtual(vInst, classKeys, virtualInstances)
+	local vCache = session.vCacheStore[virtualId]
+	if not vCache then
+		vCache = cacheVirtual(vInst, classKeys, virtualInstances)
+		session.vCacheStore[virtualId] = vCache
+	end
 	local refPropNames: { string } = {}
 	for propName, _ in pairs(vCache.refs) do
 		table.insert(refPropNames, propName)
@@ -485,11 +491,16 @@ matchChildren = function(
 		local allExtraProps: { [string]: boolean } = {}
 		local allRefProps: { [string]: boolean } = {}
 		for _, vi in ipairs(vIndices) do
-			local vInst = virtualInstances[virtualChildren[vi]]
+			local vid = virtualChildren[vi]
+			local vInst = virtualInstances[vid]
 			if not vInst then
 				continue
 			end
-			local vCache = cacheVirtual(vInst, classKeys, virtualInstances)
+			local vCache = session.vCacheStore[vid]
+			if not vCache then
+				vCache = cacheVirtual(vInst, classKeys, virtualInstances)
+				session.vCacheStore[vid] = vCache
+			end
 			vCaches[vi] = vCache
 			for _, propName in ipairs(vCache.extraProps) do
 				allExtraProps[propName] = true

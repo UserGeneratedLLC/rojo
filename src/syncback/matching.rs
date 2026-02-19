@@ -15,7 +15,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use blake3::Hash;
-use rbx_dom_weak::types::Ref;
+use rbx_dom_weak::types::{Ref, Variant};
 use rbx_dom_weak::{Ustr, WeakDom};
 
 use crate::variant_eq::variant_eq;
@@ -214,7 +214,7 @@ fn build_result(
     old_matched: &[bool],
     mut matched_indices: Vec<(usize, usize)>,
 ) -> MatchResult {
-    matched_indices.sort_by_key(|&(ni, _)| ni); // TODO: this seems sketchy?
+    matched_indices.sort_by_key(|&(ni, _)| ni);
     let matched: Vec<(Ref, Ref)> = matched_indices
         .into_iter()
         .map(|(ni, oi)| (new_children[ni], old_children[oi]))
@@ -492,7 +492,9 @@ fn compute_change_count(
 }
 
 /// Count own property diffs between two WeakDom instances (flat, non-recursive).
-/// Each differing property = +1. Children count diff = +1.
+/// Tags and Attributes counted granularly (per-tag and per-attribute diffs).
+/// Ref properties compared by target Name+ClassName at UNMATCHED_PENALTY per
+/// mismatch. Children count diff = +1.
 /// Does NOT include hash fast-path (handled by `compute_change_count`).
 ///
 /// Properties present on only one side are skipped when their value matches
@@ -516,15 +518,13 @@ fn count_own_diffs(new_ref: Ref, old_ref: Ref, new_dom: &WeakDom, old_dom: &Weak
 
     for (key, new_val) in new_inst.properties.iter() {
         if let Some(old_val) = old_inst.properties.get(key) {
-            if !variant_eq(new_val, old_val) {
-                cost += 1;
-            }
+            cost += diff_variant_pair(new_val, old_val, new_dom, old_dom);
         } else {
             let is_default = class_data
                 .and_then(|cd| cd.default_properties.get(key.as_str()))
                 .is_some_and(|default| variant_eq(new_val, default));
             if !is_default {
-                cost += 1;
+                cost += count_variant_one_sided(new_val);
             }
         }
     }
@@ -535,7 +535,7 @@ fn count_own_diffs(new_ref: Ref, old_ref: Ref, new_dom: &WeakDom, old_dom: &Weak
                 .and_then(|cd| cd.default_properties.get(key.as_str()))
                 .is_some_and(|default| variant_eq(old_val, default));
             if !is_default {
-                cost += 1;
+                cost += count_variant_one_sided(old_val);
             }
         }
     }
@@ -545,6 +545,89 @@ fn count_own_diffs(new_ref: Ref, old_ref: Ref, new_dom: &WeakDom, old_dom: &Weak
     }
 
     cost
+}
+
+/// Compare two Variant values with type-aware scoring for syncback.
+/// Ref targets resolved by Name+ClassName from their respective DOMs.
+#[inline]
+fn diff_variant_pair(a: &Variant, b: &Variant, a_dom: &WeakDom, b_dom: &WeakDom) -> u32 {
+    match (a, b) {
+        (Variant::Ref(ref_a), Variant::Ref(ref_b)) => {
+            if ref_a == ref_b {
+                return 0;
+            }
+            let a_none = !ref_a.is_some();
+            let b_none = !ref_b.is_some();
+            if a_none != b_none {
+                return UNMATCHED_PENALTY;
+            }
+            if a_none && b_none {
+                return 0;
+            }
+            let target_a = a_dom.get_by_ref(*ref_a);
+            let target_b = b_dom.get_by_ref(*ref_b);
+            match (target_a, target_b) {
+                (Some(ta), Some(tb)) => {
+                    if ta.name == tb.name && ta.class == tb.class {
+                        0
+                    } else {
+                        UNMATCHED_PENALTY
+                    }
+                }
+                (None, None) => 0,
+                _ => UNMATCHED_PENALTY,
+            }
+        }
+        (Variant::Tags(tags_a), Variant::Tags(tags_b)) => {
+            use std::collections::HashSet;
+            let set_a: HashSet<&str> = tags_a.iter().collect();
+            let set_b: HashSet<&str> = tags_b.iter().collect();
+            (set_a.difference(&set_b).count() + set_b.difference(&set_a).count()) as u32
+        }
+        (Variant::Attributes(attrs_a), Variant::Attributes(attrs_b)) => {
+            let mut cost: u32 = 0;
+            for (key, a_val) in attrs_a.iter() {
+                match attrs_b.get(key.as_str()) {
+                    Some(b_val) => {
+                        if !variant_eq(a_val, b_val) {
+                            cost += 1;
+                        }
+                    }
+                    None => cost += 1,
+                }
+            }
+            for (key, _) in attrs_b.iter() {
+                if attrs_a.get(key.as_str()).is_none() {
+                    cost += 1;
+                }
+            }
+            cost
+        }
+        _ => {
+            if variant_eq(a, b) {
+                0
+            } else {
+                1
+            }
+        }
+    }
+}
+
+/// Cost for a one-sided Variant (property present on only one side).
+#[inline]
+fn count_variant_one_sided(val: &Variant) -> u32 {
+    match val {
+        Variant::Ref(r) => {
+            if r.is_some() {
+                UNMATCHED_PENALTY
+            } else {
+                0
+            }
+        }
+        Variant::Tags(tags) => tags.len() as u32,
+        Variant::Attributes(attrs) => attrs.len() as u32,
+        _ => 1,
+    }
 }
 
 #[cfg(test)]
@@ -783,5 +866,114 @@ mod tests {
             &session,
         );
         assert_eq!(r1.matched.len(), r2.matched.len());
+    }
+
+    #[test]
+    fn ref_scoring_syncback() {
+        use rbx_dom_weak::types::Variant;
+
+        // 2 Models named "Weapon" in each DOM, each with a differently-named
+        // child Part. A Ref property on each Model points to its own child.
+        // Syncback matching must pair by Ref target Name+ClassName, not by
+        // raw Ref identity (which always differs between DOMs).
+
+        let mut new_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let new_root = new_dom.root_ref();
+
+        let new_model_a = new_dom.insert(
+            new_root,
+            InstanceBuilder::new("Model").with_name("Weapon"),
+        );
+        let new_handle = new_dom.insert(
+            new_model_a,
+            InstanceBuilder::new("Part").with_name("Handle"),
+        );
+        new_dom
+            .get_by_ref_mut(new_model_a)
+            .unwrap()
+            .properties
+            .insert("PrimaryPart".into(), Variant::Ref(new_handle));
+
+        let new_model_b = new_dom.insert(
+            new_root,
+            InstanceBuilder::new("Model").with_name("Weapon"),
+        );
+        let new_grip = new_dom.insert(
+            new_model_b,
+            InstanceBuilder::new("Part").with_name("Grip"),
+        );
+        new_dom
+            .get_by_ref_mut(new_model_b)
+            .unwrap()
+            .properties
+            .insert("PrimaryPart".into(), Variant::Ref(new_grip));
+
+        // Old DOM: reversed order (Grip-model first, Handle-model second)
+        let mut old_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let old_root = old_dom.root_ref();
+
+        let old_model_b = old_dom.insert(
+            old_root,
+            InstanceBuilder::new("Model").with_name("Weapon"),
+        );
+        let old_grip = old_dom.insert(
+            old_model_b,
+            InstanceBuilder::new("Part").with_name("Grip"),
+        );
+        old_dom
+            .get_by_ref_mut(old_model_b)
+            .unwrap()
+            .properties
+            .insert("PrimaryPart".into(), Variant::Ref(old_grip));
+
+        let old_model_a = old_dom.insert(
+            old_root,
+            InstanceBuilder::new("Model").with_name("Weapon"),
+        );
+        let old_handle = old_dom.insert(
+            old_model_a,
+            InstanceBuilder::new("Part").with_name("Handle"),
+        );
+        old_dom
+            .get_by_ref_mut(old_model_a)
+            .unwrap()
+            .properties
+            .insert("PrimaryPart".into(), Variant::Ref(old_handle));
+
+        let new_children: Vec<Ref> = new_dom.get_by_ref(new_root).unwrap().children().to_vec();
+        let old_children: Vec<Ref> = old_dom.get_by_ref(old_root).unwrap().children().to_vec();
+
+        let result = match_children(
+            &new_children,
+            &old_children,
+            &new_dom,
+            &old_dom,
+            None,
+            None,
+            &MatchingSession::new(),
+        );
+
+        assert_eq!(result.matched.len(), 2);
+        assert!(result.unmatched_new.is_empty());
+        assert!(result.unmatched_old.is_empty());
+
+        for (new_ref, old_ref) in &result.matched {
+            let new_inst = new_dom.get_by_ref(*new_ref).unwrap();
+            let old_inst = old_dom.get_by_ref(*old_ref).unwrap();
+
+            let new_child_name = &new_dom
+                .get_by_ref(new_inst.children()[0])
+                .unwrap()
+                .name;
+            let old_child_name = &old_dom
+                .get_by_ref(old_inst.children()[0])
+                .unwrap()
+                .name;
+            assert_eq!(
+                new_child_name, old_child_name,
+                "Ref scoring failed: new model with child '{}' matched old model with child '{}'",
+                new_child_name, old_child_name
+            );
+        }
     }
 }

@@ -1,13 +1,34 @@
 use rbx_dom_weak::types::{PhysicalProperties, Variant, Vector3};
 
-/// Accepts three argumets: a float type and two values to compare.
-///
-/// Returns a bool indicating whether they're equal. This accounts for NaN such
-/// that `approx_eq!(f32, f32::NAN, f32::NAN)` is `true`.
-macro_rules! approx_eq {
-    ($Ty:ty, $a:expr, $b:expr) => {
-        float_cmp::approx_eq!($Ty, $a, $b) || $a.is_nan() && $b.is_nan()
-    };
+const EPSILON_F32: f32 = 0.0001;
+const EPSILON_F64: f64 = 0.0001;
+
+/// Fuzzy float equality matching Lua trueEquals: absolute OR relative epsilon.
+/// NaN == NaN is true.
+#[inline(always)]
+fn fuzzy_eq_f32(a: f32, b: f32) -> bool {
+    if a.is_nan() {
+        return b.is_nan();
+    }
+    if b.is_nan() {
+        return false;
+    }
+    let diff = (a - b).abs();
+    let max_val = a.abs().max(b.abs()).max(1.0);
+    diff < EPSILON_F32 || diff < max_val * EPSILON_F32
+}
+
+#[inline(always)]
+fn fuzzy_eq_f64(a: f64, b: f64) -> bool {
+    if a.is_nan() {
+        return b.is_nan();
+    }
+    if b.is_nan() {
+        return false;
+    }
+    let diff = (a - b).abs();
+    let max_val = a.abs().max(b.abs()).max(1.0);
+    diff < EPSILON_F64 || diff < max_val * EPSILON_F64
 }
 
 /// Compares two variants to determine if they're equal. This correctly takes
@@ -46,7 +67,7 @@ pub fn variant_eq(variant_a: &Variant, variant_b: &Variant) -> bool {
                 && vector_eq(&a.orientation.z, &b.orientation.z)
         }
         (Variant::Color3(a), Variant::Color3(b)) => {
-            approx_eq!(f32, a.r, b.r) && approx_eq!(f32, a.g, b.g) && approx_eq!(f32, a.b, b.b)
+            fuzzy_eq_f32(a.r, b.r) && fuzzy_eq_f32(a.g, b.g) && fuzzy_eq_f32(a.b, b.b)
         }
         (Variant::Color3uint8(a), Variant::Color3uint8(b)) => a == b,
         (Variant::ColorSequence(a), Variant::ColorSequence(b)) => {
@@ -59,10 +80,10 @@ pub fn variant_eq(variant_a: &Variant, variant_b: &Variant) -> bool {
             b_keypoints.sort_unstable_by(|k1, k2| k1.time.partial_cmp(&k2.time).unwrap());
 
             for (a_kp, b_kp) in a_keypoints.iter().zip(b_keypoints) {
-                if !(approx_eq!(f32, a_kp.time, b_kp.time)
-                    && approx_eq!(f32, a_kp.color.r, b_kp.color.r)
-                    && approx_eq!(f32, a_kp.color.g, b_kp.color.g)
-                    && approx_eq!(f32, a_kp.color.b, b_kp.color.b))
+                if !(fuzzy_eq_f32(a_kp.time, b_kp.time)
+                    && fuzzy_eq_f32(a_kp.color.r, b_kp.color.r)
+                    && fuzzy_eq_f32(a_kp.color.g, b_kp.color.g)
+                    && fuzzy_eq_f32(a_kp.color.b, b_kp.color.b))
                 {
                     return false;
                 }
@@ -74,8 +95,8 @@ pub fn variant_eq(variant_a: &Variant, variant_b: &Variant) -> bool {
         (Variant::Enum(a), Variant::Enum(b)) => a == b,
         (Variant::EnumItem(a), Variant::EnumItem(b)) => a == b,
         (Variant::Faces(a), Variant::Faces(b)) => a == b,
-        (Variant::Float32(a), Variant::Float32(b)) => approx_eq!(f32, *a, *b),
-        (Variant::Float64(a), Variant::Float64(b)) => approx_eq!(f64, *a, *b),
+        (Variant::Float32(a), Variant::Float32(b)) => fuzzy_eq_f32(*a, *b),
+        (Variant::Float64(a), Variant::Float64(b)) => fuzzy_eq_f64(*a, *b),
         (Variant::Font(a), Variant::Font(b)) => {
             a.weight == b.weight
                 && a.style == b.style
@@ -87,7 +108,7 @@ pub fn variant_eq(variant_a: &Variant, variant_b: &Variant) -> bool {
         (Variant::MaterialColors(a), Variant::MaterialColors(b)) => a.encode() == b.encode(),
         (Variant::NetAssetRef(a), Variant::NetAssetRef(b)) => a == b,
         (Variant::NumberRange(a), Variant::NumberRange(b)) => {
-            approx_eq!(f32, a.max, b.max) && approx_eq!(f32, a.min, b.min)
+            fuzzy_eq_f32(a.max, b.max) && fuzzy_eq_f32(a.min, b.min)
         }
         (Variant::NumberSequence(a), Variant::NumberSequence(b)) => {
             if a.keypoints.len() != b.keypoints.len() {
@@ -99,9 +120,9 @@ pub fn variant_eq(variant_a: &Variant, variant_b: &Variant) -> bool {
             b_keypoints.sort_unstable_by(|k1, k2| k1.time.partial_cmp(&k2.time).unwrap());
 
             for (a_kp, b_kp) in a_keypoints.iter().zip(b_keypoints) {
-                if !(approx_eq!(f32, a_kp.time, b_kp.time)
-                    && approx_eq!(f32, a_kp.value, b_kp.value)
-                    && approx_eq!(f32, a_kp.envelope, b_kp.envelope))
+                if !(fuzzy_eq_f32(a_kp.time, b_kp.time)
+                    && fuzzy_eq_f32(a_kp.value, b_kp.value)
+                    && fuzzy_eq_f32(a_kp.envelope, b_kp.envelope))
                 {
                     return false;
                 }
@@ -121,12 +142,12 @@ pub fn variant_eq(variant_a: &Variant, variant_b: &Variant) -> bool {
         (Variant::PhysicalProperties(a), Variant::PhysicalProperties(b)) => match (a, b) {
             (PhysicalProperties::Default, PhysicalProperties::Default) => true,
             (PhysicalProperties::Custom(a2), PhysicalProperties::Custom(b2)) => {
-                approx_eq!(f32, a2.density(), b2.density())
-                    && approx_eq!(f32, a2.elasticity(), b2.elasticity())
-                    && approx_eq!(f32, a2.friction(), b2.friction())
-                    && approx_eq!(f32, a2.elasticity_weight(), b2.elasticity_weight())
-                    && approx_eq!(f32, a2.friction_weight(), b2.friction_weight())
-                    && approx_eq!(f32, a2.acoustic_absorption(), b2.acoustic_absorption())
+                fuzzy_eq_f32(a2.density(), b2.density())
+                    && fuzzy_eq_f32(a2.elasticity(), b2.elasticity())
+                    && fuzzy_eq_f32(a2.friction(), b2.friction())
+                    && fuzzy_eq_f32(a2.elasticity_weight(), b2.elasticity_weight())
+                    && fuzzy_eq_f32(a2.friction_weight(), b2.friction_weight())
+                    && fuzzy_eq_f32(a2.acoustic_absorption(), b2.acoustic_absorption())
             }
             _ => false,
         },
@@ -134,10 +155,10 @@ pub fn variant_eq(variant_a: &Variant, variant_b: &Variant) -> bool {
             vector_eq(&a.direction, &b.direction) && vector_eq(&a.origin, &b.origin)
         }
         (Variant::Rect(a), Variant::Rect(b)) => {
-            approx_eq!(f32, a.max.x, b.max.x)
-                && approx_eq!(f32, a.max.y, b.max.y)
-                && approx_eq!(f32, a.min.x, b.min.x)
-                && approx_eq!(f32, a.min.y, b.min.y)
+            fuzzy_eq_f32(a.max.x, b.max.x)
+                && fuzzy_eq_f32(a.max.y, b.max.y)
+                && fuzzy_eq_f32(a.min.x, b.min.x)
+                && fuzzy_eq_f32(a.min.y, b.min.y)
         }
         (Variant::Ref(a), Variant::Ref(b)) => a == b,
         (Variant::Region3(a), Variant::Region3(b)) => {
@@ -163,18 +184,18 @@ pub fn variant_eq(variant_a: &Variant, variant_b: &Variant) -> bool {
             }
         }
         (Variant::UDim(a), Variant::UDim(b)) => {
-            approx_eq!(f32, a.scale, b.scale) && a.offset == b.offset
+            fuzzy_eq_f32(a.scale, b.scale) && a.offset == b.offset
         }
         (Variant::UDim2(a), Variant::UDim2(b)) => {
-            approx_eq!(f32, a.x.scale, b.x.scale)
+            fuzzy_eq_f32(a.x.scale, b.x.scale)
                 && a.x.offset == b.x.offset
-                && approx_eq!(f32, a.y.scale, b.y.scale)
+                && fuzzy_eq_f32(a.y.scale, b.y.scale)
                 && a.y.offset == b.y.offset
         }
         (Variant::UniqueId(a), Variant::UniqueId(b)) => a == b,
         (Variant::String(a), Variant::String(b)) => a == b,
         (Variant::Vector2(a), Variant::Vector2(b)) => {
-            approx_eq!(f32, a.x, b.x) && approx_eq!(f32, a.y, b.y)
+            fuzzy_eq_f32(a.x, b.x) && fuzzy_eq_f32(a.y, b.y)
         }
         (Variant::Vector2int16(a), Variant::Vector2int16(b)) => a == b,
         (Variant::Vector3(a), Variant::Vector3(b)) => vector_eq(a, b),
@@ -189,5 +210,53 @@ pub fn variant_eq(variant_a: &Variant, variant_b: &Variant) -> bool {
 
 #[inline(always)]
 fn vector_eq(a: &Vector3, b: &Vector3) -> bool {
-    approx_eq!(f32, a.x, b.x) && approx_eq!(f32, a.y, b.y) && approx_eq!(f32, a.z, b.z)
+    fuzzy_eq_f32(a.x, b.x) && fuzzy_eq_f32(a.y, b.y) && fuzzy_eq_f32(a.z, b.z)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fuzzy_eq_matches_lua_absolute_epsilon() {
+        assert!(fuzzy_eq_f32(1.0, 1.0 + 0.000099));
+        assert!(!fuzzy_eq_f32(1.0, 1.0 + 0.00011));
+    }
+
+    #[test]
+    fn fuzzy_eq_matches_lua_relative_epsilon() {
+        assert!(fuzzy_eq_f32(10000.0, 10000.0 + 0.9));
+        assert!(!fuzzy_eq_f32(10000.0, 10000.0 + 1.1));
+    }
+
+    #[test]
+    fn fuzzy_eq_nan_handling() {
+        assert!(fuzzy_eq_f32(f32::NAN, f32::NAN));
+        assert!(!fuzzy_eq_f32(f32::NAN, 0.0));
+        assert!(!fuzzy_eq_f32(0.0, f32::NAN));
+    }
+
+    #[test]
+    fn fuzzy_eq_zero_and_negative_zero() {
+        assert!(fuzzy_eq_f32(0.0, -0.0));
+    }
+
+    #[test]
+    fn fuzzy_eq_f64_basic() {
+        assert!(fuzzy_eq_f64(1.0, 1.0 + 0.000099));
+        assert!(!fuzzy_eq_f64(1.0, 1.0 + 0.00011));
+        assert!(fuzzy_eq_f64(f64::NAN, f64::NAN));
+    }
+
+    #[test]
+    fn variant_eq_float32_with_new_epsilon() {
+        assert!(variant_eq(
+            &Variant::Float32(1.0),
+            &Variant::Float32(1.0 + 0.000099)
+        ));
+        assert!(!variant_eq(
+            &Variant::Float32(1.0),
+            &Variant::Float32(1.0 + 0.00011)
+        ));
+    }
 }

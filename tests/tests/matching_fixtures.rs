@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use rbx_dom_weak::types::{Ref, Variant};
-use rbx_dom_weak::{ustr, WeakDom};
+use rbx_dom_weak::{ustr, HashMapExt as _, WeakDom};
 
 use crate::rojo_test::io_util::SYNCBACK_TESTS_PATH;
 
@@ -339,19 +339,340 @@ fn forward_matching_ufowave_textures() {
                 );
             }
             (None, Some(tv)) => {
-                // Snapshot omitted Face (default = Front)
                 assert!(
                     librojo::variant_eq::variant_eq(tv, &face_front),
                     "Omitted Face should match Front, got {:?}",
                     tv
                 );
             }
-            (None, None) => {
-                // Both omitted: both at default, fine
-            }
+            (None, None) => {}
             (Some(sv), None) => {
                 panic!("Snap has Face={:?} but tree has none", sv);
             }
         }
+    }
+}
+
+// ================================================================
+// Parity: forward sync vs syncback produce same pairings
+// ================================================================
+
+#[test]
+fn parity_forward_vs_syncback() {
+    use rbx_dom_weak::types::Variant;
+    use rbx_dom_weak::InstanceBuilder;
+    use std::borrow::Cow;
+
+    let transparency_values = [0.0_f32, 0.3, 0.6, 0.9];
+
+    // Build "new" WeakDom (for syncback) with parts in forward order
+    let mut new_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+    let new_root = new_dom.root_ref();
+    for &t in &transparency_values {
+        let builder = InstanceBuilder::new("Part")
+            .with_name("Line")
+            .with_property("Transparency", Variant::Float32(t));
+        new_dom.insert(new_root, builder);
+    }
+
+    // Build "old" WeakDom (for syncback) with parts in REVERSED order
+    let mut old_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+    let old_root = old_dom.root_ref();
+    for &t in transparency_values.iter().rev() {
+        let builder = InstanceBuilder::new("Part")
+            .with_name("Line")
+            .with_property("Transparency", Variant::Float32(t));
+        old_dom.insert(old_root, builder);
+    }
+
+    let new_children: Vec<Ref> = new_dom.get_by_ref(new_root).unwrap().children().to_vec();
+    let old_children: Vec<Ref> = old_dom.get_by_ref(old_root).unwrap().children().to_vec();
+
+    // Run syncback matching
+    let syncback_session = librojo::syncback::matching::MatchingSession::new();
+    let syncback_result = librojo::syncback::matching::match_children(
+        &new_children,
+        &old_children,
+        &new_dom,
+        &old_dom,
+        None,
+        None,
+        &syncback_session,
+    );
+
+    // Build equivalent InstanceSnapshots for forward sync
+    let snap_children: Vec<librojo::InstanceSnapshot> = transparency_values
+        .iter()
+        .map(|&t| {
+            let mut properties = rbx_dom_weak::UstrMap::new();
+            properties.insert(ustr("Transparency"), Variant::Float32(t));
+            librojo::InstanceSnapshot {
+                snapshot_id: Ref::none(),
+                metadata: librojo::snapshot::InstanceMetadata::default(),
+                name: Cow::Borrowed("Line"),
+                class_name: ustr("Part"),
+                properties,
+                children: Vec::new(),
+            }
+        })
+        .collect();
+
+    // Build RojoTree from old_dom data (reversed order)
+    let tree_snap_children: Vec<librojo::InstanceSnapshot> = transparency_values
+        .iter()
+        .rev()
+        .map(|&t| {
+            let mut properties = rbx_dom_weak::UstrMap::new();
+            properties.insert(ustr("Transparency"), Variant::Float32(t));
+            librojo::InstanceSnapshot {
+                snapshot_id: Ref::none(),
+                metadata: librojo::snapshot::InstanceMetadata::default(),
+                name: Cow::Borrowed("Line"),
+                class_name: ustr("Part"),
+                properties,
+                children: Vec::new(),
+            }
+        })
+        .collect();
+
+    let root_snap = librojo::InstanceSnapshot {
+        snapshot_id: Ref::none(),
+        metadata: librojo::snapshot::InstanceMetadata::default(),
+        name: Cow::Borrowed("DataModel"),
+        class_name: ustr("DataModel"),
+        properties: Default::default(),
+        children: tree_snap_children,
+    };
+    let tree = librojo::RojoTree::new(root_snap);
+    let tree_root = tree.get_root_id();
+    let tree_children_refs: Vec<Ref> = tree.get_instance(tree_root).unwrap().children().to_vec();
+
+    // Run forward sync matching
+    let forward_session = librojo::snapshot::matching::MatchingSession::new();
+    let forward_result = librojo::snapshot::matching::match_forward(
+        snap_children,
+        &tree_children_refs,
+        &tree,
+        &forward_session,
+    );
+
+    // Both should match all 4
+    assert_eq!(syncback_result.matched.len(), 4);
+    assert_eq!(forward_result.matched.len(), 4);
+
+    // Verify both produce the same pairing (by Transparency value)
+    let mut syncback_pairs: Vec<(f32, f32)> = syncback_result
+        .matched
+        .iter()
+        .map(|(nr, or)| {
+            let nt = match new_dom
+                .get_by_ref(*nr)
+                .unwrap()
+                .properties
+                .get(&ustr("Transparency"))
+            {
+                Some(Variant::Float32(t)) => *t,
+                _ => panic!("Missing Transparency on new"),
+            };
+            let ot = match old_dom
+                .get_by_ref(*or)
+                .unwrap()
+                .properties
+                .get(&ustr("Transparency"))
+            {
+                Some(Variant::Float32(t)) => *t,
+                _ => panic!("Missing Transparency on old"),
+            };
+            (nt, ot)
+        })
+        .collect();
+    syncback_pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+    let mut forward_pairs: Vec<(f32, f32)> = forward_result
+        .matched
+        .iter()
+        .map(|(snap, tree_ref)| {
+            let st = match snap.properties.get(&ustr("Transparency")) {
+                Some(Variant::Float32(t)) => *t,
+                _ => panic!("Missing Transparency on snap"),
+            };
+            let tt = match tree
+                .get_instance(*tree_ref)
+                .unwrap()
+                .properties()
+                .get(&ustr("Transparency"))
+            {
+                Some(Variant::Float32(t)) => *t,
+                _ => panic!("Missing Transparency on tree"),
+            };
+            (st, tt)
+        })
+        .collect();
+    forward_pairs.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+
+    assert_eq!(
+        syncback_pairs, forward_pairs,
+        "Syncback and forward sync produced different pairings"
+    );
+
+    // Verify correct pairing: each pair should have matching Transparency
+    for (nt, ot) in &syncback_pairs {
+        assert_eq!(
+            nt, ot,
+            "Incorrect pairing: new Transparency={} matched to old Transparency={}",
+            nt, ot
+        );
+    }
+}
+
+// ================================================================
+// Round-trip: syncback matching + forward sync matching agree
+// ================================================================
+
+#[test]
+fn round_trip_matching_identity() {
+    let _ = env_logger::try_init();
+
+    // Load the input rbxm (simulates Studio with full properties)
+    let input_dom = load_input_rbxm();
+    let input_root = input_dom.root_ref();
+    let input_tsunami = find_descendant(&input_dom, input_root, "TsunamiWave")
+        .expect("TsunamiWave not found in input.rbxm");
+    let input_textures = get_texture_children(&input_dom, input_tsunami);
+    assert_eq!(input_textures.len(), 12, "Expected 12 Textures in input");
+
+    // Load the expected/ filesystem as a WeakDom (syncback output)
+    let expected_dom = load_expected_dom();
+    let expected_root = expected_dom.root_ref();
+    let expected_tsunami = find_descendant(&expected_dom, expected_root, "TsunamiWave")
+        .expect("TsunamiWave not found in expected/");
+    let expected_textures = get_texture_children(&expected_dom, expected_tsunami);
+    assert_eq!(
+        expected_textures.len(),
+        12,
+        "Expected 12 Textures in expected/"
+    );
+
+    // Step 1: Syncback matching (input rbxm vs expected filesystem)
+    let syncback_session = librojo::syncback::matching::MatchingSession::new();
+    let syncback_result = librojo::syncback::matching::match_children(
+        &input_textures,
+        &expected_textures,
+        &input_dom,
+        &expected_dom,
+        None,
+        None,
+        &syncback_session,
+    );
+    assert_eq!(
+        syncback_result.matched.len(),
+        12,
+        "Syncback should match all 12"
+    );
+
+    // Step 2: Forward sync matching (expected/ snapshots vs input-as-tree)
+    let expected_path = Path::new(SYNCBACK_TESTS_PATH)
+        .join(FIXTURE_DIR)
+        .join("expected");
+    let vfs = memofs::Vfs::new_default();
+    let ctx = librojo::InstanceContext::default();
+    let full_snapshot = librojo::snapshot_from_vfs(&ctx, &vfs, &expected_path)
+        .expect("Failed to snapshot expected/")
+        .expect("snapshot_from_vfs returned None");
+    let snap_tsunami = full_snapshot
+        .children
+        .iter()
+        .find(|c| c.name == "TsunamiWave")
+        .expect("TsunamiWave not found in snapshot");
+    let snap_textures: Vec<librojo::InstanceSnapshot> = snap_tsunami
+        .children
+        .iter()
+        .filter(|c| c.class_name.as_str() == "Texture")
+        .cloned()
+        .collect();
+    assert_eq!(snap_textures.len(), 12, "Expected 12 snapshot Textures");
+
+    let input_dom2 = load_input_rbxm();
+    let root_ref2 = input_dom2.root_ref();
+    let input_snapshot = librojo::InstanceSnapshot::from_tree(input_dom2, root_ref2);
+    let tree = librojo::RojoTree::new(input_snapshot);
+    let tree_root = tree.get_root_id();
+    let tree_tsunami = find_descendant_by_name(&tree, tree_root, "TsunamiWave")
+        .expect("TsunamiWave not found in tree");
+    let tree_textures: Vec<Ref> = tree
+        .get_instance(tree_tsunami)
+        .unwrap()
+        .children()
+        .iter()
+        .filter(|&&r| {
+            tree.get_instance(r)
+                .is_some_and(|i| i.class_name().as_str() == "Texture")
+        })
+        .copied()
+        .collect();
+    assert_eq!(tree_textures.len(), 12, "Expected 12 tree Textures");
+
+    let forward_session = librojo::snapshot::matching::MatchingSession::new();
+    let forward_result = librojo::snapshot::matching::match_forward(
+        snap_textures,
+        &tree_textures,
+        &tree,
+        &forward_session,
+    );
+    assert_eq!(
+        forward_result.matched.len(),
+        12,
+        "Forward sync should match all 12"
+    );
+
+    // Step 3: Verify both directions paired by the same Face value.
+    // Syncback pairs: (input_face, expected_face)
+    let face_front = 5_u32;
+    let mut syncback_faces: Vec<(u32, u32)> = syncback_result
+        .matched
+        .iter()
+        .map(|(input_ref, expected_ref)| {
+            let iface = get_face(&input_dom, *input_ref).unwrap_or(face_front);
+            let eface = get_face(&expected_dom, *expected_ref).unwrap_or(face_front);
+            (iface, eface)
+        })
+        .collect();
+    syncback_faces.sort();
+
+    // Forward pairs: (snap_face, tree_face)
+    let mut forward_faces: Vec<(u32, u32)> = forward_result
+        .matched
+        .iter()
+        .map(|(snap, tree_ref)| {
+            let sface = snap
+                .properties
+                .get(&ustr("Face"))
+                .and_then(|v| match v {
+                    Variant::Enum(e) => Some(e.to_u32()),
+                    _ => None,
+                })
+                .unwrap_or(face_front);
+            let tface = tree
+                .get_instance(*tree_ref)
+                .and_then(|i| i.properties().get(&ustr("Face")))
+                .and_then(|v| match v {
+                    Variant::Enum(e) => Some(e.to_u32()),
+                    _ => None,
+                })
+                .unwrap_or(face_front);
+            (sface, tface)
+        })
+        .collect();
+    forward_faces.sort();
+
+    // Both directions must produce identical (face, face) pairs
+    assert_eq!(
+        syncback_faces, forward_faces,
+        "Round-trip mismatch: syncback and forward sync disagree on Face pairings"
+    );
+
+    // Every pair must have matching Face values
+    for (a, b) in &syncback_faces {
+        assert_eq!(a, b, "Face mismatch in round-trip: {} vs {}", a, b);
     }
 }
