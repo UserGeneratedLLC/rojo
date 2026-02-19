@@ -58,6 +58,16 @@ pub fn parse_dedup_suffix(stem: &str) -> Option<(&str, u32)> {
     None
 }
 
+/// Strips a `~N` dedup suffix from a filename stem, returning the base name.
+///
+/// Given `"Foo~2"`, returns `"Foo"`.
+/// Given `"Foo"`, returns `"Foo"` unchanged.
+/// Given `"Foo~0"` or `"Foo~abc"`, returns the input unchanged (not valid
+/// dedup suffixes).
+pub fn strip_dedup_suffix(name: &str) -> &str {
+    parse_dedup_suffix(name).map_or(name, |(base, _)| base)
+}
+
 /// Builds a dedup'd filename from a base stem, optional suffix number, and
 /// extension.
 ///
@@ -173,6 +183,22 @@ mod tests {
     fn parse_suffix_complex_stems() {
         assert_eq!(parse_dedup_suffix("A_B~3"), Some(("A_B", 3)));
         assert_eq!(parse_dedup_suffix("My Script~1"), Some(("My Script", 1)));
+    }
+
+    #[test]
+    fn strip_suffix_basic() {
+        assert_eq!(strip_dedup_suffix("Foo~1"), "Foo");
+        assert_eq!(strip_dedup_suffix("Foo~2"), "Foo");
+        assert_eq!(strip_dedup_suffix("Foo~10"), "Foo");
+    }
+
+    #[test]
+    fn strip_suffix_no_op() {
+        assert_eq!(strip_dedup_suffix("Foo"), "Foo");
+        assert_eq!(strip_dedup_suffix("Foo~0"), "Foo~0");
+        assert_eq!(strip_dedup_suffix("Foo~abc"), "Foo~abc");
+        assert_eq!(strip_dedup_suffix("Foo~"), "Foo~");
+        assert_eq!(strip_dedup_suffix(""), "");
     }
 
     #[test]

@@ -1067,8 +1067,8 @@ fn edit_dedup_file_with_meta() {
     });
 }
 
-/// Test 29: Create Foo~1.luau with NO meta. Instance name should be
-/// literally "Foo~1" -- tilde is NOT parsed as dedup marker.
+/// Test 29: Create Foo~1.luau with NO meta. Forward sync strips the ~1
+/// dedup suffix, so the instance name should be "Foo".
 #[test]
 fn dedup_file_without_meta_uses_stem() {
     run_serve_test("connected_slugify", |session, mut redactions| {

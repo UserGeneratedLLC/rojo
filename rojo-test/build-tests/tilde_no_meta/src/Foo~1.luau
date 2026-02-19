@@ -1,2 +1,2 @@
--- Tilde in filename without meta should produce instance name "Foo~1"
+-- Dedup suffix ~1: forward sync strips it to produce instance name "Foo"
 return nil

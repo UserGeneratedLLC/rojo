@@ -12,7 +12,7 @@ body:
           Id: id-13
           Metadata:
             ignoreUnknownInstances: false
-          Name: Foo~1
+          Name: Foo
           Parent: id-3
           Properties:
             Source:

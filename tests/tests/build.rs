@@ -68,6 +68,7 @@ gen_build_tests! {
     meta_name_override,
     model_json_name_override,
     dedup_suffix_with_meta,
+    dedup_suffix_auto_strip,
     init_meta_name_override,
     reserved_name_override,
 }

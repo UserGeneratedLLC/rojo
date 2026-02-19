@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     glob::Glob,
     project::DEFAULT_PROJECT_NAMES,
-    syncback::{SyncbackReturn, SyncbackSnapshot},
+    syncback::{dedup_suffix::strip_dedup_suffix, SyncbackReturn, SyncbackSnapshot},
 };
 use crate::{
     snapshot::{InstanceContext, InstanceSnapshot, SyncRule},
@@ -118,6 +118,7 @@ fn get_dir_middleware<'path>(
         .expect("Could not extract directory name")
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("File name was not valid UTF-8: {}", dir_path.display()))?;
+    let dir_name = strip_dedup_suffix(dir_name);
 
     static INIT_PATHS: OnceLock<Vec<(Middleware, &str)>> = OnceLock::new();
     let order = INIT_PATHS.get_or_init(|| {

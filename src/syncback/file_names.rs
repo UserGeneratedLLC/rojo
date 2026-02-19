@@ -75,8 +75,9 @@ pub fn name_for_inst<'a>(
             Some(extension_for_middleware(middleware))
         };
 
-        let (deduped_slug, full_fs_name) = deduplicate_name_with_ext(&base, extension, taken_names);
-        let needs_meta = needs_slugify || deduped_slug != base;
+        let (_deduped_slug, full_fs_name) =
+            deduplicate_name_with_ext(&base, extension, taken_names);
+        let needs_meta = needs_slugify;
 
         let filename = full_fs_name.clone();
         Ok((Cow::Owned(filename), needs_meta, full_fs_name))
@@ -832,7 +833,10 @@ mod tests {
         let (filename, needs_meta, _dk) =
             name_for_inst(Middleware::ModuleScript, child, None, &taken).unwrap();
         assert_eq!(filename.as_ref(), "Foo~2.luau");
-        assert!(needs_meta, "deduped name differs from original");
+        assert!(
+            !needs_meta,
+            "dedup-only: forward sync strips ~N automatically"
+        );
     }
 
     #[test]
@@ -845,7 +849,10 @@ mod tests {
         let (filename, needs_meta, _dk) =
             name_for_inst(Middleware::Dir, child, None, &taken).unwrap();
         assert_eq!(filename.as_ref(), "Stuff~2");
-        assert!(needs_meta);
+        assert!(
+            !needs_meta,
+            "dedup-only: forward sync strips ~N automatically"
+        );
     }
 
     #[test]
@@ -1172,21 +1179,19 @@ mod tests {
     }
 
     #[test]
-    fn nfi_clean_name_dedup_still_needs_meta_dir() {
-        // Clean name "Foo", but "foo" is already taken → dedup adds ~2 → needs meta
+    fn nfi_clean_name_dedup_no_meta_dir() {
+        // Clean name "Foo", but "foo" is already taken → dedup adds ~2.
+        // Forward sync strips ~N, so no meta name needed.
         let (f, m) = nfi("Foo", Middleware::Dir, &["foo"]);
         assert_eq!(f, "Foo~2");
-        assert!(
-            m,
-            "dedup suffix means filesystem name differs from instance name"
-        );
+        assert!(!m, "dedup-only: forward sync strips ~N automatically");
     }
 
     #[test]
     fn nfi_case_collision_dir() {
         let (f, m) = nfi("Assets", Middleware::Dir, &["assets"]);
         assert_eq!(f, "Assets~2");
-        assert!(m);
+        assert!(!m, "dedup-only: forward sync strips ~N automatically");
     }
 
     #[test]
@@ -1223,7 +1228,7 @@ mod tests {
         assert_eq!(r[0].1, "Foo");
         assert!(!r[0].2);
         assert_eq!(r[1].1, "Foo~2");
-        assert!(r[1].2);
+        assert!(!r[1].2, "dedup-only: forward sync strips ~N automatically");
     }
 
     #[test]
@@ -1251,7 +1256,7 @@ mod tests {
         assert_eq!(r[0].1, "Hey_Bro");
         assert!(r[0].2);
         assert_eq!(r[1].1, "Hey_Bro~2");
-        assert!(r[1].2, "dedup suffix → needs meta even for natural name");
+        assert!(!r[1].2, "dedup-only: natural name, forward sync strips ~N");
     }
 
     #[test]
@@ -1260,9 +1265,9 @@ mod tests {
         assert_eq!(r[0].1, "Script");
         assert!(!r[0].2);
         assert_eq!(r[1].1, "script~2");
-        assert!(r[1].2);
+        assert!(!r[1].2, "dedup-only: forward sync strips ~N automatically");
         assert_eq!(r[2].1, "SCRIPT~3");
-        assert!(r[2].2);
+        assert!(!r[2].2, "dedup-only: forward sync strips ~N automatically");
     }
 
     #[test]
@@ -1294,7 +1299,7 @@ mod tests {
         assert_eq!(r[0].1, "CON_");
         assert!(r[0].2);
         assert_eq!(r[1].1, "CON_~2");
-        assert!(r[1].2);
+        assert!(!r[1].2, "dedup-only: natural name, forward sync strips ~N");
     }
 
     #[test]
@@ -1309,11 +1314,11 @@ mod tests {
         assert_eq!(r[0].1, "Utils");
         assert!(!r[0].2);
         assert_eq!(r[1].1, "utils~2");
-        assert!(r[1].2);
+        assert!(!r[1].2, "dedup-only: forward sync strips ~N");
         assert_eq!(r[2].1, "Utils~3");
-        assert!(r[2].2);
+        assert!(!r[2].2, "dedup-only: forward sync strips ~N");
         assert_eq!(r[3].1, "UTILS~4");
-        assert!(r[3].2);
+        assert!(!r[3].2, "dedup-only: forward sync strips ~N");
         assert_eq!(r[4].1, "Uti_ls");
         assert!(r[4].2);
     }
@@ -1351,9 +1356,9 @@ mod tests {
         assert_eq!(r[0].1, "Leading");
         assert!(r[0].2, "leading space was stripped");
         assert_eq!(r[1].1, "Leading~2");
-        assert!(r[1].2);
+        assert!(!r[1].2, "dedup-only: clean name, forward sync strips ~N");
         assert_eq!(r[2].1, "Leading~3");
-        assert!(r[2].2);
+        assert!(r[2].2, "trailing space stripped → slug differs");
     }
 
     // ── Every middleware type with slugified name ─────────────────────
@@ -1559,7 +1564,7 @@ mod tests {
         // must get "Utils~2".
         let r = process_new_children_with_disk_seed(&["utils"], &[("Utils", Middleware::Dir)]);
         assert_eq!(r[0].1, "Utils~2");
-        assert!(r[0].2);
+        assert!(!r[0].2, "dedup-only: forward sync strips ~N");
     }
 
     #[test]
@@ -1567,7 +1572,7 @@ mod tests {
         // "SCRIPTS" directory on disk, new instance "Scripts" (dir) must dedup.
         let r = process_new_children_with_disk_seed(&["scripts"], &[("Scripts", Middleware::Dir)]);
         assert_eq!(r[0].1, "Scripts~2");
-        assert!(r[0].2);
+        assert!(!r[0].2, "dedup-only: forward sync strips ~N");
     }
 
     #[test]
@@ -1592,9 +1597,9 @@ mod tests {
             ],
         );
         assert_eq!(r[0].1, "Utils~2", "Utils collides with utils/ on disk");
-        assert!(r[0].2);
+        assert!(!r[0].2, "dedup-only: forward sync strips ~N");
         assert_eq!(r[1].1, "Config~2", "Config collides with config/ on disk");
-        assert!(r[1].2);
+        assert!(!r[1].2, "dedup-only: forward sync strips ~N");
         assert_eq!(r[2].1, "NewThing", "NewThing is clean");
         assert!(!r[2].2);
     }
@@ -1608,7 +1613,7 @@ mod tests {
             &[("Stuff", Middleware::Dir)],
         );
         assert_eq!(r[0].1, "Stuff~2");
-        assert!(r[0].2);
+        assert!(!r[0].2, "dedup-only: forward sync strips ~N");
     }
 
     #[test]
@@ -1621,7 +1626,7 @@ mod tests {
             &[("MyModule", Middleware::ModuleScript)],
         );
         assert_eq!(r[0].1, "MyModule~2.luau");
-        assert!(r[0].2, "dedup suffix means needs meta");
+        assert!(!r[0].2, "dedup-only: forward sync strips ~N");
     }
 
     #[test]
@@ -1679,7 +1684,7 @@ mod tests {
         // New "Foo" dir must skip both and land on "Foo~2".
         let r = process_new_children_with_disk_seed(&["foo", "foo~1"], &[("Foo", Middleware::Dir)]);
         assert_eq!(r[0].1, "Foo~2");
-        assert!(r[0].2);
+        assert!(!r[0].2, "dedup-only: forward sync strips ~N");
     }
 
     #[test]
@@ -1776,9 +1781,9 @@ mod tests {
             &[("Helper", Middleware::Dir), ("Helper", Middleware::Dir)],
         );
         assert_eq!(r[0].1, "Helper~2");
-        assert!(r[0].2);
+        assert!(!r[0].2, "dedup-only: forward sync strips ~N");
         assert_eq!(r[1].1, "Helper~3");
-        assert!(r[1].2);
+        assert!(!r[1].2, "dedup-only: forward sync strips ~N");
     }
 
     #[test]
@@ -1796,11 +1801,11 @@ mod tests {
         assert_eq!(r[0].1, "Test");
         assert!(!r[0].2);
         assert_eq!(r[1].1, "test~2");
-        assert!(r[1].2);
+        assert!(!r[1].2, "dedup-only: forward sync strips ~N");
         assert_eq!(r[2].1, "TEST~3");
-        assert!(r[2].2);
+        assert!(!r[2].2, "dedup-only: forward sync strips ~N");
         assert_eq!(r[3].1, "tEsT~4");
-        assert!(r[3].2);
+        assert!(!r[3].2, "dedup-only: forward sync strips ~N");
     }
 
     // ══════════════════════════════════════════════════════════════════
@@ -1873,7 +1878,7 @@ mod tests {
         assert_eq!(r[0].1, "🎮 Games");
         assert!(!r[0].2, "emoji name is clean");
         assert_eq!(r[1].1, "🎮 Games~2");
-        assert!(r[1].2);
+        assert!(!r[1].2, "dedup-only: forward sync strips ~N");
     }
 
     #[test]
@@ -1884,7 +1889,7 @@ mod tests {
         assert_eq!(r[0].1, "CON_");
         assert!(r[0].2);
         assert_eq!(r[1].1, "CON_~2");
-        assert!(r[1].2, "natural CON_ collides with reserved CON's slug");
+        assert!(!r[1].2, "dedup-only: natural CON_ needs no meta");
         assert_eq!(r[2].1, "con_~3");
         assert!(r[2].2);
     }
@@ -1896,7 +1901,7 @@ mod tests {
         assert_eq!(r[0].1, "test");
         assert!(r[0].2, "trailing dot stripped → slug differs");
         assert_eq!(r[1].1, "test~2");
-        assert!(r[1].2);
+        assert!(!r[1].2, "dedup-only: clean name, forward sync strips ~N");
     }
 
     #[test]
@@ -1906,9 +1911,9 @@ mod tests {
         assert_eq!(r[0].1, "A");
         assert!(r[0].2, "leading space stripped");
         assert_eq!(r[1].1, "A~2");
-        assert!(r[1].2);
+        assert!(!r[1].2, "dedup-only: clean name, forward sync strips ~N");
         assert_eq!(r[2].1, "A~3");
-        assert!(r[2].2);
+        assert!(r[2].2, "leading spaces stripped → slug differs");
     }
 
     #[test]
@@ -2067,7 +2072,7 @@ mod tests {
         assert_eq!(r[1].1, "a_project~2");
         assert!(r[1].2);
         assert_eq!(r[2].1, "a_project~3");
-        assert!(r[2].2, "natural name collides with slugified siblings");
+        assert!(!r[2].2, "dedup-only: natural name, forward sync strips ~N");
     }
 
     #[test]
@@ -2079,7 +2084,7 @@ mod tests {
         assert!(!r[0].2);
         for (i, entry) in r.iter().enumerate().skip(1) {
             assert_eq!(entry.1, format!("Script~{}", i + 1));
-            assert!(entry.2);
+            assert!(!entry.2, "dedup-only: forward sync strips ~N");
         }
         // All filenames must be unique
         let unique: HashSet<String> = r.iter().map(|(_, f, _)| f.to_lowercase()).collect();
@@ -2333,17 +2338,15 @@ mod tests {
         assert_eq!(name1.as_ref(), "A_B.luau");
         assert!(meta1, "A/B was slugified, needs meta name");
         assert_eq!(name2.as_ref(), "A_B~2.luau");
-        assert!(meta2, "A_B was deduped to ~2, needs meta name");
+        assert!(!meta2, "dedup-only: natural A_B, forward sync strips ~2");
     }
 
     #[test]
     fn tilde_in_filename_not_parsed_as_dedup_marker() {
-        // A file named "Foo~1" should produce instance name "Foo~1",
-        // NOT be interpreted as "Foo" with dedup suffix ~1.
-        // This is verified by the fact that name_needs_slugify("Foo~1")
-        // returns true (tilde is in SLUGIFY_CHARS), so a file named
-        // "Foo~1.luau" can only exist if it was written by the dedup
-        // system. Forward sync reads the filename as-is.
+        // An instance literally named "Foo~1" gets slugified to "Foo_1"
+        // because tilde is in SLUGIFY_CHARS. This means a file named
+        // "Foo~1.luau" on disk can only have been produced by the dedup
+        // system, so forward sync correctly strips ~1 to derive "Foo".
         assert!(
             name_needs_slugify("Foo~1"),
             "tilde should trigger slugification"

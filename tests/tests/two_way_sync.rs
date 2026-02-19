@@ -7732,17 +7732,12 @@ fn add_same_named_folders_deduplicates() {
             data_dedup.display()
         );
 
-        // The dedup'd directory should have a meta with name: "Data"
+        // Dedup-only: no meta file needed. Forward sync strips ~N automatically.
         let dedup_meta = data_dedup.join("init.meta.json5");
         assert!(
-            dedup_meta.exists(),
-            "Data~2/init.meta.json5 should exist for name override"
-        );
-        let meta_content = fs::read_to_string(&dedup_meta).unwrap();
-        assert!(
-            meta_content.contains("\"Data\""),
-            "Dedup meta should contain name \"Data\", got: {}",
-            meta_content
+            !dedup_meta.exists(),
+            "Data~2/init.meta.json5 should NOT exist: forward sync strips ~N, got file at {}",
+            dedup_meta.display()
         );
 
         // Each directory should have its own child script

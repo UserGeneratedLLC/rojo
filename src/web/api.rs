@@ -1929,7 +1929,7 @@ impl ApiService {
         // not filenames with extensions). This ensures file-format instances
         // are correctly detected as collisions.
         let encoded_name = deduplicate_name(&base_name, sibling_slugs);
-        let needs_meta_name = needs_slug || encoded_name != base_name;
+        let needs_meta_name = needs_slug;
         let meta_name_field: Option<&str> = if needs_meta_name {
             Some(&added.name)
         } else {
@@ -6478,7 +6478,7 @@ mod tests {
                 instance_name.to_string()
             };
             let deduped = deduplicate_name(&base, &taken);
-            let needs_meta = needs_slug || deduped != base;
+            let needs_meta = needs_slug;
 
             fs::create_dir(temp.path().join(&deduped)).unwrap();
 
@@ -6516,7 +6516,7 @@ mod tests {
                     name.to_string()
                 };
                 let deduped = deduplicate_name(&base, &taken);
-                let needs_meta = needs_slug || deduped != base;
+                let needs_meta = needs_slug;
                 taken.insert(deduped.to_lowercase());
                 let meta = if needs_meta {
                     Some(name.to_string())
@@ -6541,7 +6541,7 @@ mod tests {
         fn dir_clean_name_collides_with_existing() {
             let (f, m) = simulate_dir_dedup(&["NewFolder"], "NewFolder");
             assert_eq!(f, "NewFolder~2");
-            assert_eq!(m.unwrap(), "NewFolder");
+            assert!(m.is_none(), "dedup-only: forward sync strips ~N");
         }
 
         #[test]
@@ -6562,14 +6562,14 @@ mod tests {
         fn dir_natural_collides_with_slug() {
             let (f, m) = simulate_dir_dedup(&["A_B"], "A_B");
             assert_eq!(f, "A_B~2");
-            assert_eq!(m.unwrap(), "A_B");
+            assert!(m.is_none(), "dedup-only: forward sync strips ~N");
         }
 
         #[test]
         fn dir_case_insensitive_collision() {
             let (f, m) = simulate_dir_dedup(&["MyFolder"], "myfolder");
             assert_eq!(f, "myfolder~2");
-            assert_eq!(m.unwrap(), "myfolder");
+            assert!(m.is_none(), "dedup-only: forward sync strips ~N");
         }
 
         #[test]
@@ -6628,7 +6628,7 @@ mod tests {
             assert_eq!(r[0].0, "Script");
             assert!(r[0].1.is_none());
             assert_eq!(r[1].0, "Script~2");
-            assert_eq!(r[1].1.as_deref(), Some("Script"));
+            assert!(r[1].1.is_none(), "dedup-only: forward sync strips ~N");
             assert_eq!(r[2].0, "Script~3");
         }
 
@@ -6663,7 +6663,7 @@ mod tests {
             assert_eq!(r[0].0, "CON_");
             assert_eq!(r[0].1.as_deref(), Some("CON"));
             assert_eq!(r[1].0, "CON_~2");
-            assert_eq!(r[1].1.as_deref(), Some("CON_"));
+            assert!(r[1].1.is_none(), "dedup-only: natural CON_ needs no meta");
             assert_eq!(r[2].0, "con_~3");
             assert_eq!(r[2].1.as_deref(), Some("con"));
         }

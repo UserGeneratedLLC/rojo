@@ -1556,8 +1556,9 @@ impl JobThreadContext {
                                             // Always update the name field when the
                                             // instance name changed, even if the path didn't
                                             // change (e.g. "Foo/Bar" → "Foo|Bar" both slugify
-                                            // to "Foo_Bar"). Use deduped_new_name because
-                                            // dedup may have appended ~N.
+                                            // to "Foo_Bar"). Only slugification requires a
+                                            // meta name -- dedup suffixes (~N) are stripped
+                                            // automatically by forward sync.
                                             //
                                             // For .model.json5/.model.json files, the name
                                             // field lives INSIDE the model file, not in
@@ -1566,7 +1567,7 @@ impl JobThreadContext {
                                                 let model_file = overridden_source_path
                                                     .as_deref()
                                                     .unwrap_or(path.as_path());
-                                                if deduped_new_name != *new_name {
+                                                if slugified_new_name != *new_name {
                                                     self.upsert_model_name_field(
                                                         model_file, new_name,
                                                     );
@@ -1578,7 +1579,7 @@ impl JobThreadContext {
                                                     "{}.meta.json5",
                                                     effective_meta_base
                                                 ));
-                                                if deduped_new_name != *new_name {
+                                                if slugified_new_name != *new_name {
                                                     self.upsert_meta_name_field(
                                                         &current_meta,
                                                         new_name,
