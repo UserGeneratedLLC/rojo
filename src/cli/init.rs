@@ -9,7 +9,7 @@ use std::{
     io::{self, Write},
 };
 
-use anyhow::{bail, format_err};
+use anyhow::{bail, format_err, Context};
 use clap::Parser;
 use fs_err as fs;
 use fs_err::OpenOptions;
@@ -45,6 +45,10 @@ pub struct InitCommand {
     /// Skip cloning cursor rules into .cursor directory.
     #[clap(long)]
     pub skip_rules: bool,
+
+    /// Skip changing the working directory into the project after creation.
+    #[clap(skip)]
+    pub skip_cd: bool,
 }
 
 impl InitCommand {
@@ -206,8 +210,9 @@ impl InitCommand {
 
         println!("Created project successfully.");
 
-        if self.placeid.is_some() {
-            println!("Run 'atlas syncback' to sync your place.");
+        if !self.skip_cd {
+            std::env::set_current_dir(&base_path)
+                .with_context(|| format!("Failed to cd into {}", base_path.display()))?;
         }
 
         Ok(())
