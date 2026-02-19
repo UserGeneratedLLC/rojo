@@ -629,8 +629,8 @@ function DomLabel:render()
 			}),
 			ChangeInfo = e("Frame", {
 				BackgroundTransparency = 1,
-				Size = UDim2.new(1, -indent - (if props.patchType and props.onSelectionChange then 210 else 80), 0, 24),
-				Position = UDim2.new(1, if props.patchType and props.onSelectionChange then -130 else -2, 0, 0),
+				Size = UDim2.new(1, -indent - (if props.patchType and props.onSelectionChange then 218 else 80), 0, 24),
+				Position = UDim2.new(1, if props.patchType and props.onSelectionChange then -138 else -2, 0, 0),
 				AnchorPoint = Vector2.new(1, 0),
 				ClipsDescendants = true,
 			}, {

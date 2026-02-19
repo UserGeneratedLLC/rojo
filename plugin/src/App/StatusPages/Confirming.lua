@@ -16,6 +16,94 @@ local TableDiffVisualizer = require(Plugin.App.Components.TableDiffVisualizer)
 
 local e = Roact.createElement
 
+local function makeStatTag(text, color, theme, transparency, layoutOrder)
+	return e("Frame", {
+		Size = UDim2.new(0, 0, 0, 16),
+		AutomaticSize = Enum.AutomaticSize.X,
+		BackgroundColor3 = color,
+		BackgroundTransparency = transparency:map(function(t)
+			return 0.85 + 0.15 * t
+		end),
+		LayoutOrder = layoutOrder,
+	}, {
+		Corner = e("UICorner", {
+			CornerRadius = UDim.new(0, 3),
+		}),
+		Padding = e("UIPadding", {
+			PaddingLeft = UDim.new(0, 5),
+			PaddingRight = UDim.new(0, 5),
+		}),
+		Label = e("TextLabel", {
+			Text = text,
+			BackgroundTransparency = 1,
+			FontFace = theme.Font.Thin,
+			TextSize = theme.TextSize.Small,
+			TextColor3 = color,
+			TextXAlignment = Enum.TextXAlignment.Center,
+			TextTransparency = transparency,
+			Size = UDim2.new(0, 0, 1, 0),
+			AutomaticSize = Enum.AutomaticSize.X,
+		}),
+	})
+end
+
+local function makeStatBar(changeInfo, theme, transparency, layoutOrder)
+	local removed = changeInfo.linesRemoved or 0
+	local added = changeInfo.linesAdded or 0
+	local propChanges = changeInfo.propChanges or 0
+	local total = removed + added + propChanges
+	if total == 0 then
+		return nil
+	end
+
+	local children = {
+		Layout = e("UIListLayout", {
+			FillDirection = Enum.FillDirection.Horizontal,
+			SortOrder = Enum.SortOrder.LayoutOrder,
+		}),
+		Corner = e("UICorner", {
+			CornerRadius = UDim.new(0, 2),
+		}),
+	}
+
+	if propChanges > 0 then
+		children.SegProp = e("Frame", {
+			Size = UDim2.fromScale(propChanges / total, 1),
+			BackgroundColor3 = theme.Diff.Property,
+			BackgroundTransparency = transparency,
+			BorderSizePixel = 0,
+			LayoutOrder = 1,
+		})
+	end
+
+	if added > 0 then
+		children.SegAdd = e("Frame", {
+			Size = UDim2.fromScale(added / total, 1),
+			BackgroundColor3 = theme.Diff.Add,
+			BackgroundTransparency = transparency,
+			BorderSizePixel = 0,
+			LayoutOrder = 2,
+		})
+	end
+
+	if removed > 0 then
+		children.SegRemove = e("Frame", {
+			Size = UDim2.fromScale(removed / total, 1),
+			BackgroundColor3 = theme.Diff.Remove,
+			BackgroundTransparency = transparency,
+			BorderSizePixel = 0,
+			LayoutOrder = 3,
+		})
+	end
+
+	return e("Frame", {
+		Size = UDim2.new(0, 40, 0, 8),
+		BackgroundTransparency = 1,
+		ClipsDescendants = true,
+		LayoutOrder = layoutOrder,
+	}, children)
+end
+
 local ConfirmingPage = Roact.Component:extend("ConfirmingPage")
 
 function ConfirmingPage:init()
@@ -143,6 +231,10 @@ function ConfirmingPage:render()
 	local hasChanges = self.props.patchTree and self.props.patchTree:getCount() > 0
 
 	return Theme.with(function(theme)
+		local rootChangeInfo = self.props.patchTree
+			and self.props.patchTree.ROOT
+			and self.props.patchTree.ROOT.changeInfo
+
 		local pageContent = Roact.createFragment({
 			Header = e("Frame", {
 				Size = UDim2.new(1, 0, 0, 28),
@@ -165,6 +257,53 @@ function ConfirmingPage:render()
 					Position = UDim2.new(0, 0, 0, 0),
 					BackgroundTransparency = 1,
 				}),
+
+				ChangeStats = if rootChangeInfo
+					then e("Frame", {
+						Size = UDim2.new(0.25, -10, 0, 20),
+						Position = UDim2.new(0.5, 0, 0.5, 0),
+						AnchorPoint = Vector2.new(0, 0.5),
+						BackgroundTransparency = 1,
+					}, {
+						Layout = e("UIListLayout", {
+							FillDirection = Enum.FillDirection.Horizontal,
+							HorizontalAlignment = Enum.HorizontalAlignment.Right,
+							VerticalAlignment = Enum.VerticalAlignment.Center,
+							SortOrder = Enum.SortOrder.LayoutOrder,
+							Padding = UDim.new(0, 4),
+						}),
+						PropsTag = if rootChangeInfo.propChanges
+							then makeStatTag(
+								rootChangeInfo.propChanges .. "P",
+								theme.Diff.Property,
+								theme,
+								self.props.transparency,
+								1
+							)
+							else nil,
+						AddedTag = if rootChangeInfo.linesAdded ~= nil
+							then makeStatTag(
+								"+" .. (rootChangeInfo.linesAdded or 0),
+								theme.Diff.Add,
+								theme,
+								self.props.transparency,
+								2
+							)
+							else nil,
+						RemovedTag = if rootChangeInfo.linesRemoved ~= nil
+							then makeStatTag(
+								"-" .. (rootChangeInfo.linesRemoved or 0),
+								theme.Diff.Remove,
+								theme,
+								self.props.transparency,
+								3
+							)
+							else nil,
+						Bar = if rootChangeInfo
+							then makeStatBar(rootChangeInfo, theme, self.props.transparency, 4)
+							else nil,
+					})
+					else nil,
 
 				FilterInput = e(TextInput, {
 					text = self.state.filterText,

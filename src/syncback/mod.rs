@@ -419,7 +419,7 @@ pub fn syncback_loop_with_stats(
                     }
                     e.file_name()
                         .to_str()
-                        .map_or(true, |n| !n.starts_with('.') || n == ".gitkeep")
+                        .is_none_or(|n| !n.starts_with('.') || n == ".gitkeep")
                 })
                 .flatten()
             {
