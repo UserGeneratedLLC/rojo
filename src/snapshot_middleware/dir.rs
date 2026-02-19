@@ -49,19 +49,41 @@ pub fn snapshot_dir_no_meta(
             .all(|rule| rule.passes(child.path()))
     };
 
-    let mut snapshot_children = Vec::new();
-
-    for entry in vfs.read_dir(path)? {
-        let entry = entry?;
-
-        if !passes_filter_rules(&entry) {
-            continue;
+    let snapshot_children = if std::env::var("ATLAS_SEQUENTIAL").is_ok() {
+        let mut children = Vec::new();
+        for entry in vfs.read_dir(path)? {
+            let entry = entry?;
+            if !passes_filter_rules(&entry) {
+                continue;
+            }
+            if let Some(child_snapshot) = snapshot_from_vfs(context, vfs, entry.path())? {
+                children.push(child_snapshot);
+            }
         }
+        children
+    } else {
+        use rayon::prelude::*;
 
-        if let Some(child_snapshot) = snapshot_from_vfs(context, vfs, entry.path())? {
-            snapshot_children.push(child_snapshot);
+        let entries: Vec<_> = vfs.read_dir(path)?.filter_map(|e| e.ok()).collect();
+
+        let results: Vec<anyhow::Result<Option<InstanceSnapshot>>> = entries
+            .par_iter()
+            .map(|entry| {
+                if !passes_filter_rules(entry) {
+                    return Ok(None);
+                }
+                snapshot_from_vfs(context, vfs, entry.path())
+            })
+            .collect();
+
+        let mut children = Vec::new();
+        for result in results {
+            if let Some(snapshot) = result? {
+                children.push(snapshot);
+            }
         }
-    }
+        children
+    };
 
     let normalized_path = vfs.canonicalize(path)?;
     let relevant_paths = vec![

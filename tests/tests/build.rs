@@ -113,3 +113,45 @@ fn run_build_test(test_name: &str) {
         assert_snapshot!(test_name, contents);
     });
 }
+
+#[test]
+fn parallel_snapshot_determinism() {
+    use crate::rojo_test::io_util::SERVE_TESTS_PATH;
+
+    let _ = env_logger::try_init();
+
+    let fixture_path = Path::new(SERVE_TESTS_PATH).join("connected_scripts");
+    let vfs = memofs::Vfs::new_default();
+    let ctx = librojo::InstanceContext::default();
+
+    fn snapshot_debug(snap: &librojo::InstanceSnapshot) -> String {
+        fn recurse(snap: &librojo::InstanceSnapshot, depth: usize, out: &mut String) {
+            use std::fmt::Write;
+            let indent = "  ".repeat(depth);
+            writeln!(out, "{}{} [{}]", indent, snap.name, snap.class_name).unwrap();
+            for child in &snap.children {
+                recurse(child, depth + 1, out);
+            }
+        }
+        let mut s = String::new();
+        recurse(snap, 0, &mut s);
+        s
+    }
+
+    let first = librojo::snapshot_from_vfs(&ctx, &vfs, &fixture_path)
+        .expect("snapshot failed")
+        .expect("snapshot returned None");
+    let baseline = snapshot_debug(&first);
+
+    for i in 1..5 {
+        let vfs = memofs::Vfs::new_default();
+        let snap = librojo::snapshot_from_vfs(&ctx, &vfs, &fixture_path)
+            .expect("snapshot failed")
+            .expect("snapshot returned None");
+        let current = snapshot_debug(&snap);
+        assert_eq!(
+            baseline, current,
+            "Parallel snapshot produced different child order on iteration {i}"
+        );
+    }
+}

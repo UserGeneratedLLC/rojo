@@ -8,7 +8,7 @@ use std::{
 };
 
 use crossbeam_channel::Sender;
-use memofs::Vfs;
+use memofs::{PrefetchCache, Vfs};
 use thiserror::Error;
 
 use crate::{
@@ -125,6 +125,43 @@ pub struct ServeSession {
     git_repo_root: Option<std::path::PathBuf>,
 }
 
+/// Walk a directory tree in parallel, reading all file contents and computing
+/// canonical paths. Returns a [`PrefetchCache`] that can be loaded into the
+/// VFS to eliminate per-file I/O during the initial snapshot build.
+fn prefetch_project_files(root: &Path) -> io::Result<PrefetchCache> {
+    use rayon::prelude::*;
+    use std::collections::HashMap;
+    use walkdir::WalkDir;
+
+    let entries: Vec<walkdir::DirEntry> = WalkDir::new(root)
+        .follow_links(true)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .collect();
+
+    let file_data: Vec<_> = entries
+        .par_iter()
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|e| {
+            let path = e.path().to_path_buf();
+            std::fs::read(&path).ok().map(|c| (path, c))
+        })
+        .collect();
+
+    let canonical_data: Vec<_> = entries
+        .par_iter()
+        .filter_map(|e| {
+            let path = e.path().to_path_buf();
+            std::fs::canonicalize(&path).ok().map(|c| (path, c))
+        })
+        .collect();
+
+    Ok(PrefetchCache {
+        files: file_data.into_iter().collect::<HashMap<_, _>>(),
+        canonical: canonical_data.into_iter().collect::<HashMap<_, _>>(),
+    })
+}
+
 impl ServeSession {
     /// Shared initialization: loads the project and builds the initial
     /// snapshot tree. Used by both `new()` and `new_oneshot()`.
@@ -133,12 +170,32 @@ impl ServeSession {
 
         let root_project = Project::load_initial_project(vfs, start_path)?;
 
+        if std::env::var("ATLAS_SEQUENTIAL").is_err() {
+            let prefetch_start = Instant::now();
+            match prefetch_project_files(root_project.folder_location()) {
+                Ok(cache) => {
+                    log::info!(
+                        "Prefetched {} files + {} canonical paths in {:.1?}",
+                        cache.files.len(),
+                        cache.canonical.len(),
+                        prefetch_start.elapsed()
+                    );
+                    vfs.set_prefetch_cache(cache);
+                }
+                Err(err) => {
+                    log::warn!("Prefetch failed, falling back to sequential reads: {err}");
+                }
+            }
+        }
+
         let mut tree = RojoTree::new(InstanceSnapshot::new());
         let root_id = tree.get_root_id();
         let instance_context = InstanceContext::new();
 
         log::trace!("Generating snapshot of instances from VFS");
         let snapshot = snapshot_from_vfs(&instance_context, vfs, start_path)?;
+
+        vfs.clear_prefetch_cache();
 
         log::trace!("Computing initial patch set");
         let patch_set = compute_patch_set(snapshot, &tree, root_id);

@@ -370,38 +370,38 @@ impl RefPathIndex {
     /// absolute using `tree` so the index always stores absolute target paths.
     /// This ensures prefix-based lookup works correctly for rename updates.
     pub fn populate_from_dir(&mut self, root: &Path, tree: &crate::snapshot::RojoTree) {
-        let mut count = 0usize;
-        let mut dirs_to_visit = vec![root.to_path_buf()];
-        while let Some(dir) = dirs_to_visit.pop() {
-            let entries = match std::fs::read_dir(&dir) {
-                Ok(entries) => entries,
-                Err(_) => continue,
-            };
-            for entry in entries.filter_map(|e| e.ok()) {
-                let path = entry.path();
-                if path.is_dir() {
-                    dirs_to_visit.push(path);
-                    continue;
-                }
-                let name = match path.file_name().and_then(|n| n.to_str()) {
-                    Some(n) => n,
-                    None => continue,
-                };
-                if !(name.ends_with(".meta.json5")
-                    || name.ends_with(".model.json5")
-                    || name.ends_with(".meta.json")
-                    || name.ends_with(".model.json"))
-                {
-                    continue;
-                }
+        use rayon::prelude::*;
+        use walkdir::WalkDir;
 
+        fn is_meta_or_model(name: &str) -> bool {
+            name.ends_with(".meta.json5")
+                || name.ends_with(".model.json5")
+                || name.ends_with(".meta.json")
+                || name.ends_with(".model.json")
+        }
+
+        let meta_paths: Vec<std::path::PathBuf> = WalkDir::new(root)
+            .follow_links(true)
+            .into_iter()
+            .filter_map(|e: Result<walkdir::DirEntry, _>| e.ok())
+            .filter(|e: &walkdir::DirEntry| {
+                e.file_type().is_file()
+                    && e.file_name().to_str().is_some_and(is_meta_or_model)
+            })
+            .map(|e: walkdir::DirEntry| e.into_path())
+            .collect();
+
+        let entries: Vec<(String, std::path::PathBuf)> = meta_paths
+            .par_iter()
+            .flat_map(|path| {
                 let source_abs = tree
-                    .get_ids_at_path(&path)
+                    .get_ids_at_path(path)
                     .first()
                     .map(|&id| crate::ref_target_path_from_tree(tree, id))
                     .unwrap_or_default();
 
-                if let Ok(bytes) = std::fs::read(&path) {
+                let mut results = Vec::new();
+                if let Ok(bytes) = std::fs::read(path) {
                     if let Ok(val) = crate::json::from_slice::<serde_json::Value>(&bytes) {
                         if let Some(attrs) = val.get("attributes").and_then(|a| a.as_object()) {
                             for (key, value) in attrs {
@@ -412,16 +412,22 @@ impl RefPathIndex {
                                             &source_abs,
                                         )
                                         .unwrap_or_else(|| path_str.to_string());
-                                        self.add(&resolved, &path);
-                                        count += 1;
+                                        results.push((resolved, path.clone()));
                                     }
                                 }
                             }
                         }
                     }
                 }
-            }
+                results
+            })
+            .collect();
+
+        let count = entries.len();
+        for (resolved, path) in entries {
+            self.add(&resolved, &path);
         }
+
         if count > 0 {
             log::info!(
                 "RefPathIndex: populated {} Rojo_Ref_* entries from existing meta/model files",
