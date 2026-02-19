@@ -238,12 +238,27 @@ Apply changes in priority order. Re-run `luau-compile --remarks -O2 --vector-lib
 
 ### Priority 1 -- Headers and type safety (always apply)
 
-- Add `--!strict` / `--!native` / `--!optimize 2` header. (`--!optimize 2` is default in live but not Studio testing.)
-- Fix type errors from `luau-analyze`.
-- Add missing type annotations where `--annotate` shows `any`. Focus on function signatures first, then locals in hot paths per intensity level.
-- Annotate `Vector3`, `CFrame`, `buffer` params explicitly -- native codegen generates specialized vector code.
+**Add headers:**
+- `--!strict` / `--!native` / `--!optimize 2`. (`--!optimize 2` is default in live but not Studio testing.)
+
+**Remove deoptimizers:**
 - Replace `getfenv`/`setfenv` -- disables builtins, imports, and optimizations globally.
 - Replace `table.getn` -> `#t`, `table.foreach`/`table.foreachi` -> `for..in`.
+
+**Type accuracy -- the first big battle:**
+
+Getting the file to pass `--!strict` cleanly is the single most impactful compilation change. Every `any` type is a function the native codegen cannot specialize. But the goal is *accurate* types, not silencing errors with casts:
+
+- Run `luau-analyze --annotate` and identify every `any` inference. These are the targets.
+- Add real type annotations to function signatures first (parameters and return types). This has the highest leverage -- it propagates type info to every caller and every local inside the function.
+- Then annotate locals in hot paths where inference still falls to `any`.
+- Annotate `Vector3`, `CFrame`, `buffer` params explicitly -- native codegen generates specialized vector code. Unannotated params are assumed to be generic tables with extra type checks.
+- **Do NOT paper over type errors with `:: any` casts.** A cast to `any` is worse than no annotation -- it actively tells the compiler to give up. If a type error is hard to fix, use the narrowest cast possible (`:: SpecificType`), or restructure the code so the type flows naturally.
+- **Narrow `any` in dictionaries.** `{[string]: any}` is common but hurts codegen. Ask: what values actually go in there? If it's a known set of types, use a union: `{[string]: string | number | boolean}`. If the dictionary has known keys, use a typed table: `{name: string, score: number}`. Only fall back to `any` when the value type is genuinely unbounded (e.g., serialized data from an external source).
+- Use type refinements (`type()`, `typeof()`, `:IsA()`, `assert()`) to provide type info from runtime checks instead of casts.
+- For OOP patterns: use `typeof(setmetatable(...))` with explicit `self: ClassName` on methods (old typechecker compatible).
+- For generic code: use proper generics (`<T>`) instead of `any`. If the function truly accepts anything, use `unknown` and narrow explicitly.
+- Track type coverage: count `any` in `--annotate` output. The goal is zero (or as close as practical).
 
 ### Priority 2 -- Low-hanging structural wins
 
