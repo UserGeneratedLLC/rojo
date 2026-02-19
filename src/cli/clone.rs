@@ -36,6 +36,10 @@ pub struct CloneCommand {
     /// Skip cloning cursor rules into .cursor directory.
     #[clap(long)]
     pub skip_rules: bool,
+
+    /// Skip changing the working directory into the project after creation.
+    #[clap(long)]
+    pub skip_cd: bool,
 }
 
 impl CloneCommand {
@@ -72,6 +76,7 @@ impl CloneCommand {
             skip_git,
             placeid: Some(self.placeid),
             skip_rules: self.skip_rules,
+            skip_cd: true,
         };
 
         init.run()?;
@@ -109,6 +114,11 @@ impl CloneCommand {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status();
+        }
+
+        if !self.skip_cd {
+            std::env::set_current_dir(&path)
+                .with_context(|| format!("Failed to cd into {}", path.display()))?;
         }
 
         Ok(())
