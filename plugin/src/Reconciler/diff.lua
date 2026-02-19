@@ -50,12 +50,16 @@ local function shouldDeleteChild(virtualInstance, childInstance)
 	return false
 end
 
+local DIFF_YIELD_INTERVAL = 1000
+
 local function diff(instanceMap, virtualInstances, rootId, serverInfo)
 	local patch = {
 		removed = {},
 		added = {},
 		updated = {},
 	}
+
+	local diffCount = 0
 
 	-- Build a lookup table for visible services (for ignoreHiddenServices check)
 	local visibleServicesSet: { [string]: boolean } = {}
@@ -78,6 +82,10 @@ local function diff(instanceMap, virtualInstances, rootId, serverInfo)
 
 	-- Internal recursive kernel for diffing an instance with the given ID.
 	local function diffInternal(id)
+		diffCount += 1
+		if diffCount % DIFF_YIELD_INTERVAL == 0 then
+			task.wait()
+		end
 		local virtualInstance = virtualInstances[id]
 		local instance = instanceMap.fromIds[id]
 

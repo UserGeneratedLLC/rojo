@@ -13,9 +13,19 @@ local Log = require(Packages.Log)
 local invariant = require(script.Parent.Parent.invariant)
 local Matching = require(script.Parent.matching)
 
+local HYDRATE_YIELD_INTERVAL = 1000
+
 local function hydrate(instanceMap, virtualInstances, rootId, rootInstance, session)
 	if not session then
 		session = Matching.newSession()
+	end
+
+	if not session.hydrateCount then
+		session.hydrateCount = 0
+	end
+	session.hydrateCount += 1
+	if session.hydrateCount % HYDRATE_YIELD_INTERVAL == 0 then
+		task.wait()
 	end
 
 	local virtualInstance = virtualInstances[rootId]
