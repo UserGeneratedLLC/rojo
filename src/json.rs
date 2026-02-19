@@ -1053,16 +1053,16 @@ mod tests {
 
         // Zero and negative zero
         assert_eq!(format_f32(0.0), "0");
-        assert_eq!(format_f32(-0.0), "0");
+        assert_eq!(format_f32(-0.0), "-0");
 
         // Rounding to 6 significant digits
         assert_eq!(format_f32(0.5), "0.5");
         assert_eq!(format_f32(1.0 / 3.0), "0.333333");
 
-        // Small values clamped to zero
-        assert_eq!(format_f32(1e-10), "0");
-        assert_eq!(format_f32(-1e-10), "0");
-        assert_eq!(format_f32(4.9e-7), "0");
+        // Small values preserved
+        assert_eq!(format_f32(1e-10).parse::<f32>().unwrap(), 1e-10_f32);
+        assert_eq!(format_f32(-1e-10).parse::<f32>().unwrap(), -1e-10_f32);
+        assert_eq!(format_f32(4.9e-7).parse::<f32>().unwrap(), 4.9e-7_f32);
 
         // Scientific notation for large values
         assert_eq!(format_f32(1e20), "1e20");
@@ -1087,16 +1087,16 @@ mod tests {
 
         // Zero and negative zero
         assert_eq!(format_f64(0.0), "0");
-        assert_eq!(format_f64(-0.0), "0");
+        assert_eq!(format_f64(-0.0), "-0");
 
-        // Rounding to 15 significant digits
+        // Full precision for roundtrip fidelity
         assert_eq!(format_f64(0.5), "0.5");
-        assert_eq!(format_f64(1.0 / 3.0), "0.333333333333333");
+        assert_eq!(format_f64(1.0 / 3.0), "0.3333333333333333");
 
-        // Small values clamped to zero
-        assert_eq!(format_f64(1e-100), "0");
-        assert_eq!(format_f64(-1e-100), "0");
-        assert_eq!(format_f64(4.9e-16), "0");
+        // Small values preserved
+        assert_eq!(format_f64(1e-100).parse::<f64>().unwrap(), 1e-100_f64);
+        assert_eq!(format_f64(-1e-100).parse::<f64>().unwrap(), -1e-100_f64);
+        assert_eq!(format_f64(4.9e-16).parse::<f64>().unwrap(), 4.9e-16_f64);
 
         // Scientific notation for large values
         assert_eq!(format_f64(1e47), "1e47");
@@ -1749,14 +1749,8 @@ mod tests {
             let serialized = to_vec_pretty_sorted(&original).unwrap();
             let json_str = String::from_utf8(serialized).unwrap();
 
-            // Very small numbers are clamped to zero by formatter policy
-            assert!(
-                json_str.contains(": 0"),
-                "Very small number should clamp to zero: {json_str}"
-            );
-
             let deserialized: Data = from_str(&json_str).unwrap();
-            assert_eq!(deserialized.value, 0.0);
+            assert_eq!(deserialized.value, original.value);
         }
 
         #[test]
@@ -1786,7 +1780,7 @@ mod tests {
             let json_str = String::from_utf8(serialized).unwrap();
 
             let deserialized: Data = from_str(&json_str).unwrap();
-            assert_eq!(deserialized.value, 0.0);
+            assert_eq!(deserialized.value, original.value);
         }
 
         // Test the exact boundaries where we switch to scientific notation
@@ -2527,7 +2521,7 @@ mod tests {
             assert_eq!(deserialized.class_name, "NumberValue");
             assert_eq!(*deserialized.properties.get("Value").unwrap(), 1e47);
             assert_eq!(*deserialized.properties.get("Normal").unwrap(), 42.5);
-            assert_eq!(*deserialized.properties.get("Tiny").unwrap(), 0.0);
+            assert_eq!(*deserialized.properties.get("Tiny").unwrap(), 1e-50);
         }
 
         #[test]
@@ -2730,8 +2724,8 @@ mod tests {
             let json_str = String::from_utf8(serialized).unwrap();
 
             let deserialized: Data = from_str(&json_str).unwrap();
-            assert_eq!(deserialized.epsilon, 0.0);
-            assert_eq!(deserialized.min_positive, 0.0);
+            assert_eq!(deserialized.epsilon, original.epsilon);
+            assert_eq!(deserialized.min_positive, original.min_positive);
         }
     }
 
@@ -3184,7 +3178,7 @@ mod tests {
             let json_str = String::from_utf8(serialized).unwrap();
 
             let deserialized: Data = from_str(&json_str).unwrap();
-            assert_eq!(deserialized.tiny, 0.0);
+            assert_eq!(deserialized.tiny, original.tiny);
         }
     }
 
@@ -3943,7 +3937,7 @@ No \\n's!",
             );
             assert!(deserialized.nan.is_nan());
             assert_eq!(deserialized.large, 1e47);
-            assert_eq!(deserialized.small, 0.0);
+            assert_eq!(deserialized.small, 1e-47);
         }
 
         #[test]
@@ -4891,8 +4885,8 @@ No \\n's!",
             assert!(deserialized.c.is_nan());
             assert_eq!(deserialized.d, f64::MAX);
             assert_eq!(deserialized.e, f64::MIN);
-            assert_eq!(deserialized.f, 0.0);
-            assert_eq!(deserialized.g, 0.0);
+            assert_eq!(deserialized.f, original.f);
+            assert_eq!(deserialized.g, original.g);
             assert_eq!(deserialized.h, 0.0);
             assert_eq!(deserialized.i, original.i);
         }

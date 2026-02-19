@@ -2,8 +2,10 @@ use std::borrow::Borrow;
 
 use anyhow::{bail, format_err};
 use rbx_dom_weak::types::{
-    Attributes, CFrame, Color3, Content, ContentId, ContentType, Enum, Font, MaterialColors,
-    Matrix3, Tags, Variant, VariantType, Vector2, Vector3,
+    Attributes, CFrame, Color3, ColorSequence, ColorSequenceKeypoint, Content, ContentId,
+    ContentType, CustomPhysicalProperties, Enum, Font, MaterialColors, Matrix3, NumberSequence,
+    NumberSequenceKeypoint, PhysicalProperties, Ray, Rect, Region3, Tags, UDim, UDim2, Variant,
+    VariantType, Vector2, Vector3,
 };
 use rbx_reflection::{DataType, PropertyDescriptor};
 use serde::{Deserialize, Serialize};
@@ -78,23 +80,150 @@ impl UnresolvedValue {
                     _ => return Self::FullyQualified(variant),
                 },
                 Variant::ContentId(content) => AmbiguousValue::String(content.into_string()),
-                Variant::Vector2(vector) => AmbiguousValue::Array2([vector.x, vector.y]),
-                Variant::Vector3(vector) => AmbiguousValue::Array3([vector.x, vector.y, vector.z]),
-                Variant::Color3(color) => AmbiguousValue::Array3([color.r, color.g, color.b]),
-                Variant::CFrame(cf) => AmbiguousValue::Array12([
-                    cf.position.x,
-                    cf.position.y,
-                    cf.position.z,
-                    cf.orientation.x.x,
-                    cf.orientation.x.y,
-                    cf.orientation.x.z,
-                    cf.orientation.y.x,
-                    cf.orientation.y.y,
-                    cf.orientation.y.z,
-                    cf.orientation.z.x,
-                    cf.orientation.z.y,
-                    cf.orientation.z.z,
+                Variant::Vector2(vector) => {
+                    AmbiguousValue::Array2([cleanup_f32(vector.x), cleanup_f32(vector.y)])
+                }
+                Variant::Vector3(vector) => AmbiguousValue::Array3([
+                    cleanup_f32(vector.x),
+                    cleanup_f32(vector.y),
+                    cleanup_f32(vector.z),
                 ]),
+                Variant::Color3(color) => AmbiguousValue::Array3([
+                    cleanup_f32(color.r),
+                    cleanup_f32(color.g),
+                    cleanup_f32(color.b),
+                ]),
+                Variant::CFrame(cf) => AmbiguousValue::Array12([
+                    cleanup_f32(cf.position.x),
+                    cleanup_f32(cf.position.y),
+                    cleanup_f32(cf.position.z),
+                    cleanup_f32(cf.orientation.x.x),
+                    cleanup_f32(cf.orientation.x.y),
+                    cleanup_f32(cf.orientation.x.z),
+                    cleanup_f32(cf.orientation.y.x),
+                    cleanup_f32(cf.orientation.y.y),
+                    cleanup_f32(cf.orientation.y.z),
+                    cleanup_f32(cf.orientation.z.x),
+                    cleanup_f32(cf.orientation.z.y),
+                    cleanup_f32(cf.orientation.z.z),
+                ]),
+                Variant::UDim(udim) => {
+                    return Self::FullyQualified(Variant::UDim(UDim::new(
+                        cleanup_f32(udim.scale),
+                        udim.offset,
+                    )));
+                }
+                Variant::UDim2(udim2) => {
+                    return Self::FullyQualified(Variant::UDim2(UDim2::new(
+                        UDim::new(cleanup_f32(udim2.x.scale), udim2.x.offset),
+                        UDim::new(cleanup_f32(udim2.y.scale), udim2.y.offset),
+                    )));
+                }
+                Variant::OptionalCFrame(Some(cf)) => {
+                    return Self::FullyQualified(Variant::OptionalCFrame(Some(CFrame::new(
+                        Vector3::new(
+                            cleanup_f32(cf.position.x),
+                            cleanup_f32(cf.position.y),
+                            cleanup_f32(cf.position.z),
+                        ),
+                        Matrix3::new(
+                            Vector3::new(
+                                cleanup_f32(cf.orientation.x.x),
+                                cleanup_f32(cf.orientation.x.y),
+                                cleanup_f32(cf.orientation.x.z),
+                            ),
+                            Vector3::new(
+                                cleanup_f32(cf.orientation.y.x),
+                                cleanup_f32(cf.orientation.y.y),
+                                cleanup_f32(cf.orientation.y.z),
+                            ),
+                            Vector3::new(
+                                cleanup_f32(cf.orientation.z.x),
+                                cleanup_f32(cf.orientation.z.y),
+                                cleanup_f32(cf.orientation.z.z),
+                            ),
+                        ),
+                    ))));
+                }
+                Variant::Rect(rect) => {
+                    return Self::FullyQualified(Variant::Rect(Rect::new(
+                        Vector2::new(cleanup_f32(rect.min.x), cleanup_f32(rect.min.y)),
+                        Vector2::new(cleanup_f32(rect.max.x), cleanup_f32(rect.max.y)),
+                    )));
+                }
+                Variant::Ray(ray) => {
+                    return Self::FullyQualified(Variant::Ray(Ray::new(
+                        Vector3::new(
+                            cleanup_f32(ray.origin.x),
+                            cleanup_f32(ray.origin.y),
+                            cleanup_f32(ray.origin.z),
+                        ),
+                        Vector3::new(
+                            cleanup_f32(ray.direction.x),
+                            cleanup_f32(ray.direction.y),
+                            cleanup_f32(ray.direction.z),
+                        ),
+                    )));
+                }
+                Variant::Region3(region) => {
+                    return Self::FullyQualified(Variant::Region3(Region3::new(
+                        Vector3::new(
+                            cleanup_f32(region.min.x),
+                            cleanup_f32(region.min.y),
+                            cleanup_f32(region.min.z),
+                        ),
+                        Vector3::new(
+                            cleanup_f32(region.max.x),
+                            cleanup_f32(region.max.y),
+                            cleanup_f32(region.max.z),
+                        ),
+                    )));
+                }
+                Variant::NumberSequence(seq) => {
+                    return Self::FullyQualified(Variant::NumberSequence(NumberSequence {
+                        keypoints: seq
+                            .keypoints
+                            .into_iter()
+                            .map(|kp| {
+                                NumberSequenceKeypoint::new(
+                                    cleanup_f32(kp.time),
+                                    cleanup_f32(kp.value),
+                                    cleanup_f32(kp.envelope),
+                                )
+                            })
+                            .collect(),
+                    }));
+                }
+                Variant::ColorSequence(seq) => {
+                    return Self::FullyQualified(Variant::ColorSequence(ColorSequence {
+                        keypoints: seq
+                            .keypoints
+                            .into_iter()
+                            .map(|kp| {
+                                ColorSequenceKeypoint::new(
+                                    cleanup_f32(kp.time),
+                                    Color3::new(
+                                        cleanup_f32(kp.color.r),
+                                        cleanup_f32(kp.color.g),
+                                        cleanup_f32(kp.color.b),
+                                    ),
+                                )
+                            })
+                            .collect(),
+                    }));
+                }
+                Variant::PhysicalProperties(PhysicalProperties::Custom(cpp)) => {
+                    return Self::FullyQualified(Variant::PhysicalProperties(
+                        PhysicalProperties::Custom(CustomPhysicalProperties::new(
+                            cleanup_f32(cpp.density()),
+                            cleanup_f32(cpp.friction()),
+                            cleanup_f32(cpp.elasticity()),
+                            cleanup_f32(cpp.friction_weight()),
+                            cleanup_f32(cpp.elasticity_weight()),
+                            cleanup_f32(cpp.acoustic_absorption()),
+                        )),
+                    ));
+                }
                 Variant::Attributes(attr) => AmbiguousValue::Attributes(attr),
                 Variant::Font(font) => AmbiguousValue::Font(font),
                 Variant::MaterialColors(colors) => AmbiguousValue::MaterialColors(colors),
@@ -285,6 +414,15 @@ impl AmbiguousValue {
             AmbiguousValue::Font(_) => "an object describing a Font",
             AmbiguousValue::MaterialColors(_) => "an object describing MaterialColors",
         }
+    }
+}
+
+fn cleanup_f32(v: f32) -> f32 {
+    let cleaned = format!("{:.6}", v).parse::<f32>().unwrap_or(v);
+    if cleaned == 0.0 {
+        0.0
+    } else {
+        cleaned
     }
 }
 
