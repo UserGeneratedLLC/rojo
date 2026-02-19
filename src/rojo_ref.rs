@@ -154,35 +154,7 @@ pub fn ref_target_path_from_tree(tree: &crate::snapshot::RojoTree, target_ref: R
             None => break,
         };
 
-        // Derive the filesystem name for this instance.
-        let fs_name = if let Some(meta) = tree.get_metadata(current) {
-            if let Some(source) = &meta.instigating_source {
-                match source {
-                    crate::snapshot::InstigatingSource::Path(_) => {
-                        // File-backed instance: use the filename from disk.
-                        source
-                            .path()
-                            .file_name()
-                            .and_then(|f| f.to_str())
-                            .unwrap_or(&inst.name)
-                            .to_string()
-                    }
-                    crate::snapshot::InstigatingSource::ProjectNode { .. } => {
-                        // Project-sourced instance: use instance name, not the
-                        // project file path (which would be e.g. "default.project.json5").
-                        inst.name.clone()
-                    }
-                }
-            } else {
-                // No instigating source (newly added) -- use name.
-                inst.name.clone()
-            }
-        } else {
-            // No metadata at all -- use instance name.
-            inst.name.clone()
-        };
-
-        components.push(fs_name);
+        components.push(tree.filesystem_name_for(current));
         current = inst.parent();
     }
 
