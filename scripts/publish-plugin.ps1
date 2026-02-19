@@ -1,14 +1,9 @@
-# Build and publish the Rojo plugin to the Creator Store
-# Loads API key from .env file, ROBLOX_API_KEY env var, or -ApiKey argument.
-# Get an API key at https://create.roblox.com/credentials (assets read+write).
-
-param(
-    [string]$ApiKey
-)
+# Build and publish the Atlas plugin to the Creator Store via OpenCloud.
+# Loads env vars from .env file in the repo root.
+# Required .env vars: PLUGIN_UPLOAD_TOKEN, PLUGIN_CI_UNIVERSE_ID, PLUGIN_CI_PLACE_ID
 
 $ErrorActionPreference = "Stop"
 
-# Load .env file if it exists
 $envFile = Join-Path $PSScriptRoot "..\.env"
 if (Test-Path $envFile) {
     foreach ($line in Get-Content $envFile) {
@@ -22,16 +17,14 @@ if (Test-Path $envFile) {
     }
 }
 
-# Resolve API key: argument > env var > .env (already loaded above)
-if (-not $ApiKey) {
-    $ApiKey = $env:ROBLOX_API_KEY
-}
-
-if (-not $ApiKey -or $ApiKey -eq "your-key-here") {
-    Write-Host "Error: No API key provided." -ForegroundColor Red
-    Write-Host "Set ROBLOX_API_KEY in .env, env var, or pass -ApiKey <key>" -ForegroundColor Yellow
+if (-not $env:PLUGIN_UPLOAD_TOKEN) {
+    Write-Host "Error: PLUGIN_UPLOAD_TOKEN not set. Add it to .env or set as env var." -ForegroundColor Red
     exit 1
 }
 
+$env:RBX_API_KEY = $env:PLUGIN_UPLOAD_TOKEN
+$env:RBX_UNIVERSE_ID = $env:PLUGIN_CI_UNIVERSE_ID
+$env:RBX_PLACE_ID = $env:PLUGIN_CI_PLACE_ID
+
 Write-Host "Building and uploading plugin..." -ForegroundColor Cyan
-cargo run -- upload plugin.project.json --asset_id 111151139098227
+lune run upload-plugin Atlas.rbxm
