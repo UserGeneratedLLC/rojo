@@ -13,6 +13,12 @@ local NULL_REF: string = "00000000000000000000000000000000"
 local EPSILON: number = 0.0001
 
 local function fuzzyEq(a: number, b: number): boolean
+	if a == b then
+		return true
+	end
+	if a ~= a then
+		return b ~= b
+	end
 	local diff = math.abs(a - b)
 	local maxVal = math.max(math.abs(a), math.abs(b), 1)
 	return diff < EPSILON or diff < maxVal * EPSILON
@@ -90,9 +96,6 @@ local function trueEquals(a: any, b: any): boolean
 	end
 
 	if t == "number" then
-		if a ~= a then
-			return b ~= b
-		end
 		return fuzzyEq(a, b)
 	end
 	if t == "Color3" then

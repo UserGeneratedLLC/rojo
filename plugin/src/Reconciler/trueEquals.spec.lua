@@ -224,6 +224,14 @@ return function()
 		it("large values within relative epsilon", function()
 			expect(trueEquals(Vector3.new(1e6, 1e6, 1e6), Vector3.new(1e6 + 50, 1e6, 1e6))).to.equal(true)
 		end)
+
+		it("NaN component equal", function()
+			expect(trueEquals(Vector3.new(0 / 0, 1, 2), Vector3.new(0 / 0, 1, 2))).to.equal(true)
+		end)
+
+		it("NaN vs finite component", function()
+			expect(trueEquals(Vector3.new(0 / 0, 1, 2), Vector3.new(0, 1, 2))).to.equal(false)
+		end)
 	end)
 
 	describe("Vector2", function()
@@ -237,6 +245,22 @@ return function()
 
 		it("Y differs by 1", function()
 			expect(trueEquals(Vector2.new(1, 2), Vector2.new(1, 3))).to.equal(false)
+		end)
+
+		it("infinity components", function()
+			expect(trueEquals(Vector2.new(math.huge, math.huge), Vector2.new(math.huge, math.huge))).to.equal(true)
+		end)
+
+		it("mixed infinity and finite", function()
+			expect(trueEquals(Vector2.new(math.huge, 0), Vector2.new(math.huge, 1))).to.equal(false)
+		end)
+
+		it("NaN components", function()
+			expect(trueEquals(Vector2.new(0 / 0, 0 / 0), Vector2.new(0 / 0, 0 / 0))).to.equal(true)
+		end)
+
+		it("NaN vs finite component", function()
+			expect(trueEquals(Vector2.new(0 / 0, 1), Vector2.new(1, 1))).to.equal(false)
 		end)
 	end)
 
