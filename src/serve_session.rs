@@ -152,10 +152,8 @@ fn prefetch_project_files(project: &Project) -> io::Result<PrefetchCache> {
         if !root.exists() {
             continue;
         }
-        for entry in WalkDir::new(root).follow_links(true) {
-            if let Ok(e) = entry {
-                entries.push(e);
-            }
+        for e in WalkDir::new(root).follow_links(true).into_iter().flatten() {
+            entries.push(e);
         }
     }
 

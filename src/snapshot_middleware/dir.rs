@@ -472,7 +472,7 @@ mod test {
         .unwrap();
 
         fn count_nodes(snap: &InstanceSnapshot) -> usize {
-            1 + snap.children.iter().map(|c| count_nodes(c)).sum::<usize>()
+            1 + snap.children.iter().map(count_nodes).sum::<usize>()
         }
         let total = count_nodes(&snap);
         assert!(total > 100, "Should have many nodes, got {total}");
