@@ -381,50 +381,6 @@ pub fn syncback_loop_with_stats(
             }
         }
 
-        // Recursively scan each source directory
-        fn scan_directory(
-            dir: &Path,
-            paths: &mut HashSet<PathBuf>,
-            ignore_patterns: &Option<Vec<Glob>>,
-            project_path: &Path,
-        ) {
-            log::trace!("Scanning directory: {}", dir.display());
-            let entries = match std::fs::read_dir(dir) {
-                Ok(e) => e,
-                Err(e) => {
-                    log::trace!("Failed to read directory {}: {}", dir.display(), e);
-                    return;
-                }
-            };
-
-            for entry in entries.flatten() {
-                let path = entry.path();
-
-                // Skip paths matching ignore patterns
-                if !is_valid_path(ignore_patterns, project_path, &path) {
-                    log::trace!("Skipping {} (matches ignore pattern)", path.display());
-                    continue;
-                }
-
-                // Skip hidden files/directories (starting with .), except
-                // .gitkeep which is managed by Rojo and must be tracked for
-                // cleanup when directories are no longer empty.
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.starts_with('.') && name != ".gitkeep" {
-                        log::trace!("Skipping {} (hidden)", path.display());
-                        continue;
-                    }
-                }
-
-                log::trace!("Found path: {}", path.display());
-                paths.insert(path.clone());
-
-                if path.is_dir() {
-                    scan_directory(&path, paths, ignore_patterns, project_path);
-                }
-            }
-        }
-
         log::trace!(
             "dirs_to_scan: {:?}",
             dirs_to_scan
@@ -699,58 +655,9 @@ pub fn syncback_loop_with_stats(
             }
         }
 
-        // Helper to normalize a path by:
-        // 1. Canonicalizing to resolve symlinks (important on macOS where /var -> /private/var)
-        // 2. Stripping UNC prefix on Windows
-        fn normalize_existing_path(p: &Path) -> PathBuf {
-            // First try to canonicalize to resolve symlinks
-            // This is important on macOS where /var is a symlink to /private/var
-            let canonicalized = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-            strip_unc_prefix(canonicalized)
-        }
-
         let canonical_project_path = strip_unc_prefix(
             std::fs::canonicalize(project_path).unwrap_or_else(|_| project_path.to_path_buf()),
         );
-
-        // Helper to canonicalize a path that may not exist yet.
-        // Tries to canonicalize the full path, then falls back to canonicalizing
-        // the nearest existing ancestor and appending the remaining components.
-        fn canonicalize_maybe_nonexistent(p: &Path) -> PathBuf {
-            // Try full canonicalization first (works if path exists)
-            if let Ok(canonical) = std::fs::canonicalize(p) {
-                return strip_unc_prefix(canonical);
-            }
-
-            // Path doesn't exist - find the nearest existing ancestor and canonicalize that,
-            // then append the remaining path components.
-            let mut existing_ancestor = p.to_path_buf();
-            let mut suffix_components = Vec::new();
-
-            while !existing_ancestor.as_os_str().is_empty() {
-                if existing_ancestor.exists() {
-                    break;
-                }
-                if let Some(file_name) = existing_ancestor.file_name() {
-                    suffix_components.push(file_name.to_owned());
-                }
-                if !existing_ancestor.pop() {
-                    break;
-                }
-            }
-
-            // Canonicalize the existing ancestor
-            let canonical_ancestor = std::fs::canonicalize(&existing_ancestor)
-                .map(strip_unc_prefix)
-                .unwrap_or(existing_ancestor);
-
-            // Append the suffix components in reverse order
-            let mut result = canonical_ancestor;
-            for component in suffix_components.into_iter().rev() {
-                result.push(component);
-            }
-            result
-        }
 
         let added_paths: HashSet<PathBuf> = fs_snapshot
             .added_paths()

@@ -1,7 +1,6 @@
 use std::{
     collections::HashSet,
     io,
-    net::IpAddr,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard},
     time::Instant,
@@ -456,10 +455,6 @@ impl ServeSession {
             .expect("all top-level projects must have their name set")
     }
 
-    pub fn project_port(&self) -> Option<u16> {
-        self.root_project.serve_port
-    }
-
     pub fn place_id(&self) -> Option<u64> {
         self.root_project.place_id
     }
@@ -478,10 +473,6 @@ impl ServeSession {
 
     pub fn blocked_place_ids(&self) -> Option<&HashSet<u64>> {
         self.root_project.blocked_place_ids.as_ref()
-    }
-
-    pub fn serve_address(&self) -> Option<IpAddr> {
-        self.root_project.serve_address
     }
 
     pub fn root_dir(&self) -> &Path {
