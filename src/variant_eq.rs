@@ -102,10 +102,7 @@ pub fn variant_eq(variant_a: &Variant, variant_b: &Variant) -> bool {
         (Variant::Float32(a), Variant::Float32(b)) => fuzzy_eq_f32(*a, *b),
         (Variant::Float64(a), Variant::Float64(b)) => fuzzy_eq_f64(*a, *b),
         (Variant::Font(a), Variant::Font(b)) => {
-            a.weight == b.weight
-                && a.style == b.style
-                && a.family == b.family
-                && a.cached_face_id == b.cached_face_id
+            a.weight == b.weight && a.style == b.style && a.family == b.family
         }
         (Variant::Int32(a), Variant::Int32(b)) => a == b,
         (Variant::Int64(a), Variant::Int64(b)) => a == b,
@@ -329,10 +326,7 @@ pub fn variant_eq_disk(variant_a: &Variant, variant_b: &Variant) -> bool {
         (Variant::Float32(a), Variant::Float32(b)) => disk_eq_f32(*a, *b),
         (Variant::Float64(a), Variant::Float64(b)) => disk_eq_f64(*a, *b),
         (Variant::Font(a), Variant::Font(b)) => {
-            a.weight == b.weight
-                && a.style == b.style
-                && a.family == b.family
-                && a.cached_face_id == b.cached_face_id
+            a.weight == b.weight && a.style == b.style && a.family == b.family
         }
         (Variant::Int32(a), Variant::Int32(b)) => a == b,
         (Variant::Int64(a), Variant::Int64(b)) => a == b,

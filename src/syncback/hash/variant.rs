@@ -96,12 +96,6 @@ pub fn hash_variant(hasher: &mut Hasher, value: &Variant) {
             n_hash!(hasher, f.weight as u16);
             n_hash!(hasher, f.style as u8);
             hash!(hasher, f.family.as_bytes());
-            if let Some(cache) = &f.cached_face_id {
-                hash!(hasher, &[0x01]);
-                hash!(hasher, cache.as_bytes());
-            } else {
-                hash!(hasher, &[0x00]);
-            }
         }
         Variant::Int32(n) => n_hash!(hasher, n),
         Variant::Int64(n) => n_hash!(hasher, n),
