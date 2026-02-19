@@ -82,6 +82,11 @@ impl StdBackend {
                     );
                     false // keep watcher running
                 }
+                WatcherCriticalError::ChannelSendFailed(_) => {
+                    // The event receiver was dropped (VFS shutdown). This is
+                    // normal during process exit -- stop the thread silently.
+                    true
+                }
                 _ => {
                     log::error!("{}. File watching is no longer reliable.", err);
                     std::process::exit(1);

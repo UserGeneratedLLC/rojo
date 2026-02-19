@@ -258,6 +258,7 @@ fn parallel_snapshot_with_prefetch_cache() {
         files,
         canonical,
         is_file: std::collections::HashMap::new(),
+        children: std::collections::HashMap::new(),
     });
 
     let snap_cached = librojo::snapshot_from_vfs(&ctx, &vfs_cached, &project_path)

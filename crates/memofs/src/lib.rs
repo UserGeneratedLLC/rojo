@@ -43,6 +43,8 @@ pub struct PrefetchCache {
     /// `true` = file, `false` = directory. Paths not in the map fall through
     /// to the backend (e.g. init-file probes for paths that don't exist).
     pub is_file: HashMap<PathBuf, bool>,
+    /// Directory path -> sorted child paths. Consumed once per directory.
+    pub children: HashMap<PathBuf, Vec<PathBuf>>,
 }
 
 mod sealed {
@@ -216,6 +218,19 @@ impl VfsInner {
 
     fn read_dir<P: AsRef<Path>>(&mut self, path: P) -> io::Result<ReadDir> {
         let path = path.as_ref();
+
+        if let Some(cache) = &mut self.prefetch_cache {
+            if let Some(child_paths) = cache.children.remove(path) {
+                if self.watch_enabled {
+                    self.backend.watch(path)?;
+                }
+                let inner = child_paths.into_iter().map(|p| Ok(DirEntry { path: p }));
+                return Ok(ReadDir {
+                    inner: Box::new(inner),
+                });
+            }
+        }
+
         let dir = self.backend.read_dir(path)?;
 
         if self.watch_enabled {
@@ -765,6 +780,7 @@ mod test {
                 .map(|(k, v)| (PathBuf::from(k), PathBuf::from(v)))
                 .collect(),
             is_file: HashMap::new(),
+            children: HashMap::new(),
         }
     }
 
@@ -883,6 +899,7 @@ mod test {
             files: cache_files,
             canonical: HashMap::new(),
             is_file: HashMap::new(),
+            children: HashMap::new(),
         });
 
         let result = vfs.read(&file_path).unwrap();
@@ -954,6 +971,7 @@ mod test {
             files: cache_files,
             canonical: HashMap::new(),
             is_file: HashMap::new(),
+            children: HashMap::new(),
         });
 
         let handles: Vec<_> = (0..100)
@@ -998,6 +1016,7 @@ mod test {
             files: cache_files,
             canonical,
             is_file: HashMap::new(),
+            children: HashMap::new(),
         });
 
         for i in 0..50 {

@@ -142,6 +142,7 @@ fn prefetch_project_files(project: &Project) -> io::Result<PrefetchCache> {
             files: HashMap::new(),
             canonical: HashMap::new(),
             is_file: HashMap::new(),
+            children: HashMap::new(),
         });
     }
 
@@ -214,15 +215,38 @@ fn prefetch_project_files(project: &Project) -> io::Result<PrefetchCache> {
         canon_elapsed,
     );
 
-    let is_file: HashMap<_, _> = entries
-        .iter()
-        .map(|e| (e.path().to_path_buf(), e.file_type().is_file()))
-        .collect();
+    let mut is_file_map: HashMap<std::path::PathBuf, bool> = HashMap::new();
+    let mut children_map: HashMap<std::path::PathBuf, Vec<std::path::PathBuf>> = HashMap::new();
+
+    for entry in &entries {
+        let path = entry.path().to_path_buf();
+        is_file_map.insert(path.clone(), entry.file_type().is_file());
+
+        if entry.depth() > 0 {
+            if let Some(parent) = entry.path().parent() {
+                children_map
+                    .entry(parent.to_path_buf())
+                    .or_default()
+                    .push(path);
+            }
+        }
+    }
+
+    for children in children_map.values_mut() {
+        children.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+    }
+
+    log::info!(
+        "Prefetch maps: {} is_file + {} children dirs built",
+        is_file_map.len(),
+        children_map.len(),
+    );
 
     Ok(PrefetchCache {
         files: file_data.into_iter().collect::<HashMap<_, _>>(),
         canonical: canonical_data.into_iter().collect::<HashMap<_, _>>(),
-        is_file,
+        is_file: is_file_map,
+        children: children_map,
     })
 }
 
