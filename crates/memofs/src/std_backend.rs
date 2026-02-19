@@ -344,7 +344,7 @@ impl VfsBackend for StdBackend {
             // This prevents a failed watch from permanently marking the path as "watched"
             match self.debouncer.watch(path, RecursiveMode::Recursive) {
                 Ok(()) => {
-                    log::info!("Watching path: {}", path.display());
+                    log::debug!("Watching path: {}", path.display());
                     self.watches.insert(path.to_path_buf());
                     Ok(())
                 }

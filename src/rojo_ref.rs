@@ -428,7 +428,7 @@ impl RefPathIndex {
         }
 
         if count > 0 {
-            log::info!(
+            log::debug!(
                 "RefPathIndex: populated {} Rojo_Ref_* entries from existing meta/model files",
                 count
             );

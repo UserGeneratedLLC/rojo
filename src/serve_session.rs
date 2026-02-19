@@ -174,7 +174,7 @@ fn prefetch_project_files(project: &Project) -> io::Result<PrefetchCache> {
     let file_count = entries.iter().filter(|e| e.file_type().is_file()).count();
     let dir_count = entries.len() - file_count;
 
-    log::info!(
+    log::debug!(
         "Prefetch walk: {} files + {} dirs from {} root(s) in {:.1?}",
         file_count,
         dir_count,
@@ -206,7 +206,7 @@ fn prefetch_project_files(project: &Project) -> io::Result<PrefetchCache> {
 
     let canon_elapsed = canon_start.elapsed();
 
-    log::info!(
+    log::debug!(
         "Prefetch I/O: read {} files in {:.1?}, canonicalize {} paths in {:.1?}",
         file_data.len(),
         read_elapsed,
@@ -235,7 +235,7 @@ fn prefetch_project_files(project: &Project) -> io::Result<PrefetchCache> {
         children.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
     }
 
-    log::info!(
+    log::debug!(
         "Prefetch maps: {} is_file + {} children dirs built",
         is_file_map.len(),
         children_map.len(),
@@ -293,7 +293,7 @@ impl ServeSession {
         let snap_start = Instant::now();
         log::trace!("Generating snapshot of instances from VFS");
         let snapshot = snapshot_from_vfs(&instance_context, vfs, start_path)?;
-        log::info!("Snapshot built in {:.1?}", snap_start.elapsed());
+        log::debug!("Snapshot built in {:.1?}", snap_start.elapsed());
 
         vfs.clear_prefetch_cache();
 
@@ -303,7 +303,7 @@ impl ServeSession {
 
         log::trace!("Applying initial patch set");
         apply_patch_set(&mut tree, patch_set);
-        log::info!("Patch computed + applied in {:.1?}", patch_start.elapsed());
+        log::debug!("Patch computed + applied in {:.1?}", patch_start.elapsed());
 
         Ok((root_project, tree))
     }

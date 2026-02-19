@@ -132,7 +132,7 @@ pub fn syncback_loop_with_stats(
     // (references to instances that will be pruned, like SoundGroups in SoundService).
     log::debug!("Collecting instance paths before pruning...");
     let pre_prune_paths = collect_all_paths(&new_tree);
-    log::info!(
+    log::debug!(
         "syncback: collect_all_paths in {:.1?}",
         phase_timer.elapsed()
     );
@@ -171,12 +171,12 @@ pub fn syncback_loop_with_stats(
     if ignore_hidden {
         strip_hidden_services(&mut new_tree);
     }
-    log::info!("syncback: prune + filter in {:.1?}", phase_timer.elapsed());
+    log::debug!("syncback: prune + filter in {:.1?}", phase_timer.elapsed());
 
     let phase_timer = std::time::Instant::now();
     let mut deferred_referents = collect_referents(&new_tree, &pre_prune_paths, None);
     let placeholder_map = std::mem::take(&mut deferred_referents.placeholder_to_source_and_target);
-    log::info!(
+    log::debug!(
         "syncback: collect_referents in {:.1?}",
         phase_timer.elapsed()
     );
@@ -235,7 +235,7 @@ pub fn syncback_loop_with_stats(
     if !ignore_referents {
         link_referents(deferred_referents, &mut new_tree)?;
     }
-    log::info!(
+    log::debug!(
         "syncback: filter props + link refs in {:.1?}",
         phase_timer.elapsed()
     );
@@ -247,7 +247,7 @@ pub fn syncback_loop_with_stats(
         || hash_tree(project, old_tree.inner(), old_tree.get_root_id()),
         || hash_tree(project, &new_tree, new_tree.root_ref()),
     );
-    log::info!(
+    log::debug!(
         "syncback: hash both trees (parallel) in {:.1?}",
         phase_timer.elapsed()
     );
@@ -381,13 +381,13 @@ pub fn syncback_loop_with_stats(
             }
         }
 
-        log::trace!(
-            "dirs_to_scan: {:?}",
-            dirs_to_scan
+        if log::log_enabled!(log::Level::Trace) {
+            let dirs_str: Vec<_> = dirs_to_scan
                 .iter()
                 .map(|p| p.display().to_string())
-                .collect::<Vec<_>>()
-        );
+                .collect();
+            log::trace!("dirs_to_scan: {:?}", dirs_str);
+        }
 
         for dir in &dirs_to_scan {
             if !dir.is_dir() {
@@ -439,7 +439,7 @@ pub fn syncback_loop_with_stats(
     } else {
         HashSet::new()
     };
-    log::info!(
+    log::debug!(
         "syncback: orphan scan in {:.1?} ({} paths)",
         phase_timer.elapsed(),
         existing_paths.len()
@@ -605,7 +605,7 @@ pub fn syncback_loop_with_stats(
 
         snapshots.extend(syncback.children);
     }
-    log::info!("syncback: main walk loop in {:.1?}", phase_timer.elapsed());
+    log::debug!("syncback: main walk loop in {:.1?}", phase_timer.elapsed());
 
     let phase_timer = std::time::Instant::now();
     {
@@ -625,7 +625,7 @@ pub fn syncback_loop_with_stats(
             let relative = crate::compute_relative_ref_path(&source_abs, &target_abs);
             substitutions.push((placeholder.clone(), relative));
         }
-        log::info!(
+        log::debug!(
             "syncback: built {} ref substitutions in {:.1?}",
             substitutions.len(),
             phase_timer.elapsed()
@@ -635,7 +635,7 @@ pub fn syncback_loop_with_stats(
         if !substitutions.is_empty() {
             fs_snapshot.fix_ref_paths(&substitutions);
         }
-        log::info!(
+        log::debug!(
             "syncback: applied ref substitutions in {:.1?}",
             sub_timer.elapsed()
         );
@@ -738,8 +738,10 @@ pub fn syncback_loop_with_stats(
             &mut protected_paths,
             &mut path_to_instance_prefix,
         );
-        log::trace!("Protected $path references: {:?}", protected_paths);
-        log::trace!("Path to instance mappings: {:?}", path_to_instance_prefix);
+        if log::log_enabled!(log::Level::Trace) {
+            log::trace!("Protected $path references: {:?}", protected_paths);
+            log::trace!("Path to instance mappings: {:?}", path_to_instance_prefix);
+        }
 
         // Helper to convert a filesystem path to an instance path using the mappings
         let fs_path_to_instance_path = |fs_path: &Path| -> Option<String> {
@@ -906,7 +908,7 @@ pub fn syncback_loop_with_stats(
         }
     }
 
-    log::info!("syncback: orphan removal in {:.1?}", phase_timer.elapsed());
+    log::debug!("syncback: orphan removal in {:.1?}", phase_timer.elapsed());
 
     if external_stats.is_none() {
         stats.log_summary();
