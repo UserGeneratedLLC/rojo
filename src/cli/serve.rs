@@ -12,6 +12,7 @@ use memofs::Vfs;
 use rbx_dom_weak::{types::Ref, types::Variant, InstanceBuilder, WeakDom};
 
 use crate::{
+    project::Project,
     serve_session::ServeSession,
     syncback::syncback_loop,
     web::{
@@ -48,16 +49,12 @@ impl ServeCommand {
 
         let (ip, port) = {
             let vfs = Vfs::new_oneshot();
-            let session = ServeSession::new_oneshot(vfs, project_path.clone())?;
+            let project = Project::load_initial_project(&vfs, &project_path)?;
             let ip = self
                 .address
-                .or_else(|| session.serve_address())
+                .or(project.serve_address)
                 .unwrap_or(DEFAULT_BIND_ADDRESS.into());
-            let port = self
-                .port
-                .or_else(|| session.project_port())
-                .unwrap_or(DEFAULT_PORT);
-            drop(session);
+            let port = self.port.or(project.serve_port).unwrap_or(DEFAULT_PORT);
             (ip, port)
         };
 

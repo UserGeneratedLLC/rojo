@@ -447,6 +447,38 @@ impl FsSnapshot {
         removed_dirs
     }
 
+    /// Replace `__ROJO_REF_<hex>__` placeholders in a line using HashMap lookup.
+    /// Scans the line for `__ROJO_REF_` markers and extracts each full
+    /// placeholder key for O(1) lookup, avoiding O(n) iteration over all
+    /// substitutions.
+    fn replace_placeholders(line: &str, sub_map: &std::collections::HashMap<&str, &str>) -> String {
+        const PREFIX: &str = "__ROJO_REF_";
+        const SUFFIX: &str = "__";
+
+        let mut result = String::with_capacity(line.len());
+        let mut remaining = line;
+
+        while let Some(start) = remaining.find(PREFIX) {
+            result.push_str(&remaining[..start]);
+            let after_prefix = &remaining[start + PREFIX.len()..];
+            if let Some(end) = after_prefix.find(SUFFIX) {
+                let placeholder = &remaining[start..start + PREFIX.len() + end + SUFFIX.len()];
+                if let Some(replacement) = sub_map.get(placeholder) {
+                    result.push_str(replacement);
+                } else {
+                    result.push_str(placeholder);
+                }
+                remaining = &remaining[start + PREFIX.len() + end + SUFFIX.len()..];
+            } else {
+                result.push_str(&remaining[start..]);
+                remaining = "";
+                break;
+            }
+        }
+        result.push_str(remaining);
+        result
+    }
+
     /// Post-process `Rojo_Ref_*` attribute paths in meta/model JSON files.
     ///
     /// For each entry in `substitutions` (old_path → new_path), finds all
@@ -459,6 +491,11 @@ impl FsSnapshot {
         if substitutions.is_empty() {
             return;
         }
+
+        let sub_map: std::collections::HashMap<&str, &str> = substitutions
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
 
         let ref_paths: Vec<PathBuf> = self
             .added_files
@@ -480,23 +517,25 @@ impl FsSnapshot {
             let Ok(text) = std::str::from_utf8(contents) else {
                 continue;
             };
-            if !text.contains("Rojo_Ref_") {
+            if !text.contains("__ROJO_REF_") && !text.contains("Rojo_Ref_") {
                 continue;
             }
 
-            // Attribute-scoped replacement: only apply substitutions on
-            // lines that contain a Rojo_Ref_ key. This prevents accidental
-            // mutation of unrelated string values in the same file.
             let mut modified_lines: Vec<String> = Vec::new();
             let mut any_changed = false;
             for line in text.split('\n') {
-                if line.contains("Rojo_Ref_") {
+                if line.contains("__ROJO_REF_") {
+                    let new_line = Self::replace_placeholders(line, &sub_map);
+                    if new_line != line {
+                        any_changed = true;
+                    }
+                    modified_lines.push(new_line);
+                } else if line.contains("Rojo_Ref_") {
                     let mut new_line = line.to_string();
                     for (old_path, new_path) in substitutions {
-                        if old_path == new_path {
-                            continue;
+                        if old_path != new_path && new_line.contains(old_path.as_str()) {
+                            new_line = new_line.replace(old_path.as_str(), new_path.as_str());
                         }
-                        new_line = new_line.replace(old_path.as_str(), new_path.as_str());
                     }
                     if new_line != line {
                         any_changed = true;
