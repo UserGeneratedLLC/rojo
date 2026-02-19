@@ -32,6 +32,7 @@ Atlas bridges filesystem and Roblox Studio, enabling professional development to
 - Build/upload rbxl/rbxm files from command line
 - Syncback: pull instances from Roblox → filesystem (7.7.0+)
 - Two-way sync (plugin-based): live bidirectional sync during `atlas serve` sessions
+- Live syncback: one-click full sync from Studio to filesystem during `atlas serve` (no WebSocket connection required)
 
 ### Two-Way Sync Strategy
 
@@ -206,7 +207,7 @@ pub struct InstanceContext {
 }
 ```
 
-**Filename handling:** Instance names with forbidden filesystem chars are slugified (forbidden chars → `_`), deduplicated (`~1`, `~2`, etc. on collision), and the real name is stored in `.meta.json5`/`.model.json5` `name` fields. See `src/syncback/file_names.rs`.
+**Filename handling:** Instance names with forbidden filesystem chars are slugified (forbidden chars → `_`), deduplicated (`~2`, `~3`, etc. on collision), and the real name is stored in `.meta.json5`/`.model.json5` `name` fields. See `src/syncback/file_names.rs`.
 
 **VFS passed separately to snapshot functions:**
 ```rust
@@ -322,6 +323,7 @@ src/                     - Rust server/CLI
     dedup_suffix.rs     - Dedup cleanup rules
     meta.rs             - Meta file read/write helpers
   web/                  - HTTP/WebSocket server
+    interface.rs        - Wire types (patches, syncback requests)
   change_processor.rs   - Two-way sync filesystem writer
   git.rs                - Git integration (changed files, SHA1 hashing, auto-staging)
   rojo_ref.rs           - Ref path system (Rojo_Ref_*, RefPathIndex)
@@ -333,6 +335,7 @@ plugin/src/             - Lua Studio plugin
     matching.lua        - Lua matching algorithm
     trueEquals.lua      - Shared value equality module
   ChangeBatcher/        - Two-way sync patch creation
+    encodeService.lua   - Service-level property encoding for live syncback
   Config.lua            - Version and protocol config
   PatchTree.lua         - Patch visualization tree (git-based default selections)
   SHA1.luau             - SHA1 hash for git blob format comparison

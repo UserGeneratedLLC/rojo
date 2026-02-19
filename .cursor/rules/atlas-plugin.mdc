@@ -25,9 +25,10 @@ Built with Roact (React-like), handles WebSocket sync with server, patch applica
   - `Studio/` - Studio API wrappers (`StudioPluginAction`, `StudioPluginContext`, `StudioPluginGui`, `StudioToggleButton`, `StudioToolbarContext`, `StudioToolbar`)
   - General: `Header`, `TextInput`, `TextButton`, `Checkbox`, `Dropdown`, `Tag`, `IconButton`, `Tooltip`, `TouchRipple`, `VirtualScroller`, `ScrollingFrame`, `Spinner`, `BorderedContainer`, `EditableImage`, `SlicedImage`, `ClassIcon`
 - **StatusPages/** - Main UI pages
-  - `NotConnected.lua` - Connection form (host/port input)
+  - `NotConnected.lua` - Connection form (host/port input), "Syncback" button (Danger style)
   - `Connecting.lua` - Loading screen
   - `Confirming.lua` - Patch confirmation dialog with push/pull/ignore per-node selections
+  - `SyncbackConfirm` - Floating dialog for live syncback confirmation (rendered by `App/init.lua`)
   - `Connected.lua` - Status display with patch history
   - `Error.lua` - Error display
   - `Settings/` - Settings UI (`init.lua`, `Setting.lua`)
@@ -56,7 +57,8 @@ Built with Roact (React-like), handles WebSocket sync with server, patch applica
 - **init.lua** - Main batcher: accumulates changes every 200ms, pause/resume, deferred Ref resolution
 - **createPatchSet.lua** - Converts pending changes to PatchSet
 - **encodePatchUpdate.lua** - Encodes property updates including Ref properties via InstanceMap
-- **encodeInstance.lua** - Full instance encoding (for additions/syncback)
+- **encodeInstance.lua** - Full instance encoding (for additions/syncback); includes duplicate detection helpers (`findDuplicateNames`, `hasDuplicateSiblings`, `isPathUnique`)
+- **encodeService.lua** - Encodes service-level properties/attributes/refs for live syncback; uses ObjectValue carriers for Ref properties
 - **encodeProperty.lua** - Single property value encoding via RbxDom
 - **propertyFilter.lua** - Property type filtering (only `UniqueId` blocked; `Ref` is allowed)
 
@@ -242,12 +244,22 @@ Pairs incoming virtual instances with existing Studio instances during hydration
 
 **Algorithm:**
 1. **Fast path:** Group by (Name, ClassName). 1:1 groups get instant-matched with zero scoring.
-2. **Ambiguous groups:** For groups with multiple candidates, compute pairwise `_computeChangeCount()` (recursive, scores entire subtree). Greedy assignment sorted by cost ascending, child-order tiebreaker for stability.
+2. **Ambiguous groups:** For groups with multiple candidates, compute pairwise `computePairCost()` (recursive, scores entire subtree). Greedy assignment sorted by cost ascending, child-order tiebreaker for stability.
 3. **Leftovers:** Unmatched virtual = new instances, unmatched studio = deleted.
+
+**Performance:** File-level `--!native` and `--!optimize 2` directives for native codegen. `MatchingSession` caches results across recursive calls:
+```lua
+type MatchingSession = {
+    matchCache: { [string]: { [Instance]: MatchResult } },
+    costCache: { [string]: { [Instance]: number } },
+}
+```
+
+**Valid children tracking:** `cacheVirtual()` filters children to only those existing in `virtualInstances`, preventing crashes on incomplete virtual instance trees.
 
 **Sort stability note:** `table.sort` is NOT stable in Luau. Comparator breaks ties by insertion index to ensure deterministic ordering.
 
-**Value equality:** Shared `trueEquals.lua` module used by both `matching.lua` and `diff.lua` -- fuzzy equality for floats (epsilon 0.0001), Color3 via RGB ints, CFrame/Vector3 component-wise, NaN handling, nil/null-ref equivalence.
+**Value equality:** Shared `trueEquals.lua` module used by both `matching.lua` and `diff.lua` -- fuzzy equality for floats (epsilon 0.0001, absolute + relative), Color3 via RGB ints, CFrame/Vector3 component-wise, NaN handling, nil/null-ref equivalence, EnumItem/number interop.
 
 ## InstanceMap (`InstanceMap.lua`)
 
@@ -307,6 +319,29 @@ Watches Studio changes and sends them to the server in real-time. Enabled by def
 - `oneShotSync` setting blocks automatic outgoing writes
 - `__paused` flag blocks flushes during confirmation dialog
 - `RunService:IsRunning()` blocks during Play mode
+
+## Live Syncback
+
+One-click full sync from Studio to filesystem. Available from the **NotConnected page** -- does not require an active WebSocket session. Sends directly to the server via HTTP POST using the host/port fields from the connection form.
+
+**`SYNCBACK_SERVICES` constant (14 services):** Lighting, MaterialService, ReplicatedFirst, ReplicatedStorage, ServerScriptService, ServerStorage, SoundService, StarterGui, StarterPack, StarterPlayer, Teams, TextChatService, VoiceChatService, Workspace.
+
+**Flow:**
+1. User clicks "Syncback" button on NotConnected page → `SyncbackConfirm` floating dialog appears
+2. Dialog warns: "This will overwrite your project files with the current Studio state. This cannot be undone."
+3. User confirms → `performSyncback()`:
+   a. Iterates `SYNCBACK_SERVICES`, calls `encodeService(service)` for each
+   b. Collects all children instances and ObjectValue Ref carriers
+   c. Serializes all children via `SerializationService:SerializeInstancesAsync()` into a single buffer
+   d. Destroys temporary ObjectValue carriers
+   e. POSTs to `http://host:port/api/syncback` (MessagePack): `{protocolVersion, serverVersion, placeId, data, services}`
+4. Shows success/error notification
+
+**`encodeService(service)`** (`ChangeBatcher/encodeService.lua`):
+- Encodes service-level properties via `RbxDom.findClassDescriptor()`
+- Skips: `Parent`, `Name`, `Archivable`, `Attributes`, `Tags` (handled separately), class-specific excludes (`Lighting.ClockTime`)
+- Ref properties: creates temporary `ObjectValue` carriers (Name = property name, Value = target instance), stores 1-based index in `refs` map
+- Returns `(chunk, refTargets)` where `chunk = {className, childCount, refTargetCount, properties?, refs?}`
 
 ## Dependencies
 

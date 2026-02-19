@@ -19,7 +19,7 @@ Pure functions: filesystem → instance tree → minimal patches → apply chang
 - `mod.rs` - System overview with detailed explanation
 - `patch_compute.rs` - Generate diffs (uses matching algorithm)
 - `patch_apply.rs` - Apply changes (resolves `Rojo_Ref_*` and `Rojo_Target_*` refs)
-- `matching.rs` - Forward sync matching algorithm (recursive change-count scoring)
+- `matching.rs` - Forward sync matching algorithm (recursive change-count scoring, `MatchingSession` caching)
 - `instance_snapshot.rs` - Core snapshot type
 
 ```rust
@@ -79,7 +79,7 @@ Instance names with forbidden filesystem chars (`<>:"/\|?*~`) are handled by:
 
 ### 3. Commands (`src/cli/`)
 
-- `serve.rs` - Live sync with WebSocket
+- `serve.rs` - Live sync with WebSocket; live syncback via `run_live_syncback()` + `build_dom_from_chunks()` (server restarts after syncback)
 - `build.rs` - Generate rbxl/rbxm/rbxmx/rbxlx
 - `upload.rs` - Upload to Roblox.com
 - `sourcemap.rs` - Generate sourcemaps
@@ -92,17 +92,19 @@ Reverse: Roblox file → filesystem
 
 - `snapshot.rs` - Convert instances to snapshots
 - `fs_snapshot.rs` - Filesystem representation
-- `matching.rs` - Syncback matching algorithm (recursive change-count scoring)
+- `matching.rs` - Syncback matching algorithm (recursive change-count scoring, `MatchingSession` caching)
 - `dedup_suffix.rs` - Dedup cleanup rules (gap-tolerant, base-name promotion, group-to-1)
 - `meta.rs` - Meta file read/write helpers (upsert/remove name, update ref paths)
-- `ref_properties.rs` - Ref property path linking (`Rojo_Ref_*`, tentative_fs_path)
+- `ref_properties.rs` - Ref property path linking (`Rojo_Ref_*`, tentative_fs_path, placeholder system)
 - `hash/` - Content hashing for change detection
-- `property_filter.rs` - Apply syncback rules
+- `fs_snapshot.rs` - Filesystem representation, parallel writes (`write_to_vfs_parallel`), ref path post-processing (`fix_ref_paths`)
+- `property_filter.rs` - Apply syncback rules (default: `sync_unscriptable = false`)
 
 ### 5. Web Server (`src/web/`)
 
-- `api.rs` - HTTP/WebSocket endpoints
-- `interface.rs` - Browser UI
+- `api.rs` - HTTP/WebSocket endpoints, including `POST /api/syncback` handler (`handle_api_syncback`)
+- `interface.rs` - Wire types: patches, `SyncbackRequest`, `ServiceChunk`, `SyncbackPayload`, `ServerExitReason`
+- `mod.rs` - `SyncbackSignal` (Mutex + Notify pattern), `LiveServer` (uses `tokio::select!` to wait for connections or syncback signal)
 - Protocol version enforcement
 
 ### 6. Project System (`src/project.rs`)
@@ -122,6 +124,8 @@ Parse/validate `.project.json5` (or legacy `.project.json`), handle nested proje
 7. Send to connected plugins
 
 **Key:** `src/serve_session.rs` manages active sessions
+
+**Live syncback integration:** The serve loop checks for `ServerExitReason::SyncbackRequested(payload)`. When received, calls `run_live_syncback()` which reconstructs the DOM from the plugin's rbxm blob + service chunks via `build_dom_from_chunks()`, runs `syncback_loop(incremental=false)` (clean mode), writes files via `write_to_vfs_parallel()`, refreshes git index, then restarts the serve loop.
 
 ### `rojo build`
 
@@ -149,7 +153,7 @@ pub struct SyncbackRules {
     ignore_properties: IndexMap<Ustr, Vec<Ustr>>,  // Class → properties
     ignore_classes: Vec<String>,         // Classes to skip entirely
     sync_current_camera: Option<bool>,   // Default: false
-    sync_unscriptable: Option<bool>,     // Default: true
+    sync_unscriptable: Option<bool>,     // Default: false
     ignore_referents: Option<bool>,      // Skip Ref properties, default: false
 }
 ```
@@ -220,6 +224,7 @@ Review: `cargo insta review`
 **HTTP:**
 - `GET /` - Browser UI
 - `GET /api/rojo` - Server info (version, project name, protocol)
+- `POST /api/syncback` - Live syncback: full Roblox → filesystem sync (validates protocol, version, place ID)
 
 **WebSocket:** `ws://host:port/api/rojo`
 
@@ -312,6 +317,7 @@ to_writer(&mut buffer, &dom, dom.root())?;
 **Core:** rbx_binary, rbx_xml, rbx_dom_weak, memofs (local crate)
 **Async:** tokio, hyper, hyper-tungstenite
 **Serialization:** serde, json5, toml, yaml-rust2, csv
+**Float precision:** lexical-write-float (for roundtrip-safe f32/f64 formatting in JSON)
 **Utilities:** clap, anyhow, thiserror, crossbeam-channel, rayon, globset
 
 ## Module Organization
@@ -378,10 +384,11 @@ src/
     matching.rs         - Syncback matching algorithm
     dedup_suffix.rs     - Dedup cleanup rules
     meta.rs             - Meta file helpers
-  web/                  - HTTP/WebSocket
+  web/                  - HTTP/WebSocket (incl. SyncbackSignal, LiveServer)
+    interface.rs        - Wire types (patches, syncback requests)
   change_processor.rs   - Two-way sync filesystem writer
   git.rs                - Git integration (changed files, SHA1 hashing, auto-staging)
-  rojo_ref.rs           - Ref path system (Rojo_Ref_*, RefPathIndex)
+  rojo_ref.rs           - Ref path system (Rojo_Ref_*, RefPathIndex, Luau-style relative paths)
   variant_eq.rs         - Property value comparison
   lib.rs                - Public API
   main.rs               - CLI entry

@@ -34,7 +34,9 @@ return function(service: Instance)
 				continue
 			end
 
-			local isReadable = propertyMeta.scriptability == "ReadWrite" or propertyMeta.scriptability == "Read"
+			local isReadable = propertyMeta.scriptability == "ReadWrite"
+				or propertyMeta.scriptability == "Read"
+				or propertyMeta.scriptability == "Custom"
 			local doesSerialize = propertyMeta.serialization ~= "DoesNotSerialize"
 
 			if isReadable and doesSerialize then

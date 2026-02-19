@@ -191,7 +191,7 @@ Configure `syncbackRules` object for Roblox → filesystem sync:
 | `ignoreProperties` | object | `{}` | Properties to skip per class: `{"ClassName": ["Prop1", "Prop2"]}` |
 | `ignoreClasses` | string[] | `[]` | Instance classes to skip entirely |
 | `syncCurrentCamera` | bool | `false` | Whether to sync `Workspace.CurrentCamera` |
-| `syncUnscriptable` | bool | `true` | Whether to sync unscriptable properties |
+| `syncUnscriptable` | bool | `false` | Whether to sync unscriptable properties |
 | `ignoreReferents` | bool | `false` | Whether to skip Ref properties (e.g., `Model.PrimaryPart`) |
 | `createIgnoreDirPaths` | bool | `false` | Whether `/**` in ignore paths also matches the directory itself |
 | `ignoreHiddenServices` | bool | — | Override root-level `ignoreHiddenServices` for syncback |
@@ -208,7 +208,7 @@ Configure `syncbackRules` object for Roblox → filesystem sync:
     },
     "ignoreClasses": ["Terrain", "Camera"],
     "syncCurrentCamera": false,
-    "syncUnscriptable": true,
+    "syncUnscriptable": false,
     "ignoreReferents": false,
     "createIgnoreDirPaths": false,
     "warnDuplicateNames": false
@@ -341,9 +341,15 @@ Uses filesystem-name paths (slugified, dedup'd) to reference target instances:
 }
 ```
 
-**Attribute format:** `Rojo_Ref_<PropertyName> = "<filesystem-name path>"`
+**Attribute format:** `Rojo_Ref_<PropertyName> = "<path>"`
 
-Path segments use full filesystem names (slug + extension + dedup suffix). Resolved during forward sync via `get_instance_by_path()` (case-insensitive filesystem name matching with instance name fallback).
+Syncback writes **Luau-style relative paths**:
+- `@self` / `@self/Child.luau` -- target is same instance or a descendant
+- `./Sibling.luau` -- target is a same-parent sibling
+- `../Uncle.luau` -- target is a parent's sibling
+- `@game/Service/Path` -- cross-service reference
+
+Forward sync resolves both relative and absolute formats via `resolve_ref_path_to_absolute()` + `get_instance_by_path()`. Path segments use full filesystem names (slug + extension + dedup suffix), matched case-insensitive with instance name fallback.
 
 ### ID-Based: `Rojo_Target_*` + `$id` (legacy, still read by forward sync)
 

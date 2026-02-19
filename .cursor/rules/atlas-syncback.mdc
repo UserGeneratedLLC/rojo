@@ -114,6 +114,30 @@ pub fn syncback_loop(
 
 **Implementation detail:** `old_ref` is ignored in `SyncbackSnapshot::with_joined_path` when `incremental=false`.
 
+### Live Syncback Mode (via `atlas serve`)
+
+Triggered via `POST /api/syncback` during an active `atlas serve` session. The plugin encodes the Studio state (service properties + children as rbxm blob) and POSTs directly -- no WebSocket connection required.
+
+**Server-side flow:**
+1. `handle_api_syncback()` validates protocol, version, place ID
+2. Fires `SyncbackSignal` → `LiveServer` exits accept loop
+3. `run_live_syncback()` in `src/cli/serve.rs`:
+   a. `build_dom_from_chunks()` reconstructs DOM from rbxm blob + `ServiceChunk` metadata
+   b. Runs `syncback_loop(incremental=false)` -- always clean mode
+   c. `write_to_vfs_parallel()` writes files with Windows retry logic
+   d. `refresh_git_index()` updates git
+4. Serve loop restarts (new session)
+
+**Key differences from CLI syncback:**
+- Runs during an active serve session (not standalone)
+- Receives data via HTTP (not file-based)
+- Always clean mode (replaces everything)
+- Server restarts after completion
+
+**Plugin-side encoding:** `encodeService()` encodes service properties/attributes/refs (ObjectValue carriers for Ref), `SerializationService:SerializeInstancesAsync()` serializes all children into a single rbxm buffer.
+
+See `atlas-api.mdc` for wire format details (`SyncbackRequest`, `ServiceChunk`).
+
 ## Matching Algorithm (`matching.rs`)
 
 Pairs new instances (from Roblox file) with old instances (from filesystem) to determine which files to update vs create.
@@ -132,6 +156,8 @@ Pairs new instances (from Roblox file) with old instances (from filesystem) to d
 **`compute_change_count()` and `match_children()` are mutually recursive.** Base case: leaf nodes (no children).
 
 **Output:** `MatchResult { matched: Vec<(new_ref, old_ref)>, unmatched_new: Vec<new_ref>, unmatched_old: Vec<old_ref> }`
+
+**Session caching:** `MatchingSession` wraps a `cost_cache: RefCell<HashMap<(Ref, Ref), u32>>` to cache `compute_change_count` results, avoiding redundant recursive scoring when the same pairs are encountered at different tree levels.
 
 **Known limitation:** Greedy assignment is not globally optimal. The Hungarian algorithm (O(N^3)) would give optimal results, but ambiguous groups are typically small (2-10 instances).
 
@@ -171,7 +197,7 @@ pub struct SyncbackRules {
     /// Whether to sync Workspace.CurrentCamera (default: false)
     pub sync_current_camera: Option<bool>,
     
-    /// Whether to sync unscriptable properties (default: true)
+    /// Whether to sync unscriptable properties (default: false)
     pub sync_unscriptable: Option<bool>,
     
     /// Whether to skip Ref properties (default: false)
@@ -340,10 +366,10 @@ fs_snapshot.merge(other)  // Combine snapshots
 
 // Apply to filesystem
 fs_snapshot.write_to_vfs(base_path, vfs)?;
-fs_snapshot.write_to_vfs_parallel(base_path, vfs)?;  // Parallel writes with retry logic
+fs_snapshot.write_to_vfs_parallel(base_path, vfs)?;  // Parallel writes (see below)
 
 // Post-process ref paths
-fs_snapshot.fix_ref_paths(&substitutions);  // Replace tentative paths with final dedup'd paths
+fs_snapshot.fix_ref_paths(&substitutions);  // Replace placeholder paths with final relative paths
 
 // Query
 fs_snapshot.is_empty()
@@ -357,18 +383,22 @@ fs_snapshot.removed_paths()
 
 **Solution: Path-based `Rojo_Ref_*` attributes (preferred)**
 
-Syncback writes filesystem-name-based paths as `Rojo_Ref_PropertyName` attributes:
+Syncback writes **Luau-style relative paths** as `Rojo_Ref_PropertyName` attributes via `compute_relative_ref_path()`:
 
 ```json5
 {
     "properties": {},
     "attributes": {
-        "Rojo_Ref_PrimaryPart": "Workspace/Handle.model.json5"
+        "Rojo_Ref_PrimaryPart": "./Handle.model.json5"
     }
 }
 ```
 
-Forward sync reads `Rojo_Ref_*` attributes and resolves them to tree instances via `get_instance_by_path()`.
+Relative path prefixes: `@self` (same/descendant), `./` (sibling), `../` (parent's sibling), `@game/` (cross-service).
+
+Forward sync resolves both relative and absolute formats via `resolve_ref_path_to_absolute()` + `get_instance_by_path()`.
+
+**Placeholder system:** During the syncback walk, before dedup suffixes are finalized, ref paths are written as `__ROJO_REF_<source>_TO_<target>__` placeholders (encoding both source and target refs). After the walk assigns final filesystem names, `fix_ref_paths()` substitutes placeholders with actual relative paths. Substitutions are sorted by length descending to prevent partial prefix matches.
 
 **Legacy: `Rojo_Target_*` / `$id` system (still supported for reading)**
 
@@ -498,12 +528,9 @@ Filesystem:
 
 ## Integration with Plugin
 
-**Plugin does NOT handle syncback.** It only handles:
-1. Downloading place file from Studio
-2. Sending file to server
-3. Server runs syncback command
+**Live syncback (plugin-initiated):** The plugin encodes the Studio state via `encodeService()` + `SerializationService` and POSTs to `/api/syncback`. The server reconstructs the DOM, runs `syncback_loop(incremental=false)`, writes files, and restarts. Available from the NotConnected page -- no active WebSocket session required. See `atlas-api.mdc` for wire format.
 
-**Two-way sync** is different - see `atlas-api.mdc`.
+**Two-way sync** is a separate system for incremental bidirectional changes -- see `atlas-api.mdc`.
 
 ## Performance Considerations
 
@@ -511,7 +538,9 @@ Filesystem:
 
 **Incremental benefit:** On large projects, incremental mode with hashing can be 10-100x faster than rewriting everything.
 
-**Parallelization:** File writes can be parallelized via `write_to_vfs_parallel()` (includes Windows retry logic).
+**Parallelization:** File writes can be parallelized via `write_to_vfs_parallel()`:
+- 4-phase approach: create dirs (sequential) → write files (parallel via rayon) → remove files (parallel) → remove dirs (sequential via VFS)
+- Windows retry logic: exponential backoff (10ms initial, doubles each retry, max 3 retries) for OS errors 5 (Access denied) and 32 (Sharing violation)
 
 ## Debugging
 
@@ -546,7 +575,7 @@ diff place.rbxl rebuilt.rbxl
 - Better handling of Roblox format changes
 - Support for partial syncback (only changed instances)
 - Globally optimal matching (Hungarian algorithm) for large ambiguous groups
-- Matching cache (parent_ref -> match_assignments) for avoiding redundant scoring
+- ~~Matching cache (parent_ref -> match_assignments) for avoiding redundant scoring~~ (session-level caching now implemented via `MatchingSession`; per-parent invalidation cache still deferred)
 
 ## Key Files to Reference
 
@@ -558,5 +587,9 @@ diff place.rbxl rebuilt.rbxl
 - `src/syncback/meta.rs` - Meta file read/write helpers
 - `src/syncback/ref_properties.rs` - Ref property path linking
 - `src/syncback/hash/` - Hashing algorithm
+- `src/syncback/fs_snapshot.rs` - Filesystem operations, parallel writes, ref path post-processing
 - `src/syncback/property_filter.rs` - Property filtering logic
 - `src/cli/syncback.rs` - CLI command implementation
+- `src/cli/serve.rs` - Live syncback handler (`run_live_syncback`, `build_dom_from_chunks`)
+- `src/web/interface.rs` - `SyncbackRequest`, `ServiceChunk`, `SyncbackPayload` types
+- `src/rojo_ref.rs` - Luau-style relative ref paths (`compute_relative_ref_path`, `resolve_ref_path_to_absolute`)

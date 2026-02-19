@@ -36,6 +36,10 @@ The matching algorithm exists in 3 parallel implementations that must produce id
 
 All three use the same recursive change-count scoring + greedy assignment algorithm. Changes to the algorithm must be applied to all three.
 
+All three now have **`MatchingSession` caching** to avoid redundant recursive scoring:
+- **Rust:** `cost_cache: RefCell<HashMap<(Ref, Ref), u32>>` -- caches `compute_change_count` results
+- **Lua:** `matchCache` (parent virtual ID → Studio instance → MatchResult), `costCache` (virtual ID → Studio instance → cost)
+
 ### Key Files Map
 
 | File | Subsystem | Purpose |
@@ -45,7 +49,7 @@ All three use the same recursive change-count scoring + greedy assignment algori
 | `src/syncback/matching.rs` | Matching | Syncback matching: `match_children` (WeakDom) |
 | `src/snapshot/matching.rs` | Matching | Forward sync matching: `match_forward` (Snapshot vs Tree) |
 | `plugin/src/Reconciler/matching.lua` | Matching | Lua matching: `Matching.matchChildren` (Virtual vs Studio) |
-| `src/rojo_ref.rs` | Ref Paths | `ref_target_path_from_tree`, `RefPathIndex`, `Rojo_Ref_*` constants |
+| `src/rojo_ref.rs` | Ref Paths | `ref_target_path_from_tree`, `compute_relative_ref_path`, `resolve_ref_path_to_absolute`, `RefPathIndex`, `Rojo_Ref_*` constants |
 | `src/snapshot/tree.rs` | Ref Paths | `get_instance_by_path`, `filesystem_name_for` |
 | `src/syncback/ref_properties.rs` | Ref Paths | `collect_referents`, `tentative_fs_path`, `RefLinks` |
 | `src/variant_eq.rs` | Matching | `variant_eq` property comparison (Rust) |
@@ -213,8 +217,6 @@ function Matching.matchChildren(
 
 **Fast-path: (Name, ClassName) Grouping.** Group children by `(Name, ClassName)`. 1:1 groups get instant-matched with zero scoring.
 
-> **Note on Ref Pin:** The Lua matching module has a commented-out Ref pin fast-path (scanning parent Ref properties to pin child matches). In practice this is a no-op because during initial hydration the instanceMap is empty. The Rust implementations do not have Ref pin logic. Ref property correctness is maintained by `computeChangeCount` counting Ref property diffs.
-
 **Ambiguous Groups: Recursive Scoring + Greedy Assignment.** For groups with multiple candidates on at least one side:
 
 ```
@@ -271,6 +273,14 @@ Syncback matching has precomputed blake3 subtree hashes. If `new_hash == old_has
 
 **Lua (`trueEquals`):** Recursive deep equality. Treats `nil` and null ref (`{Ref = "000...0"}`) as equal. Floats use epsilon 0.0001 (absolute + relative). CFrame/Vector3 component-wise. Color3 via RGB ints. EnumItem via `.Value`.
 
+### Session Caching
+
+All three implementations wrap scoring in a `MatchingSession` that caches results:
+- **Rust:** `compute_change_count` checks `cost_cache` before scoring. If `(ref_a, ref_b)` was scored before, returns cached value.
+- **Lua:** `computePairCost` checks `costCache`; `matchChildren` checks `matchCache`. Avoids redundant work when hydrate re-calls matching on the same children.
+
+The Lua matching file uses `--!native` and `--!optimize 2` file-level directives for native codegen performance. `cacheVirtual()` filters children to only those existing in `virtualInstances`, preventing crashes on incomplete virtual instance trees.
+
 ### Known Limitation: Greedy vs Optimal
 
 The greedy algorithm is NOT globally optimal. Edge cases exist where a locally-best pick forces a globally-worse assignment. The Hungarian algorithm (O(N^3)) would give optimal results, but ambiguous groups are typically small (2-10 instances). Accepted for current release.
@@ -291,7 +301,21 @@ Dedup'd ModuleScript   → segment "Foo~2.luau"
 Init-style Script      → segment "Foo" (directory)
 ```
 
-Paths are slash-separated from DataModel's children downward: `"Workspace/TestModel/Part1.model.json5"`.
+Absolute paths are slash-separated from DataModel's children downward: `"Workspace/TestModel/Part1.model.json5"`.
+
+### Luau-Style Relative Ref Paths
+
+Syncback now writes **relative** ref paths using Luau require-by-string semantics via `compute_relative_ref_path()`:
+
+- `@self` -- target is the source instance itself
+- `@self/Child.luau` -- target is a descendant of source
+- `./Sibling.luau` -- target is a same-parent sibling
+- `../Uncle.luau` -- target is a parent's sibling
+- `@game/Service/Path` -- cross-service reference
+
+Forward sync resolves both absolute and relative formats via `resolve_ref_path_to_absolute()` + `get_instance_by_path()`.
+
+**Placeholder system:** During syncback, before dedup suffixes are finalized, ref paths are written as `__ROJO_REF_<source>_TO_<target>__` placeholders. After the syncback walk assigns final filesystem names, `fix_ref_paths()` substitutes placeholders with actual relative paths.
 
 ### Key Functions
 
@@ -492,9 +516,9 @@ Duplicate-named children under ProjectNode are currently skipped during syncback
 
 The greedy assignment may produce suboptimal pairing in rare ambiguous groups. A globally optimal algorithm (Hungarian, O(N^3)) would be better but is deferred since ambiguous groups are typically small.
 
-### Matching Cache Not Implemented
+### ~~Matching Cache Not Implemented~~ (Resolved)
 
-Phase 2e from the original plan: optional cache mapping `parent_ref → (children_list_hash, match_assignments)` to avoid re-running matching when children haven't changed. Optimization only, not needed for correctness.
+`MatchingSession` caching is now implemented in all three matching implementations. See "Session Caching" in Subsystem 3. The per-parent invalidation cache (mapping `parent_ref → (children_list_hash, match_assignments)`) remains deferred.
 
 ### ~~Stale Ref Paths After Rename~~ (Resolved)
 
@@ -506,7 +530,7 @@ Both dedup-triggered renames and user-initiated renames now update `Rojo_Ref_*` 
 
 - **Shared filesystem-segment derivation:** Consolidate tentative filesystem name computation into one shared helper used by `rojo_ref.rs`, `tree.rs`, `api.rs`, and `ref_properties.rs`. Currently duplicated across 4+ call sites.
 - **Optimal assignment algorithm:** Replace greedy with Hungarian for large ambiguous groups.
-- **Matching cache:** Add per-parent cache with invalidation for performance.
+- **Per-parent matching invalidation cache:** `MatchingSession` cost/match caching is implemented, but the per-parent cache with `children_list_hash` invalidation (avoids re-running matching when children haven't changed) remains deferred.
 - **Duplicated name→index grouping:** All three matching implementations repeat the same HashMap pattern. Could be factored but types differ.
 
 ---
@@ -549,3 +573,6 @@ The dedup system was built across these plans (chronological):
 8. **ambiguous_paths_audit_fixes** -- Second audit: recursive matching, `added_paths` format, dedup-aware ref collection, full-FS-name cleanup grouping, shared `trueEquals`
 9. **audit_ambiguous_paths_followup** -- Third audit: metadata drift after cleanup rename, co-removed sibling exclusion, `added_paths` extension/suffix, attribute-scoped final paths
 10. **audit_ref_two-way_sync** -- Ref audit: round-trip fidelity, path computation correctness, meta lifecycle, VFS suppression, wire format
+11. **matching_session_caching** -- Session-scoped caching for all three matching implementations, `--!native`/`--!optimize 2` for Lua, valid children tracking
+12. **luau-style_ref_paths** -- Relative ref paths (`@self`, `./`, `../`, `@game/`), source-aware placeholder system
+13. **live_syncback** -- One-click full sync from Studio via `POST /api/syncback`, service property encoding, server restart

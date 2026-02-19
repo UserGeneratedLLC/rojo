@@ -4,6 +4,7 @@
 ]]
 
 local HttpService = game:GetService("HttpService")
+local ScriptEditorService = game:GetService("ScriptEditorService")
 
 local Rojo = script:FindFirstAncestor("Rojo")
 local Plugin = Rojo.Plugin
@@ -365,6 +366,20 @@ function PatchTree.build(patch, instanceMap, changeListHeaders, gitMetadata)
 						if studioHash == hash then
 							defaultSelection = "push"
 							break
+						end
+					end
+
+					if defaultSelection == nil then
+						local ok, draft = pcall(ScriptEditorService.GetEditorSource, ScriptEditorService, instance)
+						if ok and draft ~= source then
+							local draftBlob = "blob " .. tostring(#draft) .. "\0" .. draft
+							local draftHash = SHA1(buffer.fromstring(draftBlob))
+							for _, hash in hashes do
+								if draftHash == hash then
+									defaultSelection = "push"
+									break
+								end
+							end
 						end
 					end
 				end

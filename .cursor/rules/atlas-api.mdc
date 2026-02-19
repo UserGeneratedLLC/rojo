@@ -45,6 +45,7 @@ Studio → ChangeBatcher → Plugin → WebSocket → Server → Filesystem
 | `/api/write` | POST | Two-way sync: plugin sends changes |
 | `/api/open/:id` | POST | Open script in editor (`{"cursor": [line, col]}`) |
 | `/api/ref-patch/:id` | GET | Fix Ref properties after syncback |
+| `/api/syncback` | POST | Live syncback: full Roblox → filesystem sync |
 | `/api/socket/:cursor` | GET | WebSocket upgrade for live patch streaming |
 
 ### Server Info Response (`GET /api/rojo`)
@@ -94,6 +95,99 @@ Recomputed fresh on each `GET /api/rojo` connect. Uses a two-phase tree lock: sn
 **`stageIds`**: Instance IDs whose backing files should be staged via `git add` after writing. Includes all push-accepted IDs + auto-selected pull-accepted IDs. The server resolves these to filesystem paths and runs `git add`. Staging is split: `api.rs` stages additions/removals/push files directly; `change_processor` stages Source writes after they complete (via `stage_ids` on PatchSet).
 
 **Format detection:** `Name/init.luau` → directory | `Name.luau` → file | neither → use `has_children` (`.lua` also supported)
+
+### Live Syncback Endpoint (`POST /api/syncback`)
+
+One-click full sync from Studio to filesystem. Does **not** require an active WebSocket connection -- the plugin POSTs directly from the NotConnected page using the host/port fields.
+
+**Request (`SyncbackRequest`):**
+
+```rust
+pub struct SyncbackRequest {
+    pub protocol_version: f64,   // f64 because Luau has no integer type
+    pub server_version: String,
+    pub place_id: Option<f64>,
+    pub data: Vec<u8>,           // Single rbxm blob containing ALL children from ALL services
+    pub services: Vec<ServiceChunk>,
+}
+```
+
+**`ServiceChunk`:**
+
+```rust
+pub struct ServiceChunk {
+    pub class_name: String,
+    pub child_count: u32,
+    pub ref_target_count: u32,
+    pub properties: HashMap<String, Variant>,   // Service-level properties (omitted if empty)
+    pub refs: HashMap<String, u32>,             // Ref property name → 1-based carrier index (omitted if empty)
+}
+```
+
+**Data format:** The `data` field is a single rbxm binary blob containing all children from all services concatenated. Each service's range in the blob is `child_count + ref_target_count` consecutive entries. First `child_count` entries are real children (parented to service). Next `ref_target_count` entries are temporary ObjectValue carriers encoding Ref properties (destroyed after resolving). The `refs` map connects property names to carrier indices.
+
+**Validation:**
+- Protocol version must match `PROTOCOL_VERSION` (6) → 400 Bad Request
+- Server version MAJOR.MINOR must match → 400 Bad Request
+- Place ID must pass `servePlaceIds`/`blockedPlaceIds` checks if configured → 403 Forbidden
+
+**Response:** `{"status": "syncback_initiated"}`
+
+**Server-side types:**
+
+```rust
+pub struct SyncbackPayload {
+    pub data: Vec<u8>,
+    pub services: Vec<ServiceChunk>,
+}
+
+pub enum ServerExitReason {
+    SyncbackRequested(SyncbackPayload),
+}
+```
+
+**`SyncbackSignal` (`src/web/mod.rs`):** Thread-safe signal for API handler → serve loop communication. Uses `Mutex<Option<SyncbackPayload>>` + `Notify`. `fire()` deposits payload and notifies; `take_payload()` retrieves it. `LiveServer::start()` uses `tokio::select!` to wait for either new connections OR the syncback signal, exiting the accept loop when fired.
+
+### Live Syncback Data Flow
+
+```
+Plugin (NotConnected page)
+    │ User clicks "Syncback" button → SyncbackConfirm dialog
+    │ User confirms → performSyncback()
+    │ Encodes services via encodeService() + serializes children via SerializationService
+    ▼
+HTTP POST /api/syncback (MessagePack body)
+    │
+    ▼
+handle_api_syncback() [src/web/api.rs]
+    │ Validates protocol, version, place ID
+    │ Fires SyncbackSignal
+    ▼
+LiveServer::start() receives notification [src/web/mod.rs]
+    │ Exits accept loop
+    │ Returns ServerExitReason::SyncbackRequested(payload)
+    ▼
+run_live_syncback() [src/cli/serve.rs]
+    │ build_dom_from_chunks(payload) → reconstructs DOM from rbxm + service chunks
+    │ syncback_loop(incremental = false) → clean mode, full filesystem rewrite
+    │ write_to_vfs_parallel() → writes files
+    │ refresh_git_index() → updates git index
+    ▼
+Serve loop restarts (new session, ready for connections)
+```
+
+### Live Syncback vs Two-Way Sync
+
+| Aspect | Live Syncback (`/api/syncback`) | Two-Way Sync (`/api/write`) |
+|--------|--------------------------------|---------------------------|
+| **Purpose** | Full Roblox → filesystem sync | Incremental property/instance changes |
+| **Scope** | Entire instance tree (all services) | Individual instance changes |
+| **Mode** | Clean mode (replaces everything) | Incremental (add/update/remove) |
+| **Server restart** | Yes (restarts serve loop) | No (continues serving) |
+| **Data format** | Single rbxm blob + service chunks | Patch-based (added/updated/removed) |
+| **Connection** | No WebSocket needed (HTTP POST) | Requires active WebSocket session |
+| **When used** | User-initiated one-click syncback | Real-time bidirectional sync |
+| **Session** | Creates new session after restart | Uses existing live session |
 
 ## WebSocket Protocol (v6)
 
@@ -652,14 +746,16 @@ Only **Updated** items get defaults. Added/Removed items remain `nil`.
 
 The plugin uses a recursive change-count scoring algorithm (implemented in `matching.lua`) to pair incoming virtual instances with existing Studio instances during hydration.
 
-**Entry point:** `Matching.matchChildren(virtualChildren, studioChildren, parentVirtual, parentStudio)`
+**Entry point:** `Matching.matchChildren(virtualChildren, studioChildren, virtualInstances)`
 
 **Algorithm:**
 1. **Fast path:** Group by (Name, ClassName). 1:1 groups get instant-matched with zero scoring.
-2. **Ambiguous groups:** For groups with multiple candidates, compute pairwise `_computeChangeCount()` (recursive, scores entire subtree). Greedy assignment sorted by cost ascending, child-order tiebreaker.
+2. **Ambiguous groups:** For groups with multiple candidates, compute pairwise `computePairCost()` (recursive, scores entire subtree). Greedy assignment sorted by cost ascending, child-order tiebreaker.
 3. **Leftovers:** Unmatched virtual = new instances, unmatched Studio = deleted.
 
-**Value equality:** Shared `trueEquals.lua` module used by both `matching.lua` and `diff.lua` (fuzzy equality for floats, Color3, CFrame, Vector3; NaN handling; nil/null-ref equivalence).
+**Performance:** File-level `--!native` and `--!optimize 2` directives for native codegen. `MatchingSession` caches scoring results across recursive calls (`matchCache` for match results, `costCache` for pair costs), avoiding redundant computation when hydrate re-calls `matchChildren` on the same children. `cacheVirtual()` filters children to only those existing in `virtualInstances`, preventing crashes on incomplete virtual instance trees.
+
+**Value equality:** Shared `trueEquals.lua` module used by both `matching.lua` and `diff.lua` (fuzzy equality for floats with epsilon 0.0001, Color3, CFrame, Vector3; NaN handling; nil/null-ref equivalence).
 
 ## Protocol Enforcement
 
@@ -701,8 +797,10 @@ Browser: `http://localhost:34872` → Network tab → WebSocket messages
 | Server | Plugin |
 |--------|--------|
 | `src/web/api.rs` - Endpoints | `plugin/src/ServeSession.lua` - Connection |
-| `src/web/interface.rs` - Packets | `plugin/src/ApiContext.lua` - HTTP/WS client |
-| `src/serve_session.rs` - Session | `plugin/src/ChangeBatcher/` - Two-way sync |
-| `src/change_processor.rs` - FS writer | `plugin/src/Reconciler/` - Patch application |
-| `src/rojo_ref.rs` - Ref paths | `plugin/src/Reconciler/matching.lua` - Matching |
-| `src/git.rs` - Git integration | `plugin/src/PatchTree.lua` - Default selections |
+| `src/web/interface.rs` - Packets, syncback types | `plugin/src/ApiContext.lua` - HTTP/WS client |
+| `src/web/mod.rs` - SyncbackSignal, LiveServer | `plugin/src/ChangeBatcher/` - Two-way sync |
+| `src/serve_session.rs` - Session | `plugin/src/ChangeBatcher/encodeService.lua` - Live syncback encoding |
+| `src/cli/serve.rs` - Live syncback handler | `plugin/src/Reconciler/` - Patch application |
+| `src/change_processor.rs` - FS writer | `plugin/src/Reconciler/matching.lua` - Matching |
+| `src/rojo_ref.rs` - Ref paths | `plugin/src/PatchTree.lua` - Default selections |
+| `src/git.rs` - Git integration | `plugin/src/App/init.lua` - Live syncback UI |

@@ -221,7 +221,9 @@ encodeInstance = function(instance, parentId, _skipPathCheck)
 			-- Only encode properties that:
 			-- 1. Are readable (ReadWrite or Read scriptability)
 			-- 2. Actually serialize (not "DoesNotSerialize")
-			local isReadable = propertyMeta.scriptability == "ReadWrite" or propertyMeta.scriptability == "Read"
+			local isReadable = propertyMeta.scriptability == "ReadWrite"
+				or propertyMeta.scriptability == "Read"
+				or propertyMeta.scriptability == "Custom"
 			local doesSerialize = propertyMeta.serialization ~= "DoesNotSerialize"
 
 			if isReadable and doesSerialize then
