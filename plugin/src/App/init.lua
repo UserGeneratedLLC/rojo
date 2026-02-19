@@ -1230,14 +1230,14 @@ function App:render()
 			SyncbackConfirm = e(Theme.StudioProvider, nil, {
 				e(StudioPluginGui, {
 					id = "Atlas_SyncbackConfirm",
-					title = "Full Syncback",
+					title = "⚠️ Full Syncback (BETA) ⚠️",
 					active = self.state.showingSyncbackConfirm == true,
 					isEphemeral = true,
 
 					initDockState = Enum.InitialDockState.Float,
 					overridePreviousState = true,
-					floatingSize = Vector2.new(400, 150),
-					minimumSize = Vector2.new(300, 120),
+					floatingSize = Vector2.new(400, 250),
+					minimumSize = Vector2.new(300, 220),
 
 					zIndexBehavior = Enum.ZIndexBehavior.Sibling,
 
@@ -1266,7 +1266,7 @@ function App:render()
 								VerticalAlignment = Enum.VerticalAlignment.Center,
 							}),
 							Message = e("TextLabel", {
-								Text = "This will overwrite your project files with the current Studio state. This cannot be undone.",
+								Text = "This will overwrite your project files with the current Studio state. This cannot be undone.\n\nNote: Live syncback produces slightly different formatting than CLI syncback (atlas syncback). This may cause minor git diffs even when the data is identical. Pick one method and stick with it to avoid unnecessary churn.",
 								TextWrapped = true,
 								FontFace = theme.Font.Main,
 								TextSize = theme.TextSize.Body,
