@@ -44,6 +44,10 @@ pub fn compute_patch_set(snapshot: Option<InstanceSnapshot>, tree: &RojoTree, id
 #[derive(Default)]
 struct ComputePatchContext {
     snapshot_id_to_instance_id: HashMap<Ref, Ref>,
+    /// Maps `Rojo_Id` attribute values (from snapshots being patched) to the
+    /// tree Ref of the instance that carries them.  Populated top-down so that
+    /// parent IDs are available when children try to resolve `Rojo_Target_*`.
+    snapshot_specified_ids: HashMap<String, Ref>,
 }
 
 fn rewrite_refs_in_updates(context: &ComputePatchContext, updates: &mut [PatchUpdate]) {
@@ -92,15 +96,32 @@ fn compute_patch_set_internal(
             .insert(snapshot.snapshot_id, id);
     }
 
+    if let Some(Variant::Attributes(attrs)) = snapshot.properties.get(&ustr("Attributes")) {
+        if let Some(id_value) = attrs.get(REF_ID_ATTRIBUTE_NAME) {
+            if let Some(id_str) = crate::variant_as_str(id_value, REF_ID_ATTRIBUTE_NAME) {
+                context
+                    .snapshot_specified_ids
+                    .insert(id_str.to_string(), id);
+            }
+        }
+    }
+
     let instance = tree
         .get_instance(id)
         .expect("Instance did not exist in tree");
 
-    compute_property_patches(&mut snapshot, &instance, patch_set, tree);
+    compute_property_patches(
+        &context.snapshot_specified_ids,
+        &mut snapshot,
+        &instance,
+        patch_set,
+        tree,
+    );
     compute_children_patches(context, &mut snapshot, tree, id, patch_set, session);
 }
 
 fn compute_property_patches(
+    snapshot_specified_ids: &HashMap<String, Ref>,
     snapshot: &mut InstanceSnapshot,
     instance: &InstanceWithMeta,
     patch_set: &mut PatchSet,
@@ -109,7 +130,8 @@ fn compute_property_patches(
     let mut visited_properties = UstrSet::default();
     let mut changed_properties = UstrMap::new();
 
-    let attribute_ref_properties = compute_ref_properties(snapshot, tree, instance.id());
+    let attribute_ref_properties =
+        compute_ref_properties(snapshot, tree, instance.id(), snapshot_specified_ids);
 
     // Strip Rojo ref transport attributes from the snapshot before comparison.
     // finalize_patch_application strips these from the tree after resolving refs,
@@ -287,6 +309,7 @@ fn compute_ref_properties(
     snapshot: &InstanceSnapshot,
     tree: &RojoTree,
     source_ref: Ref,
+    snapshot_specified_ids: &HashMap<String, Ref>,
 ) -> UstrMap<Option<Variant>> {
     let mut map = UstrMap::new();
     let attributes = match snapshot.properties.get(&ustr("Attributes")) {
@@ -311,6 +334,8 @@ fn compute_ref_properties(
             };
             let rojo_ref = RojoRef::new(id_str.to_string());
             if let Some(target_id) = tree.get_specified_id(&rojo_ref) {
+                map.insert(key, Some(Variant::Ref(target_id)));
+            } else if let Some(&target_id) = snapshot_specified_ids.get(id_str) {
                 map.insert(key, Some(Variant::Ref(target_id)));
             } else {
                 map.insert(key, None);

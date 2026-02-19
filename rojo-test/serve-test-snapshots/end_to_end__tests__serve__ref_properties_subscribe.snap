@@ -29,19 +29,7 @@ body:
           changedName: ~
           changedProperties:
             Attributes:
-              "!Attributes":
-                Rojo_Id:
-                  "!String": model target 2
+              "!Attributes": {}
           id: id-7
-        - changedClassName: ~
-          changedMetadata: ~
-          changedName: ~
-          changedProperties:
-            Attributes:
-              "!Attributes":
-                Rojo_Target_PrimaryPart:
-                  "!String": model target 2
-            PrimaryPart: ~
-          id: id-8
 packetType: messages
 sessionId: id-1

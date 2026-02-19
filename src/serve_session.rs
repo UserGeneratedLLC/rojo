@@ -281,7 +281,7 @@ impl ServeSession {
             let prefetch_start = Instant::now();
             match prefetch_project_files(&root_project) {
                 Ok(cache) => {
-                    log::info!(
+                    log::debug!(
                         "Prefetch total: {} files + {} canonical paths in {:.1?}",
                         cache.files.len(),
                         cache.canonical.len(),
