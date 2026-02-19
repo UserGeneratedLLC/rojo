@@ -31,6 +31,15 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+## [8.4.1] (February 19th, 2026)
+
+* Fix spurious diffs during VFS events by removing redundant Rojo reference attributes from snapshot comparisons.
+* Fix `Rojo_Id` attribute handling in patch computation to improve reference resolution for instances.
+* Ensure deterministic ordering for interned instance additions by sorting by redacted parent and name.
+* Reduce log verbosity by changing prefetch file statistics logging from info to debug.
+* Update README with Atlas branding, installation instructions, and CLI commands.
+* Update vscode-rojo submodule to latest commit.
+
 ## [8.4.0] (February 19th, 2026)
 
 * Implement ambiguous path handling in the Reconciler with a 3-pass matching algorithm (exact match, property-weighted scoring, recursive change-count) that correctly reconciles instances when multiple children share the same name.
@@ -222,6 +231,7 @@ Making a new release? Simply add the new header with the version and date undern
 
 </details>
 
+[8.4.1]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.4.1
 [8.4.0]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.4.0
 [8.3.0]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.3.0
 [#2]: https://github.com/UserGeneratedLLC/rojo/pull/2
