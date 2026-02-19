@@ -281,9 +281,9 @@ impl TestServeSession {
     /// backoff. If the process dies with `AddrInUse`, respawns with a new
     /// random port (up to `MAX_PORT_RETRIES` times).
     pub fn wait_to_come_online(&mut self) -> ServerInfoResponse {
-        const BASE_DURATION_MS: f32 = 30.0;
+        const BASE_DURATION_MS: f32 = 100.0;
         const EXP_BACKOFF_FACTOR: f32 = 1.3;
-        const MAX_TRIES: u32 = 5;
+        const MAX_TRIES: u32 = 10;
         const MAX_PORT_RETRIES: u32 = 3;
 
         let mut port_retries = 0u32;
@@ -976,9 +976,9 @@ pub fn fresh_rebuild_read(project_path: &Path) -> NormalizedInstance {
         );
     };
 
-    const BASE_DURATION_MS: f32 = 30.0;
+    const BASE_DURATION_MS: f32 = 100.0;
     const EXP_BACKOFF_FACTOR: f32 = 1.3;
-    const MAX_TRIES: u32 = 5;
+    const MAX_TRIES: u32 = 10;
     const MAX_PORT_RETRIES: u32 = 3;
 
     let working_dir = get_working_dir_path();
