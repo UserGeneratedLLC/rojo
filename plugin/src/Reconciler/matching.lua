@@ -416,9 +416,9 @@ matchChildren = function(
 	virtualInstances: VirtualInstances,
 	parentVirtualId: string?,
 	parentStudioInstance: Instance?,
-	depth: number?
+	_depth: number?
 ): MatchResult
-	depth = depth or 0
+	local depth = _depth or 0
 	if parentVirtualId and parentStudioInstance then
 		local pc = session.matchCache[parentVirtualId]
 		if pc then
@@ -430,6 +430,7 @@ matchChildren = function(
 	end
 
 	local matched: { MatchPair } = {}
+	local matchedCosts: { number? } = {}
 	local matchedV: { [number]: boolean } = {}
 	local matchedS: { [number]: boolean } = {}
 
@@ -476,6 +477,7 @@ matchChildren = function(
 				virtualId = virtualChildren[vi],
 				studioInstance = studioChildren[si],
 			})
+			table.insert(matchedCosts, nil)
 			matchedV[vi] = true
 			matchedS[si] = true
 			continue
@@ -590,6 +592,7 @@ matchChildren = function(
 				virtualId = virtualChildren[pair.vi],
 				studioInstance = studioChildren[pair.si],
 			})
+			table.insert(matchedCosts, pair.cost)
 			matchedV[pair.vi] = true
 			matchedS[pair.si] = true
 		end
@@ -613,8 +616,13 @@ matchChildren = function(
 	end
 
 	local totalCost = 0
-	for _, pair in ipairs(matched) do
-		totalCost += computePairCost(session, pair.virtualId, pair.studioInstance, virtualInstances, math.huge, depth)
+	for i, pair in ipairs(matched) do
+		local precomputed = matchedCosts[i]
+		if precomputed ~= nil then
+			totalCost += precomputed
+		else
+			totalCost += computePairCost(session, pair.virtualId, pair.studioInstance, virtualInstances, math.huge, depth)
+		end
 	end
 	totalCost += (#unmatchedVirtual + #unmatchedStudio) * UNMATCHED_PENALTY
 

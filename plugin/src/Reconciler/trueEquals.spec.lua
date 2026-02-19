@@ -360,6 +360,187 @@ return function()
 		end)
 	end)
 
+	describe("UDim", function()
+		it("identical", function()
+			expect(trueEquals(UDim.new(0.5, 10), UDim.new(0.5, 10))).to.equal(true)
+		end)
+
+		it("scale within epsilon", function()
+			expect(trueEquals(UDim.new(0.5, 10), UDim.new(0.50005, 10))).to.equal(true)
+		end)
+
+		it("scale beyond epsilon", function()
+			expect(trueEquals(UDim.new(0.5, 10), UDim.new(0.502, 10))).to.equal(false)
+		end)
+
+		it("offset differs by 1", function()
+			expect(trueEquals(UDim.new(0.5, 10), UDim.new(0.5, 11))).to.equal(false)
+		end)
+
+		it("zero vs zero", function()
+			expect(trueEquals(UDim.new(0, 0), UDim.new(0, 0))).to.equal(true)
+		end)
+	end)
+
+	describe("UDim2", function()
+		it("identical", function()
+			expect(trueEquals(UDim2.new(1, 0, 0.5, 100), UDim2.new(1, 0, 0.5, 100))).to.equal(true)
+		end)
+
+		it("X scale within epsilon", function()
+			expect(trueEquals(UDim2.new(1, 0, 0.5, 100), UDim2.new(1.00005, 0, 0.5, 100))).to.equal(true)
+		end)
+
+		it("X scale beyond epsilon", function()
+			expect(trueEquals(UDim2.new(1, 0, 0.5, 100), UDim2.new(1.002, 0, 0.5, 100))).to.equal(false)
+		end)
+
+		it("Y scale within epsilon", function()
+			expect(trueEquals(UDim2.new(1, 0, 0.5, 100), UDim2.new(1, 0, 0.50005, 100))).to.equal(true)
+		end)
+
+		it("X offset differs", function()
+			expect(trueEquals(UDim2.new(1, 0, 0.5, 100), UDim2.new(1, 1, 0.5, 100))).to.equal(false)
+		end)
+
+		it("Y offset differs", function()
+			expect(trueEquals(UDim2.new(1, 0, 0.5, 100), UDim2.new(1, 0, 0.5, 101))).to.equal(false)
+		end)
+
+		it("fromOffset identical", function()
+			expect(trueEquals(UDim2.fromOffset(100, 200), UDim2.fromOffset(100, 200))).to.equal(true)
+		end)
+
+		it("fromScale identical", function()
+			expect(trueEquals(UDim2.fromScale(0.5, 0.5), UDim2.fromScale(0.5, 0.5))).to.equal(true)
+		end)
+	end)
+
+	describe("NumberRange", function()
+		it("identical", function()
+			expect(trueEquals(NumberRange.new(0, 10), NumberRange.new(0, 10))).to.equal(true)
+		end)
+
+		it("min within epsilon", function()
+			expect(trueEquals(NumberRange.new(0, 10), NumberRange.new(0.00005, 10))).to.equal(true)
+		end)
+
+		it("max beyond epsilon", function()
+			expect(trueEquals(NumberRange.new(0, 10), NumberRange.new(0, 10.002))).to.equal(false)
+		end)
+
+		it("single-value range", function()
+			expect(trueEquals(NumberRange.new(5), NumberRange.new(5))).to.equal(true)
+		end)
+
+		it("different ranges", function()
+			expect(trueEquals(NumberRange.new(0, 10), NumberRange.new(0, 20))).to.equal(false)
+		end)
+	end)
+
+	describe("Rect", function()
+		it("identical", function()
+			expect(trueEquals(Rect.new(0, 0, 100, 200), Rect.new(0, 0, 100, 200))).to.equal(true)
+		end)
+
+		it("min X within epsilon", function()
+			expect(trueEquals(Rect.new(0, 0, 100, 200), Rect.new(0.00005, 0, 100, 200))).to.equal(true)
+		end)
+
+		it("max Y beyond epsilon", function()
+			expect(trueEquals(Rect.new(0, 0, 100, 200), Rect.new(0, 0, 100, 200.5))).to.equal(false)
+		end)
+
+		it("from Vector2 identical", function()
+			expect(trueEquals(
+				Rect.new(Vector2.new(10, 20), Vector2.new(30, 40)),
+				Rect.new(Vector2.new(10, 20), Vector2.new(30, 40))
+			)).to.equal(true)
+		end)
+	end)
+
+	describe("NumberSequence", function()
+		it("identical two-keypoint", function()
+			expect(trueEquals(
+				NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) }),
+				NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) })
+			)).to.equal(true)
+		end)
+
+		it("value within epsilon", function()
+			expect(trueEquals(
+				NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) }),
+				NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1.00005) })
+			)).to.equal(true)
+		end)
+
+		it("value beyond epsilon", function()
+			expect(trueEquals(
+				NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) }),
+				NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1.002) })
+			)).to.equal(false)
+		end)
+
+		it("different keypoint count", function()
+			expect(trueEquals(
+				NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) }),
+				NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(0.5, 0.5), NumberSequenceKeypoint.new(1, 1) })
+			)).to.equal(false)
+		end)
+
+		it("simple constructor identical", function()
+			expect(trueEquals(NumberSequence.new(5), NumberSequence.new(5))).to.equal(true)
+		end)
+
+		it("envelope within epsilon", function()
+			expect(trueEquals(
+				NumberSequence.new({ NumberSequenceKeypoint.new(0, 1, 0.5), NumberSequenceKeypoint.new(1, 1, 0.5) }),
+				NumberSequence.new({ NumberSequenceKeypoint.new(0, 1, 0.50005), NumberSequenceKeypoint.new(1, 1, 0.5) })
+			)).to.equal(true)
+		end)
+	end)
+
+	describe("ColorSequence", function()
+		it("identical two-keypoint", function()
+			expect(trueEquals(
+				ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) }),
+				ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) })
+			)).to.equal(true)
+		end)
+
+		it("color within epsilon", function()
+			expect(trueEquals(
+				ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.new(0.5, 0, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) }),
+				ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.new(0.50005, 0, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) })
+			)).to.equal(true)
+		end)
+
+		it("color beyond epsilon", function()
+			expect(trueEquals(
+				ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.new(0.5, 0, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) }),
+				ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.new(0.6, 0, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) })
+			)).to.equal(false)
+		end)
+
+		it("different keypoint count", function()
+			expect(trueEquals(
+				ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) }),
+				ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)), ColorSequenceKeypoint.new(0.5, Color3.new(0, 1, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) })
+			)).to.equal(false)
+		end)
+
+		it("simple constructor identical", function()
+			expect(trueEquals(ColorSequence.new(Color3.new(1, 0, 0)), ColorSequence.new(Color3.new(1, 0, 0)))).to.equal(true)
+		end)
+
+		it("time within epsilon", function()
+			expect(trueEquals(
+				ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) }),
+				ColorSequence.new({ ColorSequenceKeypoint.new(0.00005, Color3.new(1, 0, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) })
+			)).to.equal(true)
+		end)
+	end)
+
 	describe("type mismatches", function()
 		it("string vs number", function()
 			expect(trueEquals("hello", 42)).to.equal(false)

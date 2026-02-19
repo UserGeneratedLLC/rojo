@@ -107,6 +107,50 @@ local function trueEquals(a: any, b: any): boolean
 	if t == "CFrame" then
 		return cframeEq(a, b)
 	end
+	if t == "UDim" then
+		return fuzzyEq(a.Scale, b.Scale) and a.Offset == b.Offset
+	end
+	if t == "UDim2" then
+		return fuzzyEq(a.X.Scale, b.X.Scale)
+			and a.X.Offset == b.X.Offset
+			and fuzzyEq(a.Y.Scale, b.Y.Scale)
+			and a.Y.Offset == b.Y.Offset
+	end
+	if t == "NumberRange" then
+		return fuzzyEq(a.Min, b.Min) and fuzzyEq(a.Max, b.Max)
+	end
+	if t == "Rect" then
+		return fuzzyEq(a.Min.X, b.Min.X)
+			and fuzzyEq(a.Min.Y, b.Min.Y)
+			and fuzzyEq(a.Max.X, b.Max.X)
+			and fuzzyEq(a.Max.Y, b.Max.Y)
+	end
+	if t == "NumberSequence" then
+		local aKp = a.Keypoints
+		local bKp = b.Keypoints
+		if #aKp ~= #bKp then
+			return false
+		end
+		for i = 1, #aKp do
+			if not (fuzzyEq(aKp[i].Time, bKp[i].Time) and fuzzyEq(aKp[i].Value, bKp[i].Value) and fuzzyEq(aKp[i].Envelope, bKp[i].Envelope)) then
+				return false
+			end
+		end
+		return true
+	end
+	if t == "ColorSequence" then
+		local aKp = a.Keypoints
+		local bKp = b.Keypoints
+		if #aKp ~= #bKp then
+			return false
+		end
+		for i = 1, #aKp do
+			if not (fuzzyEq(aKp[i].Time, bKp[i].Time) and color3Eq(aKp[i].Value, bKp[i].Value)) then
+				return false
+			end
+		end
+		return true
+	end
 
 	return false
 end
