@@ -373,10 +373,14 @@ impl VfsBackend for StdBackend {
                 Ok(())
             }
             Err(err) => {
-                if matches!(
+                let is_not_watched = matches!(
                     err.kind,
                     notify::ErrorKind::WatchNotFound | notify::ErrorKind::PathNotFound
-                ) {
+                ) || matches!(
+                    &err.kind,
+                    notify::ErrorKind::Generic(msg) if msg.contains("No watch was found")
+                );
+                if is_not_watched {
                     log::trace!(
                         "Path was not directly watched (likely covered by parent): {}",
                         path.display()

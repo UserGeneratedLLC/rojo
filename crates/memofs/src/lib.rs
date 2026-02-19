@@ -252,13 +252,17 @@ impl VfsInner {
 
     fn remove_file<P: AsRef<Path>>(&mut self, path: P) -> io::Result<()> {
         let path = path.as_ref();
-        let _ = self.backend.unwatch(path);
+        if self.watch_enabled {
+            let _ = self.backend.unwatch(path);
+        }
         self.backend.remove_file(path)
     }
 
     fn remove_dir_all<P: AsRef<Path>>(&mut self, path: P) -> io::Result<()> {
         let path = path.as_ref();
-        let _ = self.backend.unwatch(path);
+        if self.watch_enabled {
+            let _ = self.backend.unwatch(path);
+        }
         self.backend.remove_dir_all(path)
     }
 
