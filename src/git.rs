@@ -1,8 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Arc, Mutex},
+    thread,
 };
 
 use rbx_dom_weak::types::Ref;
@@ -92,6 +94,7 @@ fn git_changed_files(repo_root: &Path) -> Option<HashSet<PathBuf>> {
     Some(changed)
 }
 
+#[cfg(test)]
 fn git_show(repo_root: &Path, object_ref: &str) -> Option<String> {
     let output = Command::new("git")
         .args(["-C", &repo_root.to_string_lossy(), "show", object_ref])
@@ -105,14 +108,95 @@ fn git_show(repo_root: &Path, object_ref: &str) -> Option<String> {
     String::from_utf8(output.stdout).ok()
 }
 
+#[cfg(test)]
 fn git_show_head(repo_root: &Path, rel_path: &Path) -> Option<String> {
     let object_ref = format!("HEAD:{}", rel_path.to_string_lossy().replace('\\', "/"));
     git_show(repo_root, &object_ref)
 }
 
+#[cfg(test)]
 fn git_show_staged(repo_root: &Path, rel_path: &Path) -> Option<String> {
     let object_ref = format!(":0:{}", rel_path.to_string_lossy().replace('\\', "/"));
     git_show(repo_root, &object_ref)
+}
+
+/// Retrieves git blob hashes for multiple object refs in a single subprocess.
+/// Returns a Vec with the same length as `object_refs`, where each element is
+/// `Some(sha1_hex)` if the object exists, or `None` if missing.
+///
+/// Uses `git cat-file --batch-check` which outputs the stored blob hash
+/// directly, avoiding the need to download and re-hash file contents.
+fn git_batch_check_hashes(repo_root: &Path, object_refs: &[String]) -> Vec<Option<String>> {
+    if object_refs.is_empty() {
+        return Vec::new();
+    }
+
+    let mut child = match Command::new("git")
+        .args([
+            "-C",
+            &repo_root.to_string_lossy(),
+            "cat-file",
+            "--batch-check",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(child) => child,
+        Err(err) => {
+            log::warn!("Failed to spawn git cat-file --batch-check: {}", err);
+            return vec![None; object_refs.len()];
+        }
+    };
+
+    let stdin = child.stdin.take().unwrap();
+    let refs_for_writer: Vec<String> = object_refs.to_vec();
+    let writer_thread = thread::spawn(move || {
+        let mut stdin = stdin;
+        for object_ref in &refs_for_writer {
+            if writeln!(stdin, "{}", object_ref).is_err() {
+                break;
+            }
+        }
+    });
+
+    let expected = object_refs.len();
+    let mut results = Vec::with_capacity(expected);
+
+    if let Some(stdout) = child.stdout.take() {
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            let line = match line {
+                Ok(l) => l,
+                Err(_) => break,
+            };
+
+            if line.ends_with(" missing") {
+                results.push(None);
+            } else if let Some(sha1) = line.split(' ').next() {
+                if sha1.len() == 40 && sha1.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    results.push(Some(sha1.to_string()));
+                } else {
+                    results.push(None);
+                }
+            } else {
+                results.push(None);
+            }
+
+            if results.len() >= expected {
+                break;
+            }
+        }
+    }
+
+    while results.len() < expected {
+        results.push(None);
+    }
+
+    let _ = writer_thread.join();
+    let _ = child.wait();
+    results
 }
 
 pub fn compute_blob_sha1(content: &str) -> String {
@@ -158,10 +242,10 @@ struct ResolvedInstance {
 /// `repo_root` must be the git repository root (from `git_repo_root()`),
 /// cached at session start by `ServeSession`.
 ///
-/// Uses a two-phase approach to avoid holding the tree lock during I/O:
+/// Uses a three-phase approach to avoid holding the tree lock during I/O:
 /// 1. Run git commands to get changed files (no lock)
 /// 2. Briefly lock tree to resolve file paths to instance Refs and class names
-/// 3. Run git show for each changed script and compute hashes (no lock)
+/// 3. Single `git cat-file --batch-check` call to get blob hashes (no lock)
 pub fn compute_git_metadata(tree_handle: &Arc<Mutex<RojoTree>>, repo_root: &Path) -> GitMetadata {
     let changed_files = match git_changed_files(repo_root) {
         Some(files) => files,
@@ -215,26 +299,51 @@ pub fn compute_git_metadata(tree_handle: &Arc<Mutex<RojoTree>>, repo_root: &Path
     let changed_ids: Vec<Ref> = resolved.iter().map(|ri| ri.id).collect();
     let mut script_committed_hashes: HashMap<Ref, Vec<String>> = HashMap::new();
 
-    for ri in &resolved {
+    struct ScriptRef {
+        resolved_idx: usize,
+        is_staged: bool,
+    }
+
+    let mut object_refs = Vec::new();
+    let mut script_refs: Vec<ScriptRef> = Vec::new();
+
+    for (idx, ri) in resolved.iter().enumerate() {
         if !is_script_class(&ri.class_name) {
             continue;
         }
+        let path_str = ri.rel_path.to_string_lossy().replace('\\', "/");
 
-        let mut hashes = Vec::with_capacity(2);
+        object_refs.push(format!("HEAD:{}", path_str));
+        script_refs.push(ScriptRef {
+            resolved_idx: idx,
+            is_staged: false,
+        });
 
-        if let Some(head_content) = git_show_head(repo_root, &ri.rel_path) {
-            hashes.push(compute_blob_sha1(&head_content));
-        }
+        object_refs.push(format!(":0:{}", path_str));
+        script_refs.push(ScriptRef {
+            resolved_idx: idx,
+            is_staged: true,
+        });
+    }
 
-        if let Some(staged_content) = git_show_staged(repo_root, &ri.rel_path) {
-            let staged_hash = compute_blob_sha1(&staged_content);
-            if hashes.is_empty() || hashes[0] != staged_hash {
-                hashes.push(staged_hash);
+    let batch_hashes = git_batch_check_hashes(repo_root, &object_refs);
+
+    for (i, info) in script_refs.iter().enumerate() {
+        let sha1 = match batch_hashes.get(i).and_then(|h| h.as_ref()) {
+            Some(h) => h,
+            None => continue,
+        };
+        let ri = &resolved[info.resolved_idx];
+        let hashes = script_committed_hashes
+            .entry(ri.id)
+            .or_insert_with(|| Vec::with_capacity(2));
+
+        if info.is_staged {
+            if hashes.is_empty() || hashes[0] != *sha1 {
+                hashes.push(sha1.clone());
             }
-        }
-
-        if !hashes.is_empty() {
-            script_committed_hashes.insert(ri.id, hashes);
+        } else {
+            hashes.push(sha1.clone());
         }
     }
 
@@ -626,6 +735,152 @@ mod tests {
 
         let content = git_show_head(dir.path(), Path::new("src/init.luau"));
         assert_eq!(content.as_deref(), Some("init content"));
+    }
+
+    // -----------------------------------------------------------------------
+    // git_batch_check_hashes
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn batch_check_empty_refs() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        let results = git_batch_check_hashes(dir.path(), &[]);
+        assert!(results.is_empty());
+    }
+
+    #[test]
+    fn batch_check_single_ref() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("script.luau"), "local x = 42\nreturn x").unwrap();
+        git_commit_all(dir.path(), "init");
+
+        let refs = vec!["HEAD:script.luau".to_string()];
+        let results = git_batch_check_hashes(dir.path(), &refs);
+        assert_eq!(results.len(), 1);
+
+        let batch_hash = results[0].as_ref().unwrap();
+        let content = git_show_head(dir.path(), Path::new("script.luau")).unwrap();
+        let expected_hash = compute_blob_sha1(&content);
+        assert_eq!(*batch_hash, expected_hash);
+    }
+
+    #[test]
+    fn batch_check_missing_ref() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("dummy.luau"), "x").unwrap();
+        git_commit_all(dir.path(), "init");
+
+        let refs = vec!["HEAD:nonexistent.luau".to_string()];
+        let results = git_batch_check_hashes(dir.path(), &refs);
+        assert_eq!(results.len(), 1);
+        assert!(results[0].is_none());
+    }
+
+    #[test]
+    fn batch_check_head_and_staged_same() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("a.luau"), "content a").unwrap();
+        git_commit_all(dir.path(), "init");
+
+        let refs = vec![
+            "HEAD:a.luau".to_string(),
+            ":0:a.luau".to_string(),
+        ];
+        let results = git_batch_check_hashes(dir.path(), &refs);
+        assert_eq!(results.len(), 2);
+        assert!(results[0].is_some());
+        assert_eq!(results[0], results[1]);
+        assert_eq!(
+            results[0].as_ref().unwrap(),
+            &compute_blob_sha1("content a")
+        );
+    }
+
+    #[test]
+    fn batch_check_head_and_staged_differ() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("b.luau"), "original").unwrap();
+        git_commit_all(dir.path(), "init");
+        fs::write(dir.path().join("b.luau"), "staged version").unwrap();
+        git_stage(dir.path(), "b.luau");
+
+        let refs = vec![
+            "HEAD:b.luau".to_string(),
+            ":0:b.luau".to_string(),
+        ];
+        let results = git_batch_check_hashes(dir.path(), &refs);
+        assert_eq!(results.len(), 2);
+        assert!(results[0].is_some());
+        assert!(results[1].is_some());
+        assert_ne!(results[0], results[1]);
+        assert_eq!(
+            results[0].as_ref().unwrap(),
+            &compute_blob_sha1("original")
+        );
+        assert_eq!(
+            results[1].as_ref().unwrap(),
+            &compute_blob_sha1("staged version")
+        );
+    }
+
+    #[test]
+    fn batch_check_multiple_files_mixed() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("a.luau"), "content a").unwrap();
+        fs::write(dir.path().join("b.luau"), "content b").unwrap();
+        git_commit_all(dir.path(), "init");
+        fs::write(dir.path().join("b.luau"), "content b modified").unwrap();
+        git_stage(dir.path(), "b.luau");
+
+        let refs = vec![
+            "HEAD:a.luau".to_string(),
+            ":0:a.luau".to_string(),
+            "HEAD:b.luau".to_string(),
+            ":0:b.luau".to_string(),
+            "HEAD:nonexistent.luau".to_string(),
+        ];
+        let results = git_batch_check_hashes(dir.path(), &refs);
+        assert_eq!(results.len(), 5);
+
+        assert_eq!(results[0], results[1]); // a: HEAD == staged
+        assert_ne!(results[2], results[3]); // b: HEAD != staged
+        assert!(results[4].is_none()); // missing
+
+        assert_eq!(
+            results[0].as_ref().unwrap(),
+            &compute_blob_sha1("content a")
+        );
+        assert_eq!(
+            results[2].as_ref().unwrap(),
+            &compute_blob_sha1("content b")
+        );
+        assert_eq!(
+            results[3].as_ref().unwrap(),
+            &compute_blob_sha1("content b modified")
+        );
+    }
+
+    #[test]
+    fn batch_check_subdirectory_path() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::create_dir_all(dir.path().join("src")).unwrap();
+        fs::write(dir.path().join("src/init.luau"), "init content").unwrap();
+        git_commit_all(dir.path(), "init");
+
+        let refs = vec!["HEAD:src/init.luau".to_string()];
+        let results = git_batch_check_hashes(dir.path(), &refs);
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].as_ref().unwrap(),
+            &compute_blob_sha1("init content")
+        );
     }
 
     // -----------------------------------------------------------------------

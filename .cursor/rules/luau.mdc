@@ -3,9 +3,13 @@ alwaysApply: true
 ---
 # Luau Language Rules
 
+**Default context: Roblox Luau.** Unless otherwise stated, assume we are programming in Roblox Studio. Standard Luau differences are noted where relevant.
+
 ## Finding Documentation
 
-Search `.cursor/rules/roblox/luau/` for detailed Luau documentation files.
+- `.cursor/rules/roblox/en-us/luau/` - Roblox-specific Luau documentation (types, Roblox classes/enums, Studio integration)
+- `.cursor/rules/luau/` - Official Luau language documentation (type system, standard library, syntax, guides)
+- `.cursor/rules/luau-rfcs/` - RFC documents detailing every language feature and design decision
 
 ## Single-Threaded Execution Model
 
@@ -83,6 +87,19 @@ print(`Result: {1 + 2}`)  -- Result: 3
 print(`Literal braces: \{not interpolated}`)
 ```
 
+### String Literal Escapes
+
+Beyond standard escapes, Luau supports:
+
+```luau
+"\xAB"       -- Hex escape: inserts byte 0xAB
+"\u{1F600}"  -- Unicode escape: inserts UTF-8 for U+1F600 (braces required)
+"long\z
+  string"    -- \z skips following whitespace/newlines: "longstring"
+```
+
+Backtick strings (interpolated) use `\` to escape `` ` ``, `{`, `\`, and newlines. `{{` is a parse error (use `\{` to get a literal brace).
+
 ### If Expressions (Ternary)
 
 ```luau
@@ -113,6 +130,18 @@ str ..= "suffix"
 local half = width // 2  -- More efficient than math.floor(width / 2)
 ```
 
+### Number Literals
+
+Luau has a single number type (64-bit IEEE 754 double, integers exact up to 2^53).
+
+```luau
+local hex = 0xFF          -- Hexadecimal
+local bin = 0b10101010    -- Binary
+local big = 1_048_576     -- Decimal separators for readability
+local hexSep = 0xFFFF_FFFF
+local binSep = 0b_0101_0101
+```
+
 ## Type System Essentials
 
 ### Type Modes
@@ -121,32 +150,70 @@ local half = width // 2  -- More efficient than math.floor(width / 2)
 - `--!nonstrict`: Reduced checking
 - `--!nocheck`: Disabled
 
-### Core Types
+### Primitive Types
+
+The Luau VM has 10 primitive types: `nil`, `string`, `number`, `boolean`, `table`, `function`, `thread`, `userdata`, `vector`, `buffer`.
 
 ```luau
--- Primitives
 local x: number
 local s: string
 local b: boolean
-local arr: {string}           -- Array
-local map: {[string]: number} -- Dictionary
+local co: thread = coroutine.running()
+local buf: buffer = buffer.create(256)
+```
 
--- Optional
-local maybe: string?  -- string | nil
+Note: `table` and `function` use dedicated syntax (not written by name). `vector` is not representable by name in type annotations. `userdata` is represented by concrete host types.
 
--- Union / Intersection
+### `unknown`, `any`, and `never`
+
+```luau
+local u: unknown = anything -- Top type: accepts all values, but cannot be used without refinement
+local a: any = anything     -- Escape hatch: opts out of type checking entirely
+local n: never              -- Bottom type: no value inhabits this type
+```
+
+- `unknown` requires type refinement (e.g., `typeof(x) == "string"`) before use
+- `any` silently allows all operations -- use sparingly
+- `never` is useful for exhaustiveness checking and impossible branches
+
+### Core Type Syntax
+
+```luau
+local arr: {string}           -- Array shorthand (equivalent to {[number]: string})
+local map: {[string]: number} -- Dictionary with indexer
+local obj: { x: number, y: number } -- Table with named properties
+
+local maybe: string?  -- Optional: string | nil
+
+-- Union / Intersection (leading | and & are allowed for formatting)
 type Result = "ok" | "error"
+type Action
+    = { type: "add", value: number }
+    | { type: "remove", id: string }
 type Combined = TypeA & TypeB
 
--- Negation
-type NotNil = ~nil
+type NotNil = ~nil  -- Negation type
 
--- Singleton (literal types)
+-- Singleton (literal) types -- strings and booleans only, not numbers
 type Direction = "up" | "down" | "left" | "right"
+type Truthy = true
 
--- Function types
+-- Function types with optional named parameters
 type Callback = (number, string) -> boolean
+type Named = (errorCode: number, errorText: string) -> ()
 type Generic = <T>(T) -> T
+type Multi = (number, string) -> (boolean, string) -- Multiple returns
+```
+
+### Generics with Defaults
+
+Type aliases support default type parameters (functions do not):
+
+```luau
+type Pair<T> = { first: T, second: T }
+type PairWithDefault<T = string> = Pair<T>
+
+local p: PairWithDefault = { first = "hello", second = "world" } -- T defaults to string
 ```
 
 ### Read-Only Properties
@@ -182,8 +249,10 @@ end
 ### Built-in Type Functions
 
 ```luau
-type Keys = keyof<MyTable>
-type PropType = index<Person, "age">
+type Keys = keyof<MyTable>           -- Union of all property names
+type RawKeys = rawkeyof<MyTable>     -- Keys without __index
+type PropType = index<Person, "age"> -- Property type lookup
+type RawProp = rawget<Person, "age"> -- Property lookup without __index
 ```
 
 ### Variadic Type Packs
@@ -241,18 +310,164 @@ type Vector = typeof(setmetatable({}::{
 }))
 ```
 
+### Type Refinements
+
+The type checker narrows types based on control flow:
+
+```luau
+local x: string | number = getValue()
+
+-- Type guard with type() or typeof()
+if type(x) == "string" then
+    local s: string = x  -- ok, narrowed to string
+end
+
+-- Truthy test
+local maybe: string? = getMaybe()
+if maybe then
+    local s: string = maybe  -- ok, nil ruled out
+end
+
+-- Equality narrowing to singleton
+local s: string = getStr()
+if s == "hello" then
+    local h: "hello" = s  -- ok, narrowed to literal
+end
+
+-- Compose with and/or/not
+if (type(x) == "string" or type(x) == "number") and x ~= nil then
+    -- x: string | number
+end
+
+-- assert() also refines
+assert(type(x) == "string")
+local s: string = x  -- ok after assert
+```
+
+### Sealed vs Unsealed Tables
+
+Tables have different mutability rules depending on how they are created:
+
+**Unsealed** (table literals without annotation) -- can add new properties until scope exits:
+
+```luau
+local t = { x = 1 }  -- unsealed: {x: number}
+t.y = 2               -- ok, adds y: {x: number, y: number}
+t.z = 3               -- ok
+
+local u: { x: number, y: number? } = t  -- ok, y is optional
+```
+
+**Sealed** (annotated or returned from function) -- locked, supports width subtyping:
+
+```luau
+local t: { x: number } = { x = 1 }
+t.y = 2  -- NOT ok, table is sealed
+
+type Point2D = { x: number, y: number }
+type Point1D = { x: number }
+local p: Point2D = { x = 5, y = 37 }
+local q: Point1D = p  -- ok, Point2D is a subtype (has extra properties)
+```
+
+Once an unsealed table leaves its defining scope (e.g., returned from a function), it becomes sealed.
+
+### User-Defined Type Functions
+
+Type functions run at analysis time and operate on types using the `types` library:
+
+```luau
+type function simple_keyof(ty)
+    if not ty:is("table") then
+        error("Can only call keyof on tables.")
+    end
+
+    local union = nil
+    for property in ty:properties() do
+        union = if union then types.unionof(union, property) else property
+    end
+    return if union then union else types.singleton(nil)
+end
+
+type Person = { name: string, age: number }
+type Keys = simple_keyof<Person>  -- "age" | "name"
+```
+
+Available in type function environment: `types` library, `assert`, `error`, `print`, `next`, `pairs`, `ipairs`, `select`, `unpack`, `tostring`, `tonumber`, `type`, `typeof`, `math`, `table`, `string`, `bit32`, `utf8`, `buffer` libraries.
+
 ## Roblox-Specific
+
+For full Roblox Luau documentation, see `.cursor/rules/roblox/en-us/luau/`.
+
+### Roblox Types in Annotations
+
+All Roblox classes, data types, and enums are valid type annotations:
+
+```luau
+local part: Part = Instance.new("Part")
+local color: BrickColor = part.BrickColor
+local material: Enum.Material = part.Material
+local pos: Vector3 = part.Position
+local cf: CFrame = part.CFrame
+```
 
 ### Use Vector3, Not vector
 
-The `vector` primitive exists but is poorly integrated with Roblox APIs. Always use `Vector3`:
+The `vector` primitive exists but is not compatible with Roblox APIs. Always use `Vector3`:
 
 ```luau
--- Correct
 local pos = Vector3.new(1, 2, 3)
+-- NOT: vector.create(1, 2, 3)
+```
 
--- Avoid (not compatible with most Roblox APIs)
--- local pos = vector.create(1, 2, 3)
+### Native Code Generation (Server Only)
+
+In Roblox, `--!native` compiles **server-side scripts** to machine code. There is a limit on total natively compiled code per experience. Use `@native` on individual hot functions to stay within budget.
+
+## Module Require Semantics
+
+### Roblox Luau (Default)
+
+In Roblox, use instance-path requires. This is the preferred style:
+
+```luau
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local MyModule = require(ReplicatedStorage.Modules.MyModule)
+local Types = require(ReplicatedStorage.Shared.Types)
+
+-- Common pattern: services at top of file
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local ServerStorage = game:GetService("ServerStorage")
+```
+
+### Standalone Luau (String Requires)
+
+Outside Roblox (e.g., Lune, standalone tooling), requires use explicit string paths with mandatory prefixes:
+
+```luau
+local sibling = require("./sibling")       -- Relative to current file
+local parent = require("../parent")        -- Parent directory
+local lib = require("@lune/net")           -- Alias (configured in .luaurc)
+```
+
+All paths must start with `./`, `../`, or `@` -- bare names like `require("foo")` are not allowed. Aliases are configured in `.luaurc`:
+
+```json
+{
+    "aliases": {
+        "lune": "packages/lune",
+        "shared": "src/shared"
+    }
+}
+```
+
+### Cyclic Dependencies
+
+Require paths must be statically resolvable. To break cyclic module dependencies, cast to `any`:
+
+```luau
+local myModule = require(MyModule) :: any
 ```
 
 ## Deprecated Functions
@@ -339,20 +554,42 @@ Note: `@inline` is NOT supported. Compiler handles inlining automatically.
 
 ## OOP Pattern
 
-```luau
-type Point = { x: number, y: number }
+Separate the data type from the class type using `typeof(setmetatable(...))`. Annotate `self` explicitly on methods -- this is **required** for the type checker to share `self` types across methods.
 
+```luau
 local Point = {}
 Point.__index = Point
 
-function Point.new(): Point
-    return setmetatable({ x = 0, y = 0 }, Point)
+type PointData = {
+    x: number,
+    y: number,
+}
+
+export type Point = typeof(setmetatable({} :: PointData, Point))
+
+function Point.new(x: number, y: number): Point
+    return setmetatable({ x = x, y = y }, Point)
 end
 
-function Point:getX(): number
-    return self.x
+function Point.move(self: Point, dx: number, dy: number)
+    self.x += dx
+    self.y += dy
 end
+
+function Point.magnitude(self: Point): number
+    return math.sqrt(self.x * self.x + self.y * self.y)
+end
+
+local p = Point.new(3, 4)
+p:move(1, 2)           -- Callers still use : syntax
+print(p:magnitude())   -- 5.385...
 ```
+
+Key points:
+- Define methods with `.` syntax and explicit `self: ClassName` parameter
+- Callers still invoke with `:` syntax
+- Return type annotation on the constructor ensures compatibility with methods
+- The `typeof(setmetatable(...))` trick gives full autocomplete on `self`
 
 ## Performance Tips
 
@@ -433,6 +670,52 @@ function handle(x: "a" | "b")
 end
 ```
 
+## Standard Library Additions
+
+Luau extends Lua 5.1's standard library with many functions. Below are the most important additions not covered elsewhere.
+
+### Math Library Extensions
+
+```luau
+math.clamp(n, min, max)         -- Clamp n to [min, max] range
+math.sign(n)                    -- Returns -1, 0, or 1
+math.round(n)                   -- Round to nearest integer (halfway rounds away from 0)
+math.lerp(a, b, t)              -- Linear interpolation: a + (b - a) * t, exact at t=1
+math.map(x, inmin, inmax, outmin, outmax) -- Map x from input range to output range
+math.noise(x, y?, z?)           -- 3D Perlin noise, returns [-1, 1]
+```
+
+Also available: `math.log(n, base?)` (optional base), `math.random()` uses PCG RNG.
+
+### String Library Extensions
+
+```luau
+-- string.split: splits string into array (default separator: ",")
+local parts = string.split("a,b,c", ",")  -- {"a", "b", "c"}
+local chars = string.split("hello", "")    -- {"h", "e", "l", "l", "o"}
+
+-- string.pack/unpack/packsize: binary data encoding (Lua 5.3 format strings)
+-- Fixed sizes: short=16bit, long=64bit, int=32bit, size_t=32bit
+local packed = string.pack("i4f", 42, 3.14)
+local int, float = string.unpack("i4f", packed)
+local size = string.packsize("i4f")  -- 8 bytes
+```
+
+### bit32 Library Extensions
+
+```luau
+bit32.countlz(n)    -- Count leading zeros (returns 32 if n is 0)
+bit32.countrz(n)    -- Count trailing zeros (returns 32 if n is 0)
+bit32.byteswap(n)   -- Swap byte order (endianness)
+```
+
+### coroutine.close
+
+```luau
+coroutine.close(co)  -- Puts suspended/dead coroutine into dead state, frees stack
+-- Returns (true) on success, (false, error) if coroutine was in error state
+```
+
 ## Immutable Tables
 
 ```luau
@@ -445,3 +728,82 @@ local config = table.freeze({
 local newConfig = table.clone(config)
 newConfig.maxRetries = 5
 ```
+
+## Buffer Library
+
+Buffers are fixed-size mutable byte arrays. All offsets are 0-based. Reads/writes outside bounds throw errors. Uses little-endian byte order.
+
+```luau
+local buf = buffer.create(1024)            -- All bytes initialized to 0
+local buf2 = buffer.fromstring("hello")    -- From string contents
+local str = buffer.tostring(buf2)          -- Back to string
+local len = buffer.len(buf)               -- Size in bytes
+
+-- Typed reads/writes (i=signed, u=unsigned, f=float)
+buffer.writei32(buf, 0, 42)               -- Write signed 32-bit int at offset 0
+local n = buffer.readi32(buf, 0)           -- Read it back
+buffer.writef64(buf, 4, 3.14159)           -- Write 64-bit float at offset 4
+local f = buffer.readf64(buf, 4)
+
+-- Available: readi8/u8/i16/u16/i32/u32/f32/f64 and matching write variants
+
+-- String read/write
+buffer.writestring(buf, 0, "hello", 5)    -- Write 5 bytes from string
+local s = buffer.readstring(buf, 0, 5)    -- Read 5 bytes as string
+
+-- Bit-level access
+buffer.writebits(buf, 0, 4, 0b1010)       -- Write 4 bits at bit offset 0
+local bits = buffer.readbits(buf, 0, 4)    -- Read 4 bits (returns unsigned int)
+
+-- Bulk operations
+buffer.copy(target, tOff, source, sOff?, count?) -- Copy between buffers (or within same)
+buffer.fill(buf, offset, value, count?)           -- Fill bytes with value
+```
+
+## Vector Library
+
+The `vector` primitive is a 3-component (or 4-component in 4-wide mode) immutable value type. Components are accessed via `.x`/`.y`/`.z` (and `.w` in 4-wide mode) but cannot be written individually.
+
+```luau
+-- Construction and constants
+local v = vector.create(1, 2, 3)
+local zero = vector.zero              -- (0, 0, 0)
+local one = vector.one                -- (1, 1, 1)
+
+-- Arithmetic: +, -, *, /, //, unary - all work component-wise
+local sum = v + vector.create(4, 5, 6)
+
+-- Geometric operations
+vector.magnitude(v)                    -- Length of vector
+vector.normalize(v)                    -- Unit vector
+vector.dot(v1, v2)                     -- Dot product (returns number)
+vector.cross(v1, v2)                   -- Cross product (3D only)
+vector.angle(v1, v2, axis?)           -- Angle in radians (axis for signed angle)
+vector.lerp(v1, v2, t)                -- Linear interpolation
+
+-- Component-wise math
+vector.abs(v)                          -- math.abs per component
+vector.sign(v)                         -- math.sign per component
+vector.floor(v) / vector.ceil(v)       -- Rounding per component
+vector.clamp(v, min, max)              -- Clamp per component
+vector.max(v1, v2, ...) / vector.min(v1, v2, ...)
+```
+
+**Note:** In Roblox, prefer `Vector3` over `vector` -- `Vector3` integrates with all Roblox APIs. The `vector` library is for standalone Luau or performance-critical native code.
+
+## Differences from Lua
+
+Luau is based on Lua 5.1 with selective features from 5.2-5.4 and its own additions:
+
+- `_VERSION` is `"Luau"` (not `"Lua 5.1"`)
+- Single number type: 64-bit double (no separate integer type)
+- No tail call optimization (simplifies debugging and stack traces)
+- `__eq` metamethod is always called, even when objects are rawequal
+- No `goto` statement
+- No bitwise operators (`<<`, `>>`, `&`, `|`, `~`) -- use `bit32` library
+- No `__gc` metamethod (sandboxing constraint)
+- No `io`, `os.execute`, `package`, or full `debug` library (sandboxing)
+- `loadstring` cannot load bytecode, `string.dump` not available
+- Table assignment order in literals follows program order (Lua 5.x may reorder)
+- `function()` expressions may reuse closures when all captured upvalues are identical
+- `os.time` with table argument returns UTC (not local time)
