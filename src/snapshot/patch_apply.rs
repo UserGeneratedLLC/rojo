@@ -124,9 +124,9 @@ fn finalize_patch_application(context: PatchApplyContext, tree: &mut RojoTree) -
         }
     }
 
-    // This is to get around the fact that `RojoTre::get_specified_id` borrows
-    // the tree as immutable, but we need to hold a mutable reference to it.
-    // Not exactly elegant, but it does the job.
+    // IMPORTANT: Rojo_Target_* (legacy) must be resolved BEFORE Rojo_Ref_*
+    // (path-based) so that path-based results overwrite legacy results when
+    // both exist for the same property. Do not reorder these two blocks.
     let mut real_rewrites = Vec::new();
     for (id, map) in context.attribute_refs_to_rewrite {
         for (prop_name, prop_value) in map {
