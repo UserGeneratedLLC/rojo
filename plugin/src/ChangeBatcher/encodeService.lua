@@ -1,15 +1,9 @@
-local Packages = script.Parent.Parent.Parent.Packages
-local RbxDom = require(Packages.RbxDom)
-
 local encodeProperty = require(script.Parent.encodeProperty)
-local UNENCODABLE_DATA_TYPES = require(script.Parent.propertyFilter)
+local Helpers = require(script.Parent.encodeHelpers)
 
-local SKIP_PROPERTIES = {
-	Parent = true,
-	Name = true,
-	Archivable = true,
-}
-
+-- ClockTime and TimeOfDay on Lighting are linked properties representing
+-- the same value (float vs string). Exclude ClockTime so only TimeOfDay
+-- is sent, avoiding redundant/conflicting representations.
 local EXCLUDE_PROPERTIES = {
 	Lighting = { ClockTime = true },
 }
@@ -20,78 +14,28 @@ return function(service: Instance)
 	local children = service:GetChildren()
 	local refTargets = {}
 
-	local classDescriptor = RbxDom.findClassDescriptor(service.ClassName)
-	if classDescriptor then
-		local classExcludes = EXCLUDE_PROPERTIES[service.ClassName]
-		for propertyName, propertyMeta in pairs(classDescriptor.properties) do
-			if SKIP_PROPERTIES[propertyName] then
-				continue
+	local classExcludes = EXCLUDE_PROPERTIES[service.ClassName]
+	Helpers.forEachEncodableProperty(service.ClassName, classExcludes, function(propertyName, descriptor)
+		if descriptor.dataType == "Ref" then
+			local readOk, target = descriptor:read(service)
+			if readOk and target then
+				local carrier = Instance.new("ObjectValue")
+				carrier.Name = propertyName
+				carrier.Value = target
+				table.insert(refTargets, carrier)
+				refs[propertyName] = #refTargets
 			end
-			if classExcludes and classExcludes[propertyName] then
-				continue
-			end
-			if propertyName == "Attributes" or propertyName == "Tags" then
-				continue
-			end
-
-			local isReadable = propertyMeta.scriptability == "ReadWrite"
-				or propertyMeta.scriptability == "Read"
-				or propertyMeta.scriptability == "Custom"
-			local doesSerialize = propertyMeta.serialization ~= "DoesNotSerialize"
-
-			if isReadable and doesSerialize then
-				local descriptor = RbxDom.findCanonicalPropertyDescriptor(service.ClassName, propertyName)
-				if descriptor then
-					if UNENCODABLE_DATA_TYPES[descriptor.dataType] then
-						continue
-					end
-
-					if descriptor.dataType == "Ref" then
-						local readOk, target = descriptor:read(service)
-						if readOk and target then
-							local carrier = Instance.new("ObjectValue")
-							carrier.Name = propertyName
-							carrier.Value = target
-							table.insert(refTargets, carrier)
-							refs[propertyName] = #refTargets
-						end
-						continue
-					end
-
-					local encodeOk, encoded = encodeProperty(service, propertyName, descriptor)
-					if encodeOk and encoded ~= nil then
-						properties[propertyName] = encoded
-					end
-				end
-			end
+			return
 		end
-	end
 
-	local attrOk, attrMap = pcall(function()
-		return service:GetAttributes()
+		local encodeOk, encoded = encodeProperty(service, propertyName, descriptor)
+		if encodeOk and encoded ~= nil then
+			properties[propertyName] = encoded
+		end
 	end)
-	if attrOk and attrMap and next(attrMap) then
-		local descriptor = RbxDom.findCanonicalPropertyDescriptor(service.ClassName, "Attributes")
-		if descriptor then
-			local encodeOk, encoded = encodeProperty(service, "Attributes", descriptor)
-			if encodeOk and encoded ~= nil then
-				properties.Attributes = encoded
-			end
-		end
-	end
 
-	local tagOk, tagList = pcall(function()
-		return service:GetTags()
-	end)
-	if tagOk and tagList and #tagList > 0 then
-		local descriptor = RbxDom.findCanonicalPropertyDescriptor(service.ClassName, "Tags")
-		if descriptor then
-			local encodeOk, encoded = encodeProperty(service, "Tags", descriptor)
-			if encodeOk and encoded ~= nil then
-				properties.Tags = encoded
-			end
-		end
-	end
+	Helpers.encodeAttributes(service, properties)
+	Helpers.encodeTags(service, properties)
 
 	local chunk = {
 		className = service.ClassName,

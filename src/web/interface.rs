@@ -37,9 +37,10 @@ pub const PROTOCOL_VERSION: u64 = 6;
 /// to the service). The next `ref_target_count` are ObjectValue carriers
 /// whose `Value` property holds a Ref to the actual target.
 ///
-/// `refs` maps property names to 1-based indices into this combined range
-/// (0 = nil). Indices <= child_count point directly to a child instance.
-/// Indices > child_count point to an ObjectValue carrier.
+/// `refs` maps property names to 1-based indices into the carrier slice
+/// (the ObjectValue entries after the children). Index 1 is the first
+/// carrier, 2 the second, etc. The server reads carriers via
+/// `carriers[idx - 1]`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceChunk {
