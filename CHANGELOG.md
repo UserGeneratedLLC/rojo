@@ -53,6 +53,25 @@ Making a new release? Simply add the new header with the version and date undern
 * Update color handling and enhance session management in the Reconciler.
 * Refactor animation goal settings to use instant transitions in the plugin UI.
 * Refactor version rejection logic in `ApiContext`.
+* Add VFS prefetch cache to optimize file reads during project loading, reducing I/O overhead for large projects.
+* Implement parallel I/O in the VFS backend for improved serve startup and file processing performance.
+* Replace `float-cmp` dependency with custom float comparison and formatting using `lexical-write-float` for precise, round-trip-safe disk representation of float properties.
+* Fix NaN equality in `trueEquals` for compound types (e.g., `CFrame`, `Vector3` with NaN components).
+* Fix patch application logic to ensure correct resolution order for legacy `Rojo_Target_*` and path-based `Rojo_Ref_*` references.
+* Fix multiple live syncback issues including reference handling and float precision.
+* Add yield intervals for plugin diffing and hydrating processes to prevent UI freezes during large syncs.
+* Add automatic dedup suffix stripping during syncback for cleaner output when suffixes are no longer needed.
+* Add server-side and test-side port retry mechanisms to handle port race conditions.
+* Refactor font comparison logic in `variant_eq` and `hash_variant` for correct Font property equality.
+* Refactor syncback error handling and improve concurrency management.
+* Refactor ChangeBatcher encoding logic for improved readability and duplicate handling.
+* Consolidate filesystem name retrieval in `ref_target_path_from_tree`.
+* Enhance file and directory removal logic in VFS.
+* Enhance `PatchVisualizer` with change statistics in the syncback confirmation dialog.
+* Add new Git configuration options in `InitCommand` for improved project initialization usability.
+* Increase server initialization backoff duration and maximum retry attempts.
+* Refactor logging levels to debug for improved performance.
+* Update rbx-dom submodule and reflection database.
 
 <details>
 <summary>Full commit log</summary>
@@ -112,6 +131,58 @@ Making a new release? Simply add the new header with the version and date undern
 - `ddd47b9a` Enhance matching module with valid children tracking and code readability improvements
 - `30e032b2` Update color handling and enhance session management in the Reconciler
 - `72ad84b5` Implement live syncback service properties encoding and enhance syncback functionality
+- `c3cb9b4b` Enhance syncback functionality and improve matching process
+- `8070129b` Refactor service encoding to conditionally include properties, attributes, tags, and references
+- `e0fd9077` Refactor service encoding to streamline properties handling
+- `a823db02` Refactor encoding logic in ChangeBatcher and improve matching depth handling
+- `a75a1443` Enhance syncback process by integrating serialization of service children
+- `7dc4f527` Implement live syncback fixes addressing multiple issues
+- `39c8bd41` Enhance live syncback process with improved reference handling and float precision
+- `3c026aea` Add float formatting functions and update serializer for improved precision
+- `0450dabf` Refactor encoding logic in ChangeBatcher for improved readability and consistency
+- `07e0100c` Add lexical-write-float and update float formatting in JSON serialization
+- `ea902572` Update float cutoff values and adjust test cases for improved precision
+- `b8a1dc26` Remove zero cutoff checks in float formatting functions
+- `f5939258` Remove max significant digits and zero cutoff checks in float formatting functions
+- `7f4b5c49` Refactor float formatting tests for improved precision and consistency
+- `b47eef11` Add live syncback functionality and optimize service encoding
+- `e6c06276` Add luau-optimize cursor command for performance optimization
+- `24dec407` Enhance luau-optimize documentation with detailed type safety guidelines
+- `9d8762bb` Refactor encoding logic in ChangeBatcher and enhance duplicate handling
+- `9bb237f4` Add ChangeBatcher Encoding Audit Plan
+- `d3a9155e` Update patch application logic to ensure correct resolution order for legacy and path-based references
+- `b0f9b06c` Refactor filesystem name retrieval in `ref_target_path_from_tree`
+- `23874d8a` Consolidate filesystem name retrieval in `ref_target_path_from_tree`
+- `b1180d73` Enhance Luau documentation with additional context and examples
+- `a283fd1d` Add Git Sync Defaults Audit Plan
+- `7e0538b9` Remove `float-cmp` dependency and implement custom float comparison logic
+- `69f0b9fd` Add Audit Plan for Ambiguous Path Handling
+- `5b38648e` Update dependencies and improve syncback handling
+- `49b4d858` Add Live Syncback Audit Fixes Plan
+- `532425df` Update audit documentation and rules for live syncback enhancements
+- `17d52e3e` Enhance float formatting and comparison functions for disk representation
+- `7d0232c4` Add automatic dedup suffix stripping to enhance syncback functionality
+- `bf56dc47` Refactor syncback error handling and improve concurrency management
+- `d9fa62c8` Add server-side and test-side port retry mechanisms to handle race conditions
+- `b85c5f5e` Refactor font comparison logic in variant_eq and hash_variant functions
+- `354d4c8b` Add yield intervals for diffing and hydrating processes
+- `b105d865` Fix NaN equality for trueEquals for compound types
+- `1ffed121` Add prefetch cache for VFS to optimize file reads
+- `9d3d02cd` Add new Git configuration options in InitCommand
+- `0462b91a` Enhance PrefetchCache functionality and improve project file prefetching
+- `5a943c33` Refactor prefetch_project_files function for improved readability
+- `3ccaaa63` Enhance PrefetchCache and improve directory handling in VFS
+- `5fab0d57` Refactor ServeCommand and enhance placeholder replacement in syncback
+- `56e1ab4a` Remove unused methods from ServeSession and clean up syncback logic
+- `1c25b928` Refactor logging levels to debug for improved performance and clarity
+- `43834f35` Update submodule and implement parallel I/O audit fixes
+- `a071d1f0` Update submodule and enhance PatchVisualizer with change statistics
+- `8d17b1de` Enhance InitCommand Git configuration for improved usability
+- `57112a9f` Update submodule and enhance syncback confirmation dialog
+- `4f0afe87` Update submodule: rbx_binary Font snapshots remove cachedFaceId
+- `d9459638` Update submodule: rbx-dom to latest commit b75dd401
+- `d360ebe6` Enhance file and directory removal logic in VFS
+- `d252b138` Increase backoff duration and maximum retry attempts in server initialization
 
 </details>
 
