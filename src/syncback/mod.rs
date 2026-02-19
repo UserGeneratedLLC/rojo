@@ -254,6 +254,15 @@ pub fn syncback_loop_with_stats(
 
     let project_path = project.folder_location();
 
+    fn strip_unc_prefix(p: PathBuf) -> PathBuf {
+        let path_str = p.to_string_lossy();
+        if path_str.starts_with(r"\\?\") || path_str.starts_with("//?/") {
+            PathBuf::from(&path_str[4..])
+        } else {
+            p
+        }
+    }
+
     let phase_timer = std::time::Instant::now();
     let existing_paths: HashSet<PathBuf> = if !incremental {
         let mut paths = HashSet::new();
@@ -393,19 +402,25 @@ pub fn syncback_loop_with_stats(
             if !dir.is_dir() {
                 continue;
             }
+            if let Some(name) = dir.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with('.') && name != ".gitkeep" {
+                    continue;
+                }
+            }
             let canonical_dir = std::fs::canonicalize(dir)
-                .map(|p| {
-                    let s = p.to_string_lossy();
-                    if s.starts_with(r"\\?\") || s.starts_with("//?/") {
-                        PathBuf::from(&s[4..])
-                    } else {
-                        p
-                    }
-                })
+                .map(strip_unc_prefix)
                 .unwrap_or_else(|_| dir.clone());
             for entry in walkdir::WalkDir::new(&canonical_dir)
                 .follow_links(true)
                 .into_iter()
+                .filter_entry(|e| {
+                    if e.depth() == 0 {
+                        return true;
+                    }
+                    e.file_name()
+                        .to_str()
+                        .map_or(true, |n| !n.starts_with('.') || n == ".gitkeep")
+                })
                 .flatten()
             {
                 if entry.depth() == 0 {
@@ -414,11 +429,6 @@ pub fn syncback_loop_with_stats(
                 let path = entry.path().to_path_buf();
                 if !is_valid_path(&ignore_patterns, project_path, &path) {
                     continue;
-                }
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.starts_with('.') && name != ".gitkeep" {
-                        continue;
-                    }
                 }
                 paths.insert(path);
             }
@@ -561,6 +571,12 @@ pub fn syncback_loop_with_stats(
             'remove: for inst in &syncback.removed_children {
                 let path = inst.metadata().instigating_source.as_ref().unwrap().path();
                 let inst_path = snapshot.get_old_inst_path(inst.id());
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.starts_with('.') && name != ".gitkeep" {
+                        log::debug!("Skipping removing {} (hidden path)", path.display());
+                        continue;
+                    }
+                }
                 if !is_valid_path(&ignore_patterns, project_path, path) {
                     log::debug!(
                         "Skipping removing {} because its matches an ignore pattern",
@@ -645,16 +661,6 @@ pub fn syncback_loop_with_stats(
     if !incremental && !existing_paths.is_empty() {
         log::debug!("Clean mode: checking for orphaned files to remove");
 
-        // Helper to strip UNC prefix on Windows
-        fn strip_unc_prefix(p: PathBuf) -> PathBuf {
-            let path_str = p.to_string_lossy();
-            if path_str.starts_with(r"\\?\") || path_str.starts_with("//?/") {
-                PathBuf::from(&path_str[4..])
-            } else {
-                p
-            }
-        }
-
         let canonical_project_path = strip_unc_prefix(
             std::fs::canonicalize(project_path).unwrap_or_else(|_| project_path.to_path_buf()),
         );
@@ -700,17 +706,9 @@ pub fn syncback_loop_with_stats(
         ) {
             if let Some(ref path_node) = node.path {
                 let resolved = base_path.join(path_node.path());
-                let canonical = match std::fs::canonicalize(&resolved) {
-                    Ok(p) => {
-                        let s = p.to_string_lossy();
-                        if s.starts_with(r"\\?\") || s.starts_with("//?/") {
-                            PathBuf::from(&s[4..])
-                        } else {
-                            p
-                        }
-                    }
-                    Err(_) => resolved.clone(),
-                };
+                let canonical = std::fs::canonicalize(&resolved)
+                    .map(strip_unc_prefix)
+                    .unwrap_or_else(|_| resolved.clone());
                 protected.insert(canonical.clone());
                 if !instance_path.is_empty() {
                     mappings.push((canonical, instance_path.to_string()));
@@ -869,32 +867,20 @@ pub fn syncback_loop_with_stats(
         }
 
         // Second pass: only remove top-level orphaned paths.
-        let mut sorted_removals: Vec<_> = paths_to_remove.iter().cloned().collect();
+        // Sorted path order guarantees all descendants appear consecutively
+        // after their ancestor, so a single ancestor tracker suffices.
+        let mut sorted_removals: Vec<_> = paths_to_remove.into_iter().collect::<Vec<_>>();
         sorted_removals.sort();
 
-        let paths_vec: Vec<_> = paths_to_remove.iter().collect();
-        for old_path in &paths_vec {
-            let is_nested = sorted_removals
-                .binary_search(old_path)
-                .ok()
-                .and_then(|idx| {
-                    if idx > 0 {
-                        Some(
-                            old_path.starts_with(&sorted_removals[idx - 1])
-                                && *old_path != &sorted_removals[idx - 1],
-                        )
-                    } else {
-                        None
-                    }
-                })
-                .unwrap_or(false);
-
-            if is_nested {
-                continue;
+        let mut current_ancestor: Option<&PathBuf> = None;
+        for old_path in &sorted_removals {
+            if let Some(ancestor) = current_ancestor {
+                if old_path.starts_with(ancestor) && old_path != ancestor {
+                    continue;
+                }
             }
+            current_ancestor = Some(old_path);
 
-            // Convert absolute path to relative path for FsSnapshot.
-            // FsSnapshot expects relative paths and joins them with base_path in write_to_vfs.
             let relative_path = old_path
                 .strip_prefix(&canonical_project_path)
                 .unwrap_or(old_path);

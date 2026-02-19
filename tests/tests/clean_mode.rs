@@ -328,3 +328,56 @@ fn clean_mode_is_idempotent() {
         "File content should be identical after second syncback"
     );
 }
+
+/// Test that clean mode does NOT delete hidden directories or their contents
+/// inside $path source directories. Hidden directories like .vscode/ or
+/// .cursor/ should be left untouched by the orphan scanner.
+#[test]
+fn clean_mode_preserves_hidden_directories() {
+    let _ = env_logger::try_init();
+
+    let source_path = Path::new(SYNCBACK_TESTS_PATH)
+        .join("sync_rules")
+        .join("input-project");
+    let input_file = Path::new(SYNCBACK_TESTS_PATH)
+        .join("sync_rules")
+        .join("input.rbxm");
+
+    let test_dir = tempdir().expect("Couldn't create temporary directory");
+    let project_path = test_dir.path().join("test_project");
+
+    fs_err::create_dir(&project_path).expect("Couldn't create project directory");
+    copy_recursive(&source_path, &project_path).expect("Couldn't copy project");
+
+    let src_dir = project_path.join("src");
+    let hidden_dir = src_dir.join(".hidden");
+    fs_err::create_dir_all(&hidden_dir).expect("Couldn't create hidden directory");
+    fs_err::write(hidden_dir.join("keep.txt"), "do not delete").unwrap();
+    fs_err::write(hidden_dir.join("config.txt"), "some config").unwrap();
+
+    let nested_hidden = hidden_dir.join("nested");
+    fs_err::create_dir_all(&nested_hidden).unwrap();
+    fs_err::write(nested_hidden.join("deep.txt"), "also keep").unwrap();
+
+    assert!(
+        run_syncback(&project_path, &input_file, false),
+        "Syncback should succeed"
+    );
+
+    assert!(
+        hidden_dir.exists(),
+        ".hidden directory should survive clean mode syncback"
+    );
+    assert!(
+        hidden_dir.join("keep.txt").exists(),
+        ".hidden/keep.txt should survive"
+    );
+    assert!(
+        hidden_dir.join("config.txt").exists(),
+        ".hidden/config.txt should survive"
+    );
+    assert!(
+        nested_hidden.join("deep.txt").exists(),
+        ".hidden/nested/deep.txt should survive"
+    );
+}

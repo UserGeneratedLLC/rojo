@@ -136,6 +136,15 @@ fn prefetch_project_files(project: &Project) -> io::Result<PrefetchCache> {
     let mut roots: Vec<std::path::PathBuf> = Vec::new();
     collect_path_roots(&project.tree, folder, &mut roots);
 
+    roots.sort();
+    let mut deduped: Vec<std::path::PathBuf> = Vec::new();
+    for root in roots {
+        if !deduped.iter().any(|existing| root.starts_with(existing)) {
+            deduped.push(root);
+        }
+    }
+    let roots = deduped;
+
     if roots.is_empty() {
         return Ok(PrefetchCache {
             files: HashMap::new(),
