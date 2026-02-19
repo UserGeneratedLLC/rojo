@@ -11,6 +11,7 @@ mod util;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use hyper::body::Incoming;
 use hyper::server::conn::http1;
@@ -77,7 +78,37 @@ impl LiveServer {
 
         let rt = Runtime::new().unwrap();
         let exit_reason = rt.block_on(async move {
-            let listener = TcpListener::bind(address).await.unwrap();
+            let listener = {
+                const MAX_BIND_ATTEMPTS: u32 = 5;
+                const BASE_BACKOFF_MS: u64 = 200;
+                let mut attempts = 0u32;
+                loop {
+                    attempts += 1;
+                    match TcpListener::bind(address).await {
+                        Ok(listener) => break listener,
+                        Err(err)
+                            if err.kind() == std::io::ErrorKind::AddrInUse
+                                && attempts < MAX_BIND_ATTEMPTS =>
+                        {
+                            let delay = BASE_BACKOFF_MS * 2u64.pow(attempts - 1);
+                            log::warn!(
+                                "Port {} in use, retrying in {}ms (attempt {}/{})",
+                                address.port(),
+                                delay,
+                                attempts,
+                                MAX_BIND_ATTEMPTS
+                            );
+                            tokio::time::sleep(Duration::from_millis(delay)).await;
+                        }
+                        Err(err) => {
+                            panic!(
+                                "Failed to bind to {}: {} (after {} attempts)",
+                                address, err, attempts
+                            );
+                        }
+                    }
+                }
+            };
 
             loop {
                 tokio::select! {

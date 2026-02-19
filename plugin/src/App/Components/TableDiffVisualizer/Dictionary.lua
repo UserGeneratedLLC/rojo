@@ -7,6 +7,7 @@ local Roact = require(Packages.Roact)
 local Timer = require(Plugin.Timer)
 local Assets = require(Plugin.Assets)
 local Theme = require(Plugin.App.Theme)
+local trueEquals = require(Plugin.Reconciler.trueEquals)
 
 local ScrollingFrame = require(Plugin.App.Components.ScrollingFrame)
 local DisplayValue = require(Plugin.App.Components.PatchVisualizer.DisplayValue)
@@ -35,8 +36,7 @@ function Dictionary:calculateDiff()
 				key = key,
 				patchType = "Remove",
 			})
-		elseif newValue ~= oldValue then
-			-- Note: should this do some sort of deep comparison for various types?
+		elseif not trueEquals(oldValue, newValue) then
 			table.insert(diff, {
 				key = key,
 				patchType = "Edit",

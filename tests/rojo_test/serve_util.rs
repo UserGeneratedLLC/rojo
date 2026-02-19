@@ -256,47 +256,85 @@ impl TestServeSession {
         self.port
     }
 
-    /// Waits for the `rojo serve` server to come online with expontential
-    /// backoff.
+    fn respawn_with_new_port(&mut self) {
+        let port = get_port_number();
+        let port_string = port.to_string();
+        let working_dir = get_working_dir_path();
+
+        let rojo_process = Command::new(ROJO_PATH)
+            .args([
+                "serve",
+                self.project_path.to_str().unwrap(),
+                "--port",
+                port_string.as_str(),
+            ])
+            .current_dir(working_dir)
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Couldn't start Rojo");
+
+        self.rojo_process = KillOnDrop(rojo_process);
+        self.port = port;
+    }
+
+    /// Waits for the `rojo serve` server to come online with exponential
+    /// backoff. If the process dies with `AddrInUse`, respawns with a new
+    /// random port (up to `MAX_PORT_RETRIES` times).
     pub fn wait_to_come_online(&mut self) -> ServerInfoResponse {
         const BASE_DURATION_MS: f32 = 30.0;
         const EXP_BACKOFF_FACTOR: f32 = 1.3;
         const MAX_TRIES: u32 = 5;
+        const MAX_PORT_RETRIES: u32 = 3;
 
-        for i in 1..=MAX_TRIES {
-            match self.rojo_process.0.try_wait() {
-                Ok(Some(status)) => {
-                    let mut stderr_output = String::new();
-                    if let Some(mut stderr) = self.rojo_process.0.stderr.take() {
-                        let _ = stderr.read_to_string(&mut stderr_output);
+        let mut port_retries = 0u32;
+
+        'retry_port: loop {
+            for i in 1..=MAX_TRIES {
+                match self.rojo_process.0.try_wait() {
+                    Ok(Some(status)) => {
+                        let mut stderr_output = String::new();
+                        if let Some(mut stderr) = self.rojo_process.0.stderr.take() {
+                            let _ = stderr.read_to_string(&mut stderr_output);
+                        }
+                        if stderr_output.contains("AddrInUse") && port_retries < MAX_PORT_RETRIES {
+                            port_retries += 1;
+                            log::warn!(
+                                "Port {} in use, respawning with new port (attempt {}/{})",
+                                self.port,
+                                port_retries,
+                                MAX_PORT_RETRIES
+                            );
+                            self.respawn_with_new_port();
+                            continue 'retry_port;
+                        }
+                        panic!(
+                            "Rojo process exited with status {}\nstderr:\n{}",
+                            status, stderr_output
+                        );
                     }
-                    panic!(
-                        "Rojo process exited with status {}\nstderr:\n{}",
-                        status, stderr_output
-                    );
+                    Ok(None) => { /* The process is still running, as expected */ }
+                    Err(err) => panic!("Failed to wait on Rojo process: {}", err),
                 }
-                Ok(None) => { /* The process is still running, as expected */ }
-                Err(err) => panic!("Failed to wait on Rojo process: {}", err),
+
+                let info = match self.get_api_rojo() {
+                    Ok(info) => info,
+                    Err(err) => {
+                        let retry_time_ms = BASE_DURATION_MS * (i as f32).powf(EXP_BACKOFF_FACTOR);
+                        let retry_time = Duration::from_millis(retry_time_ms as u64);
+
+                        log::info!("Server error, retrying in {:?}: {}", retry_time, err);
+                        thread::sleep(retry_time);
+                        continue;
+                    }
+                };
+
+                log::info!("Got session info: {:?}", info);
+
+                return info;
             }
 
-            let info = match self.get_api_rojo() {
-                Ok(info) => info,
-                Err(err) => {
-                    let retry_time_ms = BASE_DURATION_MS * (i as f32).powf(EXP_BACKOFF_FACTOR);
-                    let retry_time = Duration::from_millis(retry_time_ms as u64);
-
-                    log::info!("Server error, retrying in {:?}: {}", retry_time, err);
-                    thread::sleep(retry_time);
-                    continue;
-                }
-            };
-
-            log::info!("Got session info: {:?}", info);
-
-            return info;
+            panic!("Rojo server did not respond after {} tries.", MAX_TRIES);
         }
-
-        panic!("Rojo server did not respond after {} tries.", MAX_TRIES);
     }
 
     pub fn get_api_rojo(&self) -> Result<ServerInfoResponse, reqwest::Error> {
@@ -938,71 +976,91 @@ pub fn fresh_rebuild_read(project_path: &Path) -> NormalizedInstance {
         );
     };
 
-    let port = get_port_number();
-    let port_string = port.to_string();
-    let working_dir = get_working_dir_path();
-
-    let process = Command::new(ROJO_PATH)
-        .args([
-            "serve",
-            project_file.to_str().unwrap(),
-            "--port",
-            port_string.as_str(),
-        ])
-        .current_dir(working_dir)
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Couldn't start fresh Rojo for round-trip check");
-
-    let mut kill_guard = KillOnDrop(process);
-
-    // Wait for fresh server to come online with same backoff
     const BASE_DURATION_MS: f32 = 30.0;
     const EXP_BACKOFF_FACTOR: f32 = 1.3;
     const MAX_TRIES: u32 = 5;
+    const MAX_PORT_RETRIES: u32 = 3;
 
-    let mut info = None;
-    for i in 1..=MAX_TRIES {
-        match kill_guard.0.try_wait() {
-            Ok(Some(status)) => {
-                let mut stderr_output = String::new();
-                if let Some(mut stderr) = kill_guard.0.stderr.take() {
-                    let _ = stderr.read_to_string(&mut stderr_output);
+    let working_dir = get_working_dir_path();
+    let mut port_retries = 0u32;
+
+    loop {
+        let port = get_port_number();
+        let port_string = port.to_string();
+
+        let process = Command::new(ROJO_PATH)
+            .args([
+                "serve",
+                project_file.to_str().unwrap(),
+                "--port",
+                port_string.as_str(),
+            ])
+            .current_dir(&working_dir)
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Couldn't start fresh Rojo for round-trip check");
+
+        let mut kill_guard = KillOnDrop(process);
+        let mut info = None;
+        let mut needs_port_retry = false;
+
+        for i in 1..=MAX_TRIES {
+            match kill_guard.0.try_wait() {
+                Ok(Some(status)) => {
+                    let mut stderr_output = String::new();
+                    if let Some(mut stderr) = kill_guard.0.stderr.take() {
+                        let _ = stderr.read_to_string(&mut stderr_output);
+                    }
+                    if stderr_output.contains("AddrInUse") && port_retries < MAX_PORT_RETRIES {
+                        port_retries += 1;
+                        log::warn!(
+                            "Port {} in use, retrying with new port (attempt {}/{})",
+                            port,
+                            port_retries,
+                            MAX_PORT_RETRIES
+                        );
+                        needs_port_retry = true;
+                        break;
+                    }
+                    panic!(
+                        "Fresh Rojo process exited with status {}\nstderr:\n{}",
+                        status, stderr_output
+                    );
                 }
-                panic!(
-                    "Fresh Rojo process exited with status {}\nstderr:\n{}",
-                    status, stderr_output
-                );
+                Ok(None) => {}
+                Err(err) => panic!("Failed to wait on fresh Rojo process: {}", err),
             }
-            Ok(None) => {}
-            Err(err) => panic!("Failed to wait on fresh Rojo process: {}", err),
+
+            let url = format!("http://localhost:{}/api/rojo", port);
+            if let Ok(resp) = reqwest::blocking::get(&url) {
+                if let Ok(body) = resp.bytes() {
+                    if let Ok(server_info) = deserialize_msgpack::<ServerInfoResponse>(&body) {
+                        info = Some(server_info);
+                        break;
+                    }
+                }
+            }
+            let retry_time_ms = BASE_DURATION_MS * (i as f32).powf(EXP_BACKOFF_FACTOR);
+            thread::sleep(Duration::from_millis(retry_time_ms as u64));
         }
 
-        let url = format!("http://localhost:{}/api/rojo", port);
-        if let Ok(resp) = reqwest::blocking::get(&url) {
-            if let Ok(body) = resp.bytes() {
-                if let Ok(server_info) = deserialize_msgpack::<ServerInfoResponse>(&body) {
-                    info = Some(server_info);
-                    break;
-                }
-            }
+        if needs_port_retry {
+            continue;
         }
-        let retry_time_ms = BASE_DURATION_MS * (i as f32).powf(EXP_BACKOFF_FACTOR);
-        thread::sleep(Duration::from_millis(retry_time_ms as u64));
+
+        let info = info.expect("Fresh Rojo server did not respond");
+        let root_id = info.root_instance_id;
+
+        let url = format!("http://localhost:{}/api/read/{}", port, root_id);
+        let body = reqwest::blocking::get(&url)
+            .expect("Failed to read from fresh server")
+            .bytes()
+            .expect("Failed to get bytes from fresh server");
+        let read: ReadResponse =
+            deserialize_msgpack(&body).expect("Fresh server returned malformed response");
+
+        return normalize_read_response(&read, root_id);
     }
-
-    let info = info.expect("Fresh Rojo server did not respond");
-    let root_id = info.root_instance_id;
-
-    let url = format!("http://localhost:{}/api/read/{}", port, root_id);
-    let body = reqwest::blocking::get(&url)
-        .expect("Failed to read from fresh server")
-        .bytes()
-        .expect("Failed to get bytes from fresh server");
-    let read: ReadResponse =
-        deserialize_msgpack(&body).expect("Fresh server returned malformed response");
-
-    normalize_read_response(&read, root_id)
 }
 
 /// Assert that the live session tree matches a fresh rebuild from the filesystem.

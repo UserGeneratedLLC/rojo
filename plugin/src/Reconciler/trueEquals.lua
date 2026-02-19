@@ -157,8 +157,11 @@ local function trueEquals(a: any, b: any): boolean
 		end
 		return true
 	end
+	if t == "Font" then
+		return a.Family == b.Family and a.Weight == b.Weight and a.Style == b.Style
+	end
 
-	return false
+	return a == b
 end
 
 return trueEquals

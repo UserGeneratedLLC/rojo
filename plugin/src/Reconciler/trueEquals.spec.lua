@@ -593,6 +593,265 @@ return function()
 		end)
 	end)
 
+	describe("Font", function()
+		it("identical fonts", function()
+			local a =
+				Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+			local b =
+				Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+			expect(trueEquals(a, b)).to.equal(true)
+		end)
+
+		it("different family", function()
+			local a =
+				Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+			local b =
+				Font.new("rbxasset://fonts/families/RobotoMono.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+			expect(trueEquals(a, b)).to.equal(false)
+		end)
+
+		it("different weight", function()
+			local a =
+				Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+			local b =
+				Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Bold, Enum.FontStyle.Normal)
+			expect(trueEquals(a, b)).to.equal(false)
+		end)
+
+		it("different style", function()
+			local a =
+				Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+			local b =
+				Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Regular, Enum.FontStyle.Italic)
+			expect(trueEquals(a, b)).to.equal(false)
+		end)
+
+		it("same reference via rawequal", function()
+			local a = Font.new("rbxasset://fonts/families/SourceSansPro.json")
+			expect(trueEquals(a, a)).to.equal(true)
+		end)
+
+		it("semibold vs regular", function()
+			local a = Font.new(
+				"rbxasset://fonts/families/SourceSansPro.json",
+				Enum.FontWeight.SemiBold,
+				Enum.FontStyle.Normal
+			)
+			local b =
+				Font.new("rbxasset://fonts/families/SourceSansPro.json", Enum.FontWeight.Regular, Enum.FontStyle.Normal)
+			expect(trueEquals(a, b)).to.equal(false)
+		end)
+	end)
+
+	describe("BrickColor", function()
+		it("same BrickColor", function()
+			expect(trueEquals(BrickColor.new("Bright red"), BrickColor.new("Bright red"))).to.equal(true)
+		end)
+
+		it("different BrickColor", function()
+			expect(trueEquals(BrickColor.new("Bright red"), BrickColor.new("Bright blue"))).to.equal(false)
+		end)
+	end)
+
+	describe("fallback == equality", function()
+		it("true vs true", function()
+			expect(trueEquals(true, true)).to.equal(true)
+		end)
+
+		it("false vs false", function()
+			expect(trueEquals(false, false)).to.equal(true)
+		end)
+
+		it("true vs false", function()
+			expect(trueEquals(true, false)).to.equal(false)
+		end)
+
+		it("false vs true", function()
+			expect(trueEquals(false, true)).to.equal(false)
+		end)
+
+		it("same string content", function()
+			expect(trueEquals("hello", "hello")).to.equal(true)
+		end)
+
+		it("different string content", function()
+			expect(trueEquals("hello", "world")).to.equal(false)
+		end)
+
+		it("empty strings", function()
+			expect(trueEquals("", "")).to.equal(true)
+		end)
+
+		it("same Axes", function()
+			expect(trueEquals(Axes.new(Enum.Axis.X, Enum.Axis.Y), Axes.new(Enum.Axis.X, Enum.Axis.Y))).to.equal(true)
+		end)
+
+		it("different Axes", function()
+			expect(trueEquals(Axes.new(Enum.Axis.X), Axes.new(Enum.Axis.Y))).to.equal(false)
+		end)
+
+		it("same Faces", function()
+			expect(trueEquals(Faces.new(Enum.NormalId.Top), Faces.new(Enum.NormalId.Top))).to.equal(true)
+		end)
+
+		it("different Faces", function()
+			expect(trueEquals(Faces.new(Enum.NormalId.Top), Faces.new(Enum.NormalId.Bottom))).to.equal(false)
+		end)
+
+		it("same Region3int16", function()
+			local a = Region3int16.new(Vector3int16.new(0, 0, 0), Vector3int16.new(10, 10, 10))
+			local b = Region3int16.new(Vector3int16.new(0, 0, 0), Vector3int16.new(10, 10, 10))
+			expect(trueEquals(a, b)).to.equal(true)
+		end)
+
+		it("different Region3int16", function()
+			local a = Region3int16.new(Vector3int16.new(0, 0, 0), Vector3int16.new(10, 10, 10))
+			local b = Region3int16.new(Vector3int16.new(0, 0, 0), Vector3int16.new(20, 20, 20))
+			expect(trueEquals(a, b)).to.equal(false)
+		end)
+
+		it("same Vector3int16", function()
+			expect(trueEquals(Vector3int16.new(1, 2, 3), Vector3int16.new(1, 2, 3))).to.equal(true)
+		end)
+
+		it("different Vector3int16", function()
+			expect(trueEquals(Vector3int16.new(1, 2, 3), Vector3int16.new(4, 5, 6))).to.equal(false)
+		end)
+
+		it("same Vector2int16", function()
+			expect(trueEquals(Vector2int16.new(1, 2), Vector2int16.new(1, 2))).to.equal(true)
+		end)
+
+		it("different Vector2int16", function()
+			expect(trueEquals(Vector2int16.new(1, 2), Vector2int16.new(3, 4))).to.equal(false)
+		end)
+
+		it("same PhysicalProperties", function()
+			local a = PhysicalProperties.new(1, 0.5, 0.3)
+			local b = PhysicalProperties.new(1, 0.5, 0.3)
+			expect(trueEquals(a, b)).to.equal(true)
+		end)
+
+		it("different PhysicalProperties", function()
+			local a = PhysicalProperties.new(1, 0.5, 0.3)
+			local b = PhysicalProperties.new(2, 0.5, 0.3)
+			expect(trueEquals(a, b)).to.equal(false)
+		end)
+
+		it("different Instances are not equal", function()
+			local a = Instance.new("Folder")
+			local b = Instance.new("Folder")
+			expect(trueEquals(a, b)).to.equal(false)
+			a:Destroy()
+			b:Destroy()
+		end)
+
+		it("same EnumItem via fallback", function()
+			expect(trueEquals(Enum.SortOrder.LayoutOrder, Enum.SortOrder.LayoutOrder)).to.equal(true)
+		end)
+
+		it("different EnumItems of same enum", function()
+			expect(trueEquals(Enum.SortOrder.LayoutOrder, Enum.SortOrder.Name)).to.equal(false)
+		end)
+	end)
+
+	describe("attribute dictionaries", function()
+		it("identical Color3 attributes", function()
+			local a = { BackgroundColor = Color3.fromRGB(32, 34, 39), TextSize = 14 }
+			local b = { BackgroundColor = Color3.fromRGB(32, 34, 39), TextSize = 14 }
+			expect(trueEquals(a, b)).to.equal(true)
+		end)
+
+		it("Color3 cleanup_f32 precision", function()
+			local a = Color3.fromRGB(32, 34, 39)
+			local b = Color3.new(0.125490, 0.133333, 0.152941)
+			expect(trueEquals(a, b)).to.equal(true)
+		end)
+
+		it("dict with Color3 cleanup_f32 precision", function()
+			local a = { BackgroundColor = Color3.fromRGB(32, 34, 39) }
+			local b = { BackgroundColor = Color3.new(0.125490, 0.133333, 0.152941) }
+			expect(trueEquals(a, b)).to.equal(true)
+		end)
+
+		it("dict with Font values", function()
+			local font = Font.new(
+				"rbxasset://fonts/families/SourceSansPro.json",
+				Enum.FontWeight.SemiBold,
+				Enum.FontStyle.Normal
+			)
+			local a = { LabelFont = font }
+			local b = {
+				LabelFont = Font.new(
+					"rbxasset://fonts/families/SourceSansPro.json",
+					Enum.FontWeight.SemiBold,
+					Enum.FontStyle.Normal
+				),
+			}
+			expect(trueEquals(a, b)).to.equal(true)
+		end)
+
+		it("dict with mixed types matching", function()
+			local a = {
+				BackgroundColor = Color3.fromRGB(128, 128, 128),
+				Transparency = 0.25,
+				Size = 14,
+				Label = "Hello",
+				LabelFont = Font.new(
+					"rbxasset://fonts/families/SourceSansPro.json",
+					Enum.FontWeight.Regular,
+					Enum.FontStyle.Normal
+				),
+				Corner = UDim.new(0, 8),
+			}
+			local b = {
+				BackgroundColor = Color3.fromRGB(128, 128, 128),
+				Transparency = 0.25,
+				Size = 14,
+				Label = "Hello",
+				LabelFont = Font.new(
+					"rbxasset://fonts/families/SourceSansPro.json",
+					Enum.FontWeight.Regular,
+					Enum.FontStyle.Normal
+				),
+				Corner = UDim.new(0, 8),
+			}
+			expect(trueEquals(a, b)).to.equal(true)
+		end)
+
+		it("dict with one Font mismatch fails whole table", function()
+			local a = {
+				BackgroundColor = Color3.fromRGB(128, 128, 128),
+				LabelFont = Font.new(
+					"rbxasset://fonts/families/SourceSansPro.json",
+					Enum.FontWeight.Regular,
+					Enum.FontStyle.Normal
+				),
+			}
+			local b = {
+				BackgroundColor = Color3.fromRGB(128, 128, 128),
+				LabelFont = Font.new(
+					"rbxasset://fonts/families/SourceSansPro.json",
+					Enum.FontWeight.Bold,
+					Enum.FontStyle.Normal
+				),
+			}
+			expect(trueEquals(a, b)).to.equal(false)
+		end)
+
+		it("extra key in new table", function()
+			local a = { BackgroundColor = Color3.new(1, 0, 0) }
+			local b = { BackgroundColor = Color3.new(1, 0, 0), NewAttr = "hello" }
+			expect(trueEquals(a, b)).to.equal(false)
+		end)
+
+		it("missing key in new table", function()
+			local a = { BackgroundColor = Color3.new(1, 0, 0), OldAttr = "hello" }
+			local b = { BackgroundColor = Color3.new(1, 0, 0) }
+			expect(trueEquals(a, b)).to.equal(false)
+		end)
+	end)
+
 	describe("type mismatches", function()
 		it("string vs number", function()
 			expect(trueEquals("hello", 42)).to.equal(false)
