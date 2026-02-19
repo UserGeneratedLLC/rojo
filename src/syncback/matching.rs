@@ -18,7 +18,7 @@ use blake3::Hash;
 use rbx_dom_weak::types::{Ref, Variant};
 use rbx_dom_weak::{Ustr, WeakDom};
 
-use crate::variant_eq::variant_eq;
+use crate::variant_eq::variant_eq_disk;
 
 const UNMATCHED_PENALTY: u32 = 10_000;
 
@@ -522,7 +522,7 @@ fn count_own_diffs(new_ref: Ref, old_ref: Ref, new_dom: &WeakDom, old_dom: &Weak
         } else {
             let is_default = class_data
                 .and_then(|cd| cd.default_properties.get(key.as_str()))
-                .is_some_and(|default| variant_eq(new_val, default));
+                .is_some_and(|default| variant_eq_disk(new_val, default));
             if !is_default {
                 cost += count_variant_one_sided(new_val);
             }
@@ -533,7 +533,7 @@ fn count_own_diffs(new_ref: Ref, old_ref: Ref, new_dom: &WeakDom, old_dom: &Weak
         if !new_inst.properties.contains_key(key) {
             let is_default = class_data
                 .and_then(|cd| cd.default_properties.get(key.as_str()))
-                .is_some_and(|default| variant_eq(old_val, default));
+                .is_some_and(|default| variant_eq_disk(old_val, default));
             if !is_default {
                 cost += count_variant_one_sided(old_val);
             }
@@ -589,7 +589,7 @@ fn diff_variant_pair(a: &Variant, b: &Variant, a_dom: &WeakDom, b_dom: &WeakDom)
             for (key, a_val) in attrs_a.iter() {
                 match attrs_b.get(key.as_str()) {
                     Some(b_val) => {
-                        if !variant_eq(a_val, b_val) {
+                        if !variant_eq_disk(a_val, b_val) {
                             cost += 1;
                         }
                     }
@@ -604,7 +604,7 @@ fn diff_variant_pair(a: &Variant, b: &Variant, a_dom: &WeakDom, b_dom: &WeakDom)
             cost
         }
         _ => {
-            if variant_eq(a, b) {
+            if variant_eq_disk(a, b) {
                 0
             } else {
                 1
@@ -633,7 +633,7 @@ fn count_variant_one_sided(val: &Variant) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rbx_dom_weak::InstanceBuilder;
+    use rbx_dom_weak::{ustr, InstanceBuilder};
 
     fn build_test_dom() -> (WeakDom, Ref, Ref, Ref) {
         let mut dom = WeakDom::new(InstanceBuilder::new("DataModel"));
@@ -953,6 +953,378 @@ mod tests {
                 new_child_name, old_child_name,
                 "Ref scoring failed: new model with child '{}' matched old model with child '{}'",
                 new_child_name, old_child_name
+            );
+        }
+    }
+
+    // ================================================================
+    // Large ambiguous group tests (50+ same-named instances)
+    // ================================================================
+
+    #[test]
+    fn fifty_same_name_parts_five_groups_syncback() {
+        use rbx_dom_weak::types::{Color3, Variant, Vector3};
+
+        let groups: Vec<(Vector3, Color3)> = vec![
+            (Vector3::new(0.0, 0.0, 0.0), Color3::new(1.0, 0.0, 0.0)),
+            (Vector3::new(0.0, 5.0, 0.0), Color3::new(1.0, 0.0, 0.0)),
+            (Vector3::new(0.0, 10.0, 0.0), Color3::new(0.0, 1.0, 0.0)),
+            (Vector3::new(0.0, 0.0, 0.0), Color3::new(0.0, 1.0, 0.0)),
+            (Vector3::new(0.0, 5.0, 0.0), Color3::new(0.0, 0.0, 1.0)),
+        ];
+
+        let mut new_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let new_root = new_dom.root_ref();
+        for (pos, color) in &groups {
+            for _ in 0..10 {
+                new_dom.insert(
+                    new_root,
+                    InstanceBuilder::new("Part")
+                        .with_name("Line")
+                        .with_property("Position", Variant::Vector3(*pos))
+                        .with_property("Color", Variant::Color3(*color)),
+                );
+            }
+        }
+
+        let mut old_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let old_root = old_dom.root_ref();
+        for (pos, color) in groups.iter().rev() {
+            for _ in 0..10 {
+                old_dom.insert(
+                    old_root,
+                    InstanceBuilder::new("Part")
+                        .with_name("Line")
+                        .with_property("Position", Variant::Vector3(*pos))
+                        .with_property("Color", Variant::Color3(*color)),
+                );
+            }
+        }
+
+        let new_children: Vec<Ref> = new_dom.get_by_ref(new_root).unwrap().children().to_vec();
+        let old_children: Vec<Ref> = old_dom.get_by_ref(old_root).unwrap().children().to_vec();
+
+        let start = std::time::Instant::now();
+        let result = match_children(
+            &new_children,
+            &old_children,
+            &new_dom,
+            &old_dom,
+            None,
+            None,
+            &MatchingSession::new(),
+        );
+        let elapsed = start.elapsed();
+
+        assert_eq!(result.matched.len(), 50);
+        assert!(result.unmatched_new.is_empty());
+        assert!(result.unmatched_old.is_empty());
+        assert!(elapsed.as_secs() < 5, "took too long: {:?}", elapsed);
+
+        for (new_ref, old_ref) in &result.matched {
+            let new_inst = new_dom.get_by_ref(*new_ref).unwrap();
+            let old_inst = old_dom.get_by_ref(*old_ref).unwrap();
+
+            let new_pos = new_inst.properties.get(&ustr("Position")).unwrap();
+            let old_pos = old_inst.properties.get(&ustr("Position")).unwrap();
+            assert!(
+                variant_eq_disk(new_pos, old_pos),
+                "Position mismatch: new={:?}, old={:?}",
+                new_pos,
+                old_pos
+            );
+            let new_color = new_inst.properties.get(&ustr("Color")).unwrap();
+            let old_color = old_inst.properties.get(&ustr("Color")).unwrap();
+            assert!(
+                variant_eq_disk(new_color, old_color),
+                "Color mismatch: new={:?}, old={:?}",
+                new_color,
+                old_color
+            );
+        }
+    }
+
+    #[test]
+    fn fifty_parts_position_only_syncback() {
+        use rbx_dom_weak::types::{Color3, Variant, Vector3};
+
+        let shared_color = Color3::new(0.5, 0.5, 0.5);
+        let positions = [
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(10.0, 0.0, 0.0),
+            Vector3::new(0.0, 10.0, 0.0),
+            Vector3::new(0.0, 0.0, 10.0),
+            Vector3::new(5.0, 5.0, 5.0),
+        ];
+
+        let mut new_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let new_root = new_dom.root_ref();
+        let mut old_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let old_root = old_dom.root_ref();
+
+        for pos in &positions {
+            for _ in 0..10 {
+                new_dom.insert(
+                    new_root,
+                    InstanceBuilder::new("Part")
+                        .with_name("Block")
+                        .with_property("Position", Variant::Vector3(*pos))
+                        .with_property("Color", Variant::Color3(shared_color)),
+                );
+            }
+        }
+        for pos in positions.iter().rev() {
+            for _ in 0..10 {
+                old_dom.insert(
+                    old_root,
+                    InstanceBuilder::new("Part")
+                        .with_name("Block")
+                        .with_property("Position", Variant::Vector3(*pos))
+                        .with_property("Color", Variant::Color3(shared_color)),
+                );
+            }
+        }
+
+        let new_children: Vec<Ref> = new_dom.get_by_ref(new_root).unwrap().children().to_vec();
+        let old_children: Vec<Ref> = old_dom.get_by_ref(old_root).unwrap().children().to_vec();
+        let result = match_children(
+            &new_children,
+            &old_children,
+            &new_dom,
+            &old_dom,
+            None,
+            None,
+            &MatchingSession::new(),
+        );
+
+        assert_eq!(result.matched.len(), 50);
+        for (new_ref, old_ref) in &result.matched {
+            let new_pos = new_dom
+                .get_by_ref(*new_ref)
+                .unwrap()
+                .properties
+                .get(&ustr("Position"))
+                .unwrap();
+            let old_pos = old_dom
+                .get_by_ref(*old_ref)
+                .unwrap()
+                .properties
+                .get(&ustr("Position"))
+                .unwrap();
+            assert!(variant_eq_disk(new_pos, old_pos), "Position mismatch");
+        }
+    }
+
+    #[test]
+    fn fifty_parts_color_only_syncback() {
+        use rbx_dom_weak::types::{Color3, Variant, Vector3};
+
+        let shared_pos = Vector3::new(0.0, 0.0, 0.0);
+        let colors = [
+            Color3::new(1.0, 0.0, 0.0),
+            Color3::new(0.0, 1.0, 0.0),
+            Color3::new(0.0, 0.0, 1.0),
+            Color3::new(1.0, 1.0, 0.0),
+            Color3::new(0.0, 1.0, 1.0),
+        ];
+
+        let mut new_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let new_root = new_dom.root_ref();
+        let mut old_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let old_root = old_dom.root_ref();
+
+        for color in &colors {
+            for _ in 0..10 {
+                new_dom.insert(
+                    new_root,
+                    InstanceBuilder::new("Part")
+                        .with_name("Block")
+                        .with_property("Position", Variant::Vector3(shared_pos))
+                        .with_property("Color", Variant::Color3(*color)),
+                );
+            }
+        }
+        for color in colors.iter().rev() {
+            for _ in 0..10 {
+                old_dom.insert(
+                    old_root,
+                    InstanceBuilder::new("Part")
+                        .with_name("Block")
+                        .with_property("Position", Variant::Vector3(shared_pos))
+                        .with_property("Color", Variant::Color3(*color)),
+                );
+            }
+        }
+
+        let new_children: Vec<Ref> = new_dom.get_by_ref(new_root).unwrap().children().to_vec();
+        let old_children: Vec<Ref> = old_dom.get_by_ref(old_root).unwrap().children().to_vec();
+        let result = match_children(
+            &new_children,
+            &old_children,
+            &new_dom,
+            &old_dom,
+            None,
+            None,
+            &MatchingSession::new(),
+        );
+
+        assert_eq!(result.matched.len(), 50);
+        for (new_ref, old_ref) in &result.matched {
+            let new_color = new_dom
+                .get_by_ref(*new_ref)
+                .unwrap()
+                .properties
+                .get(&ustr("Color"))
+                .unwrap();
+            let old_color = old_dom
+                .get_by_ref(*old_ref)
+                .unwrap()
+                .properties
+                .get(&ustr("Color"))
+                .unwrap();
+            assert!(variant_eq_disk(new_color, old_color), "Color mismatch");
+        }
+    }
+
+    #[test]
+    fn sixty_parts_near_float_syncback() {
+        use rbx_dom_weak::types::Variant;
+
+        let groups: Vec<f32> = vec![0.1, 0.100001, 0.5, 0.500001, 0.999999];
+        let group_size = 12;
+
+        let mut new_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let new_root = new_dom.root_ref();
+        let mut old_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let old_root = old_dom.root_ref();
+
+        for &t in &groups {
+            for _ in 0..group_size {
+                new_dom.insert(
+                    new_root,
+                    InstanceBuilder::new("Part")
+                        .with_name("Segment")
+                        .with_property("Transparency", Variant::Float32(t)),
+                );
+            }
+        }
+        for &t in groups.iter().rev() {
+            for _ in 0..group_size {
+                old_dom.insert(
+                    old_root,
+                    InstanceBuilder::new("Part")
+                        .with_name("Segment")
+                        .with_property("Transparency", Variant::Float32(t)),
+                );
+            }
+        }
+
+        let new_children: Vec<Ref> = new_dom.get_by_ref(new_root).unwrap().children().to_vec();
+        let old_children: Vec<Ref> = old_dom.get_by_ref(old_root).unwrap().children().to_vec();
+        let result = match_children(
+            &new_children,
+            &old_children,
+            &new_dom,
+            &old_dom,
+            None,
+            None,
+            &MatchingSession::new(),
+        );
+
+        assert_eq!(result.matched.len(), 60);
+        assert!(result.unmatched_new.is_empty());
+        assert!(result.unmatched_old.is_empty());
+
+        for (new_ref, old_ref) in &result.matched {
+            let new_t = new_dom
+                .get_by_ref(*new_ref)
+                .unwrap()
+                .properties
+                .get(&ustr("Transparency"))
+                .unwrap();
+            let old_t = old_dom
+                .get_by_ref(*old_ref)
+                .unwrap()
+                .properties
+                .get(&ustr("Transparency"))
+                .unwrap();
+            assert!(
+                variant_eq_disk(new_t, old_t),
+                "Transparency mismatch: new={:?}, old={:?}",
+                new_t,
+                old_t
+            );
+        }
+    }
+
+    #[test]
+    fn disk_representation_boundary_syncback() {
+        use rbx_dom_weak::types::Variant;
+
+        let a_val: f32 = 1.00005;
+        let b_val: f32 = 1.00015;
+
+        let mut new_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let new_root = new_dom.root_ref();
+        new_dom.insert(
+            new_root,
+            InstanceBuilder::new("Part")
+                .with_name("Edge")
+                .with_property("Transparency", Variant::Float32(a_val)),
+        );
+        new_dom.insert(
+            new_root,
+            InstanceBuilder::new("Part")
+                .with_name("Edge")
+                .with_property("Transparency", Variant::Float32(b_val)),
+        );
+
+        let mut old_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let old_root = old_dom.root_ref();
+        old_dom.insert(
+            old_root,
+            InstanceBuilder::new("Part")
+                .with_name("Edge")
+                .with_property("Transparency", Variant::Float32(b_val)),
+        );
+        old_dom.insert(
+            old_root,
+            InstanceBuilder::new("Part")
+                .with_name("Edge")
+                .with_property("Transparency", Variant::Float32(a_val)),
+        );
+
+        let new_children: Vec<Ref> = new_dom.get_by_ref(new_root).unwrap().children().to_vec();
+        let old_children: Vec<Ref> = old_dom.get_by_ref(old_root).unwrap().children().to_vec();
+        let result = match_children(
+            &new_children,
+            &old_children,
+            &new_dom,
+            &old_dom,
+            None,
+            None,
+            &MatchingSession::new(),
+        );
+
+        assert_eq!(result.matched.len(), 2);
+        for (new_ref, old_ref) in &result.matched {
+            let new_t = new_dom
+                .get_by_ref(*new_ref)
+                .unwrap()
+                .properties
+                .get(&ustr("Transparency"))
+                .unwrap();
+            let old_t = old_dom
+                .get_by_ref(*old_ref)
+                .unwrap()
+                .properties
+                .get(&ustr("Transparency"))
+                .unwrap();
+            assert!(
+                variant_eq_disk(new_t, old_t),
+                "Boundary test failed: new={:?}, old={:?}",
+                new_t,
+                old_t
             );
         }
     }

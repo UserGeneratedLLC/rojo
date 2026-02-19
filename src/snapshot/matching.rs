@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use rbx_dom_weak::types::{Ref, Variant};
 use rbx_dom_weak::Ustr;
 
-use crate::variant_eq::variant_eq;
+use crate::variant_eq::variant_eq_disk;
 
 use super::{InstanceSnapshot, InstanceWithMeta, RojoTree};
 
@@ -467,7 +467,7 @@ fn count_own_diffs(snap: &InstanceSnapshot, inst: &InstanceWithMeta, tree: &Rojo
         } else {
             let is_default = class_data
                 .and_then(|cd| cd.default_properties.get(key.as_str()))
-                .is_some_and(|default| variant_eq(snap_val, default));
+                .is_some_and(|default| variant_eq_disk(snap_val, default));
             if !is_default {
                 cost += count_variant_one_sided(snap_val);
             }
@@ -478,7 +478,7 @@ fn count_own_diffs(snap: &InstanceSnapshot, inst: &InstanceWithMeta, tree: &Rojo
         if !snap_props.contains_key(key) {
             let is_default = class_data
                 .and_then(|cd| cd.default_properties.get(key.as_str()))
-                .is_some_and(|default| variant_eq(inst_val, default));
+                .is_some_and(|default| variant_eq_disk(inst_val, default));
             if !is_default {
                 cost += count_variant_one_sided(inst_val);
             }
@@ -531,7 +531,7 @@ fn diff_variant_pair(a: &Variant, b: &Variant, tree: &RojoTree) -> u32 {
             count_attributes_diff(attrs_a, attrs_b)
         }
         _ => {
-            if variant_eq(a, b) {
+            if variant_eq_disk(a, b) {
                 0
             } else {
                 1
@@ -578,7 +578,7 @@ fn count_attributes_diff(
     for (key, a_val) in a.iter() {
         match b.get(key.as_str()) {
             Some(b_val) => {
-                if !variant_eq(a_val, b_val) {
+                if !variant_eq_disk(a_val, b_val) {
                     cost += 1;
                 }
             }
@@ -597,6 +597,7 @@ fn count_attributes_diff(
 mod tests {
     use super::*;
     use crate::snapshot::{InstanceMetadata, InstanceSnapshot, RojoTree};
+    use crate::variant_eq::variant_eq;
     use rbx_dom_weak::{ustr, HashMapExt as _};
     use std::borrow::Cow;
 
@@ -1584,6 +1585,264 @@ mod tests {
                 "Ref scoring failed: snap with child '{}' matched tree with child '{}'",
                 snap_child_name,
                 tree_child.name()
+            );
+        }
+    }
+
+    // ================================================================
+    // Large ambiguous group tests (50+ same-named instances)
+    // ================================================================
+
+    #[test]
+    fn fifty_same_name_parts_five_variation_groups() {
+        use rbx_dom_weak::types::{Color3, Variant, Vector3};
+
+        let groups: Vec<(Vector3, Color3)> = vec![
+            (Vector3::new(0.0, 0.0, 0.0), Color3::new(1.0, 0.0, 0.0)),
+            (Vector3::new(0.0, 5.0, 0.0), Color3::new(1.0, 0.0, 0.0)),
+            (Vector3::new(0.0, 10.0, 0.0), Color3::new(0.0, 1.0, 0.0)),
+            (Vector3::new(0.0, 0.0, 0.0), Color3::new(0.0, 1.0, 0.0)),
+            (Vector3::new(0.0, 5.0, 0.0), Color3::new(0.0, 0.0, 1.0)),
+        ];
+
+        let mut snaps = Vec::new();
+        for (pos, color) in &groups {
+            for _ in 0..10 {
+                snaps.push(make_snapshot_with_props(
+                    "Line",
+                    "Part",
+                    vec![
+                        ("Position", Variant::Vector3(*pos)),
+                        ("Color", Variant::Color3(*color)),
+                    ],
+                ));
+            }
+        }
+
+        let mut tree_children_snaps: Vec<InstanceSnapshot> = Vec::new();
+        for (pos, color) in groups.iter().rev() {
+            for _ in 0..10 {
+                tree_children_snaps.push(make_snapshot_with_props(
+                    "Line",
+                    "Part",
+                    vec![
+                        ("Position", Variant::Vector3(*pos)),
+                        ("Color", Variant::Color3(*color)),
+                    ],
+                ));
+            }
+        }
+
+        let (tree, tree_refs) = make_tree_from_snapshots(tree_children_snaps);
+
+        let start = std::time::Instant::now();
+        let result = match_forward(snaps, &tree_refs, &tree, &MatchingSession::new());
+        let elapsed = start.elapsed();
+
+        assert_eq!(result.matched.len(), 50);
+        assert!(result.unmatched_snapshot.is_empty());
+        assert!(result.unmatched_tree.is_empty());
+        assert!(elapsed.as_secs() < 5, "took too long: {:?}", elapsed);
+
+        for (snap, tree_ref) in &result.matched {
+            let inst = tree.get_instance(*tree_ref).unwrap();
+            let snap_pos = snap.properties.get(&ustr("Position")).unwrap();
+            let tree_pos = inst.properties().get(&ustr("Position")).unwrap();
+            assert!(
+                variant_eq_disk(snap_pos, tree_pos),
+                "Position mismatch: snap={:?}, tree={:?}",
+                snap_pos,
+                tree_pos
+            );
+            let snap_color = snap.properties.get(&ustr("Color")).unwrap();
+            let tree_color = inst.properties().get(&ustr("Color")).unwrap();
+            assert!(
+                variant_eq_disk(snap_color, tree_color),
+                "Color mismatch: snap={:?}, tree={:?}",
+                snap_color,
+                tree_color
+            );
+        }
+    }
+
+    #[test]
+    fn fifty_parts_position_only_variations() {
+        use rbx_dom_weak::types::{Color3, Variant, Vector3};
+
+        let shared_color = Color3::new(0.5, 0.5, 0.5);
+        let positions = [
+            Vector3::new(0.0, 0.0, 0.0),
+            Vector3::new(10.0, 0.0, 0.0),
+            Vector3::new(0.0, 10.0, 0.0),
+            Vector3::new(0.0, 0.0, 10.0),
+            Vector3::new(5.0, 5.0, 5.0),
+        ];
+
+        let mut snaps = Vec::new();
+        let mut tree_children_snaps = Vec::new();
+        for pos in &positions {
+            for _ in 0..10 {
+                let props = vec![
+                    ("Position", Variant::Vector3(*pos)),
+                    ("Color", Variant::Color3(shared_color)),
+                ];
+                snaps.push(make_snapshot_with_props("Block", "Part", props.clone()));
+                tree_children_snaps.push(make_snapshot_with_props("Block", "Part", props));
+            }
+        }
+        tree_children_snaps.reverse();
+
+        let (tree, tree_refs) = make_tree_from_snapshots(tree_children_snaps);
+        let result = match_forward(snaps, &tree_refs, &tree, &MatchingSession::new());
+
+        assert_eq!(result.matched.len(), 50);
+        assert!(result.unmatched_snapshot.is_empty());
+        assert!(result.unmatched_tree.is_empty());
+
+        for (snap, tree_ref) in &result.matched {
+            let inst = tree.get_instance(*tree_ref).unwrap();
+            let snap_pos = snap.properties.get(&ustr("Position")).unwrap();
+            let tree_pos = inst.properties().get(&ustr("Position")).unwrap();
+            assert!(variant_eq_disk(snap_pos, tree_pos), "Position mismatch");
+        }
+    }
+
+    #[test]
+    fn fifty_parts_color_only_variations() {
+        use rbx_dom_weak::types::{Color3, Variant, Vector3};
+
+        let shared_pos = Vector3::new(0.0, 0.0, 0.0);
+        let colors = [
+            Color3::new(1.0, 0.0, 0.0),
+            Color3::new(0.0, 1.0, 0.0),
+            Color3::new(0.0, 0.0, 1.0),
+            Color3::new(1.0, 1.0, 0.0),
+            Color3::new(0.0, 1.0, 1.0),
+        ];
+
+        let mut snaps = Vec::new();
+        let mut tree_children_snaps = Vec::new();
+        for color in &colors {
+            for _ in 0..10 {
+                let props = vec![
+                    ("Position", Variant::Vector3(shared_pos)),
+                    ("Color", Variant::Color3(*color)),
+                ];
+                snaps.push(make_snapshot_with_props("Block", "Part", props.clone()));
+                tree_children_snaps.push(make_snapshot_with_props("Block", "Part", props));
+            }
+        }
+        tree_children_snaps.reverse();
+
+        let (tree, tree_refs) = make_tree_from_snapshots(tree_children_snaps);
+        let result = match_forward(snaps, &tree_refs, &tree, &MatchingSession::new());
+
+        assert_eq!(result.matched.len(), 50);
+        assert!(result.unmatched_snapshot.is_empty());
+        assert!(result.unmatched_tree.is_empty());
+
+        for (snap, tree_ref) in &result.matched {
+            let inst = tree.get_instance(*tree_ref).unwrap();
+            let snap_color = snap.properties.get(&ustr("Color")).unwrap();
+            let tree_color = inst.properties().get(&ustr("Color")).unwrap();
+            assert!(variant_eq_disk(snap_color, tree_color), "Color mismatch");
+        }
+    }
+
+    #[test]
+    fn sixty_parts_with_near_float_values() {
+        use rbx_dom_weak::types::Variant;
+
+        let groups: Vec<f32> = vec![0.1, 0.100001, 0.5, 0.500001, 0.999999];
+        let group_size = 12;
+
+        let mut snaps = Vec::new();
+        let mut tree_children_snaps = Vec::new();
+        for &t in &groups {
+            for _ in 0..group_size {
+                snaps.push(make_snapshot_with_props(
+                    "Segment",
+                    "Part",
+                    vec![("Transparency", Variant::Float32(t))],
+                ));
+                tree_children_snaps.push(make_snapshot_with_props(
+                    "Segment",
+                    "Part",
+                    vec![("Transparency", Variant::Float32(t))],
+                ));
+            }
+        }
+        tree_children_snaps.reverse();
+
+        let (tree, tree_refs) = make_tree_from_snapshots(tree_children_snaps);
+        let result = match_forward(snaps, &tree_refs, &tree, &MatchingSession::new());
+
+        assert_eq!(result.matched.len(), 60);
+        assert!(result.unmatched_snapshot.is_empty());
+        assert!(result.unmatched_tree.is_empty());
+
+        for (snap, tree_ref) in &result.matched {
+            let inst = tree.get_instance(*tree_ref).unwrap();
+            let snap_t = snap.properties.get(&ustr("Transparency")).unwrap();
+            let tree_t = inst.properties().get(&ustr("Transparency")).unwrap();
+            assert!(
+                variant_eq_disk(snap_t, tree_t),
+                "Transparency mismatch: snap={:?}, tree={:?}",
+                snap_t,
+                tree_t
+            );
+        }
+    }
+
+    #[test]
+    fn disk_representation_boundary_matching() {
+        use rbx_dom_weak::types::Variant;
+
+        let a_val: f32 = 1.00005;
+        let b_val: f32 = 1.00015;
+
+        let snaps = vec![
+            make_snapshot_with_props(
+                "Edge",
+                "Part",
+                vec![("Transparency", Variant::Float32(a_val))],
+            ),
+            make_snapshot_with_props(
+                "Edge",
+                "Part",
+                vec![("Transparency", Variant::Float32(b_val))],
+            ),
+        ];
+
+        let tree_children = vec![
+            make_snapshot_with_props(
+                "Edge",
+                "Part",
+                vec![("Transparency", Variant::Float32(b_val))],
+            ),
+            make_snapshot_with_props(
+                "Edge",
+                "Part",
+                vec![("Transparency", Variant::Float32(a_val))],
+            ),
+        ];
+
+        let (tree, tree_refs) = make_tree_from_snapshots(tree_children);
+        let result = match_forward(snaps, &tree_refs, &tree, &MatchingSession::new());
+
+        assert_eq!(result.matched.len(), 2);
+        assert!(result.unmatched_snapshot.is_empty());
+        assert!(result.unmatched_tree.is_empty());
+
+        for (snap, tree_ref) in &result.matched {
+            let inst = tree.get_instance(*tree_ref).unwrap();
+            let snap_t = snap.properties.get(&ustr("Transparency")).unwrap();
+            let tree_t = inst.properties().get(&ustr("Transparency")).unwrap();
+            assert!(
+                variant_eq_disk(snap_t, tree_t),
+                "Boundary test failed: snap={:?}, tree={:?} (disk should pair exactly)",
+                snap_t,
+                tree_t
             );
         }
     }

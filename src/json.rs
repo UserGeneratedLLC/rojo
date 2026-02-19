@@ -153,7 +153,12 @@ const F64_FLOAT_OPTIONS: Options = Options::builder()
 const F32_BUF_SIZE: usize = F32_FLOAT_OPTIONS.buffer_size_const::<f32, STANDARD>();
 const F64_BUF_SIZE: usize = F64_FLOAT_OPTIONS.buffer_size_const::<f64, STANDARD>();
 
-fn format_f32(v: f32) -> String {
+pub(crate) const F32_DISK_OPTIONS: &Options = &F32_FLOAT_OPTIONS;
+pub(crate) const F64_DISK_OPTIONS: &Options = &F64_FLOAT_OPTIONS;
+pub(crate) const F32_DISK_BUF_SIZE: usize = F32_BUF_SIZE;
+pub(crate) const F64_DISK_BUF_SIZE: usize = F64_BUF_SIZE;
+
+pub(crate) fn format_f32(v: f32) -> String {
     let mut buffer = [0u8; F32_BUF_SIZE];
     let digits = v.to_lexical_with_options::<STANDARD>(&mut buffer, &F32_FLOAT_OPTIONS);
     std::str::from_utf8(digits)
@@ -161,7 +166,7 @@ fn format_f32(v: f32) -> String {
         .into()
 }
 
-fn format_f64(v: f64) -> String {
+pub(crate) fn format_f64(v: f64) -> String {
     let mut buffer = [0u8; F64_BUF_SIZE];
     let digits = v.to_lexical_with_options::<STANDARD>(&mut buffer, &F64_FLOAT_OPTIONS);
     std::str::from_utf8(digits)

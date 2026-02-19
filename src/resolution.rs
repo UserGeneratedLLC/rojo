@@ -417,7 +417,7 @@ impl AmbiguousValue {
     }
 }
 
-fn cleanup_f32(v: f32) -> f32 {
+pub(crate) fn cleanup_f32(v: f32) -> f32 {
     let cleaned = format!("{:.6}", v).parse::<f32>().unwrap_or(v);
     if cleaned == 0.0 {
         0.0
