@@ -32,7 +32,7 @@ pub use noop_backend::NoopBackend;
 pub use snapshot::VfsSnapshot;
 pub use std_backend::{CriticalErrorHandler, StdBackend, WatcherCriticalError};
 
-/// Pre-read file contents and canonical paths for fast startup.
+/// Pre-read file contents, canonical paths, and metadata for fast startup.
 ///
 /// Populated in parallel (via rayon + walkdir) before snapshot building,
 /// then consumed by VFS reads during `snapshot_from_vfs()`. Cleared after
@@ -40,6 +40,9 @@ pub use std_backend::{CriticalErrorHandler, StdBackend, WatcherCriticalError};
 pub struct PrefetchCache {
     pub files: HashMap<PathBuf, Vec<u8>>,
     pub canonical: HashMap<PathBuf, PathBuf>,
+    /// `true` = file, `false` = directory. Paths not in the map fall through
+    /// to the backend (e.g. init-file probes for paths that don't exist).
+    pub is_file: HashMap<PathBuf, bool>,
 }
 
 mod sealed {
@@ -246,6 +249,13 @@ impl VfsInner {
 
     fn metadata<P: AsRef<Path>>(&mut self, path: P) -> io::Result<Metadata> {
         let path = path.as_ref();
+
+        if let Some(cache) = &self.prefetch_cache {
+            if let Some(&is_file) = cache.is_file.get(path) {
+                return Ok(Metadata { is_file });
+            }
+        }
+
         self.backend.metadata(path)
     }
 
@@ -754,6 +764,7 @@ mod test {
                 .into_iter()
                 .map(|(k, v)| (PathBuf::from(k), PathBuf::from(v)))
                 .collect(),
+            is_file: HashMap::new(),
         }
     }
 
@@ -871,9 +882,162 @@ mod test {
         vfs.set_prefetch_cache(PrefetchCache {
             files: cache_files,
             canonical: HashMap::new(),
+            is_file: HashMap::new(),
         });
 
         let result = vfs.read(&file_path).unwrap();
         assert_eq!(result.as_slice(), contents.as_bytes());
+    }
+
+    #[test]
+    fn prefetch_cache_read_to_string_invalid_utf8() {
+        let imfs = InMemoryFs::new();
+        let vfs = Vfs::new(imfs);
+        vfs.set_prefetch_cache(make_prefetch(
+            vec![("test", &[0xFF, 0xFE, 0x00, 0x80])],
+            vec![],
+        ));
+
+        let err = vfs.read_to_string("test").unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+    }
+
+    #[test]
+    fn prefetch_cache_canonicalize_depletion() {
+        let mut imfs = InMemoryFs::new();
+        imfs.load_snapshot("/real/path", VfsSnapshot::file("x"))
+            .unwrap();
+        let vfs = Vfs::new(imfs);
+        vfs.set_prefetch_cache(make_prefetch(
+            vec![],
+            vec![("/real/path", "/canonical/path")],
+        ));
+
+        assert_eq!(
+            vfs.canonicalize("/real/path").unwrap(),
+            PathBuf::from("/canonical/path"),
+            "First call should hit cache"
+        );
+        assert_eq!(
+            vfs.canonicalize("/real/path").unwrap(),
+            PathBuf::from("/real/path"),
+            "Second call should fall through to InMemoryFs backend"
+        );
+    }
+
+    #[test]
+    fn prefetch_cache_set_overwrite_previous() {
+        let imfs = InMemoryFs::new();
+        let vfs = Vfs::new(imfs);
+
+        vfs.set_prefetch_cache(make_prefetch(vec![("a", b"first")], vec![]));
+        vfs.set_prefetch_cache(make_prefetch(vec![("a", b"second")], vec![]));
+
+        assert_eq!(vfs.read("a").unwrap().as_slice(), b"second");
+    }
+
+    #[test]
+    fn prefetch_cache_concurrent_reads_from_threads() {
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut cache_files = HashMap::new();
+        for i in 0..100 {
+            let path = dir.path().join(format!("file_{i}.txt"));
+            let content = format!("content_{i}");
+            fs_err::write(&path, &content).unwrap();
+            cache_files.insert(path, content.into_bytes());
+        }
+
+        let vfs = Arc::new(Vfs::new(StdBackend::new_for_testing()));
+        vfs.set_prefetch_cache(PrefetchCache {
+            files: cache_files,
+            canonical: HashMap::new(),
+            is_file: HashMap::new(),
+        });
+
+        let handles: Vec<_> = (0..100)
+            .map(|i| {
+                let vfs = Arc::clone(&vfs);
+                let path = dir.path().join(format!("file_{i}.txt"));
+                let expected = format!("content_{i}");
+                std::thread::spawn(move || {
+                    let data = vfs.read(&path).unwrap();
+                    assert_eq!(
+                        String::from_utf8(data.to_vec()).unwrap(),
+                        expected,
+                        "File {i} content mismatch"
+                    );
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().expect("Thread panicked");
+        }
+    }
+
+    #[test]
+    fn prefetch_cache_many_files_std_backend() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cache_files = HashMap::new();
+        let mut canonical = HashMap::new();
+
+        for i in 0..50 {
+            let path = dir.path().join(format!("f{i}.txt"));
+            let content = format!("data_{i}");
+            fs_err::write(&path, &content).unwrap();
+            cache_files.insert(path.clone(), content.into_bytes());
+            if let Ok(c) = path.canonicalize() {
+                canonical.insert(path, c);
+            }
+        }
+
+        let vfs = Vfs::new(StdBackend::new_for_testing());
+        vfs.set_prefetch_cache(PrefetchCache {
+            files: cache_files,
+            canonical,
+            is_file: HashMap::new(),
+        });
+
+        for i in 0..50 {
+            let path = dir.path().join(format!("f{i}.txt"));
+            let data = vfs.read_to_string(&path).unwrap();
+            assert_eq!(data.as_str(), &format!("data_{i}"));
+        }
+
+        for i in 0..50 {
+            let path = dir.path().join(format!("f{i}.txt"));
+            let data = vfs.read_to_string(&path).unwrap();
+            assert_eq!(
+                data.as_str(),
+                &format!("data_{i}"),
+                "Second read (backend) of f{i}.txt diverged"
+            );
+        }
+    }
+
+    #[test]
+    fn prefetch_cache_read_after_write_ignores_cache() {
+        let mut imfs = InMemoryFs::new();
+        imfs.load_snapshot("test", VfsSnapshot::file("original"))
+            .unwrap();
+        let vfs = Vfs::new(imfs);
+        vfs.set_prefetch_cache(make_prefetch(vec![("test", b"cached")], vec![]));
+
+        vfs.write("test", b"written").unwrap();
+        let data = vfs.read("test").unwrap();
+        assert_eq!(
+            data.as_slice(),
+            b"cached",
+            "Cache entry should still be consumed first"
+        );
+
+        let data2 = vfs.read("test").unwrap();
+        assert_eq!(
+            data2.as_slice(),
+            b"written",
+            "After cache depleted, should see the written data"
+        );
     }
 }

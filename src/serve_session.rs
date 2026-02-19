@@ -2,7 +2,7 @@ use std::{
     collections::HashSet,
     io,
     net::IpAddr,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard},
     time::Instant,
 };
@@ -125,19 +125,66 @@ pub struct ServeSession {
     git_repo_root: Option<std::path::PathBuf>,
 }
 
-/// Walk a directory tree in parallel, reading all file contents and computing
-/// canonical paths. Returns a [`PrefetchCache`] that can be loaded into the
-/// VFS to eliminate per-file I/O during the initial snapshot build.
-fn prefetch_project_files(root: &Path) -> io::Result<PrefetchCache> {
+/// Collect all filesystem paths reachable from the project tree's `$path`
+/// entries, then read file contents and compute canonical paths in parallel.
+fn prefetch_project_files(project: &Project) -> io::Result<PrefetchCache> {
     use rayon::prelude::*;
     use std::collections::HashMap;
     use walkdir::WalkDir;
 
-    let entries: Vec<walkdir::DirEntry> = WalkDir::new(root)
-        .follow_links(true)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .collect();
+    let folder = project.folder_location();
+
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    collect_path_roots(&project.tree, folder, &mut roots);
+
+    if roots.is_empty() {
+        return Ok(PrefetchCache {
+            files: HashMap::new(),
+            canonical: HashMap::new(),
+            is_file: HashMap::new(),
+        });
+    }
+
+    let walk_start = Instant::now();
+
+    let mut entries: Vec<walkdir::DirEntry> = Vec::new();
+    for root in &roots {
+        if !root.exists() {
+            continue;
+        }
+        for entry in WalkDir::new(root).follow_links(true) {
+            if let Ok(e) = entry {
+                entries.push(e);
+            }
+        }
+    }
+
+    // Also include the project file itself (read by project middleware).
+    if let Ok(meta) = std::fs::metadata(&project.file_location) {
+        if meta.is_file() {
+            entries.push(
+                WalkDir::new(&project.file_location)
+                    .into_iter()
+                    .next()
+                    .unwrap()
+                    .unwrap(),
+            );
+        }
+    }
+
+    let walk_elapsed = walk_start.elapsed();
+    let file_count = entries.iter().filter(|e| e.file_type().is_file()).count();
+    let dir_count = entries.len() - file_count;
+
+    log::info!(
+        "Prefetch walk: {} files + {} dirs from {} root(s) in {:.1?}",
+        file_count,
+        dir_count,
+        roots.len(),
+        walk_elapsed,
+    );
+
+    let read_start = Instant::now();
 
     let file_data: Vec<_> = entries
         .par_iter()
@@ -148,6 +195,9 @@ fn prefetch_project_files(root: &Path) -> io::Result<PrefetchCache> {
         })
         .collect();
 
+    let read_elapsed = read_start.elapsed();
+    let canon_start = Instant::now();
+
     let canonical_data: Vec<_> = entries
         .par_iter()
         .filter_map(|e| {
@@ -156,10 +206,37 @@ fn prefetch_project_files(root: &Path) -> io::Result<PrefetchCache> {
         })
         .collect();
 
+    let canon_elapsed = canon_start.elapsed();
+
+    log::info!(
+        "Prefetch I/O: read {} files in {:.1?}, canonicalize {} paths in {:.1?}",
+        file_data.len(),
+        read_elapsed,
+        canonical_data.len(),
+        canon_elapsed,
+    );
+
+    let is_file: HashMap<_, _> = entries
+        .iter()
+        .map(|e| (e.path().to_path_buf(), e.file_type().is_file()))
+        .collect();
+
     Ok(PrefetchCache {
         files: file_data.into_iter().collect::<HashMap<_, _>>(),
         canonical: canonical_data.into_iter().collect::<HashMap<_, _>>(),
+        is_file,
     })
+}
+
+/// Recursively collect all `$path` directories from the project tree.
+fn collect_path_roots(node: &crate::project::ProjectNode, base: &Path, out: &mut Vec<PathBuf>) {
+    if let Some(path_node) = &node.path {
+        let resolved = base.join(path_node.path());
+        out.push(resolved);
+    }
+    for child_node in node.children.values() {
+        collect_path_roots(child_node, base, out);
+    }
 }
 
 impl ServeSession {
@@ -172,10 +249,10 @@ impl ServeSession {
 
         if std::env::var("ATLAS_SEQUENTIAL").is_err() {
             let prefetch_start = Instant::now();
-            match prefetch_project_files(root_project.folder_location()) {
+            match prefetch_project_files(&root_project) {
                 Ok(cache) => {
                     log::info!(
-                        "Prefetched {} files + {} canonical paths in {:.1?}",
+                        "Prefetch total: {} files + {} canonical paths in {:.1?}",
                         cache.files.len(),
                         cache.canonical.len(),
                         prefetch_start.elapsed()
@@ -192,16 +269,20 @@ impl ServeSession {
         let root_id = tree.get_root_id();
         let instance_context = InstanceContext::new();
 
+        let snap_start = Instant::now();
         log::trace!("Generating snapshot of instances from VFS");
         let snapshot = snapshot_from_vfs(&instance_context, vfs, start_path)?;
+        log::info!("Snapshot built in {:.1?}", snap_start.elapsed());
 
         vfs.clear_prefetch_cache();
 
+        let patch_start = Instant::now();
         log::trace!("Computing initial patch set");
         let patch_set = compute_patch_set(snapshot, &tree, root_id);
 
         log::trace!("Applying initial patch set");
         apply_patch_set(&mut tree, patch_set);
+        log::info!("Patch computed + applied in {:.1?}", patch_start.elapsed());
 
         Ok((root_project, tree))
     }

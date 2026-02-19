@@ -363,6 +363,174 @@ mod test {
     use memofs::{InMemoryFs, VfsSnapshot};
 
     #[test]
+    fn parallel_wide_directory_ordering() {
+        let children: Vec<_> = (0..50)
+            .map(|i| {
+                (
+                    format!("child_{i:03}.luau"),
+                    VfsSnapshot::file(format!("-- {i}")),
+                )
+            })
+            .collect();
+
+        let mut imfs = InMemoryFs::new();
+        imfs.load_snapshot("/wide", VfsSnapshot::dir(children))
+            .unwrap();
+        let vfs = Vfs::new(imfs);
+
+        let snap = snapshot_dir(
+            &InstanceContext::default(),
+            &vfs,
+            Path::new("/wide"),
+            "wide",
+        )
+        .unwrap()
+        .unwrap();
+
+        let names: Vec<&str> = snap.children.iter().map(|c| c.name.as_ref()).collect();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(
+            names, sorted,
+            "Children should be in sorted (read_dir) order"
+        );
+        assert_eq!(snap.children.len(), 50);
+    }
+
+    #[test]
+    fn parallel_wide_directory_deterministic_across_runs() {
+        fn make_children() -> Vec<(String, VfsSnapshot)> {
+            (0..30)
+                .map(|i| {
+                    (
+                        format!("mod_{i:03}.luau"),
+                        VfsSnapshot::file(format!("-- {i}")),
+                    )
+                })
+                .collect()
+        }
+
+        fn names_from_fresh() -> Vec<String> {
+            let mut imfs = InMemoryFs::new();
+            imfs.load_snapshot("/root", VfsSnapshot::dir(make_children()))
+                .unwrap();
+            let vfs = Vfs::new(imfs);
+            let snap = snapshot_dir(
+                &InstanceContext::default(),
+                &vfs,
+                Path::new("/root"),
+                "root",
+            )
+            .unwrap()
+            .unwrap();
+            snap.children.iter().map(|c| c.name.to_string()).collect()
+        }
+
+        let baseline = names_from_fresh();
+
+        for i in 0..20 {
+            assert_eq!(
+                baseline,
+                names_from_fresh(),
+                "Child order diverged on iteration {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn parallel_deep_wide_tree() {
+        fn make_tree(depth: usize, width: usize) -> VfsSnapshot {
+            if depth == 0 {
+                return VfsSnapshot::file("-- leaf");
+            }
+            let children: Vec<_> = (0..width)
+                .map(|i| {
+                    if i % 3 == 0 {
+                        (format!("dir_{i}"), make_tree(depth - 1, width))
+                    } else {
+                        (
+                            format!("file_{i}.luau"),
+                            VfsSnapshot::file(format!("-- d{depth} f{i}")),
+                        )
+                    }
+                })
+                .collect();
+            VfsSnapshot::dir(children)
+        }
+
+        let mut imfs = InMemoryFs::new();
+        imfs.load_snapshot("/deep", make_tree(4, 8)).unwrap();
+        let vfs = Vfs::new(imfs);
+
+        let snap = snapshot_dir(
+            &InstanceContext::default(),
+            &vfs,
+            Path::new("/deep"),
+            "deep",
+        )
+        .unwrap()
+        .unwrap();
+
+        fn count_nodes(snap: &InstanceSnapshot) -> usize {
+            1 + snap.children.iter().map(|c| count_nodes(c)).sum::<usize>()
+        }
+        let total = count_nodes(&snap);
+        assert!(total > 100, "Should have many nodes, got {total}");
+    }
+
+    #[test]
+    fn parallel_mixed_middleware_types() {
+        let mut imfs = InMemoryFs::new();
+        imfs.load_snapshot(
+            "/mixed",
+            VfsSnapshot::dir([
+                ("script.server.luau", VfsSnapshot::file("-- server")),
+                ("module.luau", VfsSnapshot::file("return {}")),
+                ("data.json", VfsSnapshot::file(r#"{"key": "value"}"#)),
+                ("notes.txt", VfsSnapshot::file("hello")),
+                (
+                    "sub",
+                    VfsSnapshot::dir([
+                        ("inner.luau", VfsSnapshot::file("return 1")),
+                        (
+                            "deep",
+                            VfsSnapshot::dir([("leaf.luau", VfsSnapshot::file("return 2"))]),
+                        ),
+                    ]),
+                ),
+                ("another.luau", VfsSnapshot::file("return 3")),
+                (
+                    "model.model.json",
+                    VfsSnapshot::file(r#"{"className": "Part", "properties": {}}"#),
+                ),
+            ]),
+        )
+        .unwrap();
+        let vfs = Vfs::new(imfs);
+
+        let snap = snapshot_dir(
+            &InstanceContext::default(),
+            &vfs,
+            Path::new("/mixed"),
+            "mixed",
+        )
+        .unwrap()
+        .unwrap();
+
+        let names: Vec<&str> = snap.children.iter().map(|c| c.name.as_ref()).collect();
+        assert!(names.contains(&"script"), "Missing server script");
+        assert!(names.contains(&"module"), "Missing module script");
+        assert!(names.contains(&"data"), "Missing json data");
+        assert!(names.contains(&"notes"), "Missing txt");
+        assert!(names.contains(&"sub"), "Missing subdirectory");
+        assert!(names.contains(&"another"), "Missing another script");
+        assert!(names.contains(&"model"), "Missing model");
+
+        let sub = snap.children.iter().find(|c| c.name == "sub").unwrap();
+        assert_eq!(sub.children.len(), 2, "sub should have inner + deep");
+    }
+
+    #[test]
     fn empty_folder() {
         let mut imfs = InMemoryFs::new();
         imfs.load_snapshot("/foo", VfsSnapshot::empty_dir())
