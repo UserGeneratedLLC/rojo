@@ -163,8 +163,10 @@ impl InitCommand {
                     ".cursor",
                 ])
                 .current_dir(&base_path)
+                .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
+                .env("GIT_TERMINAL_PROMPT", "0")
                 .status();
 
             match result {
