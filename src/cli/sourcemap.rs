@@ -182,22 +182,28 @@ fn patch_set_affects_sourcemap(
 fn recurse_create_node<'a>(
     tree: &'a RojoTree,
     referent: Ref,
-    project_dir: &Path,
+    canonical_project_dir: &Path,
     filter: fn(&InstanceWithMeta) -> bool,
     use_absolute_paths: bool,
 ) -> Option<SourcemapNode<'a>> {
     let instance = tree.get_instance(referent).expect("instance did not exist");
 
-    let children: Vec<_> = instance
+    let results: Vec<Option<SourcemapNode<'a>>> = instance
         .children()
         .par_iter()
-        .filter_map(|&child_id| {
-            recurse_create_node(tree, child_id, project_dir, filter, use_absolute_paths)
+        .map(|&child_id| {
+            recurse_create_node(
+                tree,
+                child_id,
+                canonical_project_dir,
+                filter,
+                use_absolute_paths,
+            )
         })
         .collect();
 
-    // If this object has no children and doesn't pass the filter, it doesn't
-    // contain any information we're looking for.
+    let children: Vec<_> = results.into_iter().flatten().collect();
+
     if children.is_empty() && !filter(&instance) {
         return None;
     }
@@ -206,25 +212,19 @@ fn recurse_create_node<'a>(
         .metadata()
         .relevant_paths
         .iter()
-        // Not all paths listed as relevant are guaranteed to exist.
         .filter(|path| path.is_file())
         .map(|path| path.as_path());
 
     let mut output_file_paths: Vec<Cow<'a, Path>> =
         Vec::with_capacity(instance.metadata().relevant_paths.len());
 
-    // Canonicalize project_dir once to normalize Windows \\?\ prefixes
-    let canonical_project_dir =
-        std::fs::canonicalize(project_dir).unwrap_or_else(|_| project_dir.to_path_buf());
-
     for val in file_paths {
         if use_absolute_paths {
             let abs_path = path::absolute(val).expect(ABSOLUTE_PATH_FAILED_ERR);
             output_file_paths.push(Cow::Owned(abs_path));
         } else {
-            let canonical_val = std::fs::canonicalize(val).unwrap_or_else(|_| val.to_path_buf());
             output_file_paths.push(Cow::Owned(
-                pathdiff::diff_paths(&canonical_val, &canonical_project_dir)
+                pathdiff::diff_paths(val, canonical_project_dir)
                     .expect("Failed to compute relative path from project dir"),
             ));
         }
@@ -247,10 +247,13 @@ pub(crate) fn write_sourcemap(
 ) -> anyhow::Result<()> {
     let tree = session.tree();
 
+    let canonical_project_dir = std::fs::canonicalize(session.root_dir())
+        .unwrap_or_else(|_| session.root_dir().to_path_buf());
+
     let root_node = recurse_create_node(
         &tree,
         tree.get_root_id(),
-        session.root_dir(),
+        &canonical_project_dir,
         filter,
         use_absolute_paths,
     );
@@ -324,10 +327,7 @@ fn recurse_create_node_from_dom<'a>(
         .map(|paths| {
             paths
                 .iter()
-                .filter_map(|p| {
-                    let canonical = std::fs::canonicalize(p).unwrap_or_else(|_| p.clone());
-                    pathdiff::diff_paths(&canonical, project_dir).map(Cow::Owned)
-                })
+                .filter_map(|p| pathdiff::diff_paths(p, project_dir).map(Cow::Owned))
                 .collect()
         })
         .unwrap_or_default();

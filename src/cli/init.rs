@@ -131,6 +131,10 @@ impl InitCommand {
                 ("core.autocrlf", "false"),
                 ("core.eol", "lf"),
                 ("core.safecrlf", "false"),
+                // ("core.splitIndex", "true"),
+                // ("core.fsmonitor", "true"),
+                // ("core.untrackedcache", "true"),
+                // ("feature.manyFiles", "true"),
             ] {
                 let _ = Command::new("git")
                     .args(["config", "--local", key, value])
@@ -159,8 +163,10 @@ impl InitCommand {
                     ".cursor",
                 ])
                 .current_dir(&base_path)
+                .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
+                .env("GIT_TERMINAL_PROMPT", "0")
                 .status();
 
             match result {

@@ -1,0 +1,6 @@
+{
+  className: "UIStroke",
+  properties: {
+    Thickness: 2
+  }
+}

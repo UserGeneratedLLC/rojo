@@ -1,0 +1,6 @@
+{
+  "name": "dedup_suffix_auto_strip",
+  "tree": {
+    "$path": "src"
+  }
+}

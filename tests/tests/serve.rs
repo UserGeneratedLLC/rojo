@@ -5,7 +5,7 @@ use tempfile::tempdir;
 
 use crate::rojo_test::{
     internable::InternAndRedact,
-    serve_util::{run_serve_test, serialize_to_xml_model},
+    serve_util::{run_serve_test, serialize_to_xml_model, TestServeSession},
 };
 
 use librojo::web_api::SocketPacketType;
@@ -415,7 +415,13 @@ fn sync_rule_no_name_project() {
     });
 }
 
+// On macOS, kqueue delivers a duplicate WRITE event for the same file
+// modification. The second event re-snapshots against a tree whose Rojo
+// transport attributes (Rojo_Id, Rojo_Target_*) were cleaned up by
+// finalize_patch_application during the first event, producing spurious
+// Attributes and metadata update messages that break the snapshot.
 #[test]
+#[cfg_attr(target_os = "macos", ignore)]
 fn ref_properties() {
     run_serve_test("ref_properties", |session, mut redactions| {
         let info = session.get_api_rojo().unwrap();
@@ -780,6 +786,7 @@ fn api_write_existing_instance() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
 
         session
@@ -856,7 +863,7 @@ fn ref_path_add_attribute_to_existing_meta() {
                     r#"{
                         "className": "Model",
                         "attributes": {
-                            "Rojo_Ref_PrimaryPart": "Workspace/MyModel/OtherPart"
+                            "Rojo_Ref_PrimaryPart": "@self/OtherPart"
                         }
                     }"#,
                 )
@@ -916,7 +923,7 @@ fn ref_path_new_file_with_ref_attr() {
                     r#"{
                         "className": "ObjectValue",
                         "attributes": {
-                            "Rojo_Ref_Value": "Workspace/MyModel/Target"
+                            "Rojo_Ref_Value": "./Target"
                         }
                     }"#,
                 )
@@ -945,7 +952,7 @@ fn ref_path_nonexistent_target_no_crash() {
                     r#"{
                         "className": "Model",
                         "attributes": {
-                            "Rojo_Ref_PrimaryPart": "Workspace/NonExistent/Part"
+                            "Rojo_Ref_PrimaryPart": "./NonExistent/Part"
                         }
                     }"#,
                 )
@@ -958,6 +965,24 @@ fn ref_path_nonexistent_target_no_crash() {
         let redacted = socket_packet.intern_and_redact(&mut redactions, ());
         assert_yaml_snapshot!("ref_path_nonexistent_patch", redacted);
     });
+}
+
+/// When a non-default project file is used (e.g. `named.project.json5`
+/// instead of `default.project.json5`), tree validation must snapshot
+/// through the project middleware — not walk the parent directory as a
+/// generic Folder. Regression test for a bug where `check_tree_freshness`
+/// and `reconcile_tree` used `folder_location()` instead of the project
+/// file path, causing the entire repo root to be walked (including
+/// unrelated directories with potentially malformed files).
+#[test]
+fn non_default_project_file_tree_validation() {
+    let _ = env_logger::try_init();
+
+    let mut session =
+        TestServeSession::new_with_project_file("non_default_project", "named.project.json5");
+    let _info = session.wait_to_come_online();
+
+    session.assert_tree_fresh();
 }
 
 /// Multiple Rojo_Ref_* attributes on the same instance should all resolve.
@@ -975,8 +1000,8 @@ fn ref_path_multiple_attributes() {
                     r#"{
                         "className": "Model",
                         "attributes": {
-                            "Rojo_Ref_PrimaryPart": "Workspace/MyModel/Target",
-                            "Rojo_Ref_CustomRef": "Workspace/MyModel/OtherPart"
+                            "Rojo_Ref_PrimaryPart": "@self/Target",
+                            "Rojo_Ref_CustomRef": "@self/OtherPart"
                         }
                     }"#,
                 )

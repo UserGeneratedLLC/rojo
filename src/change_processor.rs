@@ -2,6 +2,7 @@ use crossbeam_channel::{select, Receiver, RecvError, Sender};
 use jod_thread::JoinHandle;
 use memofs::{IoResultExt, Vfs, VfsEvent};
 use rbx_dom_weak::types::{Ref, Variant};
+use std::collections::HashSet;
 use std::fmt;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -16,7 +17,10 @@ use crate::{
         apply_patch_set, compute_patch_set, AppliedPatchSet, InstigatingSource, PatchSet, RojoTree,
     },
     snapshot_middleware::{snapshot_from_vfs, snapshot_project_node},
-    syncback::{deduplicate_name, name_needs_slugify, slugify_name, strip_script_suffix},
+    syncback::{
+        dedup_suffix::{compute_cleanup_action, parse_dedup_suffix, DedupCleanupAction},
+        deduplicate_name, name_needs_slugify, slugify_name, strip_script_suffix,
+    },
 };
 
 /// Wrapper that displays a path relative to a project root directory.
@@ -70,6 +74,7 @@ pub struct ChangeProcessor {
 impl ChangeProcessor {
     /// Spin up the ChangeProcessor, connecting it to the given tree, VFS, and
     /// outbound message queue.
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         tree: Arc<Mutex<RojoTree>>,
         vfs: Arc<Vfs>,
@@ -78,7 +83,9 @@ impl ChangeProcessor {
         suppressed_paths: Arc<Mutex<std::collections::HashMap<PathBuf, (usize, usize)>>>,
         ref_path_index: Arc<Mutex<crate::RefPathIndex>>,
         project_root: PathBuf,
+        project_file_path: PathBuf,
         critical_error_receiver: Option<Receiver<memofs::WatcherCriticalError>>,
+        git_repo_root: Option<PathBuf>,
     ) -> Self {
         let (shutdown_sender, shutdown_receiver) = crossbeam_channel::bounded(1);
         let vfs_receiver = vfs.event_receiver();
@@ -89,6 +96,8 @@ impl ChangeProcessor {
         // Canonicalize project_root so path comparisons work with the
         // \\?\ prefix that std::fs::canonicalize adds on Windows.
         let project_root = std::fs::canonicalize(&project_root).unwrap_or(project_root);
+        let project_file_path =
+            std::fs::canonicalize(&project_file_path).unwrap_or(project_file_path);
         let task = JobThreadContext {
             tree,
             vfs,
@@ -96,18 +105,15 @@ impl ChangeProcessor {
             pending_recovery: Mutex::new(Vec::new()),
             suppressed_paths,
             project_root,
+            project_file_path,
             ref_path_index,
+            git_repo_root,
         };
 
         let job_thread = jod_thread::Builder::new()
             .name("ChangeProcessor thread".to_owned())
             .spawn(move || {
                 log::trace!("ChangeProcessor thread started");
-
-                // Populate the RefPathIndex from existing meta/model files
-                // so that renames of instances with pre-existing Rojo_Ref_*
-                // attributes are handled correctly from the first rename.
-                task.populate_initial_ref_path_index();
 
                 // Tracks when to run the next reconciliation pass. Set to
                 // Some(future_instant) after VFS events arrive, cleared
@@ -238,70 +244,24 @@ struct JobThreadContext {
     /// Root directory of the project, used to display relative paths in logs.
     project_root: PathBuf,
 
+    /// Path to the project file (e.g. `plugin.project.json`). Used by
+    /// `reconcile_tree` so that re-snapshotting goes through the project
+    /// middleware instead of walking the directory as a generic Folder.
+    project_file_path: PathBuf,
+
     /// Index of meta/model files that contain `Rojo_Ref_*` attributes.
     /// Shared with ApiService for efficient rename path updates.
     ref_path_index: Arc<Mutex<crate::RefPathIndex>>,
+
+    /// Git repository root, if the project is in a git repo.
+    /// Used for auto-staging Source writes.
+    git_repo_root: Option<PathBuf>,
 }
 
 impl JobThreadContext {
     /// Returns a display wrapper that shows `path` relative to the project root.
     fn display_path<'a>(&'a self, path: &'a Path) -> RelPath<'a> {
         rel_path(path, &self.project_root)
-    }
-
-    /// Scan all `.meta.json5`, `.model.json5`, `.meta.json`, `.model.json`
-    /// files under the project root for existing `Rojo_Ref_*` attributes
-    /// and populate the `RefPathIndex`. This ensures pre-existing ref
-    /// attributes (from CLI syncback, manual edits, or previous sessions)
-    /// are indexed so rename path updates work from the first rename.
-    fn populate_initial_ref_path_index(&self) {
-        let mut count = 0;
-        let mut dirs_to_visit = vec![self.project_root.clone()];
-        while let Some(dir) = dirs_to_visit.pop() {
-            let entries = match fs::read_dir(&dir) {
-                Ok(entries) => entries,
-                Err(_) => continue,
-            };
-            for entry in entries.filter_map(|e| e.ok()) {
-                let path = entry.path();
-                if path.is_dir() {
-                    dirs_to_visit.push(path);
-                    continue;
-                }
-                let name = match path.file_name().and_then(|n| n.to_str()) {
-                    Some(n) => n,
-                    None => continue,
-                };
-                if !(name.ends_with(".meta.json5")
-                    || name.ends_with(".model.json5")
-                    || name.ends_with(".meta.json")
-                    || name.ends_with(".model.json"))
-                {
-                    continue;
-                }
-                if let Ok(bytes) = fs::read(&path) {
-                    if let Ok(val) = crate::json::from_slice::<serde_json::Value>(&bytes) {
-                        if let Some(attrs) = val.get("attributes").and_then(|a| a.as_object()) {
-                            let mut index = self.ref_path_index.lock().unwrap();
-                            for (key, value) in attrs {
-                                if key.starts_with(crate::REF_PATH_ATTRIBUTE_PREFIX) {
-                                    if let Some(path_str) = value.as_str() {
-                                        index.add(path_str, &path);
-                                        count += 1;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        if count > 0 {
-            log::info!(
-                "RefPathIndex: populated {} Rojo_Ref_* entries from existing meta/model files",
-                count
-            );
-        }
     }
 
     /// Find the init file inside a directory-format script folder.
@@ -466,28 +426,25 @@ impl JobThreadContext {
     /// Uses the `RefPathIndex` for O(affected_files) lookup instead of
     /// scanning the full tree. After updating files, also updates the index
     /// keys and filesystem paths so future renames remain efficient.
-    fn update_ref_paths_after_rename(&self, old_path: &str, new_path: &str) {
+    fn update_ref_paths_after_rename(
+        &self,
+        old_path: &str,
+        new_path: &str,
+        tree: &crate::snapshot::RojoTree,
+    ) {
         if old_path == new_path {
             return;
         }
 
-        // Look up affected files via the pre-computed index.
         let files_from_index = self.ref_path_index.lock().unwrap().find_by_prefix(old_path);
 
         if files_from_index.is_empty() {
             return;
         }
 
-        // The directory may have already been renamed on disk by the time
-        // this function is called. The index still stores old filesystem
-        // paths. Remap them: replace the old directory segment with the
-        // new one so we can find the actual files.
-        let old_segments = crate::split_ref_path(old_path);
-        let old_segment = old_segments.last().map(|s| s.as_str()).unwrap_or(old_path);
-        let new_segments = crate::split_ref_path(new_path);
-        let new_segment = new_segments.last().map(|s| s.as_str()).unwrap_or(new_path);
+        let old_segment = old_path.rsplit('/').next().unwrap_or(old_path);
+        let new_segment = new_path.rsplit('/').next().unwrap_or(new_path);
 
-        // Pre-compute slugified forms for fallback comparison.
         let slugified_old = if name_needs_slugify(old_segment) {
             Some(slugify_name(old_segment))
         } else {
@@ -508,7 +465,6 @@ impl JobThreadContext {
                 if file_path.exists() {
                     return file_path;
                 }
-                // File doesn't exist at old path — remap directory component.
                 let mut result = PathBuf::new();
                 let mut replaced = false;
                 for comp in file_path.components() {
@@ -542,13 +498,23 @@ impl JobThreadContext {
 
         let mut updated_count = 0;
         for file_path in &files_to_check {
+            let source_abs = tree
+                .get_ids_at_path(file_path)
+                .first()
+                .map(|&id| crate::ref_target_path_from_tree(tree, id))
+                .unwrap_or_default();
+
             self.suppress_path(file_path);
-            match crate::syncback::meta::update_ref_paths_in_file(file_path, old_path, new_path) {
+            match crate::syncback::meta::update_ref_paths_in_file(
+                file_path,
+                old_path,
+                new_path,
+                &source_abs,
+            ) {
                 Ok(true) => {
                     updated_count += 1;
                 }
                 Ok(false) => {
-                    // No stale refs in this file; undo suppression
                     self.unsuppress_path(file_path);
                 }
                 Err(err) => {
@@ -971,13 +937,14 @@ impl JobThreadContext {
         let start = Instant::now();
         let instance_context = InstanceContext::new();
 
-        let snapshot = match snapshot_from_vfs(&instance_context, &self.vfs, &self.project_root) {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!("Tree reconciliation snapshot error: {:?}", e);
-                return;
-            }
-        };
+        let snapshot =
+            match snapshot_from_vfs(&instance_context, &self.vfs, &self.project_file_path) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::error!("Tree reconciliation snapshot error: {:?}", e);
+                    return;
+                }
+            };
 
         let mut tree = self.tree.lock().unwrap();
         let root_id = tree.get_root_id();
@@ -1003,6 +970,8 @@ impl JobThreadContext {
             added_instances: patch_set.added_instances,
             removed_instances: patch_set.removed_instances,
             updated_instances: Vec::new(),
+            stage_ids: HashSet::new(),
+            stage_paths: Vec::new(),
         };
 
         let applied = apply_patch_set(&mut tree, structural_patch);
@@ -1017,7 +986,7 @@ impl JobThreadContext {
         );
     }
 
-    fn handle_tree_event(&self, patch_set: PatchSet) {
+    fn handle_tree_event(&self, mut patch_set: PatchSet) {
         // Log incoming patch summary at debug level
         log::debug!(
             "Processing client patch: {} removed, {} added, {} updated",
@@ -1069,21 +1038,255 @@ impl JobThreadContext {
                 }
             }
 
+            // Dedup suffix cleanup: after removals, check if any dedup
+            // groups need suffix renames (base-name promotion, group-to-1).
+            // Must run BEFORE apply_patch_set removes the instances from
+            // the tree, because we need parent/sibling relationships.
+            //
+            // Build a set of ALL removed Refs so the sibling enumeration
+            // skips co-removed instances (Fix 2: batch-removal awareness).
+            let removed_set: std::collections::HashSet<Ref> =
+                patch_set.removed_instances.iter().copied().collect();
+            // Collect metadata updates for survivors whose filesystem path
+            // changed due to dedup cleanup renames (Fix 1: metadata drift).
+            let mut dedup_metadata_updates: Vec<(Ref, PathBuf)> = Vec::new();
+
+            for &removed_id in &patch_set.removed_instances {
+                let (parent_ref, removed_fs_name, removed_file_dir) = {
+                    let Some(inst) = tree.get_instance(removed_id) else {
+                        continue;
+                    };
+                    let Some(source) = &inst.metadata().instigating_source else {
+                        continue;
+                    };
+                    if matches!(source, InstigatingSource::ProjectNode { .. }) {
+                        continue;
+                    }
+                    let parent = inst.parent();
+                    let fs_name = tree.filesystem_name_for(removed_id);
+                    // Derive the directory containing this file from its own
+                    // instigating source path. This works even when the parent
+                    // is a ProjectNode (where instigating_source is not a Path).
+                    let file_dir = match source {
+                        InstigatingSource::Path(p) => {
+                            let fname = p.file_name().and_then(|f| f.to_str()).unwrap_or("");
+                            if fname.starts_with("init.") {
+                                // Directory-format: path is dir/init.luau,
+                                // the containing dir is the grandparent
+                                p.parent().and_then(|d| d.parent()).map(|d| d.to_path_buf())
+                            } else {
+                                p.parent().map(|d| d.to_path_buf())
+                            }
+                        }
+                        _ => None,
+                    };
+                    (parent, fs_name, file_dir)
+                };
+
+                if parent_ref.is_none() {
+                    continue;
+                }
+
+                // Parse the dedup suffix from the removed instance's FS name
+                let removed_stem = removed_fs_name
+                    .split('.')
+                    .next()
+                    .unwrap_or(&removed_fs_name);
+                let (base_stem, _) = match parse_dedup_suffix(removed_stem) {
+                    Some((base, n)) => (base.to_string(), Some(n)),
+                    None => (removed_stem.to_string(), None),
+                };
+
+                // Find siblings that share the same dedup base stem AND extension.
+                // Matching by stem alone would incorrectly group across different
+                // middleware types (e.g., Foo.server.luau and Foo.luau have the
+                // same stem "Foo" but different dedup keys).
+                let removed_extension =
+                    removed_fs_name.find('.').map(|i| &removed_fs_name[i + 1..]);
+
+                let Some(parent_inst) = tree.get_instance(parent_ref) else {
+                    continue;
+                };
+                let mut remaining_stems: Vec<String> = Vec::new();
+                let deleted_was_base = parse_dedup_suffix(removed_stem).is_none();
+
+                for &sibling_ref in parent_inst.children() {
+                    // Skip ALL instances being removed in this patch, not just
+                    // the current one. This prevents co-removed siblings from
+                    // inflating the remaining count and defeating cleanup rules.
+                    if removed_set.contains(&sibling_ref) {
+                        continue;
+                    }
+                    let sibling_fs = tree.filesystem_name_for(sibling_ref);
+                    let sibling_stem = sibling_fs.split('.').next().unwrap_or(&sibling_fs);
+                    let sibling_ext = sibling_fs.find('.').map(|i| &sibling_fs[i + 1..]);
+
+                    // Only group siblings with the same extension (same dedup key space)
+                    if sibling_ext != removed_extension {
+                        continue;
+                    }
+
+                    let sibling_base = match parse_dedup_suffix(sibling_stem) {
+                        Some((b, _)) => b,
+                        None => sibling_stem,
+                    };
+                    if sibling_base.eq_ignore_ascii_case(&base_stem) {
+                        remaining_stems.push(sibling_stem.to_string());
+                    }
+                }
+
+                if remaining_stems.is_empty() {
+                    continue;
+                }
+
+                let extension = removed_extension;
+
+                // Get the parent directory path (derived from the removed
+                // instance's own path, not the parent's instigating source,
+                // because the parent may be a ProjectNode).
+                let Some(parent_dir) = removed_file_dir.clone() else {
+                    continue;
+                };
+
+                let action = compute_cleanup_action(
+                    &base_stem,
+                    extension,
+                    &remaining_stems,
+                    deleted_was_base,
+                    &parent_dir,
+                );
+
+                match action {
+                    DedupCleanupAction::None => {}
+                    DedupCleanupAction::RemoveSuffix { from, to }
+                    | DedupCleanupAction::PromoteLowest { from, to } => {
+                        log::info!(
+                            "Dedup cleanup: renaming {} -> {}",
+                            self.display_path(&from),
+                            self.display_path(&to),
+                        );
+                        self.suppress_path_any(&from);
+                        self.suppress_path(&to);
+                        if let Err(e) = fs::rename(&from, &to) {
+                            log::warn!(
+                                "Dedup cleanup rename failed: {} -> {}: {}",
+                                from.display(),
+                                to.display(),
+                                e
+                            );
+                            self.unsuppress_path(&to);
+                        } else {
+                            // Also rename the adjacent meta file if it exists
+                            // (standalone files only; directory-format instances
+                            // have init.meta.json5 inside the directory which
+                            // moves automatically with the dir rename).
+                            if from.is_file() || !from.exists() {
+                                if let (Some(from_parent), Some(from_name), Some(to_name)) = (
+                                    from.parent(),
+                                    from.file_stem().and_then(|s| s.to_str()),
+                                    to.file_stem().and_then(|s| s.to_str()),
+                                ) {
+                                    let from_base = strip_script_suffix(from_name);
+                                    let to_base = strip_script_suffix(to_name);
+                                    let old_meta =
+                                        from_parent.join(format!("{}.meta.json5", from_base));
+                                    if old_meta.exists() {
+                                        let new_meta =
+                                            from_parent.join(format!("{}.meta.json5", to_base));
+                                        self.suppress_path_any(&old_meta);
+                                        self.suppress_path(&new_meta);
+                                        if fs::rename(&old_meta, &new_meta).is_err() {
+                                            self.unsuppress_path_any(&old_meta);
+                                            self.unsuppress_path(&new_meta);
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Update ref paths if the renamed instance has refs
+                            let old_ref_segment =
+                                from.file_name().and_then(|f| f.to_str()).unwrap_or("");
+                            let new_ref_segment =
+                                to.file_name().and_then(|f| f.to_str()).unwrap_or("");
+                            if old_ref_segment != new_ref_segment {
+                                let parent_path =
+                                    crate::ref_target_path_from_tree(&tree, parent_ref);
+                                let old_prefix = format!("{}/{}", parent_path, old_ref_segment);
+                                let new_prefix = format!("{}/{}", parent_path, new_ref_segment);
+                                self.update_ref_paths_after_rename(&old_prefix, &new_prefix, &tree);
+                            }
+
+                            // Fix 1: Update the renamed survivor's in-memory
+                            // metadata so InstigatingSource::Path and
+                            // relevant_paths point to the new filesystem path.
+                            let old_from_name =
+                                from.file_name().and_then(|f| f.to_str()).unwrap_or("");
+                            for &sibling_ref in parent_inst.children() {
+                                if removed_set.contains(&sibling_ref) {
+                                    continue;
+                                }
+                                let sibling_fs = tree.filesystem_name_for(sibling_ref);
+                                if sibling_fs == old_from_name {
+                                    // This is the survivor being renamed.
+                                    // Compute its new instigating source path.
+                                    if let Some(meta) = tree.get_metadata(sibling_ref) {
+                                        if let Some(InstigatingSource::Path(old_path)) =
+                                            &meta.instigating_source
+                                        {
+                                            let new_source = if old_path
+                                                .file_name()
+                                                .and_then(|f| f.to_str())
+                                                .map(|f| f.starts_with("init."))
+                                                .unwrap_or(false)
+                                            {
+                                                // Directory-format: old source
+                                                // is dir/init.luau; the dir was
+                                                // renamed so update the dir
+                                                // portion.
+                                                let init_name =
+                                                    old_path.file_name().unwrap().to_str().unwrap();
+                                                to.join(init_name)
+                                            } else {
+                                                // Standalone file: new source
+                                                // IS the `to` path.
+                                                to.clone()
+                                            };
+                                            dedup_metadata_updates.push((sibling_ref, new_source));
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // Collect (Ref, new_instigating_source) for instances whose
             // filesystem path changed (rename / ClassName transition).
             // Applied after the PatchSet to keep metadata in sync.
             let mut metadata_updates: Vec<(Ref, PathBuf)> = Vec::new();
+
+            // Paths to stage via git add after all writes complete.
+            // Starts with pre-resolved paths from api.rs, then Source writes are appended.
+            let mut pending_stage_paths = std::mem::take(&mut patch_set.stage_paths);
 
             for update in &patch_set.updated_instances {
                 let id = update.id;
 
                 // Capture the old path BEFORE rename for Rojo_Ref_* path updates.
                 // Must be computed before the `tree.get_instance(id)` borrow.
-                let old_ref_path = if update.changed_name.is_some() {
-                    Some(crate::ref_target_path(tree.inner(), id))
-                } else {
-                    None
-                };
+                let old_ref_path =
+                    if update.changed_name.is_some() || update.changed_class_name.is_some() {
+                        Some(crate::ref_target_path_from_tree(&tree, id))
+                    } else {
+                        None
+                    };
+
+                // The new filesystem name segment after a rename. Set during
+                // rename handling and used by the ref path update code to build
+                // the correct filesystem-name-based ref path.
+                let mut new_ref_segment: Option<String> = None;
 
                 if let Some(instance) = tree.get_instance(id) {
                     // Track the current source file path — rename and ClassName
@@ -1155,6 +1358,15 @@ impl JobThreadContext {
                                                         // The init file moved with the directory.
                                                         overridden_source_path =
                                                             Some(new_dir_path.join(file_name));
+                                                        new_ref_segment =
+                                                            Some(slugified_new_name.clone());
+                                                        if patch_set.stage_ids.contains(&id) {
+                                                            let old_init = dir_path.join(file_name);
+                                                            pending_stage_paths
+                                                                .retain(|p| *p != old_init);
+                                                            pending_stage_paths
+                                                                .push(new_dir_path.join(file_name));
+                                                        }
                                                         let old_meta = grandparent.join(format!(
                                                             "{}.meta.json5",
                                                             dir_name
@@ -1315,6 +1527,11 @@ impl JobThreadContext {
                                                     effective_meta_base = old_base;
                                                 } else {
                                                     overridden_source_path = Some(new_path.clone());
+                                                    new_ref_segment = Some(new_file_name.clone());
+                                                    if patch_set.stage_ids.contains(&id) {
+                                                        pending_stage_paths.retain(|p| *p != *path);
+                                                        pending_stage_paths.push(new_path.clone());
+                                                    }
                                                     let old_meta = parent
                                                         .join(format!("{}.meta.json5", old_base));
                                                     let new_meta = parent.join(format!(
@@ -1339,8 +1556,9 @@ impl JobThreadContext {
                                             // Always update the name field when the
                                             // instance name changed, even if the path didn't
                                             // change (e.g. "Foo/Bar" → "Foo|Bar" both slugify
-                                            // to "Foo_Bar"). Use deduped_new_name because
-                                            // dedup may have appended ~N.
+                                            // to "Foo_Bar"). Only slugification requires a
+                                            // meta name -- dedup suffixes (~N) are stripped
+                                            // automatically by forward sync.
                                             //
                                             // For .model.json5/.model.json files, the name
                                             // field lives INSIDE the model file, not in
@@ -1349,7 +1567,7 @@ impl JobThreadContext {
                                                 let model_file = overridden_source_path
                                                     .as_deref()
                                                     .unwrap_or(path.as_path());
-                                                if deduped_new_name != *new_name {
+                                                if slugified_new_name != *new_name {
                                                     self.upsert_model_name_field(
                                                         model_file, new_name,
                                                     );
@@ -1361,7 +1579,7 @@ impl JobThreadContext {
                                                     "{}.meta.json5",
                                                     effective_meta_base
                                                 ));
-                                                if deduped_new_name != *new_name {
+                                                if slugified_new_name != *new_name {
                                                     self.upsert_meta_name_field(
                                                         &current_meta,
                                                         new_name,
@@ -1493,6 +1711,19 @@ impl JobThreadContext {
                                                     );
                                                 } else {
                                                     overridden_source_path = Some(new_path.clone());
+                                                    if patch_set.stage_ids.contains(&id) {
+                                                        pending_stage_paths
+                                                            .retain(|p| *p != actual_file);
+                                                        pending_stage_paths.push(new_path.clone());
+                                                    }
+                                                    // For standalone files, the ref path
+                                                    // segment changes with the extension.
+                                                    // For init files, the directory name
+                                                    // (ref segment) is unchanged.
+                                                    if !is_init {
+                                                        new_ref_segment =
+                                                            Some(new_file_name.clone());
+                                                    }
                                                 }
                                             }
                                         } else {
@@ -1569,6 +1800,8 @@ impl JobThreadContext {
                                             id,
                                             err
                                         );
+                                    } else if patch_set.stage_ids.contains(&id) {
+                                        pending_stage_paths.push(write_path.clone());
                                     }
                                 } else {
                                     log::warn!("Cannot change Source to non-string value.");
@@ -1594,31 +1827,30 @@ impl JobThreadContext {
                 //
                 // NOTE: The tree name hasn't been updated yet (apply_patch_set
                 // runs after this loop), so we can't use full_path_of for the
-                // new path. Construct it by replacing the last path segment.
-                // Use split_ref_path for escape-aware splitting (handles
-                // instance names containing "/").
+                // new path. Construct it by replacing the last path segment
+                // with the NEW filesystem name (set during rename handling).
                 if let Some(ref old_ref_path) = old_ref_path {
-                    if let Some(ref new_name) = update.changed_name {
-                        let segments = crate::split_ref_path(old_ref_path);
+                    if let Some(ref segment) = new_ref_segment {
+                        // Use the filesystem name computed during rename handling
+                        let segments: Vec<&str> = old_ref_path.split('/').collect();
                         let new_ref_path = if segments.len() > 1 {
-                            // Rebuild parent path from all segments except the last,
-                            // re-escaping each segment to preserve the original format.
-                            let parent_parts: Vec<_> = segments[..segments.len() - 1]
-                                .iter()
-                                .map(|s| crate::escape_ref_path_segment(s).into_owned())
-                                .collect();
-                            format!(
-                                "{}/{}",
-                                parent_parts.join("/"),
-                                crate::escape_ref_path_segment(new_name)
-                            )
+                            let parent = segments[..segments.len() - 1].join("/");
+                            format!("{}/{}", parent, segment)
                         } else {
-                            // Root-level instance (no parent in path)
-                            crate::escape_ref_path_segment(new_name).into_owned()
+                            segment.clone()
                         };
                         if *old_ref_path != new_ref_path {
-                            self.update_ref_paths_after_rename(old_ref_path, &new_ref_path);
+                            self.update_ref_paths_after_rename(old_ref_path, &new_ref_path, &tree);
                         }
+                    } else if update.changed_name.is_some() || update.changed_class_name.is_some() {
+                        // Rename or class change was requested but no filesystem
+                        // rename happened (e.g., ProjectNode, init-file class
+                        // change where directory name stays the same). No ref
+                        // path update needed.
+                        log::trace!(
+                            "Skipping ref path update for {:?}: no filesystem rename",
+                            id
+                        );
                     }
                 }
             }
@@ -1629,13 +1861,23 @@ impl JobThreadContext {
             // This keeps instigating_source and path_to_ids in sync so that
             // subsequent VFS events (and future renames) target the correct
             // instance and path.
-            for (id, new_instigating_source) in metadata_updates {
+            for (id, new_instigating_source) in
+                metadata_updates.into_iter().chain(dedup_metadata_updates)
+            {
                 if let Some(old_metadata) = tree.get_metadata(id).cloned() {
                     let mut new_metadata = old_metadata;
                     new_metadata.instigating_source =
                         Some(InstigatingSource::Path(new_instigating_source.clone()));
                     new_metadata.relevant_paths = rebuild_relevant_paths(&new_instigating_source);
                     tree.update_metadata(id, new_metadata);
+                }
+            }
+
+            // Consolidated git staging: one git_add call for all paths
+            // (pre-resolved from api.rs + Source writes from this function).
+            if !pending_stage_paths.is_empty() {
+                if let Some(ref repo_root) = self.git_repo_root {
+                    crate::git::git_add(repo_root, &pending_stage_paths);
                 }
             }
 

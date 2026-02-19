@@ -8,7 +8,8 @@ use anyhow::Context;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    glob::Glob, path_serializer, project::ProjectNode, snapshot_middleware::Middleware, RojoRef,
+    glob::Glob, path_serializer, project::ProjectNode, snapshot_middleware::Middleware,
+    syncback::dedup_suffix::strip_dedup_suffix, RojoRef,
 };
 
 /// Rojo-specific metadata that can be associated with an instance or a snapshot
@@ -328,23 +329,22 @@ impl SyncRule {
     }
 
     pub fn file_name_for_path<'a>(&self, path: &'a Path) -> anyhow::Result<&'a str> {
-        if let Some(suffix) = &self.suffix {
+        let name = if let Some(suffix) = &self.suffix {
             let file_name = path
                 .file_name()
                 .and_then(|s| s.to_str())
                 .with_context(|| format!("file name of {} is invalid", path.display()))?;
             if file_name.ends_with(suffix) {
                 let end = file_name.len().saturating_sub(suffix.len());
-                Ok(&file_name[..end])
+                &file_name[..end]
             } else {
-                Ok(file_name)
+                file_name
             }
         } else {
-            // If the user doesn't specify a suffix, we assume they just want
-            // the name of the file (the file_stem)
             path.file_stem()
                 .and_then(|s| s.to_str())
-                .with_context(|| format!("file name of {} is invalid", path.display()))
-        }
+                .with_context(|| format!("file name of {} is invalid", path.display()))?
+        };
+        Ok(strip_dedup_suffix(name))
     }
 }

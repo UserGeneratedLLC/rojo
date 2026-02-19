@@ -25,3 +25,6 @@
 [submodule "vscode-rojo"]
 	path = vscode-rojo
 	url = https://github.com/UserGeneratedLLC/vscode-rojo.git
+[submodule ".lune/opencloud-execute"]
+	path = .lune/opencloud-execute
+	url = https://github.com/Dekkonot/opencloud-luau-execute-lune.git

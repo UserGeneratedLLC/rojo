@@ -124,11 +124,23 @@ function NotConnectedPage:render()
 				}),
 			}),
 
+			Syncback = e(TextButton, {
+				text = "Syncback",
+				style = "Danger",
+				transparency = self.props.transparency,
+				layoutOrder = 2,
+				onClick = self.props.onSyncback,
+			}, {
+				Tip = e(Tooltip.Trigger, {
+					text = "Overwrite project files with current Studio state",
+				}),
+			}),
+
 			Connect = e(TextButton, {
 				text = "Sync",
 				style = "Primary",
 				transparency = self.props.transparency,
-				layoutOrder = 2,
+				layoutOrder = 3,
 				onClick = self.props.onConnect,
 			}, {
 				Tip = e(Tooltip.Trigger, {

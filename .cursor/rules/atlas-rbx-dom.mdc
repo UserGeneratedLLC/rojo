@@ -1,0 +1,174 @@
+---
+globs: rbx-dom/**
+alwaysApply: false
+---
+
+# rbx-dom Submodule
+
+**This is a Git submodule** linking to https://github.com/UserGeneratedLLC/rbx-dom - a separate project with its own repository, CI/CD, and release cycle.
+
+**Critical:** When working on rbx-dom code, refer to `rbx-dom/README.md` and follow that project's conventions, not Rojo's.
+
+## What is rbx-dom?
+
+A collection of cross-platform libraries enabling any software to interact with Roblox instances. Documentation: https://dom.rojo.space
+
+### Core Libraries
+
+**1. rbx_dom_weak** - Weakly-typed instance representation
+- In-memory DOM for Roblox instances
+- Used by Rojo's snapshot system
+- Defines `Instance`, `InstanceBuilder`, `WeakDom`
+
+**2. rbx_types** - Roblox value types
+- Types like `Vector3`, `CFrame`, `Color3`, `NumberSequence`
+- Shared by all rbx-dom crates
+- Handles serialization/deserialization
+
+**3. rbx_binary** - Binary format (rbxm/rbxl)
+- Serializer/deserializer for binary models and places
+- Feature flag: `unstable_text_format` (used by Rojo)
+- Complex format with chunks and internal references
+
+**4. rbx_xml** - XML format (rbxmx/rbxlx)
+- Serializer/deserializer for XML models and places
+- More human-readable than binary format
+- Used by default in `rojo build` for debugging
+
+**5. rbx_reflection** - Instance metadata
+- Class hierarchies, property descriptors, enum definitions
+- Used for validation and type inference
+
+**6. rbx_reflection_database** - Bundled reflection data
+- Statically-compiled reflection database
+- Updated periodically from Roblox Studio
+
+**7. rbx_dom_lua** - Lua implementation
+- Roblox Lua DOM APIs for reflection within Studio
+- Compatible data format with rbx_dom_weak
+- Used by Rojo plugin for encoding instances
+
+**8. rbx_reflector** - Reflection generator
+- CLI tool to generate reflection database
+- Runs inside Roblox Studio to extract API data
+
+**9. rbx_util** - Debugging utility
+- CLI tool to convert and inspect model files
+- Useful for debugging format issues
+
+## Updating the Submodule
+
+### Initial Setup
+
+```bash
+# Clone Rojo with submodules
+git clone --recursive https://github.com/UserGeneratedLLC/rojo
+
+# Or update existing submodules
+git submodule update --init --recursive
+```
+
+### Updating to Latest
+
+```bash
+cd rbx-dom
+git pull origin main
+cd ..
+git add rbx-dom
+git commit -m "Update rbx-dom submodule"
+```
+
+**Important:** Test thoroughly after updating. rbx-dom changes can affect:
+- Build/serve functionality
+- Property serialization
+- Format compatibility
+- Reflection data
+
+## Property Type Support
+
+See `rbx-dom/README.md` for complete property type coverage matrix. Key types:
+
+- ✔ **Fully Supported:** Bool, String, Int32, Float32, Vector3, CFrame, Color3, Enum, Ref, Content, Attributes, Tags
+- ✔ **Complex Types:** NumberSequence, ColorSequence, PhysicalProperties, Font, SecurityCapabilities
+- ➖ **Partially Supported:** BinaryString (no Lua support)
+- ❌ **Unsupported:** Region3/Region3int16 in binary format
+- ⛔ **Never:** Bytecode, QDir, QFont (Studio-only types)
+
+## Development Guidelines
+
+### Working on rbx-dom
+
+Since rbx-dom is a separate repository:
+
+1. **Fork and clone rbx-dom separately** for development
+2. **Make changes in the rbx-dom repository** (not the submodule)
+3. **Open PRs against UserGeneratedLLC/rbx-dom** (not UserGeneratedLLC/rojo)
+4. **Update Rojo's submodule** only after rbx-dom changes are merged
+
+### Testing Changes
+
+**In Rojo with local rbx-dom changes:**
+
+```bash
+# Edit Cargo.toml to use local path temporarily
+[dependencies]
+rbx_binary = { path = "../rbx-dom/rbx_binary" }
+rbx_dom_weak = { path = "../rbx-dom/rbx_dom_weak" }
+# ... etc
+
+# Run Rojo tests
+cargo test
+```
+
+**Don't commit local path changes** - they won't work in CI or for other contributors.
+
+### rbx-dom Testing
+
+rbx-dom has extensive snapshot tests:
+
+```bash
+cd rbx-dom
+
+# Run all tests
+cargo test
+
+# Review snapshot changes
+cargo insta review
+
+# Run Lua tests (requires run-in-roblox)
+bash scripts/run-tests.sh
+```
+
+## Release Process
+
+rbx-dom packages must be published **in dependency order**:
+
+1. `rbx_types` (no dependencies)
+2. `rbx_dom_weak` and `rbx_reflection` (depend on rbx_types)
+3. `rbx_reflection_database` (depends on rbx_reflection)
+4. `rbx_binary` and `rbx_xml` (depend on all above)
+
+**Only maintainers can publish.** If you need a new rbx-dom release:
+1. Open issue in UserGeneratedLLC/rbx-dom
+2. Explain what features/fixes you need
+3. Maintainers will coordinate release
+
+## Common Issues
+
+**Submodule not initialized:**
+```bash
+git submodule update --init --recursive
+```
+
+**Detached HEAD state:** Normal when updating submodules. To update to latest:
+```bash
+cd rbx-dom && git checkout main && git pull
+```
+
+**Property bugs:** Check `rbx-dom/test-files/` for similar cases, file issue in UserGeneratedLLC/rbx-dom
+
+**Outdated reflection:** File issue requesting reflection database update (maintainers run `rbx_reflector`)
+
+## Contributing to rbx-dom
+
+See https://github.com/UserGeneratedLLC/rbx-dom. Remember: rbx-dom is designed for projects beyond Rojo, so changes should be general-purpose.

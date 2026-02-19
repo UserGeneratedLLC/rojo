@@ -433,10 +433,7 @@ function DomLabel:didUpdate(prevProps)
 	then
 		-- Close the expansion when the domlabel is changed to a different thing
 		self.expanded = false
-		self.motor:setGoal(Flipper.Spring.new(24, {
-			frequency = 5,
-			dampingRatio = 1,
-		}))
+		self.motor:setGoal(Flipper.Instant.new(24))
 	end
 end
 
@@ -491,7 +488,7 @@ function DomLabel:render()
 			end
 		end
 
-		if depth ~= 1 then
+		if depth > 1 then
 			lineGuides["Connector"] = e("Frame", {
 				Size = UDim2.new(0, 8, 0, 2),
 				Position = UDim2.new(0, 2 + (12 * props.depth), 0, 12),
@@ -541,71 +538,50 @@ function DomLabel:render()
 							SelectionService:Set({ props.instance })
 						end
 					else
-						-- Single click expands the changes (after a delay to check for double click)
-						task.delay(0.3, function()
-							-- Guard against unmounted component or stale click
-							if not self.isMounted then
+						-- Removed script: show diff of old source vs empty
+						if
+							props.patchType == "Remove"
+							and props.instance
+							and props.changeInfo
+							and props.changeInfo.linesRemoved
+							and props.showStringDiff
+						then
+							local ok, source = pcall(function()
+								return (props.instance :: any).Source
+							end)
+							if ok and type(source) == "string" then
+								props.showStringDiff(source, "", props.instancePath)
 								return
 							end
+						end
 
-							if os.clock() - (self.lastDoubleClickTime or 0) <= 0.35 then
-								-- This was a double click, so don't expand
-								return
-							end
-
-							-- Use self.props to get current props, not stale closure
-							local p = self.props
-
-							-- Removed script: show diff of old source vs empty
-							if
-								p.patchType == "Remove"
-								and p.instance
-								and p.changeInfo
-								and p.changeInfo.linesRemoved
-								and p.showStringDiff
-							then
-								local ok, source = pcall(function()
-									return (p.instance :: any).Source
-								end)
-								if ok and type(source) == "string" then
-									p.showStringDiff(source, "", p.instancePath)
+						-- Added script: find Source in changeList and show diff of empty vs new source
+						if
+							props.patchType == "Add"
+							and props.changeList
+							and props.changeInfo
+							and props.changeInfo.linesAdded
+							and props.showStringDiff
+						then
+							for _, entry in props.changeList do
+								if entry[1] == "Source" and type(entry[3]) == "string" then
+									props.showStringDiff("", tostring(entry[3]), props.instancePath)
 									return
 								end
 							end
+						end
 
-							-- Added script: find Source in changeList and show diff of empty vs new source
-							if
-								p.patchType == "Add"
-								and p.changeList
-								and p.changeInfo
-								and p.changeInfo.linesAdded
-								and p.showStringDiff
-							then
-								for _, entry in p.changeList do
-									if entry[1] == "Source" and type(entry[3]) == "string" then
-										p.showStringDiff("", tostring(entry[3]), p.instancePath)
-										return
-									end
-								end
+						if props.changeList then
+							local cl = props.changeList
+							if #cl == 2 and cl[2][1] == "Source" and props.showStringDiff then
+								props.showStringDiff(tostring(cl[2][2]), tostring(cl[2][3]), props.instancePath)
+							else
+								self.expanded = not self.expanded
+								local goalHeight = 24
+									+ (if self.expanded then math.clamp(#props.changeList * 24, 24, 24 * 6) else 0)
+								self.motor:setGoal(Flipper.Instant.new(goalHeight))
 							end
-
-							if p.changeList then
-								-- If the only change is Source, open the diff viewer directly
-								-- changeList[1] is the header, changeList[2+] are entries
-								local cl = p.changeList
-								if #cl == 2 and cl[2][1] == "Source" and p.showStringDiff then
-									p.showStringDiff(tostring(cl[2][2]), tostring(cl[2][3]), p.instancePath)
-								else
-									self.expanded = not self.expanded
-									local goalHeight = 24
-										+ (if self.expanded then math.clamp(#p.changeList * 24, 24, 24 * 6) else 0)
-									self.motor:setGoal(Flipper.Spring.new(goalHeight, {
-										frequency = 5,
-										dampingRatio = 1,
-									}))
-								end
-							end
-						end)
+						end
 					end
 				end,
 			}),
@@ -653,8 +629,8 @@ function DomLabel:render()
 			}),
 			ChangeInfo = e("Frame", {
 				BackgroundTransparency = 1,
-				Size = UDim2.new(1, -indent - (if props.patchType and props.onSelectionChange then 210 else 80), 0, 24),
-				Position = UDim2.new(1, if props.patchType and props.onSelectionChange then -130 else -2, 0, 0),
+				Size = UDim2.new(1, -indent - (if props.patchType and props.onSelectionChange then 218 else 80), 0, 24),
+				Position = UDim2.new(1, if props.patchType and props.onSelectionChange then -138 else -2, 0, 0),
 				AnchorPoint = Vector2.new(1, 0),
 				ClipsDescendants = true,
 			}, {

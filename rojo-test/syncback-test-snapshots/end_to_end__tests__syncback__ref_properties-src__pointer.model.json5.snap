@@ -4,7 +4,7 @@ expression: src/pointer.model.json5
 ---
 {
   attributes: {
-    Rojo_Ref_Value: "ReplicatedStorage/target"
+    Rojo_Ref_Value: "@game/target.model.json5"
   },
   className: "ObjectValue"
 }

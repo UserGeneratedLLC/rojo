@@ -25,7 +25,7 @@
   "luau-lsp.completion.imports.requireStyle": "alwaysAbsolute",
   "luau-lsp.completion.fillCallArguments": false,
   "luau-lsp.completion.showDeprecatedItems": false,
-  "luau-lsp.sourcemap.generatorCommand": "atlas sourcemap default.project.json --output sourcemap.json --include-non-scripts --watch",
+  "luau-lsp.sourcemap.generatorCommand": "atlas sourcemap plugin.project.json --output sourcemap.json --include-non-scripts --watch",
   "luau-lsp.fflags.enableNewSolver": false,
   "luau-lsp.index.maxFiles": 100000,
   "luau-lsp.plugin.port": 3668,

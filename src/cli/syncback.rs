@@ -2,7 +2,6 @@ use std::{
     io::{self, BufReader, Write as _},
     mem::forget,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     time::Instant,
 };
 
@@ -280,8 +279,7 @@ impl SyncbackCommand {
                 result.fs_snapshot.removed_paths().len()
             );
 
-            // Refresh git index if in a git repository
-            refresh_git_index(base_path);
+            crate::git::refresh_git_index(base_path);
 
             // Delete input file if using default Project.rbxl location
             if let Some(input_path) = &delete_input_after_syncback {
@@ -384,42 +382,6 @@ fn download_place(place_id: u64) -> anyhow::Result<NamedTempFile> {
     );
 
     Ok(temp_file)
-}
-
-/// Refreshes the git index if the project is in a git repository.
-///
-/// This is useful because syncback may rewrite files with identical content,
-/// which can cause git to report them as modified due to timestamp changes.
-fn refresh_git_index(project_dir: &Path) {
-    // Check if .git exists in project dir or any parent
-    let mut check_dir = Some(project_dir);
-    let mut is_git_repo = false;
-    while let Some(dir) = check_dir {
-        if dir.join(".git").exists() {
-            is_git_repo = true;
-            break;
-        }
-        check_dir = dir.parent();
-    }
-
-    if is_git_repo {
-        log::info!("Refreshing git index...");
-        // Exit code 1 is normal - it just means files were refreshed.
-        // We only warn if git itself fails to run.
-        match Command::new("git")
-            .args(["update-index", "--refresh", "-q"])
-            .current_dir(project_dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-        {
-            Ok(_) => log::info!("Git index refreshed."),
-            Err(e) => log::warn!("Failed to run git update-index --refresh: {}", e),
-        }
-    } else {
-        log::debug!("Not a git repository, skipping index refresh.");
-    }
 }
 
 fn read_dom(path: &Path, file_kind: FileKind) -> anyhow::Result<WeakDom> {

@@ -4,7 +4,9 @@
 //! to reduce boilerplate and improve ergonomics when working with JSONC files.
 
 use anyhow::Context as _;
+use lexical_write_float::{format::STANDARD, Options, RoundMode, ToLexicalWithOptions};
 use serde::{de::DeserializeOwned, Serialize};
+use std::num::{NonZeroI32, NonZeroUsize};
 
 /// Parse JSONC text into a `serde_json::Value`.
 ///
@@ -126,6 +128,52 @@ pub fn from_slice_with_context<T: DeserializeOwned>(
     from_str_with_context(text, context)
 }
 
+const SCI_POSITIVE_BREAK: Option<NonZeroI32> = NonZeroI32::new(15);
+const SCI_NEGATIVE_BREAK: Option<NonZeroI32> = NonZeroI32::new(-6);
+
+const F32_FLOAT_OPTIONS: Options = Options::builder()
+    .trim_floats(true)
+    .nan_string(Some(b"NaN"))
+    .inf_string(Some(b"Infinity"))
+    .positive_exponent_break(SCI_POSITIVE_BREAK)
+    .negative_exponent_break(SCI_NEGATIVE_BREAK)
+    .max_significant_digits(NonZeroUsize::new(6))
+    .round_mode(RoundMode::Round)
+    .build_strict();
+
+const F64_FLOAT_OPTIONS: Options = Options::builder()
+    .trim_floats(true)
+    .nan_string(Some(b"NaN"))
+    .inf_string(Some(b"Infinity"))
+    .positive_exponent_break(SCI_POSITIVE_BREAK)
+    .negative_exponent_break(SCI_NEGATIVE_BREAK)
+    .round_mode(RoundMode::Round)
+    .build_strict();
+
+const F32_BUF_SIZE: usize = F32_FLOAT_OPTIONS.buffer_size_const::<f32, STANDARD>();
+const F64_BUF_SIZE: usize = F64_FLOAT_OPTIONS.buffer_size_const::<f64, STANDARD>();
+
+pub(crate) const F32_DISK_OPTIONS: &Options = &F32_FLOAT_OPTIONS;
+pub(crate) const F64_DISK_OPTIONS: &Options = &F64_FLOAT_OPTIONS;
+pub(crate) const F32_DISK_BUF_SIZE: usize = F32_BUF_SIZE;
+pub(crate) const F64_DISK_BUF_SIZE: usize = F64_BUF_SIZE;
+
+pub(crate) fn format_f32(v: f32) -> String {
+    let mut buffer = [0u8; F32_BUF_SIZE];
+    let digits = v.to_lexical_with_options::<STANDARD>(&mut buffer, &F32_FLOAT_OPTIONS);
+    std::str::from_utf8(digits)
+        .expect("lexical-write-float produced invalid utf-8")
+        .into()
+}
+
+pub(crate) fn format_f64(v: f64) -> String {
+    let mut buffer = [0u8; F64_BUF_SIZE];
+    let digits = v.to_lexical_with_options::<STANDARD>(&mut buffer, &F64_FLOAT_OPTIONS);
+    std::str::from_utf8(digits)
+        .expect("lexical-write-float produced invalid utf-8")
+        .into()
+}
+
 /// A JSON5 value that uses BTreeMap for sorted keys and supports NaN/Infinity.
 /// Uses String for numbers to preserve exact representation (including scientific notation).
 #[derive(Debug, Clone, PartialEq)]
@@ -154,6 +202,25 @@ impl Json5Value {
             Json5Value::Array(arr) => {
                 if arr.is_empty() {
                     output.push_str("[]");
+                } else if arr.len() <= 20
+                    && arr.iter().all(|v| {
+                        matches!(
+                            v,
+                            Json5Value::Null
+                                | Json5Value::Bool(_)
+                                | Json5Value::Number(_)
+                                | Json5Value::String(_)
+                        )
+                    })
+                {
+                    output.push_str("[ ");
+                    for (i, item) in arr.iter().enumerate() {
+                        if i > 0 {
+                            output.push_str(", ");
+                        }
+                        item.write_to(output, 0);
+                    }
+                    output.push_str(" ]");
                 } else {
                     output.push_str("[\n");
                     for (i, item) in arr.iter().enumerate() {
@@ -341,27 +408,12 @@ impl<'a> serde::Serializer for &mut CompactJson5Serializer<'a> {
     }
 
     fn serialize_f32(self, v: f32) -> Result<(), Self::Error> {
-        self.serialize_f64(v as f64)
+        self.output.push_str(&format_f32(v));
+        Ok(())
     }
 
     fn serialize_f64(self, v: f64) -> Result<(), Self::Error> {
-        if v.is_nan() {
-            self.output.push_str("NaN");
-        } else if v.is_infinite() {
-            if v.is_sign_positive() {
-                self.output.push_str("Infinity");
-            } else {
-                self.output.push_str("-Infinity");
-            }
-        } else {
-            // Use scientific notation for very large or very small numbers
-            let abs = v.abs();
-            if abs != 0.0 && !(1e-6..1e15).contains(&abs) {
-                self.output.push_str(&format!("{:e}", v));
-            } else {
-                self.output.push_str(&v.to_string());
-            }
-        }
+        self.output.push_str(&format_f64(v));
         Ok(())
     }
 
@@ -689,29 +741,11 @@ impl serde::Serializer for Json5ValueSerializer {
     }
 
     fn serialize_f32(self, v: f32) -> Result<Self::Ok, Self::Error> {
-        self.serialize_f64(v as f64)
+        Ok(Json5Value::Number(format_f32(v)))
     }
 
     fn serialize_f64(self, v: f64) -> Result<Self::Ok, Self::Error> {
-        let s = if v.is_nan() {
-            "NaN".to_string()
-        } else if v.is_infinite() {
-            if v.is_sign_positive() {
-                "Infinity".to_string()
-            } else {
-                "-Infinity".to_string()
-            }
-        } else {
-            // Use scientific notation for very large or very small numbers
-            // to ensure they can be parsed back by json5
-            let abs = v.abs();
-            if abs != 0.0 && !(1e-6..1e15).contains(&abs) {
-                format!("{:e}", v)
-            } else {
-                v.to_string()
-            }
-        };
-        Ok(Json5Value::Number(s))
+        Ok(Json5Value::Number(format_f64(v)))
     }
 
     fn serialize_char(self, v: char) -> Result<Self::Ok, Self::Error> {
@@ -1009,6 +1043,78 @@ impl serde::ser::SerializeStructVariant for Json5StructVariantSerializer {
 mod tests {
     use super::*;
     use serde::Deserialize;
+
+    #[test]
+    fn test_format_f32() {
+        // Trailing zeros trimmed, .0 removed
+        assert_eq!(format_f32(6.67), "6.67");
+        assert_eq!(format_f32(6.0), "6");
+        assert_eq!(format_f32(1.5), "1.5");
+        assert_eq!(format_f32(100.0), "100");
+
+        // Negative values
+        assert_eq!(format_f32(-3.15), "-3.15");
+        assert_eq!(format_f32(-2.5), "-2.5");
+
+        // Zero and negative zero
+        assert_eq!(format_f32(0.0), "0");
+        assert_eq!(format_f32(-0.0), "-0");
+
+        // Rounding to 6 significant digits
+        assert_eq!(format_f32(0.5), "0.5");
+        assert_eq!(format_f32(1.0 / 3.0), "0.333333");
+
+        // Small values preserved
+        assert_eq!(format_f32(1e-10).parse::<f32>().unwrap(), 1e-10_f32);
+        assert_eq!(format_f32(-1e-10).parse::<f32>().unwrap(), -1e-10_f32);
+        assert_eq!(format_f32(4.9e-7).parse::<f32>().unwrap(), 4.9e-7_f32);
+
+        // Scientific notation for large values
+        assert_eq!(format_f32(1e20), "1e20");
+
+        // Special values
+        assert_eq!(format_f32(f32::NAN), "NaN");
+        assert_eq!(format_f32(f32::INFINITY), "Infinity");
+        assert_eq!(format_f32(f32::NEG_INFINITY), "-Infinity");
+    }
+
+    #[test]
+    fn test_format_f64() {
+        // Trailing zeros trimmed, .0 removed
+        assert_eq!(format_f64(6.67), "6.67");
+        assert_eq!(format_f64(6.0), "6");
+        assert_eq!(format_f64(1.5), "1.5");
+        assert_eq!(format_f64(100.0), "100");
+
+        // Negative values
+        assert_eq!(format_f64(-3.15), "-3.15");
+        assert_eq!(format_f64(-2.5), "-2.5");
+
+        // Zero and negative zero
+        assert_eq!(format_f64(0.0), "0");
+        assert_eq!(format_f64(-0.0), "-0");
+
+        // Full precision for roundtrip fidelity
+        assert_eq!(format_f64(0.5), "0.5");
+        assert_eq!(format_f64(1.0 / 3.0), "0.3333333333333333");
+
+        // Small values preserved
+        assert_eq!(format_f64(1e-100).parse::<f64>().unwrap(), 1e-100_f64);
+        assert_eq!(format_f64(-1e-100).parse::<f64>().unwrap(), -1e-100_f64);
+        assert_eq!(format_f64(4.9e-16).parse::<f64>().unwrap(), 4.9e-16_f64);
+
+        // Scientific notation for large values
+        assert_eq!(format_f64(1e47), "1e47");
+
+        // Extreme values use exact formatting to avoid roundtrip overflow
+        assert_eq!(format_f64(f64::MAX), "1.7976931348623157e308");
+        assert_eq!(format_f64(f64::MIN), "-1.7976931348623157e308");
+
+        // Special values
+        assert_eq!(format_f64(f64::NAN), "NaN");
+        assert_eq!(format_f64(f64::INFINITY), "Infinity");
+        assert_eq!(format_f64(f64::NEG_INFINITY), "-Infinity");
+    }
 
     #[test]
     fn test_parse_value() {
@@ -1648,13 +1754,6 @@ mod tests {
             let serialized = to_vec_pretty_sorted(&original).unwrap();
             let json_str = String::from_utf8(serialized).unwrap();
 
-            // Should use scientific notation for very small numbers
-            assert!(
-                json_str.contains("e-"),
-                "Very small number should be in scientific notation: {}",
-                json_str
-            );
-
             let deserialized: Data = from_str(&json_str).unwrap();
             assert_eq!(deserialized.value, original.value);
         }
@@ -1733,7 +1832,7 @@ mod tests {
             let serialized = to_vec_pretty_sorted(&original).unwrap();
             let json_str = String::from_utf8(serialized).unwrap();
 
-            // Below 1e-6 should use scientific notation
+            // Values below 0.5e-6 are clamped to zero
             let deserialized: Data = from_str(&json_str).unwrap();
             assert_eq!(deserialized.above, original.above);
             assert_eq!(deserialized.at, original.at);
@@ -2630,8 +2729,8 @@ mod tests {
             let json_str = String::from_utf8(serialized).unwrap();
 
             let deserialized: Data = from_str(&json_str).unwrap();
-            assert_eq!(deserialized.epsilon, f64::EPSILON);
-            assert_eq!(deserialized.min_positive, f64::MIN_POSITIVE);
+            assert_eq!(deserialized.epsilon, original.epsilon);
+            assert_eq!(deserialized.min_positive, original.min_positive);
         }
     }
 
@@ -4791,8 +4890,8 @@ No \\n's!",
             assert!(deserialized.c.is_nan());
             assert_eq!(deserialized.d, f64::MAX);
             assert_eq!(deserialized.e, f64::MIN);
-            assert_eq!(deserialized.f, f64::MIN_POSITIVE);
-            assert_eq!(deserialized.g, f64::EPSILON);
+            assert_eq!(deserialized.f, original.f);
+            assert_eq!(deserialized.g, original.g);
             assert_eq!(deserialized.h, 0.0);
             assert_eq!(deserialized.i, original.i);
         }

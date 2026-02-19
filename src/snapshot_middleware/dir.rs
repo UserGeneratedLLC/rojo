@@ -5,14 +5,11 @@ use std::{
 
 use anyhow::Context;
 use memofs::{DirEntry, Vfs};
+use rbx_dom_weak::types::Ref;
 
 use crate::{
     snapshot::{InstanceContext, InstanceMetadata, InstanceSnapshot, InstigatingSource},
-    snapshot_middleware::Middleware,
-    syncback::{
-        hash_instance, name_needs_slugify, slugify_name, strip_middleware_extension, FsSnapshot,
-        SyncbackReturn, SyncbackSnapshot,
-    },
+    syncback::{hash_instance, FsSnapshot, SyncbackReturn, SyncbackSnapshot},
 };
 
 use super::{meta_file::DirectoryMetadata, snapshot_from_vfs};
@@ -52,19 +49,41 @@ pub fn snapshot_dir_no_meta(
             .all(|rule| rule.passes(child.path()))
     };
 
-    let mut snapshot_children = Vec::new();
-
-    for entry in vfs.read_dir(path)? {
-        let entry = entry?;
-
-        if !passes_filter_rules(&entry) {
-            continue;
+    let snapshot_children = if std::env::var("ATLAS_SEQUENTIAL").is_ok() {
+        let mut children = Vec::new();
+        for entry in vfs.read_dir(path)? {
+            let entry = entry?;
+            if !passes_filter_rules(&entry) {
+                continue;
+            }
+            if let Some(child_snapshot) = snapshot_from_vfs(context, vfs, entry.path())? {
+                children.push(child_snapshot);
+            }
         }
+        children
+    } else {
+        use rayon::prelude::*;
 
-        if let Some(child_snapshot) = snapshot_from_vfs(context, vfs, entry.path())? {
-            snapshot_children.push(child_snapshot);
+        let entries: Vec<_> = vfs.read_dir(path)?.filter_map(|e| e.ok()).collect();
+
+        let results: Vec<anyhow::Result<Option<InstanceSnapshot>>> = entries
+            .par_iter()
+            .map(|entry| {
+                if !passes_filter_rules(entry) {
+                    return Ok(None);
+                }
+                snapshot_from_vfs(context, vfs, entry.path())
+            })
+            .collect();
+
+        let mut children = Vec::new();
+        for result in results {
+            if let Some(snapshot) = result? {
+                children.push(snapshot);
+            }
         }
-    }
+        children
+    };
 
     let normalized_path = vfs.canonicalize(path)?;
     let relevant_paths = vec![
@@ -137,205 +156,173 @@ pub fn syncback_dir<'sync>(
 pub fn syncback_dir_no_meta<'sync>(
     snapshot: &SyncbackSnapshot<'sync>,
 ) -> anyhow::Result<SyncbackReturn<'sync>> {
+    use crate::syncback::matching::match_children;
+
     let new_inst = snapshot.new_inst();
 
     let mut children = Vec::new();
     let mut removed_children = Vec::new();
 
-    // taken_names tracks claimed bare slugs (without extensions) for dedup.
-    // Pre-seeded from old tree children's slugified instance names so that
-    // new-only children correctly dedup against existing siblings, regardless
-    // of iteration order (see plan: fix_stem-level_dedup §2).
+    // taken_names tracks claimed full filesystem name components (slug +
+    // extension for files, directory name for dirs), lowercased.
     let mut taken_names: HashSet<String> = HashSet::new();
 
-    // Detect duplicate child names (case-insensitive for file system safety).
-    // We skip duplicates instead of failing, tracking them in stats.
-    let mut child_name_counts: HashMap<String, usize> = HashMap::new();
-    for child_ref in new_inst.children() {
-        let child = snapshot.get_new_instance(*child_ref).unwrap();
-        let lower_name = child.name.to_lowercase();
-        *child_name_counts.entry(lower_name).or_insert(0) += 1;
-    }
-
-    let duplicate_names: HashSet<String> = child_name_counts
-        .into_iter()
-        .filter(|(_, count)| *count > 1)
-        .map(|(name, _)| name)
-        .collect();
-
-    // Record duplicate names in stats tracker
-    if !duplicate_names.is_empty() {
-        let inst_path = crate::syncback::inst_path(snapshot.new_tree(), snapshot.new);
-        // Count total instances being skipped (sum of all duplicates)
-        let mut total_skipped = 0;
-        for child_ref in new_inst.children() {
-            let child = snapshot.get_new_instance(*child_ref).unwrap();
-            if duplicate_names.contains(&child.name.to_lowercase()) {
-                total_skipped += 1;
-            }
-        }
-        let duplicate_list: Vec<&str> = duplicate_names.iter().map(|s| s.as_str()).collect();
-        snapshot
-            .stats()
-            .record_duplicate_names_batch(&inst_path, &duplicate_list, total_skipped);
-    }
-
-    if let Some(old_inst) = snapshot.old_inst() {
-        let mut old_child_map = HashMap::with_capacity(old_inst.children().len());
-        for child in old_inst.children() {
-            let inst = snapshot.get_old_instance(*child).unwrap();
-            old_child_map.insert(inst.name(), inst);
-        }
-
-        // Pre-seed taken_names from old children's actual filesystem dedup keys
-        // so that new-only children correctly dedup against existing siblings.
-        // We derive keys from relevant_paths (the real filename on disk) rather
-        // than slugifying instance names, because an old instance may already
-        // have a tilde suffix (e.g. A_B~1.luau from prior dedup) that the bare
-        // slug wouldn't capture.
-        // Only in incremental mode: in clean mode, old_ref is forced to None
-        // for all children, so every child is treated as new and pre-seeding
-        // would cause false collisions (spurious ~1 suffixes).
-        if snapshot.data.is_incremental() {
-            for inst in old_child_map.values() {
-                if let Some(path) = inst.metadata().relevant_paths.first() {
-                    if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
-                        let middleware = inst.metadata().middleware.unwrap_or(Middleware::Dir);
-                        let dedup_key =
-                            strip_middleware_extension(filename, middleware).to_lowercase();
-                        taken_names.insert(dedup_key);
-                    }
-                } else {
-                    // Fallback (shouldn't happen for old instances with disk presence)
-                    let name = inst.name();
-                    let slug = if name_needs_slugify(name) {
-                        slugify_name(name).to_lowercase()
-                    } else {
-                        name.to_lowercase()
-                    };
-                    taken_names.insert(slug);
-                }
-            }
-        }
-
-        // Sort children alphabetically for deterministic dedup ordering.
-        // Without this, DOM iteration order determines which sibling gets
-        // the base slug vs ~1, causing non-deterministic output across
-        // different serializations of the same place.
-        let mut sorted_children: Vec<_> = new_inst
-            .children()
-            .iter()
-            .map(|r| (*r, snapshot.get_new_instance(*r).unwrap().name.clone()))
-            .collect();
-        sorted_children.sort_by(|(_, a), (_, b)| a.cmp(b));
-
-        for (new_child_ref, _) in &sorted_children {
-            let new_child = snapshot.get_new_instance(*new_child_ref).unwrap();
-
-            // Skip children with duplicate names - cannot reliably sync them
-            if duplicate_names.contains(&new_child.name.to_lowercase()) {
-                old_child_map.remove(new_child.name.as_str());
-                continue;
-            }
-
-            // Skip instances of ignored classes
-            if snapshot.should_ignore_class(&new_child.class) {
-                // Also remove from old_child_map so it won't be marked as removed
-                old_child_map.remove(new_child.name.as_str());
+    // Filter new children: exclude ignored classes and ignoreTrees.
+    let eligible_new: Vec<Ref> = new_inst
+        .children()
+        .iter()
+        .copied()
+        .filter(|r| {
+            let child = snapshot.get_new_instance(*r).unwrap();
+            if snapshot.should_ignore_class(&child.class) {
                 log::debug!(
                     "Skipping instance {} because its class {} is ignored",
-                    new_child.name,
-                    new_child.class
+                    child.name,
+                    child.class
                 );
-                continue;
+                return false;
             }
-            // Skip instances matching ignoreTrees
-            if snapshot.should_ignore_tree(*new_child_ref) {
-                old_child_map.remove(new_child.name.as_str());
-                continue;
+            if snapshot.should_ignore_tree(*r) {
+                return false;
             }
-            if let Some(old_child) = old_child_map.remove(new_child.name.as_str()) {
-                if old_child.metadata().relevant_paths.is_empty() {
+            true
+        })
+        .collect();
+
+    if let Some(old_inst) = snapshot.old_inst() {
+        // Build old_ref → InstanceWithMeta lookup for metadata access.
+        let mut old_meta_map: HashMap<Ref, _> = HashMap::new();
+        for &child_ref in old_inst.children() {
+            let inst = snapshot.get_old_instance(child_ref).unwrap();
+            old_meta_map.insert(child_ref, inst);
+        }
+
+        // Filter old children: exclude those without disk presence, from
+        // project files, or with ignored classes.
+        let eligible_old: Vec<Ref> = old_inst
+            .children()
+            .iter()
+            .copied()
+            .filter(|r| {
+                let inst = old_meta_map.get(r).unwrap();
+                if inst.metadata().relevant_paths.is_empty() {
                     log::debug!(
-                        "Skipping instance {} because it doesn't exist on the disk",
-                        old_child.name()
+                        "Excluding old instance {} from matching (no disk presence)",
+                        inst.name()
                     );
-                    continue;
-                } else if matches!(
-                    old_child.metadata().instigating_source,
+                    return false;
+                }
+                if matches!(
+                    inst.metadata().instigating_source,
                     Some(InstigatingSource::ProjectNode { .. })
                 ) {
                     log::debug!(
-                        "Skipping instance {} because it originates in a project file",
-                        old_child.name()
+                        "Excluding old instance {} from matching (project file)",
+                        inst.name()
                     );
-                    continue;
+                    return false;
                 }
-                // This child exists in both doms. Pass it on.
-                let (child_snap, _needs_meta, dedup_key) = snapshot.with_joined_path(
-                    *new_child_ref,
-                    Some(old_child.id()),
-                    &taken_names,
-                )?;
-                taken_names.insert(dedup_key.to_lowercase());
-                children.push(child_snap);
-            } else {
-                // The child only exists in the the new dom
-                let (child_snap, _needs_meta, dedup_key) =
-                    snapshot.with_joined_path(*new_child_ref, None, &taken_names)?;
-                taken_names.insert(dedup_key.to_lowercase());
-                children.push(child_snap);
+                if snapshot.should_ignore_class(inst.class_name().as_str()) {
+                    return false;
+                }
+                true
+            })
+            .collect();
+
+        // Run the 3-pass matching algorithm to pair new ↔ old children.
+        let matching_session = crate::syncback::matching::MatchingSession::new();
+        let match_result = match_children(
+            &eligible_new,
+            &eligible_old,
+            snapshot.new_tree(),
+            snapshot.old_tree(),
+            None, // TODO: pass precomputed hashes for better similarity
+            None,
+            &matching_session,
+        );
+
+        // Pre-seed taken_names from ALL matched old children's filesystem
+        // names so that unmatched new children correctly dedup.
+        if snapshot.data.is_incremental() {
+            for &(_, old_ref) in &match_result.matched {
+                if let Some(inst) = old_meta_map.get(&old_ref) {
+                    if let Some(path) = inst.metadata().relevant_paths.first() {
+                        if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
+                            taken_names.insert(filename.to_lowercase());
+                        }
+                    }
+                }
+            }
+            // Also seed from unmatched old (they still occupy filesystem names).
+            for &old_ref in &match_result.unmatched_old {
+                if let Some(inst) = old_meta_map.get(&old_ref) {
+                    if let Some(path) = inst.metadata().relevant_paths.first() {
+                        if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
+                            taken_names.insert(filename.to_lowercase());
+                        }
+                    }
+                }
             }
         }
-        // Any children that are in the old dom but not the new one are removed.
-        // Filter out instances of ignored classes and duplicates from removal.
-        removed_children.extend(old_child_map.into_values().filter(|inst| {
-            // Don't remove duplicates - we're skipping them entirely
-            if duplicate_names.contains(&inst.name().to_lowercase()) {
-                return false;
+
+        // Sort matched pairs by new child name for deterministic ordering.
+        let mut sorted_matched = match_result.matched;
+        sorted_matched.sort_by(|(a, _), (b, _)| {
+            let a_name = &snapshot.get_new_instance(*a).unwrap().name;
+            let b_name = &snapshot.get_new_instance(*b).unwrap().name;
+            a_name.cmp(b_name)
+        });
+
+        // Process matched pairs: preserve existing filesystem assignment.
+        for (new_ref, old_ref) in &sorted_matched {
+            let (child_snap, _needs_meta, dedup_key) =
+                snapshot.with_joined_path(*new_ref, Some(*old_ref), &taken_names)?;
+            taken_names.insert(dedup_key.to_lowercase());
+            children.push(child_snap);
+        }
+
+        // Sort unmatched new by name for deterministic dedup ordering.
+        let mut sorted_unmatched_new = match_result.unmatched_new;
+        sorted_unmatched_new.sort_by(|a, b| {
+            let a_name = &snapshot.get_new_instance(*a).unwrap().name;
+            let b_name = &snapshot.get_new_instance(*b).unwrap().name;
+            a_name.cmp(b_name)
+        });
+
+        // Process unmatched new children: generate new filenames.
+        for new_ref in &sorted_unmatched_new {
+            let (child_snap, _needs_meta, dedup_key) =
+                snapshot.with_joined_path(*new_ref, None, &taken_names)?;
+            taken_names.insert(dedup_key.to_lowercase());
+            children.push(child_snap);
+        }
+
+        // Unmatched old children are removed (instance was deleted).
+        // Filter out ignored classes from removal.
+        for old_ref in match_result.unmatched_old {
+            if let Some(inst) = old_meta_map.get(&old_ref) {
+                if !snapshot.should_ignore_class(inst.class_name().as_str()) {
+                    removed_children.push(*inst);
+                } else {
+                    log::debug!(
+                        "Not removing instance {} because its class {} is ignored",
+                        inst.name(),
+                        inst.class_name()
+                    );
+                }
             }
-            if snapshot.should_ignore_class(inst.class_name().as_str()) {
-                log::debug!(
-                    "Not removing instance {} because its class {} is ignored",
-                    inst.name(),
-                    inst.class_name()
-                );
-                false
-            } else {
-                true
-            }
-        }));
+        }
     } else {
-        // There is no old instance. Just add every child.
+        // No old instance (clean mode). All children are new.
         // Sort alphabetically for deterministic dedup ordering.
-        let mut sorted_children: Vec<_> = new_inst
-            .children()
-            .iter()
-            .map(|r| (*r, snapshot.get_new_instance(*r).unwrap().name.clone()))
-            .collect();
-        sorted_children.sort_by(|(_, a), (_, b)| a.cmp(b));
+        let mut sorted_new = eligible_new;
+        sorted_new.sort_by(|a, b| {
+            let a_name = &snapshot.get_new_instance(*a).unwrap().name;
+            let b_name = &snapshot.get_new_instance(*b).unwrap().name;
+            a_name.cmp(b_name)
+        });
 
-        for (new_child_ref, _) in &sorted_children {
-            let new_child = snapshot.get_new_instance(*new_child_ref).unwrap();
-
-            // Skip children with duplicate names - cannot reliably sync them
-            if duplicate_names.contains(&new_child.name.to_lowercase()) {
-                continue;
-            }
-
-            // Skip instances of ignored classes
-            if snapshot.should_ignore_class(&new_child.class) {
-                log::debug!(
-                    "Skipping instance {} because its class {} is ignored",
-                    new_child.name,
-                    new_child.class
-                );
-                continue;
-            }
-            // Skip instances matching ignoreTrees
-            if snapshot.should_ignore_tree(*new_child_ref) {
-                continue;
-            }
+        for new_child_ref in &sorted_new {
             let (child_snap, _needs_meta, dedup_key) =
                 snapshot.with_joined_path(*new_child_ref, None, &taken_names)?;
             taken_names.insert(dedup_key.to_lowercase());
@@ -374,6 +361,174 @@ mod test {
     use super::*;
 
     use memofs::{InMemoryFs, VfsSnapshot};
+
+    #[test]
+    fn parallel_wide_directory_ordering() {
+        let children: Vec<_> = (0..50)
+            .map(|i| {
+                (
+                    format!("child_{i:03}.luau"),
+                    VfsSnapshot::file(format!("-- {i}")),
+                )
+            })
+            .collect();
+
+        let mut imfs = InMemoryFs::new();
+        imfs.load_snapshot("/wide", VfsSnapshot::dir(children))
+            .unwrap();
+        let vfs = Vfs::new(imfs);
+
+        let snap = snapshot_dir(
+            &InstanceContext::default(),
+            &vfs,
+            Path::new("/wide"),
+            "wide",
+        )
+        .unwrap()
+        .unwrap();
+
+        let names: Vec<&str> = snap.children.iter().map(|c| c.name.as_ref()).collect();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(
+            names, sorted,
+            "Children should be in sorted (read_dir) order"
+        );
+        assert_eq!(snap.children.len(), 50);
+    }
+
+    #[test]
+    fn parallel_wide_directory_deterministic_across_runs() {
+        fn make_children() -> Vec<(String, VfsSnapshot)> {
+            (0..30)
+                .map(|i| {
+                    (
+                        format!("mod_{i:03}.luau"),
+                        VfsSnapshot::file(format!("-- {i}")),
+                    )
+                })
+                .collect()
+        }
+
+        fn names_from_fresh() -> Vec<String> {
+            let mut imfs = InMemoryFs::new();
+            imfs.load_snapshot("/root", VfsSnapshot::dir(make_children()))
+                .unwrap();
+            let vfs = Vfs::new(imfs);
+            let snap = snapshot_dir(
+                &InstanceContext::default(),
+                &vfs,
+                Path::new("/root"),
+                "root",
+            )
+            .unwrap()
+            .unwrap();
+            snap.children.iter().map(|c| c.name.to_string()).collect()
+        }
+
+        let baseline = names_from_fresh();
+
+        for i in 0..20 {
+            assert_eq!(
+                baseline,
+                names_from_fresh(),
+                "Child order diverged on iteration {i}"
+            );
+        }
+    }
+
+    #[test]
+    fn parallel_deep_wide_tree() {
+        fn make_tree(depth: usize, width: usize) -> VfsSnapshot {
+            if depth == 0 {
+                return VfsSnapshot::file("-- leaf");
+            }
+            let children: Vec<_> = (0..width)
+                .map(|i| {
+                    if i % 3 == 0 {
+                        (format!("dir_{i}"), make_tree(depth - 1, width))
+                    } else {
+                        (
+                            format!("file_{i}.luau"),
+                            VfsSnapshot::file(format!("-- d{depth} f{i}")),
+                        )
+                    }
+                })
+                .collect();
+            VfsSnapshot::dir(children)
+        }
+
+        let mut imfs = InMemoryFs::new();
+        imfs.load_snapshot("/deep", make_tree(4, 8)).unwrap();
+        let vfs = Vfs::new(imfs);
+
+        let snap = snapshot_dir(
+            &InstanceContext::default(),
+            &vfs,
+            Path::new("/deep"),
+            "deep",
+        )
+        .unwrap()
+        .unwrap();
+
+        fn count_nodes(snap: &InstanceSnapshot) -> usize {
+            1 + snap.children.iter().map(count_nodes).sum::<usize>()
+        }
+        let total = count_nodes(&snap);
+        assert!(total > 100, "Should have many nodes, got {total}");
+    }
+
+    #[test]
+    fn parallel_mixed_middleware_types() {
+        let mut imfs = InMemoryFs::new();
+        imfs.load_snapshot(
+            "/mixed",
+            VfsSnapshot::dir([
+                ("script.server.luau", VfsSnapshot::file("-- server")),
+                ("module.luau", VfsSnapshot::file("return {}")),
+                ("data.json", VfsSnapshot::file(r#"{"key": "value"}"#)),
+                ("notes.txt", VfsSnapshot::file("hello")),
+                (
+                    "sub",
+                    VfsSnapshot::dir([
+                        ("inner.luau", VfsSnapshot::file("return 1")),
+                        (
+                            "deep",
+                            VfsSnapshot::dir([("leaf.luau", VfsSnapshot::file("return 2"))]),
+                        ),
+                    ]),
+                ),
+                ("another.luau", VfsSnapshot::file("return 3")),
+                (
+                    "model.model.json",
+                    VfsSnapshot::file(r#"{"className": "Part", "properties": {}}"#),
+                ),
+            ]),
+        )
+        .unwrap();
+        let vfs = Vfs::new(imfs);
+
+        let snap = snapshot_dir(
+            &InstanceContext::default(),
+            &vfs,
+            Path::new("/mixed"),
+            "mixed",
+        )
+        .unwrap()
+        .unwrap();
+
+        let names: Vec<&str> = snap.children.iter().map(|c| c.name.as_ref()).collect();
+        assert!(names.contains(&"script"), "Missing server script");
+        assert!(names.contains(&"module"), "Missing module script");
+        assert!(names.contains(&"data"), "Missing json data");
+        assert!(names.contains(&"notes"), "Missing txt");
+        assert!(names.contains(&"sub"), "Missing subdirectory");
+        assert!(names.contains(&"another"), "Missing another script");
+        assert!(names.contains(&"model"), "Missing model");
+
+        let sub = snap.children.iter().find(|c| c.name == "sub").unwrap();
+        assert_eq!(sub.children.len(), 2, "sub should have inner + deep");
+    }
 
     #[test]
     fn empty_folder() {

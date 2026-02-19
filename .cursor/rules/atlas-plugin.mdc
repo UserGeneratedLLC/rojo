@@ -1,0 +1,373 @@
+---
+globs: plugin/**
+alwaysApply: false
+---
+
+# Rojo Studio Plugin
+
+Built with Roact (React-like), handles WebSocket sync with server, patch application to Studio, and UI.
+
+**Entry:** `plugin/src/init.server.lua` | **Protocol:** WebSocket v6 | **Must match server MAJOR.MINOR**
+
+## Architecture
+
+### Key Components
+
+**1. UI Layer** (`App/`)
+- **init.lua** - Root component, manages connection state, auto-reconnect, sync reminders, playtest server auto-connect. Also renders `SyncbackConfirm` floating dialog (StudioPluginGui with `isEphemeral=true`, not a StatusPage file). Contains `performSyncback()` and `SYNCBACK_SERVICES` constant.
+- **Theme.lua** - Studio-matched color palette (auto light/dark)
+- **Page.lua** - Page wrapper component
+- **Components/** - Reusable UI components
+  - `PatchVisualizer/` - Tree view of changes with property diffs (`init.lua`, `DomLabel.lua`, `DisplayValue.lua`, `ChangeList.lua`)
+  - `StringDiffVisualizer/` - Side-by-side script diffs (`init.lua`, `StringDiff.lua`)
+  - `TableDiffVisualizer/` - Attributes and Tags diffs (`init.lua`, `Dictionary.lua`, `Array.lua`)
+  - `Notifications/` - Toast notifications (`init.lua`, `Notification.lua`, `FullscreenNotification.lua`)
+  - `Studio/` - Studio API wrappers (`StudioPluginAction`, `StudioPluginContext`, `StudioPluginGui`, `StudioToggleButton`, `StudioToolbarContext`, `StudioToolbar`)
+  - General: `Header`, `TextInput`, `TextButton`, `Checkbox`, `Dropdown`, `Tag`, `IconButton`, `Tooltip`, `TouchRipple`, `VirtualScroller`, `ScrollingFrame`, `Spinner`, `BorderedContainer`, `EditableImage`, `SlicedImage`, `ClassIcon`
+- **StatusPages/** - Main UI pages
+  - `NotConnected.lua` - Connection form (host/port input), "Syncback" button (Danger style)
+  - `Connecting.lua` - Loading screen
+  - `Confirming.lua` - Patch confirmation dialog with push/pull/ignore per-node selections
+  - `Connected.lua` - Status display with patch history
+  - `Error.lua` - Error display
+  - `Settings/` - Settings UI (`init.lua`, `Setting.lua`)
+- Uses Roact for declarative UI
+
+**2. Communication** (`ServeSession.lua`, `ApiContext.lua`)
+- WebSocket connection to server via `/api/socket/:cursor`
+- Handles patches, errors, reconnection
+- Protocol version checking
+- Confirmation flow with push/pull/ignore
+- One-shot mode support
+
+**3. Reconciler** (`Reconciler/`)
+- **applyPatch.lua** - Applies server patches to Studio tree
+- **reify.lua** - Creates instances from snapshots (parent last)
+- **hydrate.lua** - Updates InstanceMap with existing Studio instances
+- **diff.lua** - Computes patch between virtual and Studio state (for two-way sync)
+- **matching.lua** - Recursive change-count scoring algorithm for pairing virtual instances with Studio instances
+- **trueEquals.lua** - Shared value equality (fuzzy floats, Color3, CFrame, Vector3; NaN handling; nil/null-ref equivalence)
+- **decodeValue.lua** - Converts encoded values to Roblox types
+- **setProperty.lua** - Sets properties safely (handles unscriptable)
+- **getProperty.lua** - Gets properties with fallbacks
+- **Error.lua** - Reconciler error handling
+
+**4. ChangeBatcher** (`ChangeBatcher/`)
+- **init.lua** - Main batcher: accumulates changes every 200ms, pause/resume, deferred Ref resolution
+- **createPatchSet.lua** - Converts pending changes to PatchSet
+- **encodePatchUpdate.lua** - Encodes property updates including Ref properties via InstanceMap
+- **encodeInstance.lua** - Full instance encoding (for additions/syncback); uses `encodeHelpers` for property iteration; includes duplicate detection helpers (`findDuplicateNames`, `hasDuplicateSiblings`, `isPathUnique`)
+- **encodeHelpers.lua** - Shared property encoding helpers (`encodeAttributes`, `encodeTags`, `forEachEncodableProperty`). Used by `encodeInstance.lua` and `encodeService.lua`. Defines `SKIP_PROPERTIES` (Parent, Name, Archivable).
+- **encodeService.lua** - Encodes service-level properties/attributes/refs for live syncback; uses ObjectValue carriers for Ref properties
+- **encodeProperty.lua** - Single property value encoding via RbxDom
+- **propertyFilter.lua** - Property type filtering (only `UniqueId` blocked; `Ref` is allowed)
+
+**5. State Management**
+- **Settings.lua** - Persistent plugin settings (prefixed `Atlas_` in plugin store)
+- **InstanceMap.lua** - Bidirectional Server ID <-> Studio Instance mapping with change detection
+- **PatchSet.lua** / **PatchTree.lua** - Patch representation and visualization tree (PatchTree.build accepts optional `gitMetadata` for smart default selections)
+- **Types.lua** - Type definitions and runtime validation
+- **ChangeMetadata.lua** - Change metadata tracking
+
+**6. Utilities**
+- **Timer.lua** - Performance timing
+- **DiffUtil.lua** - Diff utilities
+- **Version.lua** - Version parsing and comparison
+- **Dictionary.lua** - Dictionary utilities
+- **Assets.lua** - Asset references
+- **SHA1.luau** - SHA1 hashing (used for git blob format hash comparison in PatchTree default selections)
+- **XXH32.luau** - XXH32 hash function
+- **soundPlayer.lua** - Sound effects
+- **preloadAssets.lua** - Asset preloading
+- **ignorePlaceIds.lua** - Place ID ignore list
+- **timeUtil.lua** - Time formatting
+- **strict.lua** - Strict module wrapper
+- **invariant.lua** - Assertion utilities
+
+**7. Testing**
+- Unit tests: `.spec.lua` files (TestEZ) throughout all modules
+- Integration tests: `integration/` directory (`confirmBehavior`, `oneShotSync`, `syncflow`, `twoWaySync`)
+- Stress tests: `.stress.spec.lua` files (applyPatch, diff, reify, encodeInstance, PatchSet)
+- Chaos tests: `chaos/` directory (`stressPatterns.spec.lua`)
+- Test utilities: `testUtils/` (`MockApiContext`, `PatchGenerator`, `LargeTreeGenerator`)
+- Test runner: `runTests.lua`
+
+## Build Structure (`plugin.project.json`)
+
+The plugin is built from `plugin.project.json` at the repo root:
+
+```json
+{
+  "name": "Rojo",
+  "tree": {
+    "$className": "Folder",
+    "Plugin": { "$path": "plugin/src" },
+    "Packages": {
+      "$path": "plugin/Packages",
+      "Log": { "$path": "plugin/log" },
+      "Http": { "$path": "plugin/http" },
+      "Fmt": { "$path": "plugin/fmt" },
+      "RbxDom": { "$path": "plugin/rbx_dom_lua" }
+    },
+    "Version": { "$path": "plugin/Version.txt" }
+  }
+}
+```
+
+Vendored packages live under `plugin/Packages/`. Custom modules (`Log`, `Http`, `Fmt`, `RbxDom`) are injected into the Packages tree from their own directories at build time.
+
+## Key Configuration (`Config.lua`)
+
+```lua
+{
+    isDevBuild = false,           -- Detected from ROJO_DEV_BUILD instance
+    codename = "Epiphany",
+    version = { major, minor, patch, metadata },  -- Parsed from Version.txt
+    expectedServerVersionString = "7.7 or newer",
+    protocolVersion = 6,          -- MUST match server
+    defaultHost = "localhost",
+    defaultPort = "34873",
+    ignoredClassNames = {         -- Auto-created instances to skip
+        TouchTransmitter = true,
+        Camera = true,
+    },
+}
+```
+
+**When changing protocol:** Bump `protocolVersion` in both `plugin/src/Config.lua` AND `src/web/interface.rs`.
+
+## Settings
+
+Persistent settings stored with `Atlas_` prefix in Studio plugin store:
+
+```lua
+{
+    openScriptsExternally = false,
+    twoWaySync = true,
+    oneShotSync = true,
+    autoReconnect = false,
+    showNotifications = false,
+    enableSyncFallback = false,
+    syncReminderMode = "Notify",           -- "None" | "Notify" | "Fullscreen"
+    syncReminderPolling = true,
+    checkForUpdates = false,
+    checkForPrereleases = false,
+    autoConnectPlaytestServer = false,
+    confirmationBehavior = "Always",       -- "Never" | "Initial" | "Always" | "Large Changes" | "Unlisted PlaceId"
+    largeChangesConfirmationThreshold = 5,
+    playSounds = true,
+    typecheckingEnabled = false,
+    logLevel = "Info",
+    timingLogsEnabled = false,
+    priorEndpoints = {},
+}
+```
+
+## WebSocket Protocol (v6)
+
+1. Connect to `ws://host:port/api/socket/:cursor`
+2. Receive `ServerInfo` handshake (protocol version, project name, session ID)
+3. Plugin sends: `{type = "Subscribe"}`
+4. Server sends patches on filesystem changes (MessagePack encoded)
+
+**Patch structure:**
+```lua
+{
+    type = "ApplyPatch",
+    sessionId = "uuid",
+    patch = {
+        removed = {"id-1", "id-2"},
+        added = {
+            ["id-3"] = {
+                id = "id-3", className = "Folder", name = "New",
+                properties = {}, metadata = { ignoreUnknownInstances = false },
+                children = {"child-1"},
+            },
+        },
+        updated = {
+            { id = "id-4", changedName = "Renamed", changedProperties = { Source = "code" } },
+        },
+    }
+}
+```
+
+## ServeSession (`ServeSession.lua`)
+
+Manages the lifecycle of a connection to the server.
+
+**Status flow:** `NotStarted` -> `Connecting` -> `Connected` -> `Disconnected`
+
+**Key methods:**
+- `new(options)` - Creates session with `ApiContext` and `twoWaySync` flag
+- `start()` - Connects, computes initial patch, shows confirmation
+- `stop()` - Disconnects and cleans up
+- `__onWebSocketMessage()` - Handles incoming patches
+- `__applyPatch()` - Applies patches via Reconciler
+- `__confirmAndApplyInitialPatch()` - Handles user confirmation with push/pull/ignore
+- `__computeInitialPatch()` - Computes catch-up patch
+- `hookPrecommit()` / `hookPostcommit()` - Lifecycle hooks
+
+**Confirmation flow:**
+
+1. Receive patch (initial or streaming)
+2. Check `confirmationBehavior` setting
+3. If confirmation needed: pause ChangeBatcher, build PatchTree with git-based default selections (from `serverInfo.gitMetadata`), show Confirming page with PatchVisualizer
+4. User reviews defaults and selects push/pull/ignore per node
+5. Build `stageIds` list (all push-accepted + auto-selected pull-accepted), send with write request
+6. Apply via Reconciler, resume ChangeBatcher
+
+**One-shot mode (`oneShotSync: true`):**
+- ChangeBatcher still collects changes (for diff visualization)
+- Automatic outgoing writes are blocked
+- Only explicit "pull" selections in confirmation dialog can write
+- Disconnects after initial sync completes
+
+## Reconciler (`Reconciler/`)
+
+**applyPatch.lua** - Main patch application:
+1. Remove instances in `removed`
+2. Create instances in `added` via `reify`
+3. Update instances in `updated` via `hydrate`
+4. Handle deferred Ref properties
+5. Collect errors, return unapplied patch
+
+**reify.lua** - Create instances (parent last - Roblox best practice)
+**hydrate.lua** - Update InstanceMap with existing instances (uses matching algorithm)
+**diff.lua** - Compute patch between virtual instances and Studio state
+**setProperty.lua** / **getProperty.lua** - Handle unscriptable properties
+
+### Matching Algorithm (`matching.lua`)
+
+Pairs incoming virtual instances with existing Studio instances during hydration.
+
+**Entry point:** `Matching.matchChildren(virtualChildren, studioChildren, virtualInstances)`
+
+**Algorithm:**
+1. **Fast path:** Group by (Name, ClassName). 1:1 groups get instant-matched with zero scoring.
+2. **Ambiguous groups:** For groups with multiple candidates, compute pairwise `computePairCost()` (recursive, scores entire subtree). Greedy assignment sorted by cost ascending, child-order tiebreaker for stability.
+3. **Leftovers:** Unmatched virtual = new instances, unmatched studio = deleted.
+
+**Performance:** File-level `--!native` and `--!optimize 2` directives for native codegen. `MatchingSession` caches results across recursive calls:
+```lua
+type MatchingSession = {
+    matchCache: { [string]: { [Instance]: MatchResult } },
+    costCache: { [string]: { [Instance]: number } },
+}
+```
+
+**Valid children tracking:** `cacheVirtual()` filters children to only those existing in `virtualInstances`, preventing crashes on incomplete virtual instance trees.
+
+**Sort stability note:** `table.sort` is NOT stable in Luau. Comparator breaks ties by insertion index to ensure deterministic ordering.
+
+**Value equality:** Shared `trueEquals.lua` module used by both `matching.lua` and `diff.lua` -- fuzzy equality for floats (epsilon 0.0001, absolute + relative), Color3 via RGB ints, CFrame/Vector3 component-wise, NaN handling, nil/null-ref equivalence, EnumItem/number interop.
+
+## InstanceMap (`InstanceMap.lua`)
+
+Bidirectional Server ID <-> Studio Instance mapping with integrated change detection:
+
+```lua
+InstanceMap = {
+    fromIds = {},                -- Server ID -> Studio Instance
+    fromInstances = {},          -- Studio Instance -> Server ID
+    pausedUpdateInstances = {},  -- Set of instances to ignore changes from
+    instancesToSignal = {},      -- Instance -> RBXScriptConnection(s)
+    onInstanceChanged = fn,      -- Callback: (instance, propertyName) -> void
+}
+```
+
+**Key methods:**
+- `insert(id, instance)` - Add mapping and connect change signals
+- `removeId(id)` / `removeInstance(instance)` - Remove mapping and disconnect signals
+- `destroyInstance(instance)` - Parent to nil (preserves undo history)
+- `fromId(id)` / `fromInstance(instance)` - Look up mapping
+- `pauseInstance(instance)` / `unpauseAllInstances()` - Pause/resume change detection
+
+**Signal connection (`__connectSignals`):**
+- Regular instances: `instance.Changed` event (fires for any property)
+- ValueBase instances: Explicit `GetPropertyChangedSignal` for Name, Value, Parent (ValueBase.Changed only fires for Value)
+
+**Change guards (`__maybeFireInstanceChanged`):**
+- Skipped if instance is in `pausedUpdateInstances`
+- Skipped if `onInstanceChanged` callback is nil
+- Skipped if `RunService:IsRunning()` (Play mode)
+
+**Pause mechanism:** During incoming patch application, instances are paused to prevent their changes from being sent back to the server (feedback loop prevention). `unpauseAllInstances()` is called each frame in `ChangeBatcher:__cycle()`.
+
+## Two-Way Sync
+
+Watches Studio changes and sends them to the server in real-time. Enabled by default (`twoWaySync: true`).
+
+**Data flow:** Studio property change -> InstanceMap signal -> ServeSession callback -> ChangeBatcher -> 200ms batch flush -> `POST /api/write` (MessagePack) -> Server writes to filesystem
+
+**ChangeBatcher state:**
+```lua
+{
+    __accumulator = 0,                    -- Time since last flush
+    __pendingPropertyChanges = {},        -- Instance -> { PropertyName -> true }
+    __pendingUnresolvedRefs = {},         -- targetInstance -> [{sourceInstance, propertyName}]
+    __syncSourceOnly = false,             -- Only sync Source property
+    __paused = false,                     -- Pause during confirmation
+    __renderSteppedConnection = conn,     -- Frame loop connection
+    __instanceMap = instanceMap,
+    __onChangesFlushed = callback,
+}
+```
+
+**Deferred Ref resolution:** When a Ref property targets an instance not yet in the InstanceMap, the property is deferred in `__pendingUnresolvedRefs`. When the target appears via `onInstanceInserted`, the property change is re-queued for the next batch.
+
+**Guards:**
+- `oneShotSync` setting blocks automatic outgoing writes
+- `__paused` flag blocks flushes during confirmation dialog
+- `RunService:IsRunning()` blocks during Play mode
+
+## Live Syncback
+
+One-click full sync from Studio to filesystem. Available from the **NotConnected page** -- does not require an active WebSocket session. Sends directly to the server via HTTP POST using the host/port fields from the connection form.
+
+**`SYNCBACK_SERVICES` constant (14 services):** Lighting, MaterialService, ReplicatedFirst, ReplicatedStorage, ServerScriptService, ServerStorage, SoundService, StarterGui, StarterPack, StarterPlayer, Teams, TextChatService, VoiceChatService, Workspace.
+
+**Flow:**
+1. User clicks "Syncback" button on NotConnected page → `SyncbackConfirm` floating dialog appears
+2. Dialog warns: "This will overwrite your project files with the current Studio state. This cannot be undone."
+3. User confirms → `performSyncback()`:
+   a. Iterates `SYNCBACK_SERVICES`, calls `encodeService(service)` for each
+   b. Collects all children instances and ObjectValue Ref carriers
+   c. Serializes all children via `SerializationService:SerializeInstancesAsync()` into a single buffer
+   d. Destroys temporary ObjectValue carriers
+   e. POSTs to `http://host:port/api/syncback` (MessagePack): `{protocolVersion, serverVersion, placeId, data, services}`
+4. Shows success/error notification
+
+**`encodeService(service)`** (`ChangeBatcher/encodeService.lua`):
+- Encodes service-level properties via `RbxDom.findClassDescriptor()`
+- Skips: `Parent`, `Name`, `Archivable`, `Attributes`, `Tags` (handled separately), class-specific excludes (`Lighting.ClockTime`)
+- Ref properties: creates temporary `ObjectValue` carriers (Name = property name, Value = target instance), stores 1-based index in `refs` map
+- Returns `(chunk, refTargets)` where `chunk = {className, childCount, refTargetCount, properties?, refs?}`
+
+## Dependencies
+
+### Vendored Packages (`plugin/Packages/`)
+
+Roact, Flipper, Promise, TestEZ, t, Highlighter, msgpack-luau, json5. **Don't edit vendored packages.**
+
+### Custom Modules (injected via `plugin.project.json`)
+
+| Module | Path | Purpose |
+|--------|------|---------|
+| Log | `plugin/log` | Structured logging with configurable levels |
+| Http | `plugin/http` | HTTP client utilities |
+| Fmt | `plugin/fmt` | String formatting with debug output |
+| RbxDom | `plugin/rbx_dom_lua` | Reflection database, property descriptors, encoded value encode/decode |
+
+## Common Issues
+
+**Plugin not reloading:** Enable Studio setting "Reload plugins on file change"
+**Connection fails:** Check server running, host/port match, protocol versions match
+**Properties not syncing:** Verify scriptable in rbx_reflection_database
+**Duplicates:** InstanceMap corruption - disconnect, restart Studio
+**Two-way sync feedback loops:** Check pause mechanism is working; instances must be paused during reconciliation
+
+## Debugging
+
+Settings -> Log Level -> "Trace" for verbose output. `ROJO_DEV_BUILD` instance enables auto-tests via TestEZ.
+
+**Timing:** Enable `timingLogsEnabled` setting to see `Timer.start`/`Timer.stop` measurements for Reconciler and other hot paths.

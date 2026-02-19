@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use insta::assert_yaml_snapshot;
 
 use rbx_dom_weak::{ustr, UstrMap};
@@ -23,6 +25,7 @@ fn set_name_and_class_name() {
             changed_properties: Default::default(),
             changed_metadata: None,
         }],
+        stage_ids: HashSet::new(),
         ..Default::default()
     };
 
@@ -50,6 +53,7 @@ fn add_property() {
             changed_properties: UstrMap::from_iter([(ustr("Foo"), Some("Value of Foo".into()))]),
             changed_metadata: None,
         }],
+        stage_ids: HashSet::new(),
         ..Default::default()
     };
 
@@ -89,6 +93,7 @@ fn remove_property() {
             changed_properties: UstrMap::from_iter([(ustr("Foo"), None)]),
             changed_metadata: None,
         }],
+        stage_ids: HashSet::new(),
         ..Default::default()
     };
 
@@ -144,6 +149,7 @@ fn apply_ref_property_update() {
             )]),
             changed_metadata: None,
         }],
+        stage_ids: HashSet::new(),
         ..Default::default()
     };
 
@@ -203,6 +209,7 @@ fn apply_nil_ref_skips_in_forward_sync() {
             )]),
             changed_metadata: None,
         }],
+        stage_ids: HashSet::new(),
         ..Default::default()
     };
 
@@ -258,6 +265,7 @@ fn apply_ref_property_removal() {
             changed_properties: UstrMap::from_iter([(ustr("PrimaryPart"), None)]),
             changed_metadata: None,
         }],
+        stage_ids: HashSet::new(),
         ..Default::default()
     };
 
@@ -314,6 +322,7 @@ fn apply_multiple_ref_property_updates() {
                 changed_metadata: None,
             },
         ],
+        stage_ids: HashSet::new(),
         ..Default::default()
     };
 
@@ -365,6 +374,7 @@ fn apply_ref_to_nonexistent_instance() {
             )]),
             changed_metadata: None,
         }],
+        stage_ids: HashSet::new(),
         ..Default::default()
     };
 

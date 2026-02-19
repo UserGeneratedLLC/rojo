@@ -1,6 +1,5 @@
 ---
-description: Python code style and conventions
-globs: ["**/*.py"]
+globs: **/*.py
 alwaysApply: false
 ---
 

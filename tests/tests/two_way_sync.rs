@@ -97,6 +97,7 @@ fn send_update(
         removed: vec![],
         added: HashMap::new(),
         updated: vec![update],
+        stage_ids: Vec::new(),
     };
     session
         .post_api_write(&write_request)
@@ -115,6 +116,7 @@ fn send_removal(
         removed: ids,
         added: HashMap::new(),
         updated: vec![],
+        stage_ids: Vec::new(),
     };
     session
         .post_api_write(&write_request)
@@ -704,6 +706,7 @@ fn echo_suppression_prevents_redundant_patches() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
 
@@ -1127,6 +1130,7 @@ fn add_child_converts_standalone_to_directory() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
@@ -1279,6 +1283,7 @@ fn add_child_to_encoded_module_creates_encoded_directory() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
@@ -1352,6 +1357,7 @@ fn add_child_to_encoded_script_strips_suffix_correctly() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
@@ -1418,6 +1424,7 @@ fn add_child_to_encoded_model_creates_encoded_directory() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
@@ -1521,6 +1528,7 @@ fn send_update_fast(
         removed: vec![],
         added: HashMap::new(),
         updated: vec![update],
+        stage_ids: Vec::new(),
     };
     session
         .post_api_write(&write_request)
@@ -1539,6 +1547,7 @@ fn send_update_no_wait(
         removed: vec![],
         added: HashMap::new(),
         updated: vec![update],
+        stage_ids: Vec::new(),
     };
     session
         .post_api_write(&write_request)
@@ -1556,6 +1565,7 @@ fn send_removal_fast(
         removed: ids,
         added: HashMap::new(),
         updated: vec![],
+        stage_ids: Vec::new(),
     };
     session
         .post_api_write(&write_request)
@@ -2198,6 +2208,7 @@ fn multi_instance_source_update_single_request() {
             removed: vec![],
             added: HashMap::new(),
             updated: updates,
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         wait_for_settle();
@@ -2234,6 +2245,7 @@ fn multi_instance_rename_single_request() {
             removed: vec![],
             added: HashMap::new(),
             updated: updates,
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         wait_for_settle();
@@ -2337,6 +2349,7 @@ fn echo_suppression_rapid_adds_10x() {
                 removed: vec![],
                 added: added_map,
                 updated: vec![],
+                stage_ids: Vec::new(),
             };
             session.post_api_write(&write_request).unwrap();
         }
@@ -2409,6 +2422,7 @@ fn echo_suppression_mixed_operations() {
             removed,
             added: added_map,
             updated: updates,
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         wait_for_settle();
@@ -2758,6 +2772,7 @@ fn fuzz_multi_instance_15_iterations() {
                 removed: vec![],
                 added: HashMap::new(),
                 updated: updates,
+                stage_ids: Vec::new(),
             };
             session.post_api_write(&write_request).unwrap();
             thread::sleep(Duration::from_millis(100));
@@ -4159,6 +4174,7 @@ fn multi_instance_combined_rename_class_source_batch() {
             removed: vec![],
             added: HashMap::new(),
             updated: updates,
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         wait_for_settle();
@@ -5126,6 +5142,7 @@ fn add_instance_with_forbidden_chars_creates_slug_and_meta() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
@@ -5147,7 +5164,7 @@ fn add_instance_with_forbidden_chars_creates_slug_and_meta() {
 }
 
 /// Adding two instances whose names slugify to the same string should produce
-/// dedup suffixes (~1) and both should have correct meta `name` fields.
+/// dedup suffixes (~2) and both should have correct meta `name` fields.
 #[test]
 fn add_two_colliding_instances_deduplicates() {
     run_serve_test("syncback_encoded_names", |session, _redactions| {
@@ -5191,18 +5208,19 @@ fn add_two_colliding_instances_deduplicates() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
 
         let src = session.path().join("src");
         let base = src.join("X_Y.luau");
-        let deduped = src.join("X_Y~1.luau");
+        let deduped = src.join("X_Y~2.luau");
 
-        // One should get X_Y.luau, the other X_Y~1.luau
+        // One should get X_Y.luau, the other X_Y~2.luau
         assert!(
             base.exists() && deduped.exists(),
-            "Both X_Y.luau and X_Y~1.luau should exist. \
+            "Both X_Y.luau and X_Y~2.luau should exist. \
              base exists: {}, deduped exists: {}",
             base.exists(),
             deduped.exists()
@@ -5210,9 +5228,9 @@ fn add_two_colliding_instances_deduplicates() {
 
         // Both should have meta files with correct names
         let base_meta = src.join("X_Y.meta.json5");
-        let deduped_meta = src.join("X_Y~1.meta.json5");
+        let deduped_meta = src.join("X_Y~2.meta.json5");
         assert_file_exists(&base_meta, "Meta for base slug instance");
-        assert_file_exists(&deduped_meta, "Meta for deduped ~1 instance");
+        assert_file_exists(&deduped_meta, "Meta for deduped ~2 instance");
 
         // Read both meta files and verify they contain the correct names
         let meta1 = fs::read_to_string(&base_meta).unwrap();
@@ -5438,7 +5456,7 @@ fn rename_model_json_to_clean_name() {
 // ---------------------------------------------------------------------------
 
 /// Adding 3 instances that all slug to the same name (X/Y, X:Y, X|Y → X_Y)
-/// should produce X_Y.luau, X_Y~1.luau, X_Y~2.luau with correct meta files.
+/// should produce X_Y.luau, X_Y~2.luau, X_Y~3.luau with correct meta files.
 #[test]
 fn add_three_colliding_instances_deduplicates() {
     run_serve_test("syncback_encoded_names", |session, _redactions| {
@@ -5470,19 +5488,20 @@ fn add_three_colliding_instances_deduplicates() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
 
         let src = session.path().join("src");
         let base = src.join("X_Y.luau");
-        let dedup1 = src.join("X_Y~1.luau");
-        let dedup2 = src.join("X_Y~2.luau");
+        let dedup1 = src.join("X_Y~2.luau");
+        let dedup2 = src.join("X_Y~3.luau");
 
         assert!(
             base.exists() && dedup1.exists() && dedup2.exists(),
             "All three slugified files should exist.\n\
-             X_Y.luau: {}, X_Y~1.luau: {}, X_Y~2.luau: {}",
+             X_Y.luau: {}, X_Y~2.luau: {}, X_Y~3.luau: {}",
             base.exists(),
             dedup1.exists(),
             dedup2.exists()
@@ -5490,11 +5509,11 @@ fn add_three_colliding_instances_deduplicates() {
 
         // All three should have meta files with the original names
         let base_meta = src.join("X_Y.meta.json5");
-        let dedup1_meta = src.join("X_Y~1.meta.json5");
-        let dedup2_meta = src.join("X_Y~2.meta.json5");
+        let dedup1_meta = src.join("X_Y~2.meta.json5");
+        let dedup2_meta = src.join("X_Y~3.meta.json5");
         assert_file_exists(&base_meta, "Meta for base slug");
-        assert_file_exists(&dedup1_meta, "Meta for ~1 dedup");
-        assert_file_exists(&dedup2_meta, "Meta for ~2 dedup");
+        assert_file_exists(&dedup1_meta, "Meta for ~2 dedup");
+        assert_file_exists(&dedup2_meta, "Meta for ~3 dedup");
 
         // Each meta should contain one of the original names
         let all_metas = [
@@ -5636,19 +5655,20 @@ fn add_case_insensitive_colliding_instances() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         thread::sleep(Duration::from_millis(500));
 
         let src = session.path().join("src");
 
-        // One should get the base name, the other should get ~1
+        // One should get the base name, the other should get ~2
         // The exact casing depends on processing order, but both files
         // must exist with distinct names.
         let base = src.join("CaseTest.luau");
         let base_lower = src.join("casetest.luau");
-        let dedup = src.join("CaseTest~1.luau");
-        let dedup_lower = src.join("casetest~1.luau");
+        let dedup = src.join("CaseTest~2.luau");
+        let dedup_lower = src.join("casetest~2.luau");
 
         let base_exists = base.exists() || base_lower.exists();
         let dedup_exists = dedup.exists() || dedup_lower.exists();
@@ -5656,7 +5676,7 @@ fn add_case_insensitive_colliding_instances() {
         assert!(
             base_exists && dedup_exists,
             "Both case-insensitive colliding instances should exist as separate files.\n\
-             CaseTest.luau: {}, casetest.luau: {}, CaseTest~1.luau: {}, casetest~1.luau: {}",
+             CaseTest.luau: {}, casetest.luau: {}, CaseTest~2.luau: {}, casetest~2.luau: {}",
             base.exists(),
             base_lower.exists(),
             dedup.exists(),
@@ -6127,7 +6147,7 @@ fn ref_set_primary_part() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "@self/Part1.model.json5",
         );
     });
 }
@@ -6156,7 +6176,11 @@ fn ref_set_object_value() {
         let model_path = session
             .path()
             .join("src/Workspace/TestObjectValue.model.json5");
-        poll_meta_has_ref_attr(&model_path, "Rojo_Ref_Value", "Workspace/TestModel/Part1");
+        poll_meta_has_ref_attr(
+            &model_path,
+            "Rojo_Ref_Value",
+            "./TestModel/Part1.model.json5",
+        );
     });
 }
 
@@ -6190,7 +6214,7 @@ fn ref_set_primary_part_to_nil() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "@self/Part1.model.json5",
         );
 
         // Now set PrimaryPart to nil
@@ -6273,7 +6297,7 @@ fn ref_change_target() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "@self/Part1.model.json5",
         );
 
         // Change PrimaryPart to Part2
@@ -6294,7 +6318,7 @@ fn ref_change_target() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part2",
+            "@self/Part2.model.json5",
         );
     });
 }
@@ -6324,7 +6348,7 @@ fn ref_set_nil_then_set_again() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "@self/Part1.model.json5",
         );
 
         let mut props2 = UstrMap::default();
@@ -6359,7 +6383,7 @@ fn ref_set_nil_then_set_again() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "@self/Part1.model.json5",
         );
     });
 }
@@ -6399,11 +6423,7 @@ fn ref_with_name_change() {
         poll_file_exists(&new_meta, "Meta file should exist at new location");
 
         // The ref path should be updated to reflect the renamed parent
-        assert_meta_has_ref_attr(
-            &new_meta,
-            "Rojo_Ref_PrimaryPart",
-            "Workspace/RenamedModel/Part1",
-        );
+        assert_meta_has_ref_attr(&new_meta, "Rojo_Ref_PrimaryPart", "@self/Part1.model.json5");
     });
 }
 
@@ -6433,7 +6453,7 @@ fn ref_only_change_creates_meta() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "@self/Part1.model.json5",
         );
     });
 }
@@ -6467,7 +6487,11 @@ fn ref_on_model_json5_instance() {
         let model_path = session
             .path()
             .join("src/Workspace/TestObjectValue.model.json5");
-        poll_meta_has_ref_attr(&model_path, "Rojo_Ref_Value", "Workspace/TestModel/Part1");
+        poll_meta_has_ref_attr(
+            &model_path,
+            "Rojo_Ref_Value",
+            "./TestModel/Part1.model.json5",
+        );
     });
 }
 
@@ -6498,7 +6522,7 @@ fn ref_existing_meta_preserved() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "@self/Part1.model.json5",
         );
 
         // Verify existing content wasn't clobbered
@@ -6571,7 +6595,7 @@ fn ref_mixed_valid_and_invalid() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "@self/Part1.model.json5",
         );
     });
 }
@@ -6614,7 +6638,7 @@ fn ref_stale_path_after_target_rename() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "@self/Part1.model.json5",
         );
 
         // Step 2: Rename Part1 to RenamedPart
@@ -6637,7 +6661,7 @@ fn ref_stale_path_after_target_rename() {
         assert_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/RenamedPart",
+            "@self/RenamedPart.model.json5",
         );
     });
 }
@@ -6671,7 +6695,7 @@ fn ref_stale_path_after_parent_rename() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "@self/Part1.model.json5",
         );
 
         // Step 2: Rename the MODEL (parent) from TestModel to RenamedModel
@@ -6700,7 +6724,7 @@ fn ref_stale_path_after_parent_rename() {
         assert_meta_has_ref_attr(
             &new_meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/RenamedModel/Part1",
+            "@self/Part1.model.json5",
         );
     });
 }
@@ -6745,6 +6769,7 @@ fn ref_to_instance_added_in_same_request() {
                 changed_properties: props,
                 changed_metadata: None,
             }],
+            stage_ids: Vec::new(),
         };
 
         session
@@ -6756,13 +6781,14 @@ fn ref_to_instance_added_in_same_request() {
 
         // The meta file should contain Rojo_Ref_PrimaryPart pointing to the new Part.
         // The added_paths fallback resolves the path from the AddedInstance data.
+        // The path includes the middleware extension (Fix 3: same-batch add+ref).
         let meta_path = session
             .path()
             .join("src/Workspace/TestModel/init.meta.json5");
         assert_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/NewPart",
+            "@self/NewPart.model.json5",
         );
 
         // Verify the tree also has a resolved PrimaryPart Ref (not dangling).
@@ -6829,7 +6855,7 @@ fn ref_ambiguous_path_no_crash() {
         let meta_path = session
             .path()
             .join("src/Workspace/DupParent/init.meta.json5");
-        poll_meta_has_ref_attr(&meta_path, "Rojo_Ref_PrimaryPart", "Workspace/Target");
+        poll_meta_has_ref_attr(&meta_path, "Rojo_Ref_PrimaryPart", "./Target.model.json5");
     });
 }
 
@@ -6926,7 +6952,7 @@ fn ref_startup_index_rename_updates_preexisting_attr() {
         assert_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "@self/Part1.model.json5",
         );
 
         // Rename Part1 to IndexTestPart WITHOUT any prior /api/write for Refs.
@@ -6951,7 +6977,7 @@ fn ref_startup_index_rename_updates_preexisting_attr() {
         assert_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/IndexTestPart",
+            "@self/IndexTestPart.model.json5",
         );
     });
 }
@@ -6987,10 +7013,10 @@ fn ref_partial_removal_preserves_remaining_index_entry() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "@self/Part1.model.json5",
         );
         // Verify second ref is there too
-        assert_meta_has_ref_attr(&meta_path, "Rojo_Ref_Adornee", "Workspace/TestModel/Part2");
+        assert_meta_has_ref_attr(&meta_path, "Rojo_Ref_Adornee", "@self/Part2.model.json5");
 
         // Step 2: Remove PrimaryPart (set to nil), keep Adornee
         let mut props2 = UstrMap::default();
@@ -7010,7 +7036,7 @@ fn ref_partial_removal_preserves_remaining_index_entry() {
         thread::sleep(Duration::from_millis(300));
         assert_meta_no_ref_attr(&meta_path, "Rojo_Ref_PrimaryPart");
         // Adornee should still be there
-        assert_meta_has_ref_attr(&meta_path, "Rojo_Ref_Adornee", "Workspace/TestModel/Part2");
+        assert_meta_has_ref_attr(&meta_path, "Rojo_Ref_Adornee", "@self/Part2.model.json5");
 
         // Step 3: Rename Part2. The RefPathIndex should still have the entry
         // for Adornee (not overbroad-removed when PrimaryPart was deleted).
@@ -7032,7 +7058,7 @@ fn ref_partial_removal_preserves_remaining_index_entry() {
         assert_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_Adornee",
-            "Workspace/TestModel/RenamedPart2",
+            "@self/RenamedPart2.model.json5",
         );
     });
 }
@@ -7066,7 +7092,7 @@ fn ref_rename_to_slugified_name_updates_ref_paths() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "@self/Part1.model.json5",
         );
 
         // Rename Model to a name with forbidden characters.
@@ -7097,7 +7123,7 @@ fn ref_rename_to_slugified_name_updates_ref_paths() {
         assert_meta_has_ref_attr(
             &new_meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/Slug:Model/Part1",
+            "@self/Part1.model.json5",
         );
     });
 }
@@ -7145,7 +7171,7 @@ fn ref_on_standalone_script() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "./TestModel/Part1.model.json5",
         );
 
         // Verify the wrong path does NOT have the attribute
@@ -7191,7 +7217,962 @@ fn ref_on_txt_file_instance() {
         poll_meta_has_ref_attr(
             &meta_path,
             "Rojo_Ref_PrimaryPart",
-            "Workspace/TestModel/Part1",
+            "./TestModel/Part1.model.json5",
+        );
+    });
+}
+
+// =========================================================================
+// Regression tests for audit_ambiguous_paths_followup fixes
+// =========================================================================
+
+/// Fix 3 regression: when adding a new Script instance and a Ref property
+/// pointing to it in the same /api/write batch, the persisted Rojo_Ref_*
+/// path must include the middleware extension (e.g. ".server.luau").
+#[test]
+fn ref_same_batch_add_target_includes_extension() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, workspace_id, model_id, _, _, _) = ref_test_setup(&session);
+
+        // Add a new Script as a child of Workspace
+        let target_guid = Ref::new();
+        let mut add_props = HashMap::new();
+        add_props.insert(
+            "Source".to_string(),
+            Variant::String("-- target script".to_string()),
+        );
+        add_props.insert(
+            "RunContext".to_string(),
+            Variant::Enum(rbx_dom_weak::types::Enum::from_u32(1)), // Server
+        );
+
+        let added_inst = AddedInstance {
+            parent: Some(workspace_id),
+            name: "RefTarget".to_string(),
+            class_name: "Script".to_string(),
+            properties: add_props,
+            children: vec![],
+        };
+        let mut added_map = HashMap::new();
+        added_map.insert(target_guid, added_inst);
+
+        // In the same request, set PrimaryPart on TestModel to the new Script
+        let mut update_props = UstrMap::default();
+        update_props.insert(ustr("PrimaryPart"), Some(Variant::Ref(target_guid)));
+
+        let write_request = WriteRequest {
+            session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![InstanceUpdate {
+                id: model_id,
+                changed_name: None,
+                changed_class_name: None,
+                changed_properties: update_props,
+                changed_metadata: None,
+            }],
+            stage_ids: Vec::new(),
+        };
+        session.post_api_write(&write_request).unwrap();
+        thread::sleep(Duration::from_millis(500));
+
+        // The Rojo_Ref_PrimaryPart path should include the extension
+        let meta_path = session
+            .path()
+            .join("src/Workspace/TestModel/init.meta.json5");
+        poll_meta_has_ref_attr(
+            &meta_path,
+            "Rojo_Ref_PrimaryPart",
+            "./RefTarget.server.luau",
+        );
+    });
+}
+
+/// Fix 3 regression: same-batch add+ref for a ModuleScript target should
+/// produce a path ending in ".luau" (not bare instance name).
+#[test]
+fn ref_same_batch_add_module_target_includes_extension() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, workspace_id, model_id, _, _, _) = ref_test_setup(&session);
+
+        let target_guid = Ref::new();
+        let mut add_props = HashMap::new();
+        add_props.insert(
+            "Source".to_string(),
+            Variant::String("return {}".to_string()),
+        );
+
+        let added_inst = AddedInstance {
+            parent: Some(workspace_id),
+            name: "ModuleTarget".to_string(),
+            class_name: "ModuleScript".to_string(),
+            properties: add_props,
+            children: vec![],
+        };
+        let mut added_map = HashMap::new();
+        added_map.insert(target_guid, added_inst);
+
+        let mut update_props = UstrMap::default();
+        update_props.insert(ustr("PrimaryPart"), Some(Variant::Ref(target_guid)));
+
+        let write_request = WriteRequest {
+            session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![InstanceUpdate {
+                id: model_id,
+                changed_name: None,
+                changed_class_name: None,
+                changed_properties: update_props,
+                changed_metadata: None,
+            }],
+            stage_ids: Vec::new(),
+        };
+        session.post_api_write(&write_request).unwrap();
+        thread::sleep(Duration::from_millis(500));
+
+        let meta_path = session
+            .path()
+            .join("src/Workspace/TestModel/init.meta.json5");
+        poll_meta_has_ref_attr(&meta_path, "Rojo_Ref_PrimaryPart", "./ModuleTarget.luau");
+    });
+}
+
+/// Fix 3 regression: same-batch add+ref for a Folder target (directory
+/// middleware) should produce a path WITHOUT an extension.
+#[test]
+fn ref_same_batch_add_folder_target_no_extension() {
+    run_serve_test("ref_two_way_sync", |session, _| {
+        let (session_id, workspace_id, model_id, _, _, _) = ref_test_setup(&session);
+
+        let target_guid = Ref::new();
+        let added_inst = AddedInstance {
+            parent: Some(workspace_id),
+            name: "FolderTarget".to_string(),
+            class_name: "Folder".to_string(),
+            properties: HashMap::new(),
+            children: vec![],
+        };
+        let mut added_map = HashMap::new();
+        added_map.insert(target_guid, added_inst);
+
+        let mut update_props = UstrMap::default();
+        update_props.insert(ustr("PrimaryPart"), Some(Variant::Ref(target_guid)));
+
+        let write_request = WriteRequest {
+            session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![InstanceUpdate {
+                id: model_id,
+                changed_name: None,
+                changed_class_name: None,
+                changed_properties: update_props,
+                changed_metadata: None,
+            }],
+            stage_ids: Vec::new(),
+        };
+        session.post_api_write(&write_request).unwrap();
+        thread::sleep(Duration::from_millis(500));
+
+        let meta_path = session
+            .path()
+            .join("src/Workspace/TestModel/init.meta.json5");
+        poll_meta_has_ref_attr(&meta_path, "Rojo_Ref_PrimaryPart", "./FolderTarget");
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Dedup suffix cleanup
+// ---------------------------------------------------------------------------
+
+/// Add two colliding ModuleScripts (creates X_Y.luau + X_Y~2.luau), then
+/// delete one. The remaining instance should lose its dedup suffix (group-to-1
+/// cleanup rule).
+#[test]
+fn delete_deduped_instance_group_to_1_cleanup() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let info = session.get_api_rojo().unwrap();
+        let root_read = session.get_api_read(info.root_instance_id).unwrap();
+        let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+
+        let mut props1 = HashMap::new();
+        props1.insert(
+            "Source".to_string(),
+            Variant::String("-- survivor".to_string()),
+        );
+        let mut props2 = HashMap::new();
+        props2.insert(
+            "Source".to_string(),
+            Variant::String("-- doomed".to_string()),
+        );
+
+        let mut added_map = HashMap::new();
+        added_map.insert(
+            Ref::new(),
+            AddedInstance {
+                parent: Some(rs_id),
+                name: "X/Y".to_string(),
+                class_name: "ModuleScript".to_string(),
+                properties: props1,
+                children: vec![],
+            },
+        );
+        added_map.insert(
+            Ref::new(),
+            AddedInstance {
+                parent: Some(rs_id),
+                name: "X:Y".to_string(),
+                class_name: "ModuleScript".to_string(),
+                properties: props2,
+                children: vec![],
+            },
+        );
+
+        let write_request = WriteRequest {
+            session_id: info.session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![],
+            stage_ids: Vec::new(),
+        };
+        session.post_api_write(&write_request).unwrap();
+
+        let src = session.path().join("src");
+        let base = src.join("X_Y.luau");
+        let deduped = src.join("X_Y~2.luau");
+
+        poll_file_exists(&base, "X_Y.luau after add");
+        poll_file_exists(&deduped, "X_Y~2.luau after add");
+
+        // Wait for VFS to settle
+        thread::sleep(Duration::from_millis(500));
+
+        // Re-read the tree to find instance IDs
+        let rs_read = session.get_api_read(rs_id).unwrap();
+
+        // Read the base file to figure out which instance maps to it
+        let base_source = fs::read_to_string(&base).unwrap();
+        let doomed_name = if base_source.contains("-- doomed") {
+            // Base file has the doomed source -- find by that name
+            // The meta file tells us the real name
+            let base_meta = src.join("X_Y.meta.json5");
+            let meta_content = fs::read_to_string(&base_meta).unwrap();
+            if meta_content.contains("\"X/Y\"") {
+                "X/Y"
+            } else {
+                "X:Y"
+            }
+        } else {
+            // Base file has the survivor source -- the other one is doomed
+            let dedup_meta = src.join("X_Y~2.meta.json5");
+            let meta_content = fs::read_to_string(&dedup_meta).unwrap();
+            if meta_content.contains("\"X/Y\"") {
+                "X/Y"
+            } else {
+                "X:Y"
+            }
+        };
+
+        let (doomed_id, _) = find_by_name(&rs_read.instances, doomed_name);
+        send_removal(&session, &info.session_id, vec![doomed_id]);
+
+        // After group-to-1 cleanup: only X_Y.luau should remain, no ~2 suffix
+        poll_not_exists(&deduped, "X_Y~2.luau after group-to-1 cleanup");
+        assert_file_exists(&base, "X_Y.luau should survive");
+
+        // The survivor's meta should still have a name field (since it's slugified)
+        let meta = src.join("X_Y.meta.json5");
+        assert_file_exists(&meta, "Meta for survivor");
+    });
+}
+
+/// Add three colliding ModuleScripts, then delete the base instance.
+/// The ~2 instance should be promoted to base (base-name promotion rule).
+#[test]
+fn delete_base_deduped_instance_promotes_lowest() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let info = session.get_api_rojo().unwrap();
+        let root_read = session.get_api_read(info.root_instance_id).unwrap();
+        let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+
+        let names = ["X/Y", "X:Y", "X|Y"];
+        let mut added_map = HashMap::new();
+        for (i, name) in names.iter().enumerate() {
+            let mut props = HashMap::new();
+            props.insert(
+                "Source".to_string(),
+                Variant::String(format!("-- inst {}", i + 1)),
+            );
+            added_map.insert(
+                Ref::new(),
+                AddedInstance {
+                    parent: Some(rs_id),
+                    name: name.to_string(),
+                    class_name: "ModuleScript".to_string(),
+                    properties: props,
+                    children: vec![],
+                },
+            );
+        }
+        let write_request = WriteRequest {
+            session_id: info.session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![],
+            stage_ids: Vec::new(),
+        };
+        session.post_api_write(&write_request).unwrap();
+
+        let src = session.path().join("src");
+        let base = src.join("X_Y.luau");
+        let dedup1 = src.join("X_Y~2.luau");
+        let dedup2 = src.join("X_Y~3.luau");
+
+        poll_file_exists(&base, "X_Y.luau after add");
+        poll_file_exists(&dedup1, "X_Y~2.luau after add");
+        poll_file_exists(&dedup2, "X_Y~3.luau after add");
+
+        // Wait for VFS to settle
+        thread::sleep(Duration::from_millis(500));
+
+        // Re-read tree and identify which instance maps to the base file
+        let rs_read = session.get_api_read(rs_id).unwrap();
+        let base_meta = src.join("X_Y.meta.json5");
+        let base_meta_content = fs::read_to_string(&base_meta).unwrap();
+
+        // Extract the real name from the base meta file
+        let base_inst_name = if base_meta_content.contains("\"X/Y\"") {
+            "X/Y"
+        } else if base_meta_content.contains("\"X:Y\"") {
+            "X:Y"
+        } else {
+            "X|Y"
+        };
+
+        let (base_id, _) = find_by_name(&rs_read.instances, base_inst_name);
+
+        // Delete the base instance
+        send_removal(&session, &info.session_id, vec![base_id]);
+
+        // After base-name promotion: ~2 should be promoted to base
+        // X_Y.luau should exist (promoted from ~2)
+        // X_Y~3.luau should still exist (unchanged)
+        // X_Y~2.luau should NOT exist (promoted away)
+        poll_not_exists(&dedup1, "X_Y~2.luau after promotion");
+        thread::sleep(Duration::from_millis(300));
+        assert_file_exists(&base, "X_Y.luau should exist (promoted)");
+        assert_file_exists(&dedup2, "X_Y~3.luau should remain");
+    });
+}
+
+/// Add three colliding ModuleScripts, then delete the ~2 instance.
+/// Gap should be tolerated: X_Y.luau and X_Y~3.luau remain unchanged.
+#[test]
+fn delete_middle_deduped_instance_tolerates_gap() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let info = session.get_api_rojo().unwrap();
+        let root_read = session.get_api_read(info.root_instance_id).unwrap();
+        let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+
+        let names = ["X/Y", "X:Y", "X|Y"];
+        let mut added_map = HashMap::new();
+        for (i, name) in names.iter().enumerate() {
+            let mut props = HashMap::new();
+            props.insert(
+                "Source".to_string(),
+                Variant::String(format!("-- inst {}", i + 1)),
+            );
+            added_map.insert(
+                Ref::new(),
+                AddedInstance {
+                    parent: Some(rs_id),
+                    name: name.to_string(),
+                    class_name: "ModuleScript".to_string(),
+                    properties: props,
+                    children: vec![],
+                },
+            );
+        }
+        let write_request = WriteRequest {
+            session_id: info.session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![],
+            stage_ids: Vec::new(),
+        };
+        session.post_api_write(&write_request).unwrap();
+
+        let src = session.path().join("src");
+        let base = src.join("X_Y.luau");
+        let dedup1 = src.join("X_Y~2.luau");
+        let dedup2 = src.join("X_Y~3.luau");
+
+        poll_file_exists(&base, "X_Y.luau after add");
+        poll_file_exists(&dedup1, "X_Y~2.luau after add");
+        poll_file_exists(&dedup2, "X_Y~3.luau after add");
+
+        thread::sleep(Duration::from_millis(500));
+
+        // Find which instance maps to ~2
+        let rs_read = session.get_api_read(rs_id).unwrap();
+        let dedup1_meta = src.join("X_Y~2.meta.json5");
+        let dedup1_meta_content = fs::read_to_string(&dedup1_meta).unwrap();
+        let middle_name = if dedup1_meta_content.contains("\"X/Y\"") {
+            "X/Y"
+        } else if dedup1_meta_content.contains("\"X:Y\"") {
+            "X:Y"
+        } else {
+            "X|Y"
+        };
+
+        let (middle_id, _) = find_by_name(&rs_read.instances, middle_name);
+
+        // Delete the ~2 instance
+        send_removal(&session, &info.session_id, vec![middle_id]);
+
+        // Gap tolerance: base and ~3 remain, ~2 is gone
+        poll_not_exists(&dedup1, "X_Y~2.luau after deletion");
+        // Also verify the ~2 meta is gone
+        poll_not_exists(&dedup1_meta, "X_Y~2.meta.json5 after deletion");
+        thread::sleep(Duration::from_millis(300));
+        assert_file_exists(&base, "X_Y.luau should remain");
+        assert_file_exists(&dedup2, "X_Y~3.luau should remain (gap tolerated)");
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Folder dedup
+// ---------------------------------------------------------------------------
+
+/// Add two Folders with the same name. Both should become directories with
+/// dedup suffixes, each containing their respective children.
+#[test]
+fn add_same_named_folders_deduplicates() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let info = session.get_api_rojo().unwrap();
+        let root_read = session.get_api_read(info.root_instance_id).unwrap();
+        let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+
+        // Add two Folders named "Data", each with a distinct child
+        let child1 = AddedInstance {
+            parent: None,
+            name: "ChildA".to_string(),
+            class_name: "ModuleScript".to_string(),
+            properties: {
+                let mut p = HashMap::new();
+                p.insert(
+                    "Source".to_string(),
+                    Variant::String("-- child A".to_string()),
+                );
+                p
+            },
+            children: vec![],
+        };
+        let child2 = AddedInstance {
+            parent: None,
+            name: "ChildB".to_string(),
+            class_name: "ModuleScript".to_string(),
+            properties: {
+                let mut p = HashMap::new();
+                p.insert(
+                    "Source".to_string(),
+                    Variant::String("-- child B".to_string()),
+                );
+                p
+            },
+            children: vec![],
+        };
+
+        let mut added_map = HashMap::new();
+        added_map.insert(
+            Ref::new(),
+            AddedInstance {
+                parent: Some(rs_id),
+                name: "Data".to_string(),
+                class_name: "Folder".to_string(),
+                properties: HashMap::new(),
+                children: vec![child1],
+            },
+        );
+        added_map.insert(
+            Ref::new(),
+            AddedInstance {
+                parent: Some(rs_id),
+                name: "Data".to_string(),
+                class_name: "Folder".to_string(),
+                properties: HashMap::new(),
+                children: vec![child2],
+            },
+        );
+
+        let write_request = WriteRequest {
+            session_id: info.session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![],
+            stage_ids: Vec::new(),
+        };
+        session.post_api_write(&write_request).unwrap();
+        thread::sleep(Duration::from_millis(500));
+
+        let src = session.path().join("src");
+        let data_dir = src.join("Data");
+        let data_dedup = src.join("Data~2");
+
+        // Both directories should exist
+        assert!(
+            data_dir.is_dir(),
+            "Data/ directory should exist at {}",
+            data_dir.display()
+        );
+        assert!(
+            data_dedup.is_dir(),
+            "Data~2/ directory should exist at {}",
+            data_dedup.display()
+        );
+
+        // Dedup-only: no meta file needed. Forward sync strips ~N automatically.
+        let dedup_meta = data_dedup.join("init.meta.json5");
+        assert!(
+            !dedup_meta.exists(),
+            "Data~2/init.meta.json5 should NOT exist: forward sync strips ~N, got file at {}",
+            dedup_meta.display()
+        );
+
+        // Each directory should have its own child script
+        let has_child_a =
+            data_dir.join("ChildA.luau").exists() || data_dedup.join("ChildA.luau").exists();
+        let has_child_b =
+            data_dir.join("ChildB.luau").exists() || data_dedup.join("ChildB.luau").exists();
+        assert!(has_child_a, "ChildA.luau should exist in one of the dirs");
+        assert!(has_child_b, "ChildB.luau should exist in one of the dirs");
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Tests: Ref paths through dedup'd instances
+// ---------------------------------------------------------------------------
+
+/// Add a Model with children that have slug-colliding names, and set a Ref
+/// property (PrimaryPart) to one of them. Verify the Rojo_Ref_* attribute
+/// path includes the dedup suffix.
+#[test]
+fn ref_through_deduped_instance() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let info = session.get_api_rojo().unwrap();
+        let root_read = session.get_api_read(info.root_instance_id).unwrap();
+        let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+
+        // Add a Model "Container" with two Part children that slug-collide
+        let target_guid = Ref::new();
+        let child_target = AddedInstance {
+            parent: None,
+            name: "X/Y".to_string(),
+            class_name: "Part".to_string(),
+            properties: HashMap::new(),
+            children: vec![],
+        };
+        let child_other = AddedInstance {
+            parent: None,
+            name: "X:Y".to_string(),
+            class_name: "Part".to_string(),
+            properties: HashMap::new(),
+            children: vec![],
+        };
+
+        let mut model_props = HashMap::new();
+        model_props.insert("PrimaryPart".to_string(), Variant::Ref(target_guid));
+
+        let mut added_map = HashMap::new();
+        added_map.insert(
+            target_guid,
+            AddedInstance {
+                parent: None,
+                name: "X/Y".to_string(),
+                class_name: "Part".to_string(),
+                properties: HashMap::new(),
+                children: vec![],
+            },
+        );
+        // Clear and re-build: add Model with children and PrimaryPart ref
+        added_map.clear();
+
+        // Use Ref::new() for the child that is NOT the target
+        let container_guid = Ref::new();
+        added_map.insert(
+            container_guid,
+            AddedInstance {
+                parent: Some(rs_id),
+                name: "Container".to_string(),
+                class_name: "Model".to_string(),
+                properties: model_props,
+                children: vec![child_target, child_other],
+            },
+        );
+        // The target_guid ref in PrimaryPart points to an instance added in
+        // the same batch — but since children use inline nesting (no separate
+        // Ref), the Ref property needs to point to a top-level added instance.
+        // For simplicity, add the target as a separate instance under Container.
+        added_map.clear();
+
+        // Simpler approach: add the Model first, then set PrimaryPart via update
+        let child1 = AddedInstance {
+            parent: None,
+            name: "X/Y".to_string(),
+            class_name: "Part".to_string(),
+            properties: HashMap::new(),
+            children: vec![],
+        };
+        let child2 = AddedInstance {
+            parent: None,
+            name: "X:Y".to_string(),
+            class_name: "Part".to_string(),
+            properties: HashMap::new(),
+            children: vec![],
+        };
+        added_map.insert(
+            Ref::new(),
+            AddedInstance {
+                parent: Some(rs_id),
+                name: "Container".to_string(),
+                class_name: "Model".to_string(),
+                properties: HashMap::new(),
+                children: vec![child1, child2],
+            },
+        );
+
+        let write_request = WriteRequest {
+            session_id: info.session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![],
+            stage_ids: Vec::new(),
+        };
+        session.post_api_write(&write_request).unwrap();
+        thread::sleep(Duration::from_millis(500));
+
+        // Verify Container directory exists with dedup'd children
+        let src = session.path().join("src");
+        let container = src.join("Container");
+        assert!(container.is_dir(), "Container/ should be a directory");
+
+        // Wait for VFS and re-read tree
+        thread::sleep(Duration::from_millis(500));
+        let rs_read = session.get_api_read(rs_id).unwrap();
+        let (container_id, _container_inst) = find_by_name(&rs_read.instances, "Container");
+
+        // Find one of the Part children to use as PrimaryPart target
+        let container_read = session.get_api_read(container_id).unwrap();
+        let (target_part_id, _) = find_by_name(&container_read.instances, "X/Y");
+
+        // Set PrimaryPart on the container model
+        let mut props = UstrMap::default();
+        props.insert(ustr("PrimaryPart"), Some(Variant::Ref(target_part_id)));
+        send_update(
+            &session,
+            &info.session_id,
+            InstanceUpdate {
+                id: container_id,
+                changed_name: None,
+                changed_class_name: None,
+                changed_properties: props,
+                changed_metadata: None,
+            },
+        );
+
+        // The Container's init.meta.json5 should have a Rojo_Ref_PrimaryPart
+        // attribute with a path that includes X_Y (base or ~2 suffix)
+        let init_meta = container.join("init.meta.json5");
+        poll_file_exists(&init_meta, "Container init.meta.json5 after ref set");
+        thread::sleep(Duration::from_millis(300));
+        let meta_content = fs::read_to_string(&init_meta).unwrap();
+        assert!(
+            meta_content.contains("Rojo_Ref_PrimaryPart"),
+            "Meta should contain Rojo_Ref_PrimaryPart, got: {}",
+            meta_content
+        );
+        // The ref path should contain "X_Y" (the slugified child name)
+        assert!(
+            meta_content.contains("X_Y"),
+            "Ref path should contain slugified name X_Y, got: {}",
+            meta_content
+        );
+    });
+}
+
+/// Create a dedup group where one instance is a ref target, then delete a
+/// member to trigger cleanup rename. Verify the ref path in the pointing
+/// meta file is updated.
+#[test]
+fn ref_path_updated_after_dedup_cleanup() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let info = session.get_api_rojo().unwrap();
+        let root_read = session.get_api_read(info.root_instance_id).unwrap();
+        let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+
+        // Step 1: Add a Model "Pointer" and two colliding ModuleScripts
+        let child_ptr = AddedInstance {
+            parent: None,
+            name: "Ptr".to_string(),
+            class_name: "ObjectValue".to_string(),
+            properties: HashMap::new(),
+            children: vec![],
+        };
+        let mut added_map = HashMap::new();
+        added_map.insert(
+            Ref::new(),
+            AddedInstance {
+                parent: Some(rs_id),
+                name: "Pointer".to_string(),
+                class_name: "Model".to_string(),
+                properties: HashMap::new(),
+                children: vec![child_ptr],
+            },
+        );
+
+        let mut props1 = HashMap::new();
+        props1.insert(
+            "Source".to_string(),
+            Variant::String("-- target".to_string()),
+        );
+        let mut props2 = HashMap::new();
+        props2.insert(
+            "Source".to_string(),
+            Variant::String("-- other".to_string()),
+        );
+        added_map.insert(
+            Ref::new(),
+            AddedInstance {
+                parent: Some(rs_id),
+                name: "X/Y".to_string(),
+                class_name: "ModuleScript".to_string(),
+                properties: props1,
+                children: vec![],
+            },
+        );
+        added_map.insert(
+            Ref::new(),
+            AddedInstance {
+                parent: Some(rs_id),
+                name: "X:Y".to_string(),
+                class_name: "ModuleScript".to_string(),
+                properties: props2,
+                children: vec![],
+            },
+        );
+
+        let write_request = WriteRequest {
+            session_id: info.session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![],
+            stage_ids: Vec::new(),
+        };
+        session.post_api_write(&write_request).unwrap();
+
+        let src = session.path().join("src");
+        let base = src.join("X_Y.luau");
+        let deduped = src.join("X_Y~2.luau");
+
+        poll_file_exists(&base, "X_Y.luau after add");
+        poll_file_exists(&deduped, "X_Y~2.luau after add");
+        thread::sleep(Duration::from_millis(500));
+
+        // Step 2: Find the ~2 instance and point Pointer's child ObjectValue at it
+        let rs_read = session.get_api_read(rs_id).unwrap();
+        let dedup_meta_path = src.join("X_Y~2.meta.json5");
+        let dedup_meta_content = fs::read_to_string(&dedup_meta_path).unwrap();
+        let target_name = if dedup_meta_content.contains("\"X/Y\"") {
+            "X/Y"
+        } else {
+            "X:Y"
+        };
+        let other_name = if target_name == "X/Y" { "X:Y" } else { "X/Y" };
+
+        let (target_id, _) = find_by_name(&rs_read.instances, target_name);
+        let (other_id, _) = find_by_name(&rs_read.instances, other_name);
+
+        // Find the Pointer model and its ObjectValue child
+        let (pointer_id, _) = find_by_name(&rs_read.instances, "Pointer");
+        let pointer_read = session.get_api_read(pointer_id).unwrap();
+        let (ptr_child_id, _) = find_by_name(&pointer_read.instances, "Ptr");
+
+        // Set ObjectValue.Value to the ~2 target
+        let mut props = UstrMap::default();
+        props.insert(ustr("Value"), Some(Variant::Ref(target_id)));
+        send_update(
+            &session,
+            &info.session_id,
+            InstanceUpdate {
+                id: ptr_child_id,
+                changed_name: None,
+                changed_class_name: None,
+                changed_properties: props,
+                changed_metadata: None,
+            },
+        );
+
+        // Verify the ref was written with the ~2 path
+        let pointer_dir = src.join("Pointer");
+        let ptr_model_path = pointer_dir.join("Ptr.model.json5");
+        poll_file_exists(&ptr_model_path, "Ptr.model.json5 after ref set");
+        thread::sleep(Duration::from_millis(300));
+        let ref_content = fs::read_to_string(&ptr_model_path).unwrap();
+        assert!(
+            ref_content.contains("X_Y~2"),
+            "Before cleanup: ref should point to X_Y~2, got: {}",
+            ref_content
+        );
+
+        // Step 3: Delete the OTHER instance (not the target) to trigger
+        // group-to-1 cleanup, which renames X_Y~2 → X_Y
+        send_removal(&session, &info.session_id, vec![other_id]);
+
+        // After cleanup: X_Y~2.luau renamed to X_Y.luau
+        poll_not_exists(&deduped, "X_Y~2.luau after cleanup");
+        thread::sleep(Duration::from_millis(300));
+        assert_file_exists(&base, "X_Y.luau after cleanup");
+
+        // The ref in Ptr.model.json5 should now point to the non-suffixed path
+        let updated_ref = fs::read_to_string(&ptr_model_path).unwrap();
+        assert!(
+            !updated_ref.contains("X_Y~2"),
+            "After cleanup: ref should NOT contain X_Y~2 (old path), got: {}",
+            updated_ref
+        );
+        assert!(
+            updated_ref.contains("X_Y"),
+            "After cleanup: ref should contain X_Y (new path), got: {}",
+            updated_ref
+        );
+    });
+}
+
+/// Rename an instance that is a ref target via two-way sync. Verify
+/// Rojo_Ref_* paths pointing to it are updated in meta files.
+#[test]
+fn rename_ref_target_updates_ref_paths() {
+    run_serve_test("syncback_encoded_names", |session, _redactions| {
+        let info = session.get_api_rojo().unwrap();
+        let root_read = session.get_api_read(info.root_instance_id).unwrap();
+        let (rs_id, _) = find_by_class(&root_read.instances, "ReplicatedStorage");
+
+        // Step 1: Add a target ModuleScript and a Pointer model
+        let child_obj = AddedInstance {
+            parent: None,
+            name: "Ref".to_string(),
+            class_name: "ObjectValue".to_string(),
+            properties: HashMap::new(),
+            children: vec![],
+        };
+        let mut added_map = HashMap::new();
+        added_map.insert(
+            Ref::new(),
+            AddedInstance {
+                parent: Some(rs_id),
+                name: "Target".to_string(),
+                class_name: "ModuleScript".to_string(),
+                properties: {
+                    let mut p = HashMap::new();
+                    p.insert(
+                        "Source".to_string(),
+                        Variant::String("-- target".to_string()),
+                    );
+                    p
+                },
+                children: vec![],
+            },
+        );
+        added_map.insert(
+            Ref::new(),
+            AddedInstance {
+                parent: Some(rs_id),
+                name: "Ptr".to_string(),
+                class_name: "Model".to_string(),
+                properties: HashMap::new(),
+                children: vec![child_obj],
+            },
+        );
+
+        let write_request = WriteRequest {
+            session_id: info.session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![],
+            stage_ids: Vec::new(),
+        };
+        session.post_api_write(&write_request).unwrap();
+
+        let src = session.path().join("src");
+        poll_file_exists(&src.join("Target.luau"), "Target.luau after add");
+        thread::sleep(Duration::from_millis(500));
+
+        // Step 2: Set the ObjectValue.Value to Target
+        let rs_read = session.get_api_read(rs_id).unwrap();
+        let (target_id, _) = find_by_name(&rs_read.instances, "Target");
+        let (ptr_model_id, _) = find_by_name(&rs_read.instances, "Ptr");
+        let ptr_read = session.get_api_read(ptr_model_id).unwrap();
+        let (objval_id, _) = find_by_name(&ptr_read.instances, "Ref");
+
+        let mut props = UstrMap::default();
+        props.insert(ustr("Value"), Some(Variant::Ref(target_id)));
+        send_update(
+            &session,
+            &info.session_id,
+            InstanceUpdate {
+                id: objval_id,
+                changed_name: None,
+                changed_class_name: None,
+                changed_properties: props,
+                changed_metadata: None,
+            },
+        );
+
+        // Verify ref was written
+        let obj_model_path = src.join("Ptr").join("Ref.model.json5");
+        poll_file_exists(&obj_model_path, "Ref.model.json5 after ref set");
+        thread::sleep(Duration::from_millis(300));
+        let ref_content = fs::read_to_string(&obj_model_path).unwrap();
+        assert!(
+            ref_content.contains("Target.luau"),
+            "Ref should point to Target.luau, got: {}",
+            ref_content
+        );
+
+        // Step 3: Rename the target
+        // Re-read to get current IDs (may have changed after VFS rebuild)
+        let rs_read = session.get_api_read(rs_id).unwrap();
+        let (target_id, _) = find_by_name(&rs_read.instances, "Target");
+
+        send_update(
+            &session,
+            &info.session_id,
+            InstanceUpdate {
+                id: target_id,
+                changed_name: Some("Renamed".to_string()),
+                changed_class_name: None,
+                changed_properties: UstrMap::default(),
+                changed_metadata: None,
+            },
+        );
+
+        // Wait for rename to propagate
+        let renamed_path = src.join("Renamed.luau");
+        poll_file_exists(&renamed_path, "Renamed.luau after rename");
+        thread::sleep(Duration::from_millis(300));
+
+        // Step 4: Verify the ref path was updated
+        let updated_ref = fs::read_to_string(&obj_model_path).unwrap();
+        assert!(
+            updated_ref.contains("Renamed.luau"),
+            "After rename: ref should point to Renamed.luau, got: {}",
+            updated_ref
+        );
+        assert!(
+            !updated_ref.contains("Target.luau"),
+            "After rename: ref should NOT point to old Target.luau, got: {}",
+            updated_ref
         );
     });
 }

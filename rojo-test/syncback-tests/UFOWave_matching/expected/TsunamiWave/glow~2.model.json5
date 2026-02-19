@@ -1,0 +1,186 @@
+{
+  attributes: {
+    Size_Curve: {
+      BinaryString: "AAAAAAAAgD8AAAAAyEWiPWTpPj9Q1747AACAPwAAAAAAAAAAAAAAAAAAAAAAAAAA"
+    },
+    Size_End: 60,
+    Size_Envelope: 5,
+    Size_Start: 45
+  },
+  className: "ParticleEmitter",
+  name: "glow",
+  properties: {
+    Color: {
+      ColorSequence: {
+        keypoints: [
+          {
+            color: [
+              0.364705890417099,
+              0.11372549086809158,
+              1
+            ],
+            time: 0
+          },
+          {
+            color: [
+              0.364705890417099,
+              0.11372549086809158,
+              1
+            ],
+            time: 1
+          }
+        ]
+      }
+    },
+    Lifetime: {
+      NumberRange: [
+        0.25,
+        0.6000000238418579
+      ]
+    },
+    LightEmission: 1,
+    LockedToPart: true,
+    Size: {
+      NumberSequence: {
+        keypoints: [
+          {
+            envelope: 5,
+            time: 0,
+            value: 45
+          },
+          {
+            envelope: 5,
+            time: 0.001580123440362513,
+            value: 46.08238983154297
+          },
+          {
+            envelope: 5,
+            time: 0.006548703648149967,
+            value: 47.16343307495117
+          },
+          {
+            envelope: 5,
+            time: 0.015281829982995987,
+            value: 48.24135971069336
+          },
+          {
+            envelope: 5,
+            time: 0.028204884380102158,
+            value: 49.313777923583984
+          },
+          {
+            envelope: 5,
+            time: 0.045797109603881836,
+            value: 50.37750244140625
+          },
+          {
+            envelope: 5,
+            time: 0.06858612596988678,
+            value: 51.42829513549805
+          },
+          {
+            envelope: 5,
+            time: 0.09713879972696304,
+            value: 52.4605827331543
+          },
+          {
+            envelope: 5,
+            time: 0.13203296065330505,
+            value: 53.46717071533203
+          },
+          {
+            envelope: 5,
+            time: 0.17381449043750763,
+            value: 54.438995361328125
+          },
+          {
+            envelope: 5,
+            time: 0.22292612493038177,
+            value: 55.36511993408203
+          },
+          {
+            envelope: 5,
+            time: 0.27961885929107666,
+            value: 56.23305892944336
+          },
+          {
+            envelope: 5,
+            time: 0.34385624527931213,
+            value: 57.029701232910156
+          },
+          {
+            envelope: 5,
+            time: 0.4152511656284332,
+            value: 57.74271774291992
+          },
+          {
+            envelope: 5,
+            time: 0.49307429790496826,
+            value: 58.362186431884766
+          },
+          {
+            envelope: 5,
+            time: 0.5763297080993652,
+            value: 58.88185501098633
+          },
+          {
+            envelope: 5,
+            time: 0.6638965010643005,
+            value: 59.29954147338867
+          },
+          {
+            envelope: 5,
+            time: 0.7546600699424744,
+            value: 59.6165657043457
+          },
+          {
+            envelope: 5,
+            time: 0.8476089239120483,
+            value: 59.83663558959961
+          },
+          {
+            envelope: 5,
+            time: 1,
+            value: 59.964595794677734
+          }
+        ]
+      }
+    },
+    Speed: {
+      NumberRange: [
+        0.0010000000474974513,
+        0.0010000000474974513
+      ]
+    },
+    Tags: [
+      "_VFX"
+    ],
+    Texture: "rbxassetid://77024587778878",
+    Transparency: {
+      NumberSequence: {
+        keypoints: [
+          {
+            envelope: 0,
+            time: 0,
+            value: 1
+          },
+          {
+            envelope: 0,
+            time: 0.09989999979734421,
+            value: 0.75
+          },
+          {
+            envelope: 0,
+            time: 0.6000000238418579,
+            value: 0.75
+          },
+          {
+            envelope: 0,
+            time: 1,
+            value: 1
+          }
+        ]
+      }
+    }
+  }
+}

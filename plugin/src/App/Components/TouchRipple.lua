@@ -8,11 +8,6 @@ local Flipper = require(Packages.Flipper)
 local Assets = require(Plugin.Assets)
 local bindingUtil = require(Plugin.App.bindingUtil)
 
-local EXPAND_SPRING = {
-	frequency = 7,
-	dampingRatio = 2,
-}
-
 local TouchRipple = Roact.Component:extend("TouchRipple")
 
 function TouchRipple:init()
@@ -81,8 +76,8 @@ function TouchRipple:render()
 				self.setPosition(relativePosition)
 
 				self.motor:setGoal({
-					scale = Flipper.Spring.new(1, EXPAND_SPRING),
-					opacity = Flipper.Spring.new(1, EXPAND_SPRING),
+					scale = Flipper.Instant.new(1),
+					opacity = Flipper.Instant.new(1),
 				})
 
 				input:GetPropertyChangedSignal("UserInputState"):Connect(function()
@@ -90,10 +85,7 @@ function TouchRipple:render()
 
 					if userInputState == Enum.UserInputState.Cancel or userInputState == Enum.UserInputState.End then
 						self.motor:setGoal({
-							opacity = Flipper.Spring.new(0, {
-								frequency = 5,
-								dampingRatio = 1,
-							}),
+							opacity = Flipper.Instant.new(0),
 						})
 					end
 				end)

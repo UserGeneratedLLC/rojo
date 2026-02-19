@@ -849,6 +849,7 @@ fn api_write_then_filesystem_change() {
                 changed_properties: props,
                 changed_metadata: None,
             }],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(500));
@@ -1043,14 +1044,14 @@ fn delete_meta_name_reverts_to_stem() {
 // ---------------------------------------------------------------------------
 
 /// Test 28: Edit dedup file with meta. Patch should show instance named
-/// "Hey/Bro" (from meta), not "Hey_Bro~1".
+/// "Hey/Bro" (from meta), not "Hey_Bro~2".
 #[test]
 fn edit_dedup_file_with_meta() {
     run_serve_test("connected_slugify", |session, mut redactions| {
         let info = session.get_api_rojo().unwrap();
         let root_id = info.root_instance_id;
 
-        let file_path = session.path().join("src/Hey_Bro~1.luau");
+        let file_path = session.path().join("src/Hey_Bro~2.luau");
 
         let socket_packet = session
             .recv_socket_packet(SocketPacketType::Messages, 0, || {
@@ -1066,8 +1067,8 @@ fn edit_dedup_file_with_meta() {
     });
 }
 
-/// Test 29: Create Foo~1.luau with NO meta. Instance name should be
-/// literally "Foo~1" -- tilde is NOT parsed as dedup marker.
+/// Test 29: Create Foo~1.luau with NO meta. Forward sync strips the ~1
+/// dedup suffix, so the instance name should be "Foo".
 #[test]
 fn dedup_file_without_meta_uses_stem() {
     run_serve_test("connected_slugify", |session, mut redactions| {
@@ -1109,8 +1110,8 @@ fn remove_one_of_two_colliding_files() {
 
         let socket_packet = session
             .recv_socket_packet(SocketPacketType::Messages, 0, || {
-                fs::remove_file(src.join("Hey_Bro~1.luau")).unwrap();
-                fs::remove_file(src.join("Hey_Bro~1.meta.json5")).unwrap();
+                fs::remove_file(src.join("Hey_Bro~2.luau")).unwrap();
+                fs::remove_file(src.join("Hey_Bro~2.meta.json5")).unwrap();
             })
             .unwrap();
         assert_yaml_snapshot!(
@@ -1137,9 +1138,9 @@ fn add_third_collision() {
 
         let socket_packet = session
             .recv_socket_packet(SocketPacketType::Messages, 0, || {
-                fs::write(src.join("Hey_Bro~2.meta.json5"), r#"{ "name": "Hey*Bro" }"#).unwrap();
+                fs::write(src.join("Hey_Bro~3.meta.json5"), r#"{ "name": "Hey*Bro" }"#).unwrap();
                 fs::write(
-                    src.join("Hey_Bro~2.luau"),
+                    src.join("Hey_Bro~3.luau"),
                     "-- third collision\nreturn 'Hey*Bro'",
                 )
                 .unwrap();
@@ -1428,7 +1429,7 @@ fn slugify_rename_chain() {
 }
 
 /// Test 41: Collision evolution. Add third collision, remove one, reuse
-/// the ~1 slot with a different name. Round-trip at each step.
+/// the ~2 slot with a different name. Round-trip at each step.
 #[test]
 fn collision_evolution() {
     run_serve_test("connected_slugify", |session, mut redactions| {
@@ -1441,11 +1442,11 @@ fn collision_evolution() {
 
         let src = session.path().join("src");
 
-        // Step 1: Add third collision Hey_Bro~2 -> "Hey*Bro"
+        // Step 1: Add third collision Hey_Bro~3 -> "Hey*Bro"
         let packet = session
             .recv_socket_packet(SocketPacketType::Messages, 0, || {
-                fs::write(src.join("Hey_Bro~2.meta.json5"), r#"{ "name": "Hey*Bro" }"#).unwrap();
-                fs::write(src.join("Hey_Bro~2.luau"), "return 'Hey*Bro'").unwrap();
+                fs::write(src.join("Hey_Bro~3.meta.json5"), r#"{ "name": "Hey*Bro" }"#).unwrap();
+                fs::write(src.join("Hey_Bro~3.luau"), "return 'Hey*Bro'").unwrap();
             })
             .unwrap();
         assert_yaml_snapshot!(
@@ -1454,12 +1455,12 @@ fn collision_evolution() {
         );
         assert_round_trip(&session, root_id);
 
-        // Step 2: Remove Hey_Bro~1 (Hey/Bro)
+        // Step 2: Remove Hey_Bro~2 (Hey/Bro)
         let cursor = get_message_cursor(&packet);
         let packet = session
             .recv_socket_packet(SocketPacketType::Messages, cursor, || {
-                fs::remove_file(src.join("Hey_Bro~1.luau")).unwrap();
-                fs::remove_file(src.join("Hey_Bro~1.meta.json5")).unwrap();
+                fs::remove_file(src.join("Hey_Bro~2.luau")).unwrap();
+                fs::remove_file(src.join("Hey_Bro~2.meta.json5")).unwrap();
             })
             .unwrap();
         assert_yaml_snapshot!(
@@ -1468,12 +1469,12 @@ fn collision_evolution() {
         );
         assert_round_trip(&session, root_id);
 
-        // Step 3: Reuse ~1 slot with different name "Hey|Bro"
+        // Step 3: Reuse ~2 slot with different name "Hey|Bro"
         let cursor = get_message_cursor(&packet);
         let packet = session
             .recv_socket_packet(SocketPacketType::Messages, cursor, || {
-                fs::write(src.join("Hey_Bro~1.meta.json5"), r#"{ "name": "Hey|Bro" }"#).unwrap();
-                fs::write(src.join("Hey_Bro~1.luau"), "return 'Hey|Bro'").unwrap();
+                fs::write(src.join("Hey_Bro~2.meta.json5"), r#"{ "name": "Hey|Bro" }"#).unwrap();
+                fs::write(src.join("Hey_Bro~2.luau"), "return 'Hey|Bro'").unwrap();
             })
             .unwrap();
         assert_yaml_snapshot!(

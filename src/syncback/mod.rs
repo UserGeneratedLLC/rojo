@@ -1,6 +1,8 @@
+pub mod dedup_suffix;
 mod file_names;
 mod fs_snapshot;
 mod hash;
+pub mod matching;
 pub mod meta;
 mod property_filter;
 mod ref_properties;
@@ -124,10 +126,16 @@ pub fn syncback_loop_with_stats(
         .map(|rules| rules.compile_tree_globs())
         .transpose()?;
 
+    let phase_timer = std::time::Instant::now();
+
     // Collect all instance paths BEFORE pruning so we can track external references
     // (references to instances that will be pruned, like SoundGroups in SoundService).
     log::debug!("Collecting instance paths before pruning...");
     let pre_prune_paths = collect_all_paths(&new_tree);
+    log::debug!(
+        "syncback: collect_all_paths in {:.1?}",
+        phase_timer.elapsed()
+    );
 
     // TODO: Add a better way to tell if the root of a project is a directory
     let skip_pruning = if let Some(path) = &project.tree.path {
@@ -146,17 +154,11 @@ pub fn syncback_loop_with_stats(
     } else {
         false
     };
+    let phase_timer = std::time::Instant::now();
     if !skip_pruning {
-        // Strip out any objects from the new tree that aren't in the old tree. This
-        // is necessary so that hashing the roots of each tree won't always result
-        // in different hashes. Shout out to Roblox for serializing a bunch of
-        // Services nobody cares about.
-        log::debug!("Pruning new tree");
         strip_unknown_root_children(&mut new_tree, old_tree);
     }
 
-    // If ignoreHiddenServices is enabled (default: true), filter to only visible services
-    // Check root-level setting first, then fall back to syncbackRules for backward compatibility
     let ignore_hidden = project
         .ignore_hidden_services
         .or_else(|| {
@@ -167,16 +169,19 @@ pub fn syncback_loop_with_stats(
         })
         .unwrap_or(true);
     if ignore_hidden {
-        log::debug!("Filtering hidden services");
         strip_hidden_services(&mut new_tree);
     }
+    log::debug!("syncback: prune + filter in {:.1?}", phase_timer.elapsed());
 
-    log::debug!("Collecting referents for new DOM...");
-    let deferred_referents = collect_referents(&new_tree, &pre_prune_paths);
+    let phase_timer = std::time::Instant::now();
+    let mut deferred_referents = collect_referents(&new_tree, &pre_prune_paths, None);
+    let placeholder_map = std::mem::take(&mut deferred_referents.placeholder_to_source_and_target);
+    log::debug!(
+        "syncback: collect_referents in {:.1?}",
+        phase_timer.elapsed()
+    );
 
-    // Remove any properties that are manually blocked from syncback via the
-    // project file.
-    log::debug!("Pre-filtering properties on DOMs");
+    let phase_timer = std::time::Instant::now();
     for referent in descendants(&new_tree, new_tree.root_ref()) {
         let new_inst = new_tree.get_by_ref_mut(referent).unwrap();
         if let Some(filter) = get_property_filter(project, new_inst) {
@@ -204,18 +209,21 @@ pub fn syncback_loop_with_stats(
         .unwrap_or(false);
     if !sync_current_camera {
         log::debug!("Removing CurrentCamera from new DOM");
-        let mut camera_ref = None;
+        let mut workspace_ref = None;
+        let mut camera_target = None;
         for child_ref in new_tree.root().children() {
             let inst = new_tree.get_by_ref(*child_ref).unwrap();
             if inst.class == "Workspace" {
-                camera_ref = inst.properties.get(&ustr("CurrentCamera"));
+                workspace_ref = Some(*child_ref);
+                camera_target = inst.properties.get(&ustr("CurrentCamera")).cloned();
                 break;
             }
         }
-        if let Some(Variant::Ref(camera_ref)) = camera_ref {
-            if new_tree.get_by_ref(*camera_ref).is_some() {
-                new_tree.destroy(*camera_ref);
+        if let (Some(ws_ref), Some(Variant::Ref(cam_ref))) = (workspace_ref, camera_target) {
+            if new_tree.get_by_ref(cam_ref).is_some() {
+                new_tree.destroy(cam_ref);
             }
+            deferred_referents.remove_ref(ws_ref, "CurrentCamera");
         }
     }
 
@@ -225,30 +233,38 @@ pub fn syncback_loop_with_stats(
         .and_then(|s| s.ignore_referents)
         .unwrap_or_default();
     if !ignore_referents {
-        log::debug!("Linking referents for new DOM");
         link_referents(deferred_referents, &mut new_tree)?;
-    } else {
-        log::debug!("Skipping referent linking as per project syncback rules");
     }
+    log::debug!(
+        "syncback: filter props + link refs in {:.1?}",
+        phase_timer.elapsed()
+    );
 
-    // As with pruning the children of the new root, we need to ensure the roots
-    // for both DOMs have the same name otherwise their hashes will always be
-    // different.
     new_tree.root_mut().name = old_tree.root().name().to_string();
 
-    log::debug!("Hashing project DOM");
-    let old_hashes = hash_tree(project, old_tree.inner(), old_tree.get_root_id());
-    log::debug!("Hashing file DOM");
-    let new_hashes = hash_tree(project, &new_tree, new_tree.root_ref());
+    let phase_timer = std::time::Instant::now();
+    let (old_hashes, new_hashes) = rayon::join(
+        || hash_tree(project, old_tree.inner(), old_tree.get_root_id()),
+        || hash_tree(project, &new_tree, new_tree.root_ref()),
+    );
+    log::debug!(
+        "syncback: hash both trees (parallel) in {:.1?}",
+        phase_timer.elapsed()
+    );
 
     let project_path = project.folder_location();
 
-    // In clean mode, we scan the actual filesystem to find ALL existing files,
-    // not just what Rojo loaded into its tree. This ensures orphaned files
-    // (like duplicates Rojo couldn't load) get cleaned up properly.
-    // Clean mode is essentially: "delete everything and rebuild from Studio"
+    fn strip_unc_prefix(p: PathBuf) -> PathBuf {
+        let path_str = p.to_string_lossy();
+        if path_str.starts_with(r"\\?\") || path_str.starts_with("//?/") {
+            PathBuf::from(&path_str[4..])
+        } else {
+            p
+        }
+    }
+
+    let phase_timer = std::time::Instant::now();
     let existing_paths: HashSet<PathBuf> = if !incremental {
-        log::debug!("Clean mode: scanning filesystem for existing paths");
         let mut paths = HashSet::new();
 
         // Get the source directories from the project's tree structure.
@@ -374,63 +390,48 @@ pub fn syncback_loop_with_stats(
             }
         }
 
-        // Recursively scan each source directory
-        fn scan_directory(
-            dir: &Path,
-            paths: &mut HashSet<PathBuf>,
-            ignore_patterns: &Option<Vec<Glob>>,
-            project_path: &Path,
-        ) {
-            log::trace!("Scanning directory: {}", dir.display());
-            let entries = match std::fs::read_dir(dir) {
-                Ok(e) => e,
-                Err(e) => {
-                    log::trace!("Failed to read directory {}: {}", dir.display(), e);
-                    return;
-                }
-            };
-
-            for entry in entries.flatten() {
-                let path = entry.path();
-
-                // Skip paths matching ignore patterns
-                if !is_valid_path(ignore_patterns, project_path, &path) {
-                    log::trace!("Skipping {} (matches ignore pattern)", path.display());
-                    continue;
-                }
-
-                // Skip hidden files/directories (starting with .), except
-                // .gitkeep which is managed by Rojo and must be tracked for
-                // cleanup when directories are no longer empty.
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.starts_with('.') && name != ".gitkeep" {
-                        log::trace!("Skipping {} (hidden)", path.display());
-                        continue;
-                    }
-                }
-
-                log::trace!("Found path: {}", path.display());
-                paths.insert(path.clone());
-
-                if path.is_dir() {
-                    scan_directory(&path, paths, ignore_patterns, project_path);
-                }
-            }
-        }
-
-        log::trace!(
-            "dirs_to_scan: {:?}",
-            dirs_to_scan
+        if log::log_enabled!(log::Level::Trace) {
+            let dirs_str: Vec<_> = dirs_to_scan
                 .iter()
                 .map(|p| p.display().to_string())
-                .collect::<Vec<_>>()
-        );
+                .collect();
+            log::trace!("dirs_to_scan: {:?}", dirs_str);
+        }
 
         for dir in &dirs_to_scan {
-            if dir.is_dir() {
-                scan_directory(dir, &mut paths, &ignore_patterns, project_path);
+            if !dir.is_dir() {
+                continue;
             }
-            // Note: We only add directories to dirs_to_scan now, so no else branch needed
+            if let Some(name) = dir.file_name().and_then(|n| n.to_str()) {
+                if name.starts_with('.') && name != ".gitkeep" {
+                    continue;
+                }
+            }
+            let canonical_dir = std::fs::canonicalize(dir)
+                .map(strip_unc_prefix)
+                .unwrap_or_else(|_| dir.clone());
+            for entry in walkdir::WalkDir::new(&canonical_dir)
+                .follow_links(true)
+                .into_iter()
+                .filter_entry(|e| {
+                    if e.depth() == 0 {
+                        return true;
+                    }
+                    e.file_name()
+                        .to_str()
+                        .is_none_or(|n| !n.starts_with('.') || n == ".gitkeep")
+                })
+                .flatten()
+            {
+                if entry.depth() == 0 {
+                    continue;
+                }
+                let path = entry.path().to_path_buf();
+                if !is_valid_path(&ignore_patterns, project_path, &path) {
+                    continue;
+                }
+                paths.insert(path);
+            }
         }
 
         // Also add any alternate file representations we found earlier
@@ -448,7 +449,14 @@ pub fn syncback_loop_with_stats(
     } else {
         HashSet::new()
     };
+    log::debug!(
+        "syncback: orphan scan in {:.1?} ({} paths)",
+        phase_timer.elapsed(),
+        existing_paths.len()
+    );
 
+    let phase_timer = std::time::Instant::now();
+    let ref_path_map = std::cell::RefCell::new(HashMap::new());
     let syncback_data = SyncbackData {
         vfs,
         old_tree,
@@ -456,6 +464,7 @@ pub fn syncback_loop_with_stats(
         project,
         incremental,
         stats,
+        ref_path_map: &ref_path_map,
     };
 
     // Always start with old reference for the Project middleware.
@@ -562,6 +571,12 @@ pub fn syncback_loop_with_stats(
             'remove: for inst in &syncback.removed_children {
                 let path = inst.metadata().instigating_source.as_ref().unwrap().path();
                 let inst_path = snapshot.get_old_inst_path(inst.id());
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if name.starts_with('.') && name != ".gitkeep" {
+                        log::debug!("Skipping removing {} (hidden path)", path.display());
+                        continue;
+                    }
+                }
                 if !is_valid_path(&ignore_patterns, project_path, path) {
                     log::debug!(
                         "Skipping removing {} because its matches an ignore pattern",
@@ -606,89 +621,70 @@ pub fn syncback_loop_with_stats(
 
         snapshots.extend(syncback.children);
     }
+    log::debug!("syncback: main walk loop in {:.1?}", phase_timer.elapsed());
 
-    // In clean mode, remove any existing paths that weren't overwritten by new structure.
-    // This ensures no orphaned files remain from the old project layout.
+    let phase_timer = std::time::Instant::now();
+    {
+        use ref_properties::tentative_fs_path_public;
+
+        let final_map = ref_path_map.borrow();
+        let mut substitutions: Vec<(String, String)> = Vec::new();
+        for (placeholder, (source_ref, target_ref)) in &placeholder_map {
+            let source_abs = final_map
+                .get(source_ref)
+                .cloned()
+                .unwrap_or_else(|| tentative_fs_path_public(&new_tree, *source_ref));
+            let target_abs = final_map
+                .get(target_ref)
+                .cloned()
+                .unwrap_or_else(|| tentative_fs_path_public(&new_tree, *target_ref));
+            let relative = crate::compute_relative_ref_path(&source_abs, &target_abs);
+            substitutions.push((placeholder.clone(), relative));
+        }
+        log::debug!(
+            "syncback: built {} ref substitutions in {:.1?}",
+            substitutions.len(),
+            phase_timer.elapsed()
+        );
+
+        let sub_timer = std::time::Instant::now();
+        if !substitutions.is_empty() {
+            fs_snapshot.fix_ref_paths(&substitutions);
+        }
+        log::debug!(
+            "syncback: applied ref substitutions in {:.1?}",
+            sub_timer.elapsed()
+        );
+    }
+
+    let phase_timer = std::time::Instant::now();
     if !incremental && !existing_paths.is_empty() {
         log::debug!("Clean mode: checking for orphaned files to remove");
 
-        // Helper to strip UNC prefix on Windows
-        fn strip_unc_prefix(p: PathBuf) -> PathBuf {
-            let path_str = p.to_string_lossy();
-            if path_str.starts_with(r"\\?\") || path_str.starts_with("//?/") {
-                PathBuf::from(&path_str[4..])
-            } else {
-                p
-            }
-        }
+        let canonical_project_path = strip_unc_prefix(
+            std::fs::canonicalize(project_path).unwrap_or_else(|_| project_path.to_path_buf()),
+        );
 
-        // Helper to normalize a path by:
-        // 1. Canonicalizing to resolve symlinks (important on macOS where /var -> /private/var)
-        // 2. Stripping UNC prefix on Windows
-        fn normalize_existing_path(p: &Path) -> PathBuf {
-            // First try to canonicalize to resolve symlinks
-            // This is important on macOS where /var is a symlink to /private/var
-            let canonicalized = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-            strip_unc_prefix(canonicalized)
-        }
-
-        // Canonicalize the project path base to resolve symlinks consistently
-        // This is important on macOS where /var -> /private/var
-        let canonical_project_path =
-            std::fs::canonicalize(project_path).unwrap_or_else(|_| project_path.to_path_buf());
-        let canonical_project_path = strip_unc_prefix(canonical_project_path);
-
-        // Helper to canonicalize a path that may not exist yet.
-        // Tries to canonicalize the full path, then falls back to canonicalizing
-        // the nearest existing ancestor and appending the remaining components.
-        fn canonicalize_maybe_nonexistent(p: &Path) -> PathBuf {
-            // Try full canonicalization first (works if path exists)
-            if let Ok(canonical) = std::fs::canonicalize(p) {
-                return strip_unc_prefix(canonical);
-            }
-
-            // Path doesn't exist - find the nearest existing ancestor and canonicalize that,
-            // then append the remaining path components.
-            let mut existing_ancestor = p.to_path_buf();
-            let mut suffix_components = Vec::new();
-
-            while !existing_ancestor.as_os_str().is_empty() {
-                if existing_ancestor.exists() {
-                    break;
-                }
-                if let Some(file_name) = existing_ancestor.file_name() {
-                    suffix_components.push(file_name.to_owned());
-                }
-                if !existing_ancestor.pop() {
-                    break;
-                }
-            }
-
-            // Canonicalize the existing ancestor
-            let canonical_ancestor = std::fs::canonicalize(&existing_ancestor)
-                .map(strip_unc_prefix)
-                .unwrap_or(existing_ancestor);
-
-            // Append the suffix components in reverse order
-            let mut result = canonical_ancestor;
-            for component in suffix_components.into_iter().rev() {
-                result.push(component);
-            }
-            result
-        }
-
-        // Convert added_paths to absolute paths by joining with canonicalized project base path.
-        // fs_snapshot paths are relative to the project folder.
-        // We must also canonicalize the result to resolve any symlinks within the project
-        // directory structure, ensuring consistent comparison with canonicalized existing paths.
         let added_paths: HashSet<PathBuf> = fs_snapshot
             .added_paths()
             .into_iter()
-            .map(|p| canonicalize_maybe_nonexistent(&canonical_project_path.join(p)))
+            .map(|p| strip_unc_prefix(canonical_project_path.join(p)))
             .collect();
 
-        // Get the project file path to exclude it from removal
-        let project_file = normalize_existing_path(&project.file_location);
+        let mut added_dir_prefixes: HashSet<PathBuf> = HashSet::new();
+        for p in &added_paths {
+            let mut ancestor = p.clone();
+            while ancestor.pop() {
+                if !added_dir_prefixes.insert(ancestor.clone()) {
+                    break;
+                }
+            }
+        }
+
+        let project_file = strip_unc_prefix(
+            std::fs::canonicalize(&project.file_location)
+                .unwrap_or_else(|_| project.file_location.clone()),
+        );
 
         // Collect ALL paths explicitly referenced via $path in the project.
         // These paths should NOT be removed during orphan cleanup because they
@@ -714,7 +710,6 @@ pub fn syncback_loop_with_stats(
                     .map(strip_unc_prefix)
                     .unwrap_or_else(|_| resolved.clone());
                 protected.insert(canonical.clone());
-                // Add mapping from filesystem path to instance path
                 if !instance_path.is_empty() {
                     mappings.push((canonical, instance_path.to_string()));
                 }
@@ -741,8 +736,10 @@ pub fn syncback_loop_with_stats(
             &mut protected_paths,
             &mut path_to_instance_prefix,
         );
-        log::trace!("Protected $path references: {:?}", protected_paths);
-        log::trace!("Path to instance mappings: {:?}", path_to_instance_prefix);
+        if log::log_enabled!(log::Level::Trace) {
+            log::trace!("Protected $path references: {:?}", protected_paths);
+            log::trace!("Path to instance mappings: {:?}", path_to_instance_prefix);
+        }
 
         // Helper to convert a filesystem path to an instance path using the mappings
         let fs_path_to_instance_path = |fs_path: &Path| -> Option<String> {
@@ -763,12 +760,10 @@ pub fn syncback_loop_with_stats(
             None
         };
 
-        // First pass: collect normalized paths to remove (deduplicated)
         let mut paths_to_remove: HashSet<PathBuf> = HashSet::new();
         for old_path in &existing_paths {
-            let old_path_norm = normalize_existing_path(old_path);
+            let old_path_norm = old_path.clone();
 
-            // Never remove the ROOT project file itself
             if old_path_norm == project_file {
                 log::trace!("Skipping root project file: {}", old_path.display());
                 continue;
@@ -862,47 +857,30 @@ pub fn syncback_loop_with_stats(
                 }
             }
 
-            // Skip if this exact path is being written to
             if added_paths.contains(&old_path_norm) {
-                log::trace!(
-                    "Skipping {} (exact path in added_paths)",
-                    old_path.display()
-                );
                 continue;
             }
-            // Skip if this path is an ancestor of something being written to
-            // (e.g., a directory that will contain new files)
-            // NOTE: We DO NOT skip files just because their parent directory is in added_paths.
-            // Adding a directory does not mean all orphan files inside should be preserved.
-            if old_path_norm.is_dir()
-                && added_paths
-                    .iter()
-                    .any(|added| added.starts_with(&old_path_norm))
-            {
-                log::trace!("Skipping {} (ancestor of added path)", old_path.display());
+            if old_path_norm.is_dir() && added_dir_prefixes.contains(&old_path_norm) {
                 continue;
             }
-            // Use normalized path to avoid duplicates from UNC vs regular paths
-            log::trace!("Marking for removal: {}", old_path_norm.display());
             paths_to_remove.insert(old_path_norm);
         }
 
         // Second pass: only remove top-level orphaned paths.
-        // Skip any path that is inside another path we're removing,
-        // since remove_dir_all will handle the contents.
-        let paths_vec: Vec<_> = paths_to_remove.iter().collect();
-        for old_path in &paths_vec {
-            // Check if this path is inside another path we're removing
-            let is_nested = paths_vec
-                .iter()
-                .any(|other| *other != *old_path && old_path.starts_with(*other));
+        // Sorted path order guarantees all descendants appear consecutively
+        // after their ancestor, so a single ancestor tracker suffices.
+        let mut sorted_removals: Vec<_> = paths_to_remove.into_iter().collect::<Vec<_>>();
+        sorted_removals.sort();
 
-            if is_nested {
-                continue;
+        let mut current_ancestor: Option<&PathBuf> = None;
+        for old_path in &sorted_removals {
+            if let Some(ancestor) = current_ancestor {
+                if old_path.starts_with(ancestor) && old_path != ancestor {
+                    continue;
+                }
             }
+            current_ancestor = Some(old_path);
 
-            // Convert absolute path to relative path for FsSnapshot.
-            // FsSnapshot expects relative paths and joins them with base_path in write_to_vfs.
             let relative_path = old_path
                 .strip_prefix(&canonical_project_path)
                 .unwrap_or(old_path);
@@ -916,7 +894,8 @@ pub fn syncback_loop_with_stats(
         }
     }
 
-    // Log stats summary if using internal stats (not provided externally)
+    log::debug!("syncback: orphan removal in {:.1?}", phase_timer.elapsed());
+
     if external_stats.is_none() {
         stats.log_summary();
     }
@@ -1017,7 +996,7 @@ pub struct SyncbackRules {
     #[serde(skip_serializing_if = "Option::is_none")]
     sync_current_camera: Option<bool>,
     /// Whether or not to sync properties that cannot be modified via scripts.
-    /// Defaults to `true`.
+    /// Defaults to `false`.
     #[serde(skip_serializing_if = "Option::is_none")]
     sync_unscriptable: Option<bool>,
     /// Whether to skip serializing referent properties like `Model.PrimaryPart`

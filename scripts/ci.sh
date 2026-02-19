@@ -11,6 +11,8 @@ for arg in "$@"; do
     esac
 done
 
+THREADS=$(nproc 2>/dev/null || sysctl -n hw.logicalcpu 2>/dev/null || echo 4)
+
 failures=()
 
 step() {
@@ -55,19 +57,19 @@ selene_exit=$?
 record "Selene" $selene_exit
 
 step 6 "Rust Linting (Clippy) - Auto-fix"
-cargo clippy -j 16 --fix --allow-dirty --allow-staged >/dev/null 2>&1
+cargo clippy -j $THREADS --fix --allow-dirty --allow-staged >/dev/null 2>&1
 echo "Verifying..."
-cargo clippy -j 16 --all-targets --all-features 2>&1
+cargo clippy -j $THREADS --all-targets --all-features 2>&1
 clippy_exit=$?
 record "Clippy" $clippy_exit
 
 step 7 "Build Everything"
-cargo build -j 16 --locked --all-targets --all-features
+cargo build --locked --all-targets --all-features
 build_exit=$?
 record "Build" $build_exit
 
 step 8 "Run ALL Rust Tests"
-cargo test -j 16 --locked --all-features -- --test-threads=16 2>&1
+cargo test --locked --all-features -- --test-threads=$THREADS 2>&1
 rust_tests=$?
 record "Rust Tests" $rust_tests
 
@@ -101,24 +103,24 @@ if [ "$RBX_DOM" = true ]; then
     record "Selene (rbx_dom_lua)" $selene_rbxdom
 
     step 13 "Rust Linting (Clippy) for rbx-dom - Auto-fix"
-    (cd rbx-dom && cargo clippy -j 16 --fix --allow-dirty --allow-staged >/dev/null 2>&1)
+    (cd rbx-dom && cargo clippy -j $THREADS --fix --allow-dirty --allow-staged >/dev/null 2>&1)
     echo "Verifying..."
-    (cd rbx-dom && cargo clippy -j 16 --all-targets --all-features -- -D warnings 2>&1)
+    (cd rbx-dom && cargo clippy -j $THREADS --all-targets --all-features -- -D warnings 2>&1)
     clippy_rbxdom=$?
     record "Clippy (rbx-dom)" $clippy_rbxdom
 
     step 14 "Build rbx-dom"
-    (cd rbx-dom && cargo build -j 16 --verbose)
+    (cd rbx-dom && cargo build --verbose)
     build_rbxdom=$?
-    (cd rbx-dom && cargo build -j 16 --all-features --verbose)
+    (cd rbx-dom && cargo build --all-features --verbose)
     build_rbxdom_all=$?
     record "Build (rbx-dom)" $build_rbxdom
     record "Build (rbx-dom all-features)" $build_rbxdom_all
 
     step 15 "Run ALL rbx-dom Rust Tests"
-    (cd rbx-dom && cargo test -j 16 --verbose -- --test-threads=16)
+    (cd rbx-dom && cargo test --verbose -- --test-threads=$THREADS)
     tests_rbxdom=$?
-    (cd rbx-dom && cargo test -j 16 --all-features --verbose -- --test-threads=16)
+    (cd rbx-dom && cargo test --all-features --verbose -- --test-threads=$THREADS)
     tests_rbxdom_all=$?
     record "Tests (rbx-dom)" $tests_rbxdom
     record "Tests (rbx-dom all-features)" $tests_rbxdom_all

@@ -28,7 +28,7 @@ body:
             Attributes:
               "!Attributes":
                 Rojo_Ref_PrimaryPart:
-                  "!String": Workspace/MyModel/Target
+                  "!String": "@self/Target"
           id: id-3
 packetType: messages
 sessionId: id-1

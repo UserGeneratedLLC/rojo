@@ -15,7 +15,7 @@ body:
             Attributes:
               "!Attributes":
                 Rojo_Ref_PrimaryPart:
-                  "!String": Workspace/NonExistent/Part
+                  "!String": "./NonExistent/Part"
             PrimaryPart: ~
           id: id-3
 packetType: messages

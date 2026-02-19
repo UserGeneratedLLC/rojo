@@ -10,9 +10,130 @@ use rbx_dom_weak::{
 };
 
 use crate::{
-    ref_attribute_name, ref_target_attribute_name, syncback::snapshot::inst_path,
+    ref_attribute_name, ref_target_attribute_name,
+    syncback::{name_needs_slugify, slugify_name},
     REF_ID_ATTRIBUTE_NAME, REF_PATH_ATTRIBUTE_PREFIX, REF_POINTER_ATTRIBUTE_PREFIX,
 };
+
+/// Public wrapper for `tentative_fs_path` used by the post-processing step
+/// in `syncback_loop` to compare tentative vs final paths.
+pub fn tentative_fs_path_public(dom: &WeakDom, target_ref: Ref) -> String {
+    tentative_fs_path(dom, target_ref)
+}
+
+/// Compute a filesystem-name-compatible path for an instance in a bare WeakDom.
+///
+/// Each path segment is a **tentative filesystem name**: the slugified instance
+/// name plus the extension that the syncback middleware would assign based on
+/// class and children. This produces paths like `"Workspace/Hey_Bro.server.luau"`
+/// that are compatible with `get_instance_by_path()` (which resolves using
+/// filesystem names).
+///
+/// For directory-style instances (Folders, services, scripts with children),
+/// the segment is just the slugified name (no extension).
+fn tentative_fs_path(dom: &WeakDom, target_ref: Ref) -> String {
+    let root_ref = dom.root_ref();
+    let mut components: Vec<String> = Vec::new();
+    let mut current = target_ref;
+
+    loop {
+        if current == root_ref || current.is_none() {
+            break;
+        }
+
+        let inst = match dom.get_by_ref(current) {
+            Some(i) => i,
+            None => break,
+        };
+
+        let segment = tentative_fs_name(inst);
+        components.push(segment);
+        current = inst.parent();
+    }
+
+    components.reverse();
+    components.join("/")
+}
+
+/// Compute the tentative filesystem name for a single instance based on its
+/// class, RunContext property, and whether it has children.
+///
+/// This mirrors the logic in `get_best_middleware()` + `extension_for_middleware()`
+/// but operates on a bare Instance without SyncbackSnapshot context.
+fn tentative_fs_name(inst: &Instance) -> String {
+    let slug = if name_needs_slugify(&inst.name) {
+        slugify_name(&inst.name)
+    } else {
+        inst.name.clone()
+    };
+
+    let has_children = !inst.children().is_empty();
+
+    // Directory-style classes never get extensions
+    let is_container = matches!(
+        inst.class.as_str(),
+        "Folder" | "Configuration" | "Tool" | "ScreenGui" | "SurfaceGui" | "BillboardGui" | "AdGui"
+    );
+
+    if is_container || (has_children && is_script_class(inst.class.as_str())) {
+        // Directory representation -- slug only, no extension
+        return slug;
+    }
+
+    let extension = match inst.class.as_str() {
+        "Script" => {
+            if has_children {
+                return slug; // directory
+            }
+            match inst.properties.get(&ustr("RunContext")) {
+                Some(Variant::Enum(e)) => match e.to_u32() {
+                    0 => "legacy.luau",
+                    1 => "server.luau",
+                    2 => "client.luau",
+                    3 => "plugin.luau",
+                    _ => "legacy.luau",
+                },
+                _ => "legacy.luau",
+            }
+        }
+        "LocalScript" => {
+            if has_children {
+                return slug;
+            }
+            "local.luau"
+        }
+        "ModuleScript" => {
+            if has_children {
+                return slug;
+            }
+            "luau"
+        }
+        "StringValue" => {
+            if has_children {
+                return slug;
+            }
+            "txt"
+        }
+        "LocalizationTable" => {
+            if has_children {
+                return slug;
+            }
+            "csv"
+        }
+        _ => {
+            if has_children {
+                return slug; // directory
+            }
+            "model.json5"
+        }
+    };
+
+    format!("{slug}.{extension}")
+}
+
+fn is_script_class(class: &str) -> bool {
+    matches!(class, "Script" | "LocalScript" | "ModuleScript")
+}
 
 pub struct RefLinks {
     /// Refs that use path-based linking (path is unique).
@@ -21,6 +142,22 @@ pub struct RefLinks {
     id_links: HashMap<Ref, Vec<IdRefLink>>,
     /// Target instances that need a Rojo_Id written (for ID-based system).
     targets_needing_id: HashSet<Ref>,
+    /// Maps placeholder strings to (source_ref, target_ref) pairs. Populated
+    /// when `final_paths` is not available (CLI syncback pre-walk). The
+    /// placeholder encodes both source and target so that post-processing can
+    /// compute the correct relative path for each (source, target) pair.
+    pub placeholder_to_source_and_target: HashMap<String, (Ref, Ref)>,
+}
+
+impl RefLinks {
+    pub fn remove_ref(&mut self, source: Ref, prop_name: &str) {
+        if let Some(links) = self.path_links.get_mut(&source) {
+            links.retain(|link| link.name.as_str() != prop_name);
+        }
+        if let Some(links) = self.id_links.get_mut(&source) {
+            links.retain(|link| link.name.as_str() != prop_name);
+        }
+    }
 }
 
 #[derive(PartialEq, Eq)]
@@ -36,7 +173,7 @@ struct IdRefLink {
 }
 
 /// Collects all instance paths in a WeakDom before any pruning occurs.
-/// Returns a map of Ref -> path for all instances.
+/// Returns a map of Ref -> filesystem-name-compatible path for all instances.
 pub fn collect_all_paths(dom: &WeakDom) -> HashMap<Ref, String> {
     let mut paths = HashMap::new();
     let mut queue = VecDeque::new();
@@ -45,83 +182,10 @@ pub fn collect_all_paths(dom: &WeakDom) -> HashMap<Ref, String> {
     while let Some(inst_ref) = queue.pop_front() {
         let inst = dom.get_by_ref(inst_ref).unwrap();
         queue.extend(inst.children().iter().copied());
-        paths.insert(inst_ref, inst_path(dom, inst_ref));
+        paths.insert(inst_ref, tentative_fs_path(dom, inst_ref));
     }
 
     paths
-}
-
-/// Pre-computes which instances have duplicate-named siblings.
-/// Returns a HashSet of Refs that have at least one sibling with the same name.
-///
-/// This is O(N) where N is the number of instances, and allows subsequent
-/// path uniqueness checks to be O(d) instead of O(d × s) where d=depth, s=siblings.
-fn compute_refs_with_duplicate_siblings(dom: &WeakDom) -> HashSet<Ref> {
-    let mut has_duplicate_siblings = HashSet::new();
-    let mut queue = VecDeque::new();
-    queue.push_back(dom.root_ref());
-
-    while let Some(inst_ref) = queue.pop_front() {
-        let inst = match dom.get_by_ref(inst_ref) {
-            Some(i) => i,
-            None => continue,
-        };
-
-        // Count children by name and collect their refs
-        let mut name_to_refs: HashMap<&str, Vec<Ref>> = HashMap::new();
-        for child_ref in inst.children() {
-            if let Some(child) = dom.get_by_ref(*child_ref) {
-                name_to_refs
-                    .entry(&child.name)
-                    .or_default()
-                    .push(*child_ref);
-            }
-            queue.push_back(*child_ref);
-        }
-
-        // Mark refs that share a name with siblings
-        for (_name, refs) in name_to_refs {
-            if refs.len() > 1 {
-                for r in refs {
-                    has_duplicate_siblings.insert(r);
-                }
-            }
-        }
-    }
-
-    has_duplicate_siblings
-}
-
-/// Checks if a path is unique using pre-computed duplicate sibling info.
-/// This is O(d) where d is the depth of the instance.
-fn is_path_unique_with_cache(
-    dom: &WeakDom,
-    target_ref: Ref,
-    has_duplicate_siblings: &HashSet<Ref>,
-) -> bool {
-    let mut current_ref = target_ref;
-
-    // Walk up the tree checking each level using the pre-computed cache
-    loop {
-        // O(1) lookup instead of O(siblings) counting
-        if has_duplicate_siblings.contains(&current_ref) {
-            return false;
-        }
-
-        let current = match dom.get_by_ref(current_ref) {
-            Some(inst) => inst,
-            None => return false,
-        };
-
-        let parent_ref = current.parent();
-        if parent_ref.is_none() {
-            // Reached root - path is unique at all levels
-            return true;
-        }
-
-        // Move up to parent and check the next level
-        current_ref = parent_ref;
-    }
 }
 
 /// Iterates through a WeakDom and collects referent properties.
@@ -130,17 +194,19 @@ fn is_path_unique_with_cache(
 /// The `pre_prune_paths` parameter should contain paths for instances that may
 /// have been pruned from the DOM. This allows references to instances outside
 /// the sync tree to be preserved as path-based attributes.
-pub fn collect_referents(dom: &WeakDom, pre_prune_paths: &HashMap<Ref, String>) -> RefLinks {
+///
+/// The `final_paths` parameter, when provided, contains the definitive
+/// filesystem-name-based paths assigned during the syncback walk (including
+/// dedup suffixes like `~2`). These take priority over `tentative_fs_path()`.
+pub fn collect_referents(
+    dom: &WeakDom,
+    pre_prune_paths: &HashMap<Ref, String>,
+    final_paths: Option<&HashMap<Ref, String>>,
+) -> RefLinks {
     let mut path_links: HashMap<Ref, Vec<PathRefLink>> = HashMap::new();
-    let mut id_links: HashMap<Ref, Vec<IdRefLink>> = HashMap::new();
-    let mut targets_needing_id: HashSet<Ref> = HashSet::new();
-
-    // Pre-compute duplicate sibling info in O(N) - this makes all subsequent
-    // path uniqueness checks O(d) instead of O(d × s) where d=depth, s=siblings
-    let has_duplicate_siblings = compute_refs_with_duplicate_siblings(dom);
-
-    // Cache path uniqueness results to avoid re-checking the same target
-    let mut path_unique_cache: HashMap<Ref, bool> = HashMap::new();
+    let id_links: HashMap<Ref, Vec<IdRefLink>> = HashMap::new();
+    let targets_needing_id: HashSet<Ref> = HashSet::new();
+    let mut placeholder_to_source_and_target: HashMap<String, (Ref, Ref)> = HashMap::new();
 
     let mut queue = VecDeque::new();
     queue.push_back(dom.root_ref());
@@ -157,50 +223,42 @@ pub fn collect_referents(dom: &WeakDom, pre_prune_paths: &HashMap<Ref, String>) 
                 continue;
             }
 
-            // Check if target exists in current DOM
-            if let Some(_target) = dom.get_by_ref(*target_ref) {
-                // Target exists - check if path is unique (with caching)
-                let is_unique = *path_unique_cache.entry(*target_ref).or_insert_with(|| {
-                    is_path_unique_with_cache(dom, *target_ref, &has_duplicate_siblings)
-                });
-
-                if is_unique {
-                    // Path is unique - use path-based system
-                    let target_path = inst_path(dom, *target_ref);
-                    path_links.entry(inst_ref).or_default().push(PathRefLink {
-                        name: *prop_name,
-                        path: target_path,
-                    });
+            if dom.get_by_ref(*target_ref).is_some() {
+                let ref_path = if let Some(fp) = final_paths {
+                    let source_abs = fp
+                        .get(&inst_ref)
+                        .cloned()
+                        .unwrap_or_else(|| tentative_fs_path(dom, inst_ref));
+                    let target_abs = fp
+                        .get(target_ref)
+                        .cloned()
+                        .unwrap_or_else(|| tentative_fs_path(dom, *target_ref));
+                    crate::compute_relative_ref_path(&source_abs, &target_abs)
                 } else {
-                    // Path is NOT unique - fall back to ID-based system
-                    log::debug!(
-                        "Property {}.{} uses ID-based reference because target has duplicate-named siblings",
-                        inst_path(dom, inst_ref),
-                        prop_name
-                    );
-                    id_links.entry(inst_ref).or_default().push(IdRefLink {
-                        name: *prop_name,
-                        target: *target_ref,
-                    });
-                    targets_needing_id.insert(*target_ref);
-                }
+                    let placeholder = ref_placeholder(inst_ref, *target_ref);
+                    placeholder_to_source_and_target
+                        .insert(placeholder.clone(), (inst_ref, *target_ref));
+                    placeholder
+                };
+                path_links.entry(inst_ref).or_default().push(PathRefLink {
+                    name: *prop_name,
+                    path: ref_path,
+                });
             } else if let Some(external_path) = pre_prune_paths.get(target_ref) {
-                // Target was pruned - use path (we can't check uniqueness, assume it's fine)
                 log::debug!(
-                    "Property {}.{} points to pruned instance at '{}', storing as path reference",
-                    inst_path(dom, inst_ref),
+                    "Property {}.{} points to pruned instance at '{}', storing as @game/ reference",
+                    tentative_fs_path(dom, inst_ref),
                     prop_name,
                     external_path
                 );
                 path_links.entry(inst_ref).or_default().push(PathRefLink {
                     name: *prop_name,
-                    path: external_path.clone(),
+                    path: format!("@game/{external_path}"),
                 });
             } else {
-                // Truly dangling reference
                 log::warn!(
                     "Property {}.{} will be `nil` on disk because the referenced instance does not exist",
-                    inst_path(dom, inst_ref),
+                    tentative_fs_path(dom, inst_ref),
                     prop_name
                 );
             }
@@ -211,7 +269,16 @@ pub fn collect_referents(dom: &WeakDom, pre_prune_paths: &HashMap<Ref, String>) 
         path_links,
         id_links,
         targets_needing_id,
+        placeholder_to_source_and_target,
     }
+}
+
+const REF_PLACEHOLDER_PREFIX: &str = "__ROJO_REF_";
+const REF_PLACEHOLDER_SUFFIX: &str = "__";
+
+/// Build a unique placeholder string encoding both source and target Refs.
+fn ref_placeholder(source: Ref, target: Ref) -> String {
+    format!("{REF_PLACEHOLDER_PREFIX}{source}_TO_{target}{REF_PLACEHOLDER_SUFFIX}")
 }
 
 /// Writes reference attributes to instances in the DOM.
@@ -361,5 +428,131 @@ fn get_existing_id_from_props(props: &rbx_dom_weak::UstrMap<Variant>) -> Option<
         }
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rbx_dom_weak::InstanceBuilder;
+
+    fn make_beam_attachment_dom() -> (WeakDom, Ref, Vec<Ref>, Ref) {
+        let mut dom = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let root = dom.root_ref();
+
+        let container = dom.insert(root, InstanceBuilder::new("Folder").with_name("Beams1"));
+
+        let mut attachments = Vec::new();
+        for _ in 0..4 {
+            let att = dom.insert(
+                container,
+                InstanceBuilder::new("Attachment").with_name("001"),
+            );
+            attachments.push(att);
+        }
+
+        let beam = dom.insert(
+            container,
+            InstanceBuilder::new("Beam")
+                .with_name("BeamA")
+                .with_property("Attachment0", Variant::Ref(attachments[2])),
+        );
+
+        (dom, container, attachments, beam)
+    }
+
+    #[test]
+    fn collect_referents_uses_source_aware_placeholders() {
+        let (dom, _, attachments, beam) = make_beam_attachment_dom();
+
+        let links = collect_referents(&dom, &HashMap::new(), None);
+
+        let beam_links = links.path_links.get(&beam).expect("beam should have refs");
+        assert_eq!(beam_links.len(), 1);
+
+        let path = &beam_links[0].path;
+        assert!(
+            path.starts_with(REF_PLACEHOLDER_PREFIX),
+            "path should be a placeholder, got: {path}"
+        );
+        assert!(
+            path.contains("_TO_"),
+            "placeholder should encode both source and target, got: {path}"
+        );
+
+        let (src, tgt) = links
+            .placeholder_to_source_and_target
+            .get(path)
+            .expect("placeholder should map to (source, target)");
+        assert_eq!(*src, beam);
+        assert_eq!(*tgt, attachments[2]);
+    }
+
+    #[test]
+    fn placeholders_are_unique_per_source_target_pair() {
+        let mut dom2 = WeakDom::new(InstanceBuilder::new("DataModel"));
+        let root2 = dom2.root_ref();
+        let c2 = dom2.insert(root2, InstanceBuilder::new("Folder").with_name("Beams1"));
+        let att_a = dom2.insert(c2, InstanceBuilder::new("Attachment").with_name("001"));
+        let att_b = dom2.insert(c2, InstanceBuilder::new("Attachment").with_name("001"));
+        dom2.insert(
+            c2,
+            InstanceBuilder::new("Beam")
+                .with_name("Beam1")
+                .with_property("Attachment0", Variant::Ref(att_a))
+                .with_property("Attachment1", Variant::Ref(att_b)),
+        );
+
+        let links = collect_referents(&dom2, &HashMap::new(), None);
+
+        let placeholders: Vec<&String> = links.placeholder_to_source_and_target.keys().collect();
+
+        assert!(
+            placeholders.len() >= 2,
+            "should have at least 2 placeholders"
+        );
+
+        let targets: HashSet<Ref> = links
+            .placeholder_to_source_and_target
+            .values()
+            .map(|(_, t)| *t)
+            .collect();
+        assert!(
+            targets.contains(&att_a),
+            "should have placeholder for att_a"
+        );
+        assert!(
+            targets.contains(&att_b),
+            "should have placeholder for att_b"
+        );
+
+        let unique_placeholders: HashSet<&String> = placeholders.iter().copied().collect();
+        assert_eq!(
+            unique_placeholders.len(),
+            placeholders.len(),
+            "all placeholders must be unique strings"
+        );
+    }
+
+    #[test]
+    fn collect_referents_with_final_paths_produces_relative_paths() {
+        let (dom, _, attachments, beam) = make_beam_attachment_dom();
+
+        let mut final_paths = HashMap::new();
+        final_paths.insert(beam, "Beams1/BeamA.model.json5".to_string());
+        final_paths.insert(attachments[2], "Beams1/001~3.model.json5".to_string());
+
+        let links = collect_referents(&dom, &HashMap::new(), Some(&final_paths));
+
+        assert!(
+            links.placeholder_to_source_and_target.is_empty(),
+            "should not generate placeholders when final_paths is provided"
+        );
+
+        let beam_links = links.path_links.get(&beam).expect("beam should have refs");
+        assert_eq!(
+            beam_links[0].path, "./001~3.model.json5",
+            "should produce relative path (sibling)"
+        );
     }
 }

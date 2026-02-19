@@ -1,14 +1,13 @@
 use std::{
     collections::HashSet,
     io,
-    net::IpAddr,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard},
     time::Instant,
 };
 
 use crossbeam_channel::Sender;
-use memofs::Vfs;
+use memofs::{PrefetchCache, Vfs};
 use thiserror::Error;
 
 use crate::{
@@ -111,7 +110,7 @@ pub struct ServeSession {
     /// Values are `(remove_count, create_write_count)` — each API write increments
     /// the appropriate counter, each suppressed VFS event decrements it.
     /// `None` for oneshot sessions.
-    #[allow(dead_code)]
+    #[allow(dead_code, clippy::type_complexity)]
     suppressed_paths:
         Option<Arc<Mutex<std::collections::HashMap<std::path::PathBuf, (usize, usize)>>>>,
 
@@ -119,6 +118,155 @@ pub struct ServeSession {
     /// Shared between ApiService (writes) and ChangeProcessor (rename updates).
     /// `None` for oneshot sessions.
     ref_path_index: Option<Arc<Mutex<crate::RefPathIndex>>>,
+
+    /// Root of the git repository, if the project is inside one.
+    /// Computed once at session start for use by auto-staging.
+    git_repo_root: Option<std::path::PathBuf>,
+}
+
+/// Collect all filesystem paths reachable from the project tree's `$path`
+/// entries, then read file contents and compute canonical paths in parallel.
+fn prefetch_project_files(project: &Project) -> io::Result<PrefetchCache> {
+    use rayon::prelude::*;
+    use std::collections::HashMap;
+    use walkdir::WalkDir;
+
+    let folder = project.folder_location();
+
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    collect_path_roots(&project.tree, folder, &mut roots);
+
+    roots.sort();
+    let mut deduped: Vec<std::path::PathBuf> = Vec::new();
+    for root in roots {
+        if !deduped.iter().any(|existing| root.starts_with(existing)) {
+            deduped.push(root);
+        }
+    }
+    let roots = deduped;
+
+    if roots.is_empty() {
+        return Ok(PrefetchCache {
+            files: HashMap::new(),
+            canonical: HashMap::new(),
+            is_file: HashMap::new(),
+            children: HashMap::new(),
+        });
+    }
+
+    let walk_start = Instant::now();
+
+    let mut entries: Vec<walkdir::DirEntry> = Vec::new();
+    for root in &roots {
+        if !root.exists() {
+            continue;
+        }
+        for e in WalkDir::new(root).follow_links(true).into_iter().flatten() {
+            entries.push(e);
+        }
+    }
+
+    // Also include the project file itself (read by project middleware).
+    if let Ok(meta) = std::fs::metadata(&project.file_location) {
+        if meta.is_file() {
+            entries.push(
+                WalkDir::new(&project.file_location)
+                    .into_iter()
+                    .next()
+                    .unwrap()
+                    .unwrap(),
+            );
+        }
+    }
+
+    let walk_elapsed = walk_start.elapsed();
+    let file_count = entries.iter().filter(|e| e.file_type().is_file()).count();
+    let dir_count = entries.len() - file_count;
+
+    log::debug!(
+        "Prefetch walk: {} files + {} dirs from {} root(s) in {:.1?}",
+        file_count,
+        dir_count,
+        roots.len(),
+        walk_elapsed,
+    );
+
+    let read_start = Instant::now();
+
+    let file_data: Vec<_> = entries
+        .par_iter()
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|e| {
+            let path = e.path().to_path_buf();
+            std::fs::read(&path).ok().map(|c| (path, c))
+        })
+        .collect();
+
+    let read_elapsed = read_start.elapsed();
+    let canon_start = Instant::now();
+
+    let canonical_data: Vec<_> = entries
+        .par_iter()
+        .filter_map(|e| {
+            let path = e.path().to_path_buf();
+            std::fs::canonicalize(&path).ok().map(|c| (path, c))
+        })
+        .collect();
+
+    let canon_elapsed = canon_start.elapsed();
+
+    log::debug!(
+        "Prefetch I/O: read {} files in {:.1?}, canonicalize {} paths in {:.1?}",
+        file_data.len(),
+        read_elapsed,
+        canonical_data.len(),
+        canon_elapsed,
+    );
+
+    let mut is_file_map: HashMap<std::path::PathBuf, bool> = HashMap::new();
+    let mut children_map: HashMap<std::path::PathBuf, Vec<std::path::PathBuf>> = HashMap::new();
+
+    for entry in &entries {
+        let path = entry.path().to_path_buf();
+        is_file_map.insert(path.clone(), entry.file_type().is_file());
+
+        if entry.depth() > 0 {
+            if let Some(parent) = entry.path().parent() {
+                children_map
+                    .entry(parent.to_path_buf())
+                    .or_default()
+                    .push(path);
+            }
+        }
+    }
+
+    for children in children_map.values_mut() {
+        children.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+    }
+
+    log::debug!(
+        "Prefetch maps: {} is_file + {} children dirs built",
+        is_file_map.len(),
+        children_map.len(),
+    );
+
+    Ok(PrefetchCache {
+        files: file_data.into_iter().collect::<HashMap<_, _>>(),
+        canonical: canonical_data.into_iter().collect::<HashMap<_, _>>(),
+        is_file: is_file_map,
+        children: children_map,
+    })
+}
+
+/// Recursively collect all `$path` directories from the project tree.
+fn collect_path_roots(node: &crate::project::ProjectNode, base: &Path, out: &mut Vec<PathBuf>) {
+    if let Some(path_node) = &node.path {
+        let resolved = base.join(path_node.path());
+        out.push(resolved);
+    }
+    for child_node in node.children.values() {
+        collect_path_roots(child_node, base, out);
+    }
 }
 
 impl ServeSession {
@@ -129,18 +277,42 @@ impl ServeSession {
 
         let root_project = Project::load_initial_project(vfs, start_path)?;
 
+        if std::env::var("ATLAS_SEQUENTIAL").is_err() {
+            let prefetch_start = Instant::now();
+            match prefetch_project_files(&root_project) {
+                Ok(cache) => {
+                    log::info!(
+                        "Prefetch total: {} files + {} canonical paths in {:.1?}",
+                        cache.files.len(),
+                        cache.canonical.len(),
+                        prefetch_start.elapsed()
+                    );
+                    vfs.set_prefetch_cache(cache);
+                }
+                Err(err) => {
+                    log::warn!("Prefetch failed, falling back to sequential reads: {err}");
+                }
+            }
+        }
+
         let mut tree = RojoTree::new(InstanceSnapshot::new());
         let root_id = tree.get_root_id();
         let instance_context = InstanceContext::new();
 
+        let snap_start = Instant::now();
         log::trace!("Generating snapshot of instances from VFS");
         let snapshot = snapshot_from_vfs(&instance_context, vfs, start_path)?;
+        log::debug!("Snapshot built in {:.1?}", snap_start.elapsed());
 
+        vfs.clear_prefetch_cache();
+
+        let patch_start = Instant::now();
         log::trace!("Computing initial patch set");
         let patch_set = compute_patch_set(snapshot, &tree, root_id);
 
         log::trace!("Applying initial patch set");
         apply_patch_set(&mut tree, patch_set);
+        log::debug!("Patch computed + applied in {:.1?}", patch_start.elapsed());
 
         Ok((root_project, tree))
     }
@@ -170,7 +342,15 @@ impl ServeSession {
 
         let (tree_mutation_sender, tree_mutation_receiver) = crossbeam_channel::unbounded();
         let suppressed_paths = Arc::new(Mutex::new(std::collections::HashMap::new()));
-        let ref_path_index = Arc::new(Mutex::new(crate::RefPathIndex::new()));
+        let ref_path_index = {
+            let mut index = crate::RefPathIndex::new();
+            let tree_guard = tree.lock().unwrap();
+            index.populate_from_dir(root_project.folder_location(), &tree_guard);
+            drop(tree_guard);
+            Arc::new(Mutex::new(index))
+        };
+
+        let git_repo_root = crate::git::git_repo_root(root_project.folder_location());
 
         log::trace!("Starting ChangeProcessor");
         let change_processor = ChangeProcessor::start(
@@ -181,7 +361,9 @@ impl ServeSession {
             Arc::clone(&suppressed_paths),
             Arc::clone(&ref_path_index),
             root_project.folder_location().to_path_buf(),
+            root_project.file_location.clone(),
             critical_error_receiver,
+            git_repo_root.clone(),
         );
 
         Ok(Self {
@@ -195,6 +377,7 @@ impl ServeSession {
             vfs,
             suppressed_paths: Some(suppressed_paths),
             ref_path_index: Some(ref_path_index),
+            git_repo_root,
         })
     }
 
@@ -220,6 +403,7 @@ impl ServeSession {
             vfs: Arc::new(vfs),
             suppressed_paths: None,
             ref_path_index: None,
+            git_repo_root: None,
         })
     }
 
@@ -280,10 +464,6 @@ impl ServeSession {
             .expect("all top-level projects must have their name set")
     }
 
-    pub fn project_port(&self) -> Option<u16> {
-        self.root_project.serve_port
-    }
-
     pub fn place_id(&self) -> Option<u64> {
         self.root_project.place_id
     }
@@ -304,12 +484,12 @@ impl ServeSession {
         self.root_project.blocked_place_ids.as_ref()
     }
 
-    pub fn serve_address(&self) -> Option<IpAddr> {
-        self.root_project.serve_address
-    }
-
     pub fn root_dir(&self) -> &Path {
         self.root_project.folder_location()
+    }
+
+    pub fn git_repo_root(&self) -> Option<&Path> {
+        self.git_repo_root.as_deref()
     }
 
     pub fn root_project(&self) -> &Project {
@@ -347,7 +527,7 @@ impl ServeSession {
     /// Does NOT apply corrections — the tree is left unchanged.
     pub fn check_tree_freshness(&self) -> TreeFreshnessReport {
         let start = Instant::now();
-        let start_path = self.root_project.folder_location();
+        let start_path: &Path = &self.root_project.file_location;
         let instance_context = InstanceContext::new();
 
         let snapshot = match snapshot_from_vfs(&instance_context, &self.vfs, start_path) {
@@ -410,7 +590,7 @@ impl ServeSession {
         }
 
         let start = Instant::now();
-        let start_path = self.root_project.folder_location();
+        let start_path: &Path = &self.root_project.file_location;
         let instance_context = InstanceContext::new();
 
         let snapshot = match snapshot_from_vfs(&instance_context, &self.vfs, start_path) {

@@ -19,12 +19,15 @@ use super::{
 
 #[profiling::function]
 pub fn compute_patch_set(snapshot: Option<InstanceSnapshot>, tree: &RojoTree, id: Ref) -> PatchSet {
+    use super::matching::MatchingSession;
+
     let mut patch_set = PatchSet::new();
 
     if let Some(snapshot) = snapshot {
         let mut context = ComputePatchContext::default();
+        let session = MatchingSession::new();
 
-        compute_patch_set_internal(&mut context, snapshot, tree, id, &mut patch_set);
+        compute_patch_set_internal(&mut context, snapshot, tree, id, &mut patch_set, &session);
 
         // Rewrite Ref properties to refer to instance IDs instead of snapshot IDs
         // for all of the IDs that we know about so far.
@@ -80,6 +83,7 @@ fn compute_patch_set_internal(
     tree: &RojoTree,
     id: Ref,
     patch_set: &mut PatchSet,
+    session: &super::matching::MatchingSession,
 ) {
     if snapshot.snapshot_id.is_some() {
         context
@@ -92,7 +96,7 @@ fn compute_patch_set_internal(
         .expect("Instance did not exist in tree");
 
     compute_property_patches(&mut snapshot, &instance, patch_set, tree);
-    compute_children_patches(context, &mut snapshot, tree, id, patch_set);
+    compute_children_patches(context, &mut snapshot, tree, id, patch_set, session);
 }
 
 fn compute_property_patches(
@@ -104,7 +108,7 @@ fn compute_property_patches(
     let mut visited_properties = UstrSet::default();
     let mut changed_properties = UstrMap::new();
 
-    let attribute_ref_properties = compute_ref_properties(snapshot, tree);
+    let attribute_ref_properties = compute_ref_properties(snapshot, tree, instance.id());
 
     let changed_name = if snapshot.name == instance.name() {
         None
@@ -216,70 +220,49 @@ fn compute_children_patches(
     tree: &RojoTree,
     id: Ref,
     patch_set: &mut PatchSet,
+    session: &super::matching::MatchingSession,
 ) {
+    use super::matching::match_forward;
+
     let instance = tree
         .get_instance(id)
         .expect("Instance did not exist in tree");
 
-    let instance_children = instance.children();
+    let instance_children = instance.children().to_vec();
+    let snapshot_children = take(&mut snapshot.children);
 
-    let mut paired_instances = vec![false; instance_children.len()];
+    let match_result = match_forward(snapshot_children, &instance_children, tree, session);
 
-    for snapshot_child in take(&mut snapshot.children) {
-        let matching_instance =
-            instance_children
-                .iter()
-                .enumerate()
-                .find(|(instance_index, instance_child_id)| {
-                    if paired_instances[*instance_index] {
-                        return false;
-                    }
-
-                    let instance_child = tree
-                        .get_instance(**instance_child_id)
-                        .expect("Instance did not exist in tree");
-
-                    if snapshot_child.name == instance_child.name()
-                        && snapshot_child.class_name == instance_child.class_name()
-                    {
-                        paired_instances[*instance_index] = true;
-                        return true;
-                    }
-
-                    false
-                });
-
-        match matching_instance {
-            Some((_, instance_child_id)) => {
-                compute_patch_set_internal(
-                    context,
-                    snapshot_child,
-                    tree,
-                    *instance_child_id,
-                    patch_set,
-                );
-            }
-            None => {
-                patch_set.added_instances.push(PatchAdd {
-                    parent_id: id,
-                    instance: snapshot_child,
-                });
-            }
-        }
+    // Matched pairs: recursively compute patches.
+    for (snapshot_child, tree_child_id) in match_result.matched {
+        compute_patch_set_internal(
+            context,
+            snapshot_child,
+            tree,
+            tree_child_id,
+            patch_set,
+            session,
+        );
     }
 
-    for (instance_index, instance_child_id) in instance_children.iter().enumerate() {
-        if paired_instances[instance_index] {
-            continue;
-        }
+    // Unmatched snapshots: new instances to be added.
+    for snapshot_child in match_result.unmatched_snapshot {
+        patch_set.added_instances.push(PatchAdd {
+            parent_id: id,
+            instance: snapshot_child,
+        });
+    }
 
-        patch_set.removed_instances.push(*instance_child_id);
+    // Unmatched tree children: instances to be removed.
+    for tree_child_id in match_result.unmatched_tree {
+        patch_set.removed_instances.push(tree_child_id);
     }
 }
 
 fn compute_ref_properties(
     snapshot: &InstanceSnapshot,
     tree: &RojoTree,
+    source_ref: Ref,
 ) -> UstrMap<Option<Variant>> {
     let mut map = UstrMap::new();
     let attributes = match snapshot.properties.get(&ustr("Attributes")) {
@@ -319,7 +302,7 @@ fn compute_ref_properties(
             let Some(path) = crate::variant_as_str(attr_value, attr_name) else {
                 continue;
             };
-            if let Some(target_id) = tree.get_instance_by_path(path) {
+            if let Some(target_id) = tree.resolve_ref_path(path, source_ref) {
                 map.insert(ustr(prop_name), Some(Variant::Ref(target_id)));
             } else {
                 // Path not found yet - will be resolved during patch apply
@@ -376,6 +359,8 @@ mod test {
             }],
             added_instances: Vec::new(),
             removed_instances: Vec::new(),
+            stage_ids: std::collections::HashSet::new(),
+            stage_paths: Vec::new(),
         };
 
         assert_eq!(patch_set, expected_patch_set);
@@ -426,6 +411,8 @@ mod test {
             }],
             updated_instances: Vec::new(),
             removed_instances: Vec::new(),
+            stage_ids: std::collections::HashSet::new(),
+            stage_paths: Vec::new(),
         };
 
         assert_eq!(patch_set, expected_patch_set);

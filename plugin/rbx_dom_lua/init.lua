@@ -1,11 +1,147 @@
 local database = require(script.database)
 local Error = require(script.Error)
 local PropertyDescriptor = require(script.PropertyDescriptor)
+local EncodedValue = require(script.EncodedValue)
 
--- Returns a class descriptor with all property names and metadata (including inherited ones)
--- Returns nil if the class doesn't exist in the database
--- The properties table maps property names to metadata (scriptability, serialization status)
--- To get a full PropertyDescriptor for encoding, use findCanonicalPropertyDescriptor
+-- Cache for default properties per class (includes inherited defaults).
+local defaultPropertiesCache: { [string]: { [string]: any } } = {}
+
+-- Returns a table mapping property names to their encoded default values
+-- for a given class, including inherited defaults from parent classes.
+-- Subclass overrides take precedence. Results are cached per class.
+local function findDefaultProperties(className: string): { [string]: any }
+	local cached = defaultPropertiesCache[className]
+	if cached then
+		return cached
+	end
+
+	local defaults: { [string]: any } = {}
+	local currentClassName: string? = className
+
+	repeat
+		local currentClass = database.Classes[currentClassName]
+		if currentClass == nil then
+			break
+		end
+
+		local classDefaults = currentClass.DefaultProperties
+		if classDefaults then
+			for propName, encodedValue in classDefaults do
+				if defaults[propName] == nil then
+					defaults[propName] = encodedValue
+				end
+			end
+		end
+
+		currentClassName = currentClass.Superclass
+	until currentClassName == nil
+
+	defaultPropertiesCache[className] = defaults
+	return defaults
+end
+
+-- Property names excluded from comparison (handled separately).
+local EXCLUDED_PROP_NAMES: { [string]: boolean } = {
+	Tags = true,
+	Attributes = true,
+	Name = true,
+}
+
+-- Encoded value type keys that cannot be compared during matching.
+local EXCLUDED_ENCODED_TYPES: { [string]: boolean } = {
+	Ref = true,
+	UniqueId = true,
+	SharedString = true,
+	Region3 = true,
+}
+
+-- Scriptabilities that allow reading from Studio instances.
+local READABLE_SCRIPTABILITY: { [string]: boolean } = {
+	ReadWrite = true,
+	Read = true,
+}
+
+-- Cache for class comparison keys (propNames + decoded defaults).
+-- Computed once per ClassName, lives for the plugin's lifetime.
+local classComparisonKeysCache: { [string]: any } = {}
+
+-- Returns a pre-computed comparison key set for a class:
+--   propNames:   ordered array of comparable property names
+--   propNameSet: O(1) lookup set of the same names
+--   defaults:    map of propName → decoded native default value
+--
+-- Filtered to: canonical, scriptable (readable), serializable, and
+-- decodable. Excludes Tags, Attributes, Ref, UniqueId, SharedString.
+-- All defaults are pre-decoded to native Roblox values.
+local function getClassComparisonKeys(className: string)
+	local cached = classComparisonKeysCache[className]
+	if cached then
+		return cached
+	end
+
+	local propNames: { string } = {}
+	local propNameSet: { [string]: boolean } = {}
+	local seenProps: { [string]: boolean } = {}
+
+	-- Walk the class hierarchy for property metadata
+	local currentClassName: string? = className
+	repeat
+		local currentClass = database.Classes[currentClassName]
+		if currentClass == nil then
+			break
+		end
+
+		for propertyName, propertyData in currentClass.Properties do
+			if seenProps[propertyName] then
+				continue
+			end
+			seenProps[propertyName] = true
+
+			if EXCLUDED_PROP_NAMES[propertyName] then
+				continue
+			end
+			if not propertyData.Kind or not propertyData.Kind.Canonical then
+				continue
+			end
+			if not READABLE_SCRIPTABILITY[propertyData.Scriptability] then
+				continue
+			end
+			if propertyData.Kind.Canonical.Serialization == "DoesNotSerialize" then
+				continue
+			end
+
+			table.insert(propNames, propertyName)
+			propNameSet[propertyName] = true
+		end
+
+		currentClassName = currentClass.Superclass
+	until currentClassName == nil
+
+	-- Pre-decode defaults for every comparable property
+	local defaults: { [string]: any } = {}
+	local encodedDefaults = findDefaultProperties(className)
+	for _, propName in propNames do
+		local encoded = encodedDefaults[propName]
+		if encoded then
+			local ty = next(encoded)
+			if not EXCLUDED_ENCODED_TYPES[ty] then
+				local pcallOk, decodeOk, decoded = pcall(EncodedValue.decode, encoded)
+				if pcallOk and decodeOk and decoded ~= nil then
+					defaults[propName] = decoded
+				end
+			end
+		end
+	end
+
+	local result = table.freeze({
+		propNames = table.freeze(propNames),
+		propNameSet = table.freeze(propNameSet),
+		defaults = table.freeze(defaults),
+	})
+	classComparisonKeysCache[className] = result
+	return result
+end
+
 local function findClassDescriptor(className)
 	local classData = database.Classes[className]
 	if classData == nil then
@@ -111,6 +247,8 @@ return {
 	writeProperty = writeProperty,
 	findCanonicalPropertyDescriptor = findCanonicalPropertyDescriptor,
 	findClassDescriptor = findClassDescriptor,
+	findDefaultProperties = findDefaultProperties,
+	getClassComparisonKeys = getClassComparisonKeys,
 	Error = Error,
-	EncodedValue = require(script.EncodedValue),
+	EncodedValue = EncodedValue,
 }

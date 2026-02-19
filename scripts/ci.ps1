@@ -6,6 +6,7 @@ param(
 )
 
 $RbxDom = -not $NoRbxDom
+$Threads = [Environment]::ProcessorCount
 
 $ErrorActionPreference = "Continue"
 $failures = @()
@@ -56,19 +57,19 @@ $selene = $LASTEXITCODE
 Record-Result "Selene" $selene
 
 Write-Step 6 "Rust Linting (Clippy) - Auto-fix"
-cargo clippy -j 16 --fix --allow-dirty --allow-staged 2>&1 | Out-Null
+cargo clippy -j $Threads --fix --allow-dirty --allow-staged 2>&1 | Out-Null
 Write-Host "Verifying..." -ForegroundColor Yellow
-cargo clippy -j 16 --all-targets --all-features 2>&1
+cargo clippy -j $Threads --all-targets --all-features 2>&1
 $clippy = $LASTEXITCODE
 Record-Result "Clippy" $clippy
 
 Write-Step 7 "Build Everything"
-cargo build -j 16 --locked --all-targets --all-features
+cargo build --locked --all-targets --all-features
 $build = $LASTEXITCODE
 Record-Result "Build" $build
 
 Write-Step 8 "Run ALL Rust Tests"
-$testOutput = cargo test -j 16 --locked --all-features -- --test-threads=16 2>&1
+$testOutput = cargo test --locked --all-features -- --test-threads=$Threads 2>&1
 $rustTests = $LASTEXITCODE
 $testOutput | Write-Host
 Record-Result "Rust Tests" $rustTests
@@ -106,18 +107,18 @@ if ($RbxDom) {
 
     Write-Step 13 "Rust Linting (Clippy) for rbx-dom - Auto-fix"
     Push-Location rbx-dom
-    cargo clippy -j 16 --fix --allow-dirty --allow-staged 2>&1 | Out-Null
+    cargo clippy -j $Threads --fix --allow-dirty --allow-staged 2>&1 | Out-Null
     Write-Host "Verifying..." -ForegroundColor Yellow
-    cargo clippy -j 16 --all-targets --all-features -- -D warnings 2>&1
+    cargo clippy -j $Threads --all-targets --all-features -- -D warnings 2>&1
     $clippyRbxDom = $LASTEXITCODE
     Pop-Location
     Record-Result "Clippy (rbx-dom)" $clippyRbxDom
 
     Write-Step 14 "Build rbx-dom"
     Push-Location rbx-dom
-    cargo build -j 16 --verbose
+    cargo build --verbose
     $buildRbxDom = $LASTEXITCODE
-    cargo build -j 16 --all-features --verbose
+    cargo build --all-features --verbose
     $buildRbxDomAll = $LASTEXITCODE
     Pop-Location
     Record-Result "Build (rbx-dom)" $buildRbxDom
@@ -125,9 +126,9 @@ if ($RbxDom) {
 
     Write-Step 15 "Run ALL rbx-dom Rust Tests"
     Push-Location rbx-dom
-    cargo test -j 16 --verbose -- --test-threads=16
+    cargo test --verbose -- --test-threads=$Threads
     $testsRbxDom = $LASTEXITCODE
-    cargo test -j 16 --all-features --verbose -- --test-threads=16
+    cargo test --all-features --verbose -- --test-threads=$Threads
     $testsRbxDomAll = $LASTEXITCODE
     Pop-Location
     Record-Result "Tests (rbx-dom)" $testsRbxDom

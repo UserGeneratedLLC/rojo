@@ -30,7 +30,8 @@ use crate::{
         interface::{
             ErrorResponse, Instance, InstanceMetadata, MessagesPacket, OpenResponse, ReadResponse,
             ServerInfoResponse, SocketPacket, SocketPacketBody, SocketPacketType, SubscribeMessage,
-            WriteRequest, WriteResponse, PROTOCOL_VERSION, SERVER_VERSION,
+            SyncbackPayload, SyncbackRequest, WriteRequest, WriteResponse, PROTOCOL_VERSION,
+            SERVER_VERSION,
         },
         util::{deserialize_msgpack, msgpack, msgpack_ok, serialize_msgpack},
     },
@@ -122,6 +123,7 @@ fn variant_to_json(variant: &Variant) -> Option<serde_json::Value> {
 pub async fn call(
     serve_session: Arc<ServeSession>,
     mut request: Request<Incoming>,
+    syncback_signal: Arc<super::SyncbackSignal>,
 ) -> Response<Full<Bytes>> {
     let service = ApiService::new(serve_session);
 
@@ -153,6 +155,9 @@ pub async fn call(
             service.handle_api_open(request).await
         }
         (&Method::POST, "/api/write") => service.handle_api_write(request).await,
+        (&Method::POST, "/api/syncback") => {
+            handle_api_syncback(request, &service, syncback_signal).await
+        }
         (&Method::GET, "/api/validate-tree") => service.handle_api_validate_tree().await,
 
         (_method, path) => msgpack(
@@ -160,6 +165,105 @@ pub async fn call(
             StatusCode::NOT_FOUND,
         ),
     }
+}
+
+async fn handle_api_syncback(
+    request: Request<Incoming>,
+    service: &ApiService,
+    syncback_signal: Arc<super::SyncbackSignal>,
+) -> Response<Full<Bytes>> {
+    let body = match request.into_body().collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(err) => {
+            return msgpack(
+                ErrorResponse::bad_request(format!("Failed to read request body: {err}")),
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    };
+
+    let syncback_request: SyncbackRequest = match deserialize_msgpack(&body) {
+        Ok(req) => req,
+        Err(err) => {
+            return msgpack(
+                ErrorResponse::bad_request(format!(
+                    "Failed to deserialize syncback request: {err}"
+                )),
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    };
+
+    let client_protocol = syncback_request.protocol_version as u64;
+    if client_protocol != PROTOCOL_VERSION {
+        return msgpack(
+            ErrorResponse::bad_request(format!(
+                "Protocol version mismatch: expected {}, got {}",
+                PROTOCOL_VERSION, client_protocol
+            )),
+            StatusCode::BAD_REQUEST,
+        );
+    }
+
+    let server_semver = SERVER_VERSION;
+    let server_parts: Vec<&str> = server_semver.split('.').collect();
+    let client_parts: Vec<&str> = syncback_request.server_version.split('.').collect();
+    let server_major_minor = server_parts.get(..2);
+    let client_major_minor = client_parts.get(..2);
+    if server_major_minor != client_major_minor {
+        return msgpack(
+            ErrorResponse::bad_request(format!(
+                "Server version mismatch: server is {}, plugin expects {}",
+                SERVER_VERSION, syncback_request.server_version
+            )),
+            StatusCode::BAD_REQUEST,
+        );
+    }
+
+    if let Some(place_id_f64) = syncback_request.place_id {
+        let place_id = place_id_f64 as u64;
+        if let Some(expected) = service.serve_session.serve_place_ids() {
+            if !expected.contains(&place_id) {
+                return msgpack(
+                    ErrorResponse::bad_request(format!(
+                        "Place ID {} is not in the servePlaceIds whitelist",
+                        place_id
+                    )),
+                    StatusCode::FORBIDDEN,
+                );
+            }
+        }
+        if let Some(blocked) = service.serve_session.blocked_place_ids() {
+            if blocked.contains(&place_id) {
+                return msgpack(
+                    ErrorResponse::bad_request(format!(
+                        "Place ID {} is in the blockedPlaceIds list",
+                        place_id
+                    )),
+                    StatusCode::FORBIDDEN,
+                );
+            }
+        }
+    }
+
+    log::info!(
+        "Live syncback requested with {} service chunks, {} bytes of rbxm data",
+        syncback_request.services.len(),
+        syncback_request.data.len()
+    );
+
+    let payload = SyncbackPayload {
+        data: syncback_request.data,
+        services: syncback_request.services,
+    };
+    if !syncback_signal.fire(payload) {
+        return msgpack(
+            ErrorResponse::bad_request("A syncback is already in progress"),
+            StatusCode::CONFLICT,
+        );
+    }
+
+    msgpack_ok(serde_json::json!({"status": "syncback_initiated"}))
 }
 
 pub struct ApiService {
@@ -264,8 +368,7 @@ impl ApiService {
 
     /// Get a summary of information about the server
     async fn handle_api_rojo(&self) -> Response<Full<Bytes>> {
-        let tree = self.serve_session.tree();
-        let root_instance_id = tree.get_root_id();
+        let root_instance_id = self.serve_session.tree().get_root_id();
 
         let ignore_hidden_services = self.serve_session.ignore_hidden_services();
         let visible_services = if ignore_hidden_services {
@@ -273,6 +376,10 @@ impl ApiService {
         } else {
             Vec::new()
         };
+
+        let git_metadata = self.serve_session.git_repo_root().map(|repo_root| {
+            crate::git::compute_git_metadata(&self.serve_session.tree_handle(), repo_root)
+        });
 
         msgpack_ok(&ServerInfoResponse {
             server_version: SERVER_VERSION.to_owned(),
@@ -288,6 +395,7 @@ impl ApiService {
             sync_source_only: true,
             ignore_hidden_services,
             visible_services,
+            git_metadata,
         })
     }
 
@@ -413,6 +521,11 @@ impl ApiService {
         // Create a stats tracker for this syncback operation
         let stats = crate::syncback::SyncbackStats::new();
 
+        // Track GUIDs that were updated in place (instance already existed
+        // in the tree). These must be excluded from the PatchAdd list to
+        // avoid creating duplicate instances in the tree.
+        let mut updated_in_place: HashSet<Ref> = HashSet::new();
+
         if !request.added.is_empty() {
             let tree = self.serve_session.tree();
             // Pre-compute duplicate sibling info in O(N) for efficient path uniqueness checks
@@ -523,21 +636,28 @@ impl ApiService {
             // Group added instances by parent so siblings share a dedup set.
             // This prevents two instances in the same batch from claiming the
             // same slug when added to the same parent.
-            let mut adds_by_parent: HashMap<Ref, Vec<&crate::web::interface::AddedInstance>> =
-                HashMap::new();
-            for added in request.added.values() {
+            let mut adds_by_parent: HashMap<
+                Ref,
+                Vec<(Ref, &crate::web::interface::AddedInstance)>,
+            > = HashMap::new();
+            for (guid, added) in &request.added {
                 if let Some(parent_ref) = added.parent {
-                    adds_by_parent.entry(parent_ref).or_default().push(added);
+                    adds_by_parent
+                        .entry(parent_ref)
+                        .or_default()
+                        .push((*guid, added));
                 } else {
-                    // No parent — process individually (will fail with context)
-                    adds_by_parent.entry(Ref::none()).or_default().push(added);
+                    adds_by_parent
+                        .entry(Ref::none())
+                        .or_default()
+                        .push((*guid, added));
                 }
             }
             for (parent_ref, siblings) in &adds_by_parent {
                 // Pre-seed sibling_slugs from the tree's existing children
                 // of this parent so new instances dedup against existing ones.
                 // We derive slugs from actual filesystem paths (via instigating_source)
-                // to correctly account for dedup suffixes (e.g., Hey_Bro~1).
+                // to correctly account for dedup suffixes (e.g., Hey_Bro~2).
                 let mut sibling_slugs: HashSet<String> = if *parent_ref != Ref::none() {
                     if let Some(parent_inst) = tree.get_instance(*parent_ref) {
                         use crate::snapshot::InstigatingSource;
@@ -576,8 +696,8 @@ impl ApiService {
                 } else {
                     HashSet::new()
                 };
-                for added in siblings {
-                    if let Err(err) = self.syncback_added_instance(
+                for (guid, added) in siblings {
+                    match self.syncback_added_instance(
                         added,
                         &tree,
                         &duplicate_siblings_cache,
@@ -585,11 +705,17 @@ impl ApiService {
                         &converted_parents,
                         &mut sibling_slugs,
                     ) {
-                        log::warn!(
-                            "Failed to syncback added instance '{}': {}",
-                            added.name,
-                            err
-                        );
+                        Ok(true) => {
+                            updated_in_place.insert(*guid);
+                        }
+                        Ok(false) => {}
+                        Err(err) => {
+                            log::warn!(
+                                "Failed to syncback added instance '{}': {}",
+                                added.name,
+                                err
+                            );
+                        }
                     }
                 }
             }
@@ -601,6 +727,9 @@ impl ApiService {
         // Build a path map for instances added in this same request.
         // This allows Ref properties in updates to reference just-added
         // instances that aren't in the tree yet (VFS watcher is async).
+        // The segment includes the middleware extension (e.g. .server.luau,
+        // .model.json5) so that Rojo_Ref_* paths match what the filesystem
+        // will actually contain.
         let added_paths: HashMap<Ref, String> = {
             let tree = self.serve_session.tree();
             request
@@ -609,15 +738,15 @@ impl ApiService {
                 .filter_map(|(guid, added)| {
                     let parent_ref = added.parent?;
                     let parent_path = if tree.get_instance(parent_ref).is_some() {
-                        crate::ref_target_path(tree.inner(), parent_ref)
+                        crate::ref_target_path_from_tree(&tree, parent_ref)
                     } else {
                         return None;
                     };
-                    let escaped_name = crate::escape_ref_path_segment(&added.name);
+                    let fs_name = added_instance_fs_segment(added);
                     let path = if parent_path.is_empty() {
-                        escaped_name.into_owned()
+                        fs_name
                     } else {
-                        format!("{}/{}", parent_path, escaped_name)
+                        format!("{}/{}", parent_path, fs_name)
                     };
                     Some((*guid, path))
                 })
@@ -696,9 +825,15 @@ impl ApiService {
         // plugin's GUID is used as the snapshot_id so that apply_patch_set's
         // snapshot_id_to_instance_id map rewrites Ref properties in
         // updated_instances to point to the correct tree IDs.
+        //
+        // Instances that were updated in place (already existed in the tree)
+        // are excluded — adding them would create duplicates. Tree
+        // reconciliation will pick up any property changes from the
+        // filesystem write.
         let added_instances: Vec<PatchAdd> = request
             .added
             .iter()
+            .filter(|(guid, _)| !updated_in_place.contains(guid))
             .filter_map(|(guid, added)| {
                 let parent_ref = added.parent?;
                 Some(PatchAdd {
@@ -708,11 +843,32 @@ impl ApiService {
             })
             .collect();
 
+        let stage_ids: HashSet<Ref> = request.stage_ids.into_iter().collect();
+
+        let paths_to_stage: Vec<PathBuf> = if !stage_ids.is_empty() {
+            let tree = self.serve_session.tree();
+            stage_ids
+                .iter()
+                .filter_map(|&id| {
+                    tree.get_instance(id).and_then(|inst| {
+                        inst.metadata()
+                            .instigating_source
+                            .as_ref()
+                            .map(|src| src.path().to_path_buf())
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         tree_mutation_sender
             .send(PatchSet {
                 removed_instances: actually_removed,
                 added_instances,
                 updated_instances,
+                stage_ids,
+                stage_paths: paths_to_stage,
             })
             .unwrap();
 
@@ -911,7 +1067,7 @@ impl ApiService {
         stats: &crate::syncback::SyncbackStats,
         converted_parents: &HashMap<Ref, PathBuf>,
         sibling_slugs: &mut HashSet<String>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<bool> {
         use anyhow::Context;
 
         // Get the parent Ref (required for top-level added instances)
@@ -947,8 +1103,11 @@ impl ApiService {
                         added.name,
                         existing_path.display()
                     );
-                    // Update the existing instance instead of creating new files
-                    return self.syncback_update_existing_instance(added, existing_path, stats);
+                    // Update the existing instance instead of creating new files.
+                    // Return true to signal caller to skip PatchAdd (instance
+                    // already exists in tree, no need to add a duplicate).
+                    self.syncback_update_existing_instance(added, existing_path, stats)?;
+                    return Ok(true);
                 }
             }
         }
@@ -1048,7 +1207,7 @@ impl ApiService {
         let slug =
             self.syncback_instance_to_path_with_stats(added, &parent_dir, stats, sibling_slugs)?;
         sibling_slugs.insert(slug);
-        Ok(())
+        Ok(false)
     }
 
     /// Update an existing instance in place instead of creating new files.
@@ -1197,14 +1356,10 @@ impl ApiService {
                         new_dir
                     };
 
-                    // Filter duplicate children
-                    let inst_path = format!("{}", existing_path.display());
-                    let unique_children =
-                        self.filter_duplicate_children(&added.children, &inst_path, stats);
-
                     // Process children using normal syncback path
                     // This will use detect_existing_script_format to check existing files
-                    self.process_children_incremental(&unique_children, &children_dir, stats)?;
+                    let children_refs: Vec<_> = added.children.iter().collect();
+                    self.process_children_incremental(&children_refs, &children_dir, stats)?;
                 }
             }
 
@@ -1234,11 +1389,8 @@ impl ApiService {
 
                     // Handle children
                     if !added.children.is_empty() {
-                        let inst_path = format!("{}", existing_path.display());
-                        let unique_children =
-                            self.filter_duplicate_children(&added.children, &inst_path, stats);
-
-                        self.process_children_incremental(&unique_children, existing_path, stats)?;
+                        let children_refs: Vec<_> = added.children.iter().collect();
+                        self.process_children_incremental(&children_refs, existing_path, stats)?;
                     }
                 } else {
                     // It's a standalone file (e.g., .model.json5)
@@ -1654,48 +1806,6 @@ impl ApiService {
         true
     }
 
-    /// Check for duplicate names among children and return the set of unique children
-    /// that should be synced. Records skipped instances via stats tracker.
-    fn filter_duplicate_children<'a>(
-        &self,
-        children: &'a [crate::web::interface::AddedInstance],
-        parent_path: &str,
-        stats: &crate::syncback::SyncbackStats,
-    ) -> Vec<&'a crate::web::interface::AddedInstance> {
-        use std::collections::HashMap;
-
-        // Count occurrences of each name
-        let mut name_counts: HashMap<&str, usize> = HashMap::new();
-        for child in children {
-            *name_counts.entry(&child.name).or_insert(0) += 1;
-        }
-
-        // Find duplicates
-        let duplicates: std::collections::HashSet<&str> = name_counts
-            .iter()
-            .filter(|(_, &count)| count > 1)
-            .map(|(&name, _)| name)
-            .collect();
-
-        // Record skipped duplicates in stats
-        if !duplicates.is_empty() {
-            let mut skipped_count = 0;
-            for child in children {
-                if duplicates.contains(child.name.as_str()) {
-                    skipped_count += 1;
-                }
-            }
-            let duplicate_list: Vec<&str> = duplicates.iter().copied().collect();
-            stats.record_duplicate_names_batch(parent_path, &duplicate_list, skipped_count);
-        }
-
-        // Return only non-duplicate children
-        children
-            .iter()
-            .filter(|child| !duplicates.contains(child.name.as_str()))
-            .collect()
-    }
-
     /// Detects what file format currently exists on disk for a given instance.
     /// This is used to preserve the existing format during partial updates.
     ///
@@ -1819,19 +1929,15 @@ impl ApiService {
         // not filenames with extensions). This ensures file-format instances
         // are correctly detected as collisions.
         let encoded_name = deduplicate_name(&base_name, sibling_slugs);
-        let needs_meta_name = needs_slug || encoded_name != base_name;
+        let needs_meta_name = needs_slug;
         let meta_name_field: Option<&str> = if needs_meta_name {
             Some(&added.name)
         } else {
             None
         };
 
-        // Build path string for stats
-        let inst_path = format!("{}/{}", parent_dir.display(), added.name);
-
-        // Filter out children with duplicate names (cannot reliably sync)
-        let unique_children = self.filter_duplicate_children(&added.children, &inst_path, stats);
-        let has_children = !unique_children.is_empty();
+        let children_refs: Vec<_> = added.children.iter().collect();
+        let has_children = !children_refs.is_empty();
 
         // Determine the appropriate middleware/file format based on class name.
         // This matches the logic in src/syncback/mod.rs::get_best_middleware.
@@ -1887,7 +1993,7 @@ impl ApiService {
                     })?;
                     self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated ModuleScript at {}", init_path.display());
-                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                    self.process_children_incremental(&children_refs, &dir_path, stats)?;
                 } else {
                     let file_path = parent_dir.join(format!("{}.luau", encoded_name));
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
@@ -1937,7 +2043,7 @@ impl ApiService {
                     })?;
                     self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated Script at {}", init_path.display());
-                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                    self.process_children_incremental(&children_refs, &dir_path, stats)?;
                 } else {
                     let file_path =
                         parent_dir.join(format!("{}.{}.luau", encoded_name, script_suffix));
@@ -1987,7 +2093,7 @@ impl ApiService {
                     })?;
                     self.write_script_meta_json_if_needed(&dir_path, added, meta_name_field)?;
                     log::info!("Syncback: Updated LocalScript at {}", init_path.display());
-                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                    self.process_children_incremental(&children_refs, &dir_path, stats)?;
                 } else {
                     let file_path = parent_dir.join(format!("{}.local.luau", encoded_name));
                     fs::write(&file_path, source.as_bytes()).with_context(|| {
@@ -2033,7 +2139,7 @@ impl ApiService {
                 );
 
                 // Recursively process children
-                self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                self.process_children_incremental(&children_refs, &dir_path, stats)?;
             }
 
             // StringValue: .txt file if no children, directory with init.meta.json5 if has children
@@ -2049,7 +2155,7 @@ impl ApiService {
                         "Syncback: Created StringValue directory at {}",
                         dir_path.display()
                     );
-                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                    self.process_children_incremental(&children_refs, &dir_path, stats)?;
                 } else {
                     let value = added
                         .properties
@@ -2103,7 +2209,7 @@ impl ApiService {
                         "Syncback: Created LocalizationTable directory at {}",
                         dir_path.display()
                     );
-                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                    self.process_children_incremental(&children_refs, &dir_path, stats)?;
                 } else {
                     let file_path = parent_dir.join(format!("{}.csv", encoded_name));
                     fs::write(&file_path, content.as_bytes()).with_context(|| {
@@ -2167,7 +2273,7 @@ impl ApiService {
                     );
 
                     // Recursively process children
-                    self.process_children_incremental(&unique_children, &dir_path, stats)?;
+                    self.process_children_incremental(&children_refs, &dir_path, stats)?;
                 } else {
                     let content = self.serialize_instance_to_model_json(added, meta_name_field)?;
                     // Use the detected file path if available (preserves .model.json
@@ -2689,15 +2795,11 @@ impl ApiService {
                 Some(Variant::Ref(target_ref)) => {
                     let attr_name = crate::ref_attribute_name(key);
                     if target_ref.is_none() {
-                        // Null ref: mark attribute for removal
                         remove_attributes.push(attr_name);
                     } else if tree.get_instance(*target_ref).is_some() {
-                        // Valid target: compute path and add as Rojo_Ref_* attribute
-                        let path = crate::ref_target_path(tree.inner(), *target_ref);
+                        let source_abs = crate::ref_target_path_from_tree(tree, update.id);
+                        let target_abs = crate::ref_target_path_from_tree(tree, *target_ref);
 
-                        // Warn if the path is ambiguous (duplicate-named siblings
-                        // at any ancestor level). The ref will still be written,
-                        // but may resolve to the wrong target on rebuild.
                         if !Self::is_ref_path_unique(tree, *target_ref) {
                             log::warn!(
                                 "Ref property '{}' for instance {:?} has an ambiguous \
@@ -2705,24 +2807,24 @@ impl ApiService {
                                  resolve to the wrong target on rebuild.",
                                 key,
                                 update.id,
-                                path
+                                target_abs
                             );
                         }
 
-                        ref_attributes.insert(attr_name, serde_json::Value::String(path));
-                    } else if let Some(path) = added_paths.get(target_ref) {
-                        // Target was added in the same /api/write request.
-                        // It's not in the tree yet (VFS watcher hasn't picked it up),
-                        // but we can compute the path from the AddedInstance data.
+                        let relative = crate::compute_relative_ref_path(&source_abs, &target_abs);
+                        ref_attributes.insert(attr_name, serde_json::Value::String(relative));
+                    } else if let Some(target_abs) = added_paths.get(target_ref) {
+                        let source_abs = crate::ref_target_path_from_tree(tree, update.id);
+                        let relative = crate::compute_relative_ref_path(&source_abs, target_abs);
                         log::info!(
                             "Ref property '{}' for instance {:?}: target {:?} is a \
-                             just-added instance, using pre-computed path '{}'",
+                             just-added instance, computed relative path '{}'",
                             key,
                             update.id,
                             target_ref,
-                            path
+                            relative
                         );
-                        ref_attributes.insert(attr_name, serde_json::Value::String(path.clone()));
+                        ref_attributes.insert(attr_name, serde_json::Value::String(relative));
                     } else {
                         log::warn!(
                             "Cannot persist Ref property '{}' for instance {:?}: \
@@ -2879,6 +2981,7 @@ impl ApiService {
         // additions/removals (which can miss remaining attrs when one is
         // removed from a file that has multiple).
         {
+            let source_abs = crate::ref_target_path_from_tree(tree, update.id);
             let mut index = self.ref_path_index.lock().unwrap();
             index.remove_all_for_file(&written_meta_path);
 
@@ -2888,7 +2991,10 @@ impl ApiService {
                         for (key, value) in attrs {
                             if key.starts_with(crate::REF_PATH_ATTRIBUTE_PREFIX) {
                                 if let Some(path_str) = value.as_str() {
-                                    index.add(path_str, &written_meta_path);
+                                    let resolved =
+                                        crate::resolve_ref_path_to_absolute(path_str, &source_abs)
+                                            .unwrap_or_else(|| path_str.to_string());
+                                    index.add(&resolved, &written_meta_path);
                                 }
                             }
                         }
@@ -3579,6 +3685,85 @@ fn instance_for_scripts_only<'a>(
         children: Cow::Owned(filtered_children),
         metadata,
     }
+}
+
+/// Compute the tentative filesystem name segment for an `AddedInstance`.
+///
+/// Mirrors the logic of `tentative_fs_name` in `ref_properties.rs` but
+/// operates on `AddedInstance` fields instead of `rbx_dom_weak::Instance`.
+/// Used by `added_paths` to build correct same-batch Ref target paths.
+fn added_instance_fs_segment(added: &crate::web::interface::AddedInstance) -> String {
+    let slug = if crate::syncback::name_needs_slugify(&added.name) {
+        crate::syncback::slugify_name(&added.name)
+    } else {
+        added.name.clone()
+    };
+
+    let has_children = !added.children.is_empty();
+
+    let is_container = matches!(
+        added.class_name.as_str(),
+        "Folder" | "Configuration" | "Tool" | "ScreenGui" | "SurfaceGui" | "BillboardGui" | "AdGui"
+    );
+
+    let is_script = matches!(
+        added.class_name.as_str(),
+        "Script" | "LocalScript" | "ModuleScript"
+    );
+
+    if is_container || (has_children && is_script) {
+        return slug;
+    }
+
+    let extension = match added.class_name.as_str() {
+        "Script" => {
+            if has_children {
+                return slug;
+            }
+            match added.properties.get("RunContext") {
+                Some(Variant::Enum(e)) => match e.to_u32() {
+                    0 => "legacy.luau",
+                    1 => "server.luau",
+                    2 => "client.luau",
+                    3 => "plugin.luau",
+                    _ => "legacy.luau",
+                },
+                _ => "legacy.luau",
+            }
+        }
+        "LocalScript" => {
+            if has_children {
+                return slug;
+            }
+            "local.luau"
+        }
+        "ModuleScript" => {
+            if has_children {
+                return slug;
+            }
+            "luau"
+        }
+        "StringValue" => {
+            if has_children {
+                return slug;
+            }
+            "txt"
+        }
+        "LocalizationTable" => {
+            if has_children {
+                return slug;
+            }
+            "csv"
+        }
+        _ => {
+            if has_children {
+                return slug;
+            }
+            "model.json5"
+        }
+    };
+
+    format!("{slug}.{extension}")
 }
 
 #[cfg(test)]
@@ -5460,115 +5645,6 @@ mod tests {
         }
     }
 
-    // =========================================================================
-    // Duplicate Path Detection - Integration Scenarios
-    // =========================================================================
-    mod duplicate_path_integration_tests {
-
-        #[test]
-        fn test_syncback_skips_duplicate_children() {
-            // When syncing back children, duplicates should be skipped
-            // This test verifies the filter_duplicate_children logic
-
-            let children_names = ["ChildA", "ChildB", "ChildA", "ChildC"];
-            let unique: Vec<_> = children_names
-                .iter()
-                .filter(|&&name| children_names.iter().filter(|&&n| n == name).count() == 1)
-                .collect();
-
-            assert_eq!(unique.len(), 2, "ChildB and ChildC should be kept");
-            assert!(unique.contains(&&"ChildB"));
-            assert!(unique.contains(&&"ChildC"));
-        }
-
-        #[test]
-        fn test_recursive_duplicate_handling() {
-            // Test that duplicates at any level are handled
-            //
-            // Parent/
-            //   ├─ Child1/
-            //   │    ├─ GrandChild (duplicate)
-            //   │    └─ GrandChild (duplicate)
-            //   └─ Child2/
-            //        └─ GrandChild (unique within its parent)
-
-            let child1_grandchildren = ["GrandChild", "GrandChild"];
-            let child2_grandchildren = ["GrandChild"];
-
-            // Child1's grandchildren have duplicates
-            let child1_filtered: Vec<_> = child1_grandchildren
-                .iter()
-                .filter(|&&name| child1_grandchildren.iter().filter(|&&n| n == name).count() == 1)
-                .collect();
-            assert_eq!(
-                child1_filtered.len(),
-                0,
-                "Child1's duplicate grandchildren filtered"
-            );
-
-            // Child2's grandchild is unique
-            let child2_filtered: Vec<_> = child2_grandchildren
-                .iter()
-                .filter(|&&name| child2_grandchildren.iter().filter(|&&n| n == name).count() == 1)
-                .collect();
-            assert_eq!(child2_filtered.len(), 1, "Child2's unique grandchild kept");
-        }
-
-        #[test]
-        fn test_duplicate_log_message_format() {
-            // Verify the expected log message format for skipped duplicates
-            let class_name = "ModuleScript";
-            let full_name = "game.ReplicatedStorage.DuplicateScript";
-
-            let expected_msg = format!(
-                "Skipped instance '{}' ({}) - path contains duplicate-named siblings (cannot reliably sync)",
-                full_name, class_name
-            );
-
-            assert!(expected_msg.contains(full_name));
-            assert!(expected_msg.contains(class_name));
-            assert!(expected_msg.contains("duplicate-named siblings"));
-        }
-
-        #[test]
-        fn test_parent_path_validation() {
-            // When pulling an instance, we must verify the parent path is unique
-            // This simulates the is_tree_path_unique check
-
-            // Scenario: Trying to add a script under a folder that has duplicate siblings
-            let parent_path_levels = [
-                ("Root", vec!["FolderA", "FolderA"]), // Duplicate at this level!
-            ];
-
-            let path_unique = parent_path_levels
-                .iter()
-                .all(|(target, siblings)| siblings.iter().filter(|&&s| s == *target).count() == 1);
-
-            assert!(
-                !path_unique,
-                "Parent path with duplicates should fail validation"
-            );
-        }
-
-        #[test]
-        fn test_valid_parent_path() {
-            // Valid parent path with no duplicates at any level
-            let parent_path_levels = [
-                (
-                    "ReplicatedStorage",
-                    vec!["Workspace", "ReplicatedStorage", "ServerStorage"],
-                ),
-                ("Shared", vec!["Shared", "Client", "Server"]),
-            ];
-
-            let path_unique = parent_path_levels
-                .iter()
-                .all(|(target, siblings)| siblings.iter().filter(|&&s| s == *target).count() == 1);
-
-            assert!(path_unique, "Valid parent path should pass validation");
-        }
-    }
-
     // Tests for syncback_removed_instance
     mod syncback_removed_tests {
         use crate::snapshot::{InstanceMetadata, InstanceSnapshot, RojoTree};
@@ -6402,7 +6478,7 @@ mod tests {
                 instance_name.to_string()
             };
             let deduped = deduplicate_name(&base, &taken);
-            let needs_meta = needs_slug || deduped != base;
+            let needs_meta = needs_slug;
 
             fs::create_dir(temp.path().join(&deduped)).unwrap();
 
@@ -6440,7 +6516,7 @@ mod tests {
                     name.to_string()
                 };
                 let deduped = deduplicate_name(&base, &taken);
-                let needs_meta = needs_slug || deduped != base;
+                let needs_meta = needs_slug;
                 taken.insert(deduped.to_lowercase());
                 let meta = if needs_meta {
                     Some(name.to_string())
@@ -6464,8 +6540,8 @@ mod tests {
         #[test]
         fn dir_clean_name_collides_with_existing() {
             let (f, m) = simulate_dir_dedup(&["NewFolder"], "NewFolder");
-            assert_eq!(f, "NewFolder~1");
-            assert_eq!(m.unwrap(), "NewFolder");
+            assert_eq!(f, "NewFolder~2");
+            assert!(m.is_none(), "dedup-only: forward sync strips ~N");
         }
 
         #[test]
@@ -6478,22 +6554,22 @@ mod tests {
         #[test]
         fn dir_forbidden_collides_with_existing() {
             let (f, m) = simulate_dir_dedup(&["Hey_Bro"], "Hey/Bro");
-            assert_eq!(f, "Hey_Bro~1");
+            assert_eq!(f, "Hey_Bro~2");
             assert_eq!(m.unwrap(), "Hey/Bro");
         }
 
         #[test]
         fn dir_natural_collides_with_slug() {
             let (f, m) = simulate_dir_dedup(&["A_B"], "A_B");
-            assert_eq!(f, "A_B~1");
-            assert_eq!(m.unwrap(), "A_B");
+            assert_eq!(f, "A_B~2");
+            assert!(m.is_none(), "dedup-only: forward sync strips ~N");
         }
 
         #[test]
         fn dir_case_insensitive_collision() {
             let (f, m) = simulate_dir_dedup(&["MyFolder"], "myfolder");
-            assert_eq!(f, "myfolder~1");
-            assert_eq!(m.unwrap(), "myfolder");
+            assert_eq!(f, "myfolder~2");
+            assert!(m.is_none(), "dedup-only: forward sync strips ~N");
         }
 
         #[test]
@@ -6518,7 +6594,7 @@ mod tests {
         #[test]
         fn dir_dangerous_suffix_collides() {
             let (f, m) = simulate_dir_dedup(&["config_meta"], "config.meta");
-            assert_eq!(f, "config_meta~1");
+            assert_eq!(f, "config_meta~2");
             assert_eq!(m.unwrap(), "config.meta");
         }
 
@@ -6532,7 +6608,7 @@ mod tests {
         #[test]
         fn dir_nul_collides_with_existing() {
             let (f, _) = simulate_dir_dedup(&["NUL_"], "NUL");
-            assert_eq!(f, "NUL_~1");
+            assert_eq!(f, "NUL_~2");
         }
 
         // ── Batch add: directory siblings ─────────────────────────────
@@ -6551,24 +6627,24 @@ mod tests {
             let r = simulate_dir_batch(&[], &["Script", "Script", "Script"]);
             assert_eq!(r[0].0, "Script");
             assert!(r[0].1.is_none());
-            assert_eq!(r[1].0, "Script~1");
-            assert_eq!(r[1].1.as_deref(), Some("Script"));
-            assert_eq!(r[2].0, "Script~2");
+            assert_eq!(r[1].0, "Script~2");
+            assert!(r[1].1.is_none(), "dedup-only: forward sync strips ~N");
+            assert_eq!(r[2].0, "Script~3");
         }
 
         #[test]
         fn batch_dir_slug_collision_siblings() {
             let r = simulate_dir_batch(&[], &["X/Y", "X:Y", "X*Y"]);
             assert_eq!(r[0].0, "X_Y");
-            assert_eq!(r[1].0, "X_Y~1");
-            assert_eq!(r[2].0, "X_Y~2");
+            assert_eq!(r[1].0, "X_Y~2");
+            assert_eq!(r[2].0, "X_Y~3");
         }
 
         #[test]
         fn batch_dir_with_existing_and_collisions() {
             let r = simulate_dir_batch(&["Utils", "Config"], &["Utils", "Config", "NewThing"]);
-            assert_eq!(r[0].0, "Utils~1");
-            assert_eq!(r[1].0, "Config~1");
+            assert_eq!(r[0].0, "Utils~2");
+            assert_eq!(r[1].0, "Config~2");
             assert_eq!(r[2].0, "NewThing");
             assert!(r[2].1.is_none());
         }
@@ -6577,8 +6653,8 @@ mod tests {
         fn batch_dir_dangerous_then_natural_then_slug() {
             let r = simulate_dir_batch(&[], &["foo.server", "foo_server", "foo/server"]);
             assert_eq!(r[0].0, "foo_server");
-            assert_eq!(r[1].0, "foo_server~1");
-            assert_eq!(r[2].0, "foo_server~2");
+            assert_eq!(r[1].0, "foo_server~2");
+            assert_eq!(r[2].0, "foo_server~3");
         }
 
         #[test]
@@ -6586,9 +6662,9 @@ mod tests {
             let r = simulate_dir_batch(&[], &["CON", "CON_", "con"]);
             assert_eq!(r[0].0, "CON_");
             assert_eq!(r[0].1.as_deref(), Some("CON"));
-            assert_eq!(r[1].0, "CON_~1");
-            assert_eq!(r[1].1.as_deref(), Some("CON_"));
-            assert_eq!(r[2].0, "con_~2");
+            assert_eq!(r[1].0, "CON_~2");
+            assert!(r[1].1.is_none(), "dedup-only: natural CON_ needs no meta");
+            assert_eq!(r[2].0, "con_~3");
             assert_eq!(r[2].1.as_deref(), Some("con"));
         }
 
@@ -6596,8 +6672,8 @@ mod tests {
         fn batch_dir_empty_names() {
             let r = simulate_dir_batch(&[], &["", "", ""]);
             assert_eq!(r[0].0, "instance");
-            assert_eq!(r[1].0, "instance~1");
-            assert_eq!(r[2].0, "instance~2");
+            assert_eq!(r[1].0, "instance~2");
+            assert_eq!(r[2].0, "instance~3");
         }
 
         #[test]
@@ -6606,7 +6682,7 @@ mod tests {
             let r = simulate_dir_batch(&[], &children);
             assert_eq!(r[0].0, "Spam");
             for (i, entry) in r.iter().enumerate().skip(1) {
-                assert_eq!(entry.0, format!("Spam~{i}"));
+                assert_eq!(entry.0, format!("Spam~{}", i + 1));
             }
             let unique: HashSet<String> = r.iter().map(|(f, _)| f.to_lowercase()).collect();
             assert_eq!(unique.len(), 20);
@@ -6622,7 +6698,7 @@ mod tests {
             let taken: HashSet<String> = ["foo".to_string()].into_iter().collect();
             // Bare slug "Foo" matches "foo" in taken
             let deduped = deduplicate_name("Foo", &taken);
-            assert_eq!(deduped, "Foo~1", "bare slug collides with existing sibling");
+            assert_eq!(deduped, "Foo~2", "bare slug collides with existing sibling");
         }
 
         #[test]
@@ -6633,7 +6709,7 @@ mod tests {
             let slug = slugify_name("Hey/Bro");
             assert_eq!(slug, "Hey_Bro");
             let deduped = deduplicate_name(&slug, &taken);
-            assert_eq!(deduped, "Hey_Bro~1", "slug collision correctly detected");
+            assert_eq!(deduped, "Hey_Bro~2", "slug collision correctly detected");
         }
 
         // ── Rename → re-add cycle (the critical slug safety test) ────
@@ -6684,7 +6760,7 @@ mod tests {
         #[test]
         fn dir_add_to_populated_no_overwrite() {
             // Dir has: Helper/ and Helper.meta.json5
-            // Add new "Helper" dir → must get Helper~1
+            // Add new "Helper" dir → must get Helper~2
             let temp = tempdir().expect("Failed to create temp dir");
             fs::create_dir(temp.path().join("Helper")).unwrap();
             File::create(temp.path().join("Helper.meta.json5"))
@@ -6700,7 +6776,7 @@ mod tests {
                 .collect();
 
             let deduped = deduplicate_name("Helper", &taken);
-            assert_eq!(deduped, "Helper~1");
+            assert_eq!(deduped, "Helper~2");
         }
 
         // ── Nightmare batch scenarios ────────────────────────────────
@@ -6713,15 +6789,15 @@ mod tests {
                     "A/B", "A:B", "A*B", "A?B", "A<B", "A>B", "A|B", "A\\B", "A\"B",
                 ],
             );
-            assert_eq!(r[0].0, "A_B~1");
-            assert_eq!(r[1].0, "A_B~2");
-            assert_eq!(r[2].0, "A_B~3");
-            assert_eq!(r[3].0, "A_B~4");
-            assert_eq!(r[4].0, "A_B~5");
-            assert_eq!(r[5].0, "A_B~6");
-            assert_eq!(r[6].0, "A_B~7");
-            assert_eq!(r[7].0, "A_B~8");
-            assert_eq!(r[8].0, "A_B~9");
+            assert_eq!(r[0].0, "A_B~2");
+            assert_eq!(r[1].0, "A_B~3");
+            assert_eq!(r[2].0, "A_B~4");
+            assert_eq!(r[3].0, "A_B~5");
+            assert_eq!(r[4].0, "A_B~6");
+            assert_eq!(r[5].0, "A_B~7");
+            assert_eq!(r[6].0, "A_B~8");
+            assert_eq!(r[7].0, "A_B~9");
+            assert_eq!(r[8].0, "A_B~10");
         }
 
         #[test]
@@ -6729,16 +6805,16 @@ mod tests {
             let r = simulate_dir_batch(&[], &["CON", "PRN", "CON/", "PRN/"]);
             assert_eq!(r[0].0, "CON_");
             assert_eq!(r[1].0, "PRN_");
-            assert_eq!(r[2].0, "CON_~1"); // "CON/" slug "CON_" collides
-            assert_eq!(r[3].0, "PRN_~1");
+            assert_eq!(r[2].0, "CON_~2"); // "CON/" slug "CON_" collides
+            assert_eq!(r[3].0, "PRN_~2");
         }
 
         #[test]
         fn batch_dir_unicode_plus_forbidden() {
             let r = simulate_dir_batch(&[], &["カフェ/Bar", "カフェ:Bar", "カフェ_Bar"]);
             assert_eq!(r[0].0, "カフェ_Bar");
-            assert_eq!(r[1].0, "カフェ_Bar~1");
-            assert_eq!(r[2].0, "カフェ_Bar~2");
+            assert_eq!(r[1].0, "カフェ_Bar~2");
+            assert_eq!(r[2].0, "カフェ_Bar~3");
         }
 
         #[test]

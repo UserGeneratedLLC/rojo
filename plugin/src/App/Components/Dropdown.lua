@@ -36,10 +36,7 @@ function Dropdown:didUpdate(prevProps)
 		})
 	end
 
-	self.openMotor:setGoal(Flipper.Spring.new(self.state.open and 1 or 0, {
-		frequency = 6,
-		dampingRatio = 1.1,
-	}))
+	self.openMotor:setGoal(Flipper.Instant.new(self.state.open and 1 or 0))
 end
 
 function Dropdown:render()

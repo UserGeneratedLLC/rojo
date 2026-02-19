@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     path::Path,
 };
 
@@ -21,8 +21,8 @@ use crate::{
     },
     snapshot_middleware::Middleware,
     syncback::{
-        filter_properties, inst_path, name_needs_slugify, slugify_name, strip_middleware_extension,
-        FsSnapshot, SyncbackReturn, SyncbackSnapshot,
+        filter_properties, inst_path, name_needs_slugify, slugify_name, FsSnapshot, SyncbackReturn,
+        SyncbackSnapshot,
     },
     variant_eq::variant_eq,
     RojoRef,
@@ -584,30 +584,101 @@ pub fn syncback_project<'sync>(
             project_node_property_syncback_no_path(snapshot, new_inst, node);
         }
 
+        // Detect duplicate children using case-insensitive comparison.
+        // Project KEYS are unique by JSON definition; only filesystem children
+        // under project nodes may collide. Duplicates are skipped with a warning
+        // for now -- the dedup system (Phase 1c/1d) will handle them properly.
+        let mut new_duplicate_names: HashSet<String> = HashSet::new();
+        {
+            let mut seen: HashSet<String> = HashSet::new();
+            for child_ref in new_inst.children() {
+                let child = snapshot
+                    .get_new_instance(*child_ref)
+                    .expect("all children of Instances should be in new DOM");
+                let lower = child.name.to_lowercase();
+                if !seen.insert(lower.clone()) {
+                    new_duplicate_names.insert(lower);
+                }
+            }
+        }
+        if !new_duplicate_names.is_empty() {
+            let parent_path = inst_path(snapshot.new_tree(), new_inst.referent());
+            for child_ref in new_inst.children() {
+                let child = snapshot
+                    .get_new_instance(*child_ref)
+                    .expect("all children of Instances should be in new DOM");
+                if new_duplicate_names.contains(&child.name.to_lowercase()) {
+                    log::warn!(
+                        "Skipping duplicate-named child '{}' under ProjectNode '{}' -- \
+                        cannot reliably sync yet. Full path: {}/{}",
+                        child.name,
+                        parent_path,
+                        parent_path,
+                        child.name
+                    );
+                }
+            }
+        }
         for child_ref in new_inst.children() {
             let child = snapshot
                 .get_new_instance(*child_ref)
                 .expect("all children of Instances should be in new DOM");
-            if new_child_map.insert(&child.name, child).is_some() {
-                let parent_path = inst_path(snapshot.new_tree(), new_inst.referent());
-                anyhow::bail!(
-                    "Instances that are direct children of an Instance that is made by a project file \
-                    must have a unique name.\nThe child '{}' is duplicated in the place file.\n\
-                    Full path: {}/{}", child.name, parent_path, child.name
-                );
+            if !new_duplicate_names.contains(&child.name.to_lowercase()) {
+                new_child_map.insert(&child.name, child);
+            }
+        }
+
+        // Project children with $path are expected in the old DOM (loaded
+        // from their own path) AND may also appear as filesystem children of
+        // the parent's scanned directory. Exclude them from duplicate
+        // detection so the project child loop below can match them.
+        let project_path_child_names: HashSet<String> = node
+            .children
+            .iter()
+            .filter(|(_, child_node)| child_node.path.is_some())
+            .map(|(name, _)| name.to_lowercase())
+            .collect();
+
+        let mut old_duplicate_names: HashSet<String> = HashSet::new();
+        {
+            let mut seen: HashSet<String> = HashSet::new();
+            for child_ref in old_inst.children() {
+                let child = snapshot
+                    .get_old_instance(*child_ref)
+                    .expect("all children of Instances should be in old DOM");
+                let lower = child.name().to_lowercase();
+                if project_path_child_names.contains(&lower) {
+                    continue;
+                }
+                if !seen.insert(lower.clone()) {
+                    old_duplicate_names.insert(lower);
+                }
+            }
+        }
+        if !old_duplicate_names.is_empty() {
+            let parent_path = inst_path(snapshot.old_tree(), old_inst.id());
+            for child_ref in old_inst.children() {
+                let child = snapshot
+                    .get_old_instance(*child_ref)
+                    .expect("all children of Instances should be in old DOM");
+                if old_duplicate_names.contains(&child.name().to_lowercase()) {
+                    log::warn!(
+                        "Skipping duplicate-named child '{}' under ProjectNode '{}' -- \
+                        cannot reliably sync yet. Full path: {}/{}",
+                        child.name(),
+                        parent_path,
+                        parent_path,
+                        child.name()
+                    );
+                }
             }
         }
         for child_ref in old_inst.children() {
             let child = snapshot
                 .get_old_instance(*child_ref)
                 .expect("all children of Instances should be in old DOM");
-            if old_child_map.insert(child.name(), child).is_some() {
-                let parent_path = inst_path(snapshot.old_tree(), old_inst.id());
-                anyhow::bail!(
-                    "Instances that are direct children of an Instance that is made by a project file \
-                    must have a unique name.\nThe child '{}' is duplicated on the file system.\n\
-                    Full path: {}/{}", child.name(), parent_path, child.name()
-                );
+            if !old_duplicate_names.contains(&child.name().to_lowercase()) {
+                old_child_map.insert(child.name(), child);
             }
         }
 
@@ -654,33 +725,27 @@ pub fn syncback_project<'sync>(
         // All of the children in this loop are by their nature not in the
         // project, so we just need to run syncback on them.
         //
-        // Track taken names (bare slugs) per parent directory so siblings
-        // under the same parent deduplicate against each other.
+        // Track taken names (full filesystem name components, lowercased)
+        // per parent directory so siblings under the same parent deduplicate
+        // against each other using filesystem-level collision detection.
         let mut taken_names_per_dir: std::collections::HashMap<
             std::path::PathBuf,
             std::collections::HashSet<String>,
         > = std::collections::HashMap::new();
 
-        // Pre-seed taken_names from old children's actual filesystem dedup keys
-        // so that new-only children correctly dedup against existing siblings.
-        // We derive keys from relevant_paths (the real filename on disk) rather
-        // than slugifying instance names, because an old instance may already
-        // have a tilde suffix (e.g. A_B~1.luau from prior dedup) that the bare
-        // slug wouldn't capture.
-        // Only in incremental mode: in clean mode, old_ref is forced to None
-        // for all children, so every child is treated as new and pre-seeding
-        // would cause false collisions (spurious ~1 suffixes).
+        // Pre-seed taken_names from old children's actual filesystem names
+        // (full filename including extension) so that new-only children
+        // correctly dedup against existing siblings.
         if snapshot.data.is_incremental() {
             if let Some(parent_path) = ref_to_path_map.get(&new_inst.referent()) {
                 let taken = taken_names_per_dir.entry(parent_path.clone()).or_default();
                 for old_child in old_child_map.values() {
                     if let Some(path) = old_child.metadata().relevant_paths.first() {
                         if let Some(filename) = path.file_name().and_then(|f| f.to_str()) {
-                            let middleware =
-                                old_child.metadata().middleware.unwrap_or(Middleware::Dir);
-                            let dedup_key =
-                                strip_middleware_extension(filename, middleware).to_lowercase();
-                            taken.insert(dedup_key);
+                            // Use the full filename (including extension) as the
+                            // dedup key so that "Foo" (dir) and "Foo.server.luau"
+                            // (file) do NOT collide.
+                            taken.insert(filename.to_lowercase());
                         }
                     } else {
                         // Fallback (shouldn't happen for old instances with disk presence)
@@ -698,7 +763,7 @@ pub fn syncback_project<'sync>(
 
         // Sort remaining children by name for deterministic dedup ordering.
         // Without this, HashMap iteration order determines which sibling gets
-        // the base slug vs ~1, causing non-deterministic output across runs.
+        // the base slug vs ~2, causing non-deterministic output across runs.
         let mut remaining_children: Vec<_> = new_child_map.drain().collect();
         remaining_children.sort_by(|(name_a, _), (name_b, _)| name_a.cmp(name_b));
         for (name, new_child) in remaining_children {

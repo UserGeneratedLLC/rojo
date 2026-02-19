@@ -7,11 +7,7 @@ expression: src/project_json.project.json5
   tree: {
     $className: "Color3Value",
     $properties: {
-      Value: [
-        1337,
-        -1337,
-        1337
-      ]
+      Value: [ 1337, -1337, 1337 ]
     }
   }
 }

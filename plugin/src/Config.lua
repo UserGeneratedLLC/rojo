@@ -26,7 +26,7 @@ return strict("Config", {
 	isDevBuild = isDevBuild,
 	codename = "Epiphany",
 	version = realVersion,
-	expectedServerVersionString = ("%d.%d or newer"):format(realVersion[1], realVersion[2]),
+	expectedServerVersionString = ("%d.%d.%d"):format(realVersion[1], realVersion[2], realVersion[3]),
 	protocolVersion = 6,
 	defaultHost = "localhost",
 	defaultPort = "34873",

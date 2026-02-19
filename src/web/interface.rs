@@ -27,6 +27,60 @@ pub(crate) const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// Current protocol version, which is required to match.
 pub const PROTOCOL_VERSION: u64 = 6;
 
+/// Metadata for a single service in the live syncback request.
+///
+/// Children are NOT stored here -- they live in the top-level `data` blob
+/// (a single rbxm containing all children from all services).
+///
+/// Each service's range in the blob is `child_count + ref_target_count`
+/// consecutive entries. The first `child_count` are real children (parented
+/// to the service). The next `ref_target_count` are ObjectValue carriers
+/// whose `Value` property holds a Ref to the actual target.
+///
+/// `refs` maps property names to 1-based indices into the carrier subrange
+/// (NOT the full service range). Index 1 = first carrier, index 2 = second,
+/// etc. Index 0 or out-of-range values are ignored (treated as nil).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceChunk {
+    pub class_name: String,
+    #[serde(default)]
+    pub child_count: u32,
+    #[serde(default)]
+    pub ref_target_count: u32,
+    #[serde(default)]
+    pub properties: HashMap<String, Variant>,
+    #[serde(default)]
+    pub refs: HashMap<String, u32>,
+}
+
+/// Incoming request from the plugin for live syncback.
+/// Numeric fields use `f64` because Luau has no integer type -- all numbers
+/// are IEEE 754 doubles, and large values (like place IDs) get encoded as
+/// msgpack float64 which rmp_serde cannot coerce into u64.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncbackRequest {
+    pub protocol_version: f64,
+    pub server_version: String,
+    pub place_id: Option<f64>,
+    #[serde(with = "serde_bytes", default)]
+    pub data: Vec<u8>,
+    pub services: Vec<ServiceChunk>,
+}
+
+/// Payload passed from the API handler to the serve loop after validation.
+#[derive(Debug)]
+pub struct SyncbackPayload {
+    pub data: Vec<u8>,
+    pub services: Vec<ServiceChunk>,
+}
+
+/// Why the live server exited its accept loop.
+pub enum ServerExitReason {
+    SyncbackRequested(SyncbackPayload),
+}
+
 /// Message returned by Rojo API when a change has occurred.
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -152,6 +206,16 @@ fn property_filter(value: Option<&Variant>) -> bool {
     ty != Some(VariantType::SharedString)
 }
 
+/// Git-related metadata sent to the plugin for smart sync direction defaults.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitMetadata {
+    pub changed_ids: Vec<Ref>,
+    /// SHA1 hashes of prior versions (git blob format) for changed script instances.
+    /// Contains 1-2 hashes per script: HEAD version and staged version (if different).
+    pub script_committed_hashes: HashMap<Ref, Vec<String>>,
+}
+
 /// Response body from /api/rojo
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -202,6 +266,8 @@ pub struct ServerInfoResponse {
     /// Services not in this list should be ignored during sync operations.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub visible_services: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_metadata: Option<GitMetadata>,
 }
 
 // Serialize place IDs as f64 to avoid msgpack uint64 encoding issues with Lua
@@ -287,6 +353,9 @@ pub struct WriteRequest {
     #[serde(default)]
     pub added: HashMap<Ref, AddedInstance>,
     pub updated: Vec<InstanceUpdate>,
+    /// Instance IDs whose backing files should be staged via git add.
+    #[serde(default)]
+    pub stage_ids: Vec<Ref>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

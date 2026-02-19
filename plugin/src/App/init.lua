@@ -1,7 +1,25 @@
 local ChangeHistoryService = game:GetService("ChangeHistoryService")
 local Players = game:GetService("Players")
+local SerializationService = game:GetService("SerializationService")
 local ServerStorage = game:GetService("ServerStorage")
 local RunService = game:GetService("RunService")
+
+local SYNCBACK_SERVICES = {
+	"Lighting",
+	"MaterialService",
+	"ReplicatedFirst",
+	"ReplicatedStorage",
+	"ServerScriptService",
+	"ServerStorage",
+	"SoundService",
+	"StarterGui",
+	"StarterPack",
+	"StarterPlayer",
+	"Teams",
+	"TextChatService",
+	"VoiceChatService",
+	"Workspace",
+}
 
 local Rojo = script:FindFirstAncestor("Rojo")
 local Plugin = Rojo.Plugin
@@ -27,8 +45,13 @@ local ignorePlaceIds = require(Plugin.ignorePlaceIds)
 local timeUtil = require(Plugin.timeUtil)
 local Theme = require(script.Theme)
 
+local Http = require(Packages.Http)
+
+local encodeService = require(Plugin.ChangeBatcher.encodeService)
+
 local Page = require(script.Page)
 local Notifications = require(script.Components.Notifications)
+local TextButton = require(script.Components.TextButton)
 local Tooltip = require(script.Components.Tooltip)
 local StudioPluginAction = require(script.Components.Studio.StudioPluginAction)
 local StudioToolbar = require(script.Components.Studio.StudioToolbar)
@@ -604,6 +627,72 @@ function App:useRunningConnectionInfo()
 	self.setPort(port)
 end
 
+function App:performSyncback()
+	self:setState({ showingSyncbackConfirm = false })
+
+	local host = self.host:getValue()
+	local port = self.port:getValue()
+
+	if host == "" then
+		host = Config.defaultHost
+	end
+	if port == "" then
+		port = Config.defaultPort
+	end
+
+	local services = {}
+	local allChildren = {}
+	local allCarriers = {}
+	for _, className in SYNCBACK_SERVICES do
+		local ok, service = pcall(game.FindService, game, className)
+		if ok and service then
+			local chunk, refTargets = encodeService(service)
+			for _, child in service:GetChildren() do
+				table.insert(allChildren, child)
+			end
+			for _, carrier in refTargets do
+				table.insert(allChildren, carrier)
+				table.insert(allCarriers, carrier)
+			end
+			table.insert(services, chunk)
+		end
+	end
+
+	local data = buffer.create(0)
+	if #allChildren > 0 then
+		data = SerializationService:SerializeInstancesAsync(allChildren)
+	end
+
+	for _, carrier in allCarriers do
+		carrier:Destroy()
+	end
+
+	local url = ("http://%s:%s/api/syncback"):format(host, port)
+	local body = Http.msgpackEncode({
+		protocolVersion = Config.protocolVersion,
+		serverVersion = Config.expectedServerVersionString,
+		placeId = game.PlaceId,
+		data = data,
+		services = services,
+	})
+
+	Http.post(url, body)
+		:andThen(function()
+			Log.info("Syncback data sent to server.")
+			self:addNotification({
+				text = "Syncback data sent. Server is processing.",
+				timeout = 10,
+			})
+		end)
+		:catch(function(err)
+			Log.warn("Syncback failed: " .. tostring(err))
+			self:addNotification({
+				text = "Syncback failed: " .. tostring(err),
+				timeout = 10,
+			})
+		end)
+end
+
 function App:startSession()
 	-- If a session is already in progress, tear it down first.
 	-- In one-shot mode the sync lock is skipped, so this is the only guard
@@ -653,10 +742,12 @@ function App:startSession()
 		})
 	end)
 
+	local cachedServerInfo = nil
+
 	self.cleanupPrecommit = serveSession:hookPrecommit(function(patch, instanceMap)
-		-- Build new tree for patch
+		local gitMetadata = cachedServerInfo and cachedServerInfo.gitMetadata
 		self:setState({
-			patchTree = PatchTree.build(patch, instanceMap, { "Property", "Old", "New" }),
+			patchTree = PatchTree.build(patch, instanceMap, { "Property", "Old", "New" }, gitMetadata),
 		})
 	end)
 	self.cleanupPostcommit = serveSession:hookPostcommit(function(patch, instanceMap, unappliedPatch)
@@ -790,6 +881,8 @@ function App:startSession()
 	local initialSyncConfirmed = false
 
 	serveSession:setConfirmCallback(function(instanceMap, patch, serverInfo)
+		cachedServerInfo = serverInfo
+
 		-- Filter out the DataModel name change from the patch
 		-- The project name (DataModel.Name) is managed by Studio independently
 		PatchSet.removeDataModelName(patch, instanceMap)
@@ -864,7 +957,12 @@ function App:startSession()
 		})
 		self:setState({
 			appStatus = AppStatus.Confirming,
-			patchTree = PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" }),
+			patchTree = PatchTree.build(
+				patch,
+				instanceMap,
+				{ "Property", "Current", "Incoming" },
+				serverInfo.gitMetadata
+			),
 			confirmData = {
 				serverInfo = serverInfo,
 			},
@@ -914,8 +1012,9 @@ function App:startSession()
 		-- Update the patchTree when new changes arrive during confirmation
 		-- The changedIds parameter contains IDs of items that were modified
 		-- so their selections can be reset (user must re-review)
+		local gitMetadata = cachedServerInfo and cachedServerInfo.gitMetadata
 		self:setState({
-			patchTree = PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" }),
+			patchTree = PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" }, gitMetadata),
 			changedIds = changedIds, -- Pass to UI so it can unselect changed items
 		})
 	end)
@@ -1027,6 +1126,12 @@ function App:render()
 							self:startSession()
 						end,
 
+						onSyncback = function()
+							self:setState({
+								showingSyncbackConfirm = true,
+							})
+						end,
+
 						onNavigateSettings = function()
 							self.backPage = AppStatus.NotConnected
 							self:setState({
@@ -1045,7 +1150,19 @@ function App:render()
 							self.confirmationBindable:Fire("Abort")
 						end,
 						onConfirm = function(selections)
-							self.confirmationBindable:Fire({ type = "Confirm", selections = selections })
+							local autoSelectedIds = {}
+							if self.state.patchTree then
+								self.state.patchTree:forEach(function(node)
+									if node.patchType and node.defaultSelection ~= nil then
+										autoSelectedIds[node.id] = true
+									end
+								end)
+							end
+							self.confirmationBindable:Fire({
+								type = "Confirm",
+								selections = selections,
+								autoSelectedIds = autoSelectedIds,
+							})
 						end,
 					}),
 
@@ -1107,6 +1224,90 @@ function App:render()
 							self:closeNotification(id)
 						end,
 					}),
+				}),
+			}),
+
+			SyncbackConfirm = e(Theme.StudioProvider, nil, {
+				e(StudioPluginGui, {
+					id = "Atlas_SyncbackConfirm",
+					title = "⚠️ Full Syncback (BETA) ⚠️",
+					active = self.state.showingSyncbackConfirm == true,
+					isEphemeral = true,
+
+					initDockState = Enum.InitialDockState.Float,
+					overridePreviousState = true,
+					floatingSize = Vector2.new(400, 250),
+					minimumSize = Vector2.new(300, 220),
+
+					zIndexBehavior = Enum.ZIndexBehavior.Sibling,
+
+					onClose = function()
+						self:setState({ showingSyncbackConfirm = false })
+					end,
+				}, {
+					Content = Theme.with(function(theme)
+						local noTransparency = Roact.createBinding(0)
+
+						return e("Frame", {
+							Size = UDim2.fromScale(1, 1),
+							BackgroundColor3 = theme.BackgroundColor,
+							BorderSizePixel = 0,
+						}, {
+							Padding = e("UIPadding", {
+								PaddingLeft = UDim.new(0, 16),
+								PaddingRight = UDim.new(0, 16),
+								PaddingTop = UDim.new(0, 16),
+								PaddingBottom = UDim.new(0, 16),
+							}),
+							Layout = e("UIListLayout", {
+								FillDirection = Enum.FillDirection.Vertical,
+								SortOrder = Enum.SortOrder.LayoutOrder,
+								Padding = UDim.new(0, 16),
+								VerticalAlignment = Enum.VerticalAlignment.Center,
+							}),
+							Message = e("TextLabel", {
+								Text = "This will overwrite your project files with the current Studio state. This cannot be undone.\n\nNote: Live syncback produces slightly different formatting than CLI syncback (atlas syncback). This may cause minor git diffs even when the data is identical. Pick one method and stick with it to avoid unnecessary churn.",
+								TextWrapped = true,
+								FontFace = theme.Font.Main,
+								TextSize = theme.TextSize.Body,
+								TextColor3 = theme.TextColor,
+								Size = UDim2.new(1, 0, 0, 0),
+								AutomaticSize = Enum.AutomaticSize.Y,
+								BackgroundTransparency = 1,
+								LayoutOrder = 1,
+							}),
+							Buttons = e("Frame", {
+								Size = UDim2.new(1, 0, 0, 34),
+								BackgroundTransparency = 1,
+								LayoutOrder = 2,
+							}, {
+								Layout = e("UIListLayout", {
+									HorizontalAlignment = Enum.HorizontalAlignment.Right,
+									FillDirection = Enum.FillDirection.Horizontal,
+									SortOrder = Enum.SortOrder.LayoutOrder,
+									Padding = UDim.new(0, 10),
+								}),
+								Cancel = e(TextButton, {
+									text = "Cancel",
+									style = "Bordered",
+									transparency = noTransparency,
+									layoutOrder = 1,
+									onClick = function()
+										self:setState({ showingSyncbackConfirm = false })
+									end,
+								}),
+								Confirm = e(TextButton, {
+									text = "Syncback",
+									style = "Danger",
+									transparency = noTransparency,
+									layoutOrder = 2,
+									onClick = function()
+										self:performSyncback()
+									end,
+								}),
+							}),
+						})
+					end),
 				}),
 			}),
 

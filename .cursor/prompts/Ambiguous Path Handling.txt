@@ -1,0 +1,350 @@
+Ambiguous Path Handling
+
+We're looking to finally add support for Ambiguous Paths.
+
+Naming
+* Duplicate file names are saved as ~1, ~2 etc - an expansion of the slugify system.
+ - ~1, ~2 suffixes: the existing deduplicate_name() in file_names.rs already does this. But currently it's only used for slug collisions (e.g., What?Script and What_Script both slugify to What_Script). I'm proposing to extend it to true duplicate names. The meta name field then stores the real name.
+ - Note: `~` is in SLUGIFY_CHARS, so instance names naturally containing `~` get it replaced with `_` BEFORE dedup runs. "Foo~1" (natural name) slugifies to "Foo_1", which is always distinct from the dedup suffix "Foo~1". This invariant is already tested in file_names.rs.
+* Name field will be populated in the meta/model definitions
+* IMPORTANT: Matching groups and dedup groups are DIFFERENT concepts with different grouping criteria:
+ - Matching groups (for pairing instances during sync): built by true Instance.Name. Two siblings with the same Name are in the same matching group regardless of ClassName. Used by the matching algorithm in all three locations.
+ - Dedup groups (for filesystem ~N suffixes): built by the FILESYSTEM SLUG that the middleware would produce. Only apply ~N suffixes when the filesystem representation would actually collide. A Folder "Foo" (becomes Foo/) and a Script "Foo" (becomes Foo.server.luau) do NOT collide on disk and do NOT need dedup suffixes. Two Folders both named "Foo" DO collide (both become Foo/) and need dedup. The dedup key is the lowercased final filesystem path component (slug + extension or directory name) that the middleware assigns.
+ - Init-style collisions: when a directory-style instance (Folder) and an init-style instance (Script with children) both want the same directory name, they DO collide -- apply dedup suffixes to the directories (Foo/ and Foo~1/). The middleware must compute whether each instance would be a directory or file BEFORE dedup grouping runs.
+ - In short: compute what each instance's filesystem name WOULD be (via middleware rules), group by lowercased collision on that name, then apply ~N suffixes within each collision group.
+* Suffix cleanup is GAP-TOLERANT: when a dedup'd sibling is deleted, do NOT renumber remaining suffixes to fill gaps. If you have Attachment, Attachment~1, Attachment~2 and delete ~1, keep Attachment and Attachment~2 as-is. Gaps are harmless and avoiding renumbering prevents cascading file renames + mass ref path updates.
+ - The ONE exception: when the dedup group shrinks to exactly 1 remaining instance, remove its suffix entirely (rename to clean name). This keeps the filesystem clean for the common case. The ref path update system must handle this single rename.
+ - If the base-name holder (no suffix) is deleted and multiple remain, the lowest-numbered suffix (~1, or ~2 if ~1 is already gone) is promoted to base name. This is the only rename that occurs on deletion besides the group→1 cleanup.
+* Base-name assignment: the matching algorithm should preserve existing filesystem assignments. Whichever instance currently holds the base name (no suffix) on disk keeps it when updating. New instances get the next available ~N suffix. In clean syncback (no existing files), Roblox child order determines base-name assignment (first child in the DOM children list gets the base name).
+* Tiebreaker ordering: when the matching algorithm has tied candidates (identical similarity scores), Roblox child order (Instance:GetChildren() index on plugin side, DOM child order on Rust side) is the canonical tiebreaker for deterministic results.
+* VFS event handling: when change_processor renames files for dedup suffix cleanup (e.g., Attachment~1 → Attachment after base-name holder deleted), tag these as self-initiated renames. compute_patch_set should recognize and ignore self-initiated VFS events to prevent feedback loops.
+
+Refs
+* PREREQUISITE: Ref resolution must happen BEFORE the matching algorithm runs. Ref resolution is cheap on the Rust side (pointer lookups). On the Lua plugin side, reading Ref properties from Studio instances requires pcall (some instances have restricted access) -- still fast but add error handling. Missing or invalid Refs should log a warning and default to nil -- don't error, don't block matching.
+* FILE FORMAT: Keep the Rojo_Ref_* attribute prefix with slug paths. Ref paths are stored as attributes: `Rojo_Ref_PrimaryPart: "Workspace/Model.model.json5/Attachment~1"`. Each path segment is the FULL FILESYSTEM NAME of the instance (slug + dedup suffix + extension for files, directory name + dedup suffix for directories). Examples:
+ - Folder "Foo" (directory) → segment `"Foo"`
+ - ModuleScript "Foo" → segment `"Foo.luau"`
+ - Script "Foo" (server) → segment `"Foo.server.luau"`
+ - Script "Foo" with children (init-style directory) → segment `"Foo"`
+ - Dedup'd ModuleScript "Foo" → segment `"Foo~1.luau"`
+ This guarantees ref path segments are always unique among siblings (because filesystem names are unique). The tradeoff: ref paths are coupled to middleware/extension choices, so script type transitions (ModuleScript→Script changes .luau→.server.luau) and file-to-folder transitions ALSO require ref path updates for all refs passing through that instance. This is additional maintenance but eliminates the ambiguity that extension-free paths would create for same-name siblings with different classes.
+ The path starts from the DataModel's children (DataModel excluded, so `game.Workspace.Model.Part` becomes `"Workspace/Model.model.json5/Part"`). This keeps the existing prefix-based detection (scan for keys starting with `Rojo_Ref_`) which is simple and doesn't require reflection data.
+* NOTE: The Rojo_Ref_* system did NOT exist on origin/master -- it was added on the rbxm-ambiguous branch. So this is effectively a new addition, not a modification. The original Rojo $id / Rojo_Target_* / Rojo_Id system stays for backward compatibility with existing projects. When the slug-path system is available, prefer it. Fall back to the $id system for instances without filesystem backing (see below).
+* The ref path is always unambiguous because each segment is the full filesystem name, which is unique among siblings by definition (filesystem can't have two files/dirs with the same name). Two Folders named "Attachment" become "Attachment" and "Attachment~1" on disk, producing distinct segments. A Folder "Foo" and Script "Foo" produce segments "Foo" and "Foo.server.luau" -- distinct without dedup.
+* Ref path resolution:
+ - Syncback (ref_properties.rs): When writing Rojo_Ref_* attributes, build the ref path from the full filesystem names assigned during syncback (the same names used for files/directories on disk, INCLUDING extensions).
+ - Forward sync (patch_apply.rs): When resolving Rojo_Ref_* paths, walk the tree matching each segment against the full filesystem name of each child (derived from instigating_source filename/dirname). get_instance_by_path() in tree.rs currently resolves using instance names -- it needs a filesystem-name resolver instead. For instances without instigating_source (e.g., inside user .rbxm files, newly added during session), fall back to computing what the filesystem name WOULD be (slugify name + middleware extension).
+ - Forward sync Ref pre-resolution for matching (patch_compute.rs): When pre-resolving Refs before the matching algorithm, try the old RojoTree FIRST (most refs target existing instances). If the path can't be resolved in the old tree (target is a new instance), fall back to walking the snapshot tree. The snapshot is only a subtree (the re-snapshotted directory), so this fallback only works for refs within the same subtree. Refs to new instances outside the current snapshot remain unresolved and are skipped during matching (treated as nil).
+ - Two-way sync (change_processor.rs, api.rs): When the plugin sends a Ref property change, the server receives a UID. The server must compute the slug path for the target to write it to disk. For file-backed instances, derive the slug from instigating_source. For instances without filesystem backing (inside .rbxm files, newly added instances before VFS catches up), fall back to the $id / Rojo_Target_* system instead of slug paths.
+* Cleanup: Remove the escape_ref_path_segment() / split_ref_path() infrastructure in rojo_ref.rs. With filesystem-name-based paths, `/` in instance names is already slugified to `_` by slugify_name(). The `\/` escaping system was needed because the old system used raw instance names -- filesystem-name paths don't need it.
+* IMPORTANT: Any time an instance is moved, renamed, or has its dedup suffix reassigned, ALL Rojo_Ref_* paths across ALL meta/model files that reference that instance (or any of its descendants) must be updated. This includes:
+ - Renames: instance name changes -> slug changes -> all refs to it and its children update
+ - Dedup reassignment: matching algorithm reassigns ~1 to ~2, or suffix removed entirely -> all refs update
+ - Reparenting: instance moves to a different parent -> entire ancestor path changes -> all refs update
+ - Suffix cleanup: dedup suffix removed because sibling was deleted -> all refs update
+ - Script type transitions: ClassName change (e.g., ModuleScript→Script) changes extension (.luau→.server.luau), which changes the ref segment -> all refs through this instance update
+ - File-to-folder transitions: instance gains/loses children, flipping between file (Foo.server.luau) and directory (Foo/) representation -> ref segment changes -> all refs update
+ - The existing RefPathIndex infrastructure tracks which files contain refs to which targets. Extend it to handle all cases above.
+ - Batch ref path writes: when dedup reassignment causes mass ref path updates (many siblings renamed, each referenced by multiple files), collect ALL affected ref updates first, then write all affected files in one batch. This avoids redundant I/O when multiple refs in the same file need updating.
+
+Matching System
+* We need to create a Rust and Lua matching algorithm that produces the same pairing given equivalent instance data. The data shapes differ (Rust: UstrMap<Variant>, Lua: Studio property access via pcall) but the algorithm logic and output must be equivalent.
+* The matching algorithm attempts to assign a list of child instances to the current corresponding state, whether that is the actual Instances in the tree in Roblox Studio or the files on the file system (the dom).
+* It tries it's BEST to find what will effectively requires the fewest number of changes of each child, when duplicates are encountered. Things which are 1:1 can be considered an instant match.
+* You need to consider literally everything about the instance. Name, ClassName, Properties, Attributes, Tags, ITS children, etc. To avoid combinatorial explosion, use a bottom-up subtree hash computed once and cached. The hash infrastructure already exists in syncback/hash/.
+ - Rust side: blake3 (existing infrastructure). Full subtree hash of name+class+sorted property hashes+children hashes.
+ - Lua plugin side: use XXH32 (impl attached at bottom of this file) for the STRUCTURAL subtree fingerprint only (child count + sorted child name+class pairs). Do NOT hash full property values (especially Source) -- the serialize-to-buffer cost dominates. For actual property comparison in Pass 3 similarity scoring, compare properties directly with early-exit ordering: ClassName → Tags → Attributes → scalar properties (numbers, bools, enums) → Source last (most expensive, least likely needed after cheaper signals differentiate).
+ - Hashes are a fast-path signal, NOT a definitive equality proof. If hashes differ → definitely different. If hashes match → very likely identical, score as max similarity. The matching algorithm must not rely solely on hash equality for correctness -- other discriminators (Refs, ClassName, Tags) always participate. This makes 32-bit collision risk irrelevant in practice (ambiguous groups are small, typically 2-10 instances).
+ - Lua-side caching: compute structural fingerprints LAZILY -- only for instances that actually enter Pass 3 (ambiguous groups not resolved by Refs). Cache fingerprints for the duration of the matching call (not across calls). On the Rust side, hash_tree() precomputes all hashes bottom-up in one pass before matching begins -- this is cheap with blake3.
+* Ambiguous groups are built by the TRUE Instance.Name (as finally resolved for each instance). Two siblings with the same true Name are in the same ambiguous group regardless of ClassName. On the plugin/Rust-tree side, Instance.Name / instance.name() is readily available. On the filesystem side, resolving the true Name is non-trivial: it may come from the `name` field in .meta.json5 (if present, overrides filename), the `name` field in .model.json5, or the filename stem after stripping extensions and script suffixes (if no meta override). The matching algorithm must resolve all true Names before it can build groups.
+* The matching algorithm should work in passes (Refs must be pre-resolved before any pass runs -- see Refs section above):
+ - Pass 1: Match all instances that have a unique true Name among their siblings (no ambiguity, O(n)). Within a same-Name group, ClassName is a fast first discriminator for narrowing candidates.
+ - Pass 2: For remaining unmatched instances (same-Name groups), use the pre-resolved Refs as discriminators. Refs are the strongest signal because they carry structural identity -- if instance A has a Ref property pointing to UID-7, and UID-7 was already matched in Pass 1, then we know instance A's Ref "means" something specific. If only one candidate on the other side also has a Ref resolving to that same matched target, that's a near-certain match. On the Rust side, Refs are already resolved to specific Refs in the tree. On the Lua side, Refs sent from the server are literal UIDs that map to specific Studio instances via the instanceMap. Also consider incoming Refs TO these instances (other instances pointing at them) -- if instance X is the only candidate that other already-matched instances reference, that's equally strong signal.
+   - Unmatched Ref targets: if a Ref target is itself in an unmatched ambiguous group (not resolved in Pass 1), treat it as a weaker signal -- compare target names/classes without requiring a confirmed match. Do NOT recursively match the target's group (adds complexity for an extremely rare edge case). If the weaker signal is insufficient, the instance falls through to Pass 3 naturally.
+ - Pass 3: For still-unmatched same-Name groups, use ClassName as a fast discriminator to narrow candidates, then compute pairwise similarity scores (using precomputed subtree hashes on Rust side, direct comparison on Lua side) and greedily assign best-match-first (pick highest score, remove both from pool, repeat).
+* Instances which were extra from the incoming changes are considered NEW and then extra from the existing are considered DELETED
+* The server assigns every instance a unique Ref (UID) in the RojoTree. When the plugin connects, the matching algorithm pairs server UIDs to Studio instances and caches this mapping in the instanceMap. Once matched, that pairing is stable for the duration of the sync session -- the matching algorithm should not reshuffle existing matched pairs unnecessarily. This cache allows subsequent operations (property changes, renames) to be fast lookups rather than re-running the full matching algorithm.
+* We don't need a "UUID" system saved as attributes on instances because of this matching system, even though that would allow this algorithm to work as-is but faster, it's not desired as it adds a lot of bloat.
+* Performance of this is really important. Precompute hashes and resolve Refs once before entering the matching loop. Avoid recomputing anything per-pair in Pass 3 -- all signals should be cached before pairwise comparison begins.
+* FAST PATH: if Pass 1 matches ALL children (no ambiguous groups exist among siblings), skip Passes 2 and 3 entirely. This is the common case -- most parents have uniquely-named children. The fast path makes forward sync (called on every VFS event) effectively free for non-ambiguous subtrees, degrading to the same cost as the current name+class matching.
+* Matching priority within an ambiguous group (same true Name): Refs (pre-resolved -- strongest signal), ClassName, Tags, Attributes, Properties (non-Ref), Children hash.
+* The matching needs to handle partial matches -- instance exists in both but has property changes. In this case, just pick the best of each. If candidates are completely equal (identical similarity scores), use Roblox child order as the deterministic tiebreaker (first in DOM children list / Instance:GetChildren() index wins).
+* Matching should be run in 3 locations. These are 3 SEPARATE IMPLEMENTATIONS of the same algorithm pattern (2 Rust, 1 Lua), NOT shared code. The data shapes are too different to share implementation. Equivalence is guaranteed by shared test vectors (see Testing section), not by code reuse.
+ - hydrate.lua -- plugin connects, matches server virtual instances (encoded properties, UIDs for Refs) to Studio instances (read via pcall, direct Instance Ref pointers). Lua implementation.
+ - compute_patch_set in patch_compute.rs -- VFS event triggers re-snapshot, matches snapshot children (InstanceSnapshot with Rojo_Ref_* as string paths) to tree children (RojoTree instances with Refs as UIDs). Rust implementation #1.
+ - syncback_dir_no_meta in dir.rs -- syncback matches new instance children (WeakDom from Roblox file) to existing filesystem children (WeakDom from old tree). Rust implementation #2.
+* IDEA: We can build a cache progressively by assigning children to specific UIDs. This can help on running time of the algorithm. We need to ensure things don't become stale in this LUT cache. The cache can be built up during actual application. The cache invalidates per-parent when a child is added, removed, or renamed under that parent. During two-way sync, each /api/write mutation should invalidate the affected parent's cache entry. The cache maps parent_ref -> (children_list, match_assignments) and is cheap to rebuild for a single parent.
+
+Syncback:
+* ARCHITECTURAL CHANGE: the current syncback flow processes children one-at-a-time via with_joined_path(). Collision-based dedup requires knowing ALL children's filesystem names before assigning suffixes. This requires restructuring to TWO PASSES:
+ 1. First pass: iterate all children, select middleware for each (get_best_middleware), compute tentative filesystem name (slug + extension or directory name).
+ 2. Second pass: group by lowercased collision on tentative name, assign ~N suffixes within each collision group, then actually process each child with its final dedup'd name.
+ The current with_joined_path() does middleware selection + filename generation + dedup in one call per child. This must be split so dedup grouping has the full picture before any suffix is assigned.
+* Needs to be able to output the duplicate files with ~N dedup suffixes
+* The matching algorithm runs FIRST to pair incoming instances to existing filesystem children. Then files are written/updated based on the pairing:
+ - Matched pairs: update the existing file/directory in place (overwrite content, update meta). The matching algorithm should preserve existing base-name assignments -- whoever held the base name on disk keeps it.
+ - Unmatched incoming instances: create new files (with dedup suffixes if Name collides)
+ - Unmatched existing files: delete them (instance was removed)
+* When a dedup suffix changes (base-name holder deleted → lowest suffix promoted, or group shrinks to 1 → suffix removed), rename the file on disk and update all ref paths that referenced the old slug. Gaps in suffix numbers are left as-is (no renumbering).
+* Clean syncback rebuilds everything from scratch -- matching is only needed in incremental mode to preserve existing file paths where possible. In clean mode, base-name assignment for duplicate names uses Roblox child order (first child in DOM children list gets the base name, second gets ~1, etc.).
+* It should not just keep "adding" more files each time a syncback happens, it needs to CORRECT/UPDATE them, utilizing the matching algorithm
+* When a third duplicate is added (e.g., existing "Attachment" and "Attachment~1", now a third "Attachment" appears), the matching algorithm pairs the two existing ones, and the new one gets "Attachment~2". Existing suffixes are never renumbered.
+
+Forward Sync:
+* When a user edits Attachment~1/init.meta.json5 on disk, the server re-snapshots. The snapshot produces two children both named "Attachment" (from their meta name fields). compute_patch_set must use the matching algorithm to pair them correctly against the tree's existing Attachment instances, rather than greedy first-match which may cross-pair them.
+
+API
+* Leverage the UID we are sending it from the rust side, and vice-versa for newly created instances - make sure those are session persistant and utilized. We need to utilize this to keep things straight when we send data back to the rust side so it knows where to place things.
+* The UID I'm speaking of is the Ref that the server assigns to each instance in the RojoTree. These are sent to the plugin via the API when connecting, and the plugin sends them back for newly created instances. This is the existing system -- no new UID mechanism is needed.
+* Processing order in /api/write: use a two-pass approach. First pass: apply ALL mutations (renames, property changes, adds, removes) to the tree. Second pass: recompute all affected ref slug paths based on the final tree state. This ensures refs always use the newest slugs, even when a rename and a ref update targeting the renamed instance arrive in the same request.
+
+Notes
+* Case-insensitive instances need to be differentiated on the filesystem to properly support all operating systems. On Linux (case-sensitive FS), "Script" and "script" can coexist as separate files, but for cross-platform compatibility they must still be deduped with ~N suffixes. The matching algorithm handles these trivially since the true Names are different.
+* This system needs to work for all sync directions/systems - syncback, two-way sync, forward sync, one-shot, rbxl construction from project, etc.
+* Project file instances: project keys are unique by JSON definition (duplicate keys in JSON/JSON5 are not valid), so project-sourced instances do NOT participate in the dedup system. They always have unique names within their sibling group.
+* Performance target: system must handle large games (10K+ instances) with <100ms latency per operation. Optimization can be deferred but the architecture must not have O(n^2) bottlenecks on the full tree. The matching algorithm should only run on the affected subtree when possible.
+* We need to literally remove the ENTIRE system responsible for blacklisting duplicately named paths on the plugin and in the rust code, it is no longer relevant.
+
+rbxm-ambiguous
+* Additionally, you should review the changes done in the branch rbxm-ambiguous. I'm abandoning that branch, but these two problems are closely related. I don't really ever want projects to have rbxm files being outputted for syncback or two-way sync anymore, but I still want to fully support loading them, but they should also get removed/replaced properly when you do a syncback on clean mode.
+* Best to do a full diff from origin/master
+* We specifically mention / probably want to take these features which were mentioned specifically in this plan:
+ - The plugin relaxations (diff.lua, encodeInstance.lua duplicate-skip removal) -- these are needed regardless of approach
+ - The has_duplicate_children helper and case-insensitive detection
+ - The project.rs case-insensitive duplicate detection. Note: with the dedup-suffix approach, ProjectNode children with duplicate names CAN now be written as individual files with ~N suffixes -- the warn-and-skip guard from the rbxm branch may no longer be needed. The implementer should evaluate whether to remove it or keep it as a safety net.
+ - The roundtrip test improvements (compare_children Vec-based, Tags check)
+ - The macOS ref_properties test ignore
+ - The DuplicateChildrenError typed error pattern (or equivalent)
+* Don't take: ambiguous_container metadata, find_rbxm_container, reserialize_rbxm_container, rbxm fallback block, all ambiguous test fixtures. We are specifically trying to avoid rbxm-ing things.
+* No special transition logic needed for old .rbxm files. Syncback rewrites the filesystem from scratch (clean) or matches instances to existing files (incremental) -- either way, the rbxm just doesn't get recreated. User-intentional .rbxm files that users placed manually in their project still load fine via snapshot_rbxm during forward sync -- that's unchanged.
+
+Sync System Invariants (from audit.md -- these apply to EVERY change in this feature)
+
+* ROUND-TRIP IDENTITY: Syncback (or two-way sync) writes a directory tree. Building an rbxl from that directory tree and forward-syncing it back must produce a bit-identical instance tree -- same names, same classes, same properties, same hierarchy, same ref targets. The dedup system, matching algorithm, and ref path system must ALL preserve this invariant. Any deviation is a bug.
+
+* CLI SYNCBACK PARITY: Plugin-based two-way sync must produce EXACTLY the same filesystem output that `atlas syncback` would give for the same input. Byte-for-byte identical files, identical directory structures, identical naming, identical dedup suffixes. This means the dedup logic, matching algorithm, and ref path computation must be shared or equivalent between the two paths. Any divergence is a bug.
+
+* 4 FILE FORMAT BRANCHES: syncback_updated_properties() in api.rs has 4 branches for writing property changes. The dedup/naming system must work correctly in ALL 4:
+ 1. Directory format: init.meta.json5 inside the instance's directory
+ 2. Standalone script: adjacent ScriptName.meta.json5 (strips .server/.client/.plugin/.local/.legacy suffix from stem)
+ 3. Model file: inline in .model.json5 (writes directly into the file, NOT adjacent meta)
+ 4. Other file types (.txt, .csv, .toml): adjacent FileName.meta.json5
+ Each branch must: compute the correct dedup'd filename, write the correct meta name field, and produce ref paths consistent with the dedup assignment.
+
+* INSTIGATING SOURCE CONSISTENCY: every instance in the RojoTree tracks where it came from via InstigatingSource. When creating files with dedup suffixes, the InstigatingSource path must reflect the dedup'd path (including ~N suffix). Pre-seed taken_names from existing tree children via their instigating_source paths (using strip_middleware_extension), NOT from instance names. This prevents slug collisions with existing files on disk.
+
+* FILE-TO-FOLDER TRANSITIONS: instances can flip between file representation (Foo.server.luau) and directory representation (Foo/init.server.luau + children). This transition changes the dedup group key (file stem vs directory name) and must update:
+ - The dedup suffix (may change or be added/removed)
+ - The meta file location (adjacent → init.meta.json5 inside directory, or vice versa)
+ - All Rojo_Ref_* paths that pass through this instance (slug changes)
+ - The InstigatingSource path
+ Round-trip: adding a child to a file instance then removing it must produce identical filesystem state to the original. Treat any code touching these transitions as high-risk.
+
+* SCRIPT TYPE TRANSITIONS: ClassName changes (ModuleScript → Script) cause file extension changes (.luau → .server.luau). This changes the dedup group key since the filesystem representation changes. A ModuleScript "Foo" (.luau) and Script "Foo" (.server.luau) don't collide -- but if the ModuleScript becomes a Script, it now collides with the existing Script. The dedup system must handle this mid-session during two-way sync.
+
+* DUAL WRITE PATH CONSISTENCY: handle_api_write in api.rs does TWO things: (1) writes files to disk, and (2) sends a PatchSet to the ChangeProcessor to update the in-memory tree. These MUST stay consistent. If the file write uses dedup suffix ~1 but the PatchSet doesn't reflect that, the tree and filesystem diverge silently.
+
+* MULTIPLE PLUGIN ENTRY POINTS: property changes flow through the plugin via TWO separate paths:
+ 1. ChangeBatcher flow (live two-way sync): Instance.Changed → InstanceMap → ChangeBatcher → encodePatchUpdate → ApiContext:write()
+ 2. Confirmation dialog flow (initial sync pull): ServeSession.__confirmAndApplyInitialPatch → encodePatchUpdate → ApiContext:write()
+ Both paths must handle duplicate-named instances correctly. A function modified in path 1 may not have been updated in path 2.
+
+* REVIEW DIALOGUE INVARIANT: No two-way sync change may bypass the review dialogue in Always and Initial sync modes. Dedup suffix renames, ref path updates, and meta file changes triggered by the matching algorithm must all be cataloged in the confirmation UI. No silent application.
+
+* VFS ECHO PREVENTION: the existing suppress_path() system uses per-path counters. For dedup operations: suppress_path() MUST be called before any file write/rename during dedup suffix changes. New instance additions must NOT suppress (VFS watcher needs to pick up new files). The VFS event tagging mentioned in the Naming section should integrate with this existing mechanism.
+
+* ATOMICITY: dedup suffix cleanup involves multiple filesystem operations (rename file, update meta, update ref paths). There is a window where the VFS watcher could fire between operations and snapshot an inconsistent intermediate state. Minimize race windows by ordering operations carefully and using suppress_path() to cover all intermediate states.
+
+* DETERMINISM: given the same instance tree, the dedup system must ALWAYS produce the same filesystem output. Child ordering must be stable (sorted/deterministic), dedup suffix assignment must be deterministic, and generated identifiers must be reproducible. Non-determinism = different builds from same source = git churn = invariant violation.
+
+* COMPOUND FILE EXTENSIONS: .server.luau, .client.luau, .model.json5, .meta.json5, .project.json5 are multi-part extensions. Dedup suffixes are applied to the STEM before the compound extension: Foo~1.server.luau (correct), NOT Foo.server~1.luau. Meta pairing: Foo~1.server.luau pairs with Foo~1.meta.json5 (strip script suffix from stem, then add .meta.json5). The suffix list in change_processor.rs must include all compound parts for rename operations.
+
+Testing
+* This system is extremely critical -- subtle bugs here silently corrupt user projects. Test the hell out of it at every layer: e2e, plugin, api, syncback, forward sync, two-way sync, build, roundtrip.
+* Ensure we try all combinations, folder/meta swaps, etc. Try to make the system conflict with the existing slugify system.
+* Define shared test vectors as structured data (e.g., two lists of instance descriptions -> expected match pairing) that both the Rust and Lua implementations must produce identical results for. This is the strongest guarantee that the two implementations don't diverge.
+* The scenarios below are MINIMUM REQUIRED tests, not exhaustive. The implementer should add additional edge cases they discover during implementation. Think adversarially -- what combinations of operations could break invariants?
+* Specific scenarios to test:
+ - Two identical Folders with same Name (simplest dedup case)
+ - Two Folders same Name, different children (matching must pair correctly by content)
+ - Two Folders same Name, identical content (tiebreaker: Roblox child order wins -- first in DOM children list gets base name)
+ - Folder "Foo" next to Script "Foo" (same Name, different ClassName -- NO dedup suffix because Foo/ and Foo.server.luau don't collide on disk. Both keep clean names.)
+ - Folder "Foo" next to Script "Foo" where Script has children (init-style: Foo/ vs Foo/init.server.luau -- these DO collide, dedup suffix applied)
+ - Instance naturally named "Foo~1" next to two "Foo" instances -- "Foo~1" slugifies to "Foo_1" (tilde replaced with underscore), which is distinct from the dedup suffix "Foo~1". Verify filesystem has Foo/, Foo~1/, Foo_1/ (or Foo_1.server.luau etc.)
+ - Third duplicate added to existing dedup group (no renumbering of existing suffixes)
+ - Dedup suffix cleanup (group→1): only two instances "Foo" and "Foo~1", base deleted, ~1 renamed to clean "Foo" (group shrank to 1)
+ - Gap tolerance: three instances Foo, Foo~1, Foo~2 -- delete ~1 -- verify Foo and Foo~2 remain unchanged (no renumbering)
+ - Base-name promotion: three instances Foo, Foo~1, Foo~2 -- delete Foo (base) -- lowest suffix ~1 promoted to base name, ~2 stays as ~2
+ - Gap tolerance with refs: Foo~2 has refs pointing to it, ~1 deleted, verify Foo~2's refs are untouched (no path changes since no rename occurred)
+ - Idempotency: syncback twice produces identical filesystem output
+ - Roundtrip: syncback -> build -> compare trees
+* Ref path integrity tests (CRITICAL -- refs becoming stale/broken is the highest-risk failure mode):
+ - Basic ref survives syncback: Model.PrimaryPart points to a Part, syncback writes the ref path, build resolves it back to the same Part. Roundtrip identity preserved.
+ - Ref to a dedup'd instance: PrimaryPart points to "Attachment~1". Syncback writes the slug path. Build resolves it correctly (not to the other Attachment).
+ - Ref survives gap-tolerant deletion: Three "Attachment" instances (Attachment, Attachment~1, Attachment~2). Delete the middle one (~1). Attachment and Attachment~2 remain unchanged -- NO ref path updates needed. Verify all Rojo_Ref_* paths still resolve correctly.
+ - Ref survives base-name promotion: Three "Attachment" instances. Delete the base (Attachment). Attachment~1 is promoted to base name "Attachment". ALL Rojo_Ref_* paths that pointed to the old "Attachment~1" must now say "Attachment". Attachment~2 is unchanged. Verify by building.
+ - Ref survives group→1 cleanup: Two "Attachment" instances (Attachment, Attachment~1). Delete Attachment. Attachment~1 renamed to Attachment (group shrank to 1). ALL Rojo_Ref_* paths must update. Verify.
+ - Ref survives rename: Instance "Foo" is renamed to "Bar". All ref paths containing "Foo" segment must update to "Bar". Verify across meta files, model files, and project files.
+ - Ref survives reparent: Instance moves from Parent_A to Parent_B. The entire ancestor path changes. All ref paths must update. Verify.
+ - Ref to deeply nested instance through multiple dedup layers: A/B~1/C/D~2 where both B and D have dedup suffixes. Ref resolves correctly through the full chain.
+ - Cross-file ref update: File_A.meta.json5 has a ref to an instance whose slug changes. File_B.model.json5 also has a ref to the same instance. BOTH files must be updated. Verify by reading both files after the operation.
+ - Ref to instance that gets deleted: Ref path points to an instance that no longer exists after syncback. Should resolve to nil, not crash, not point to wrong instance.
+ - Ref path with instance whose natural name contains tilde: Instance named "Foo~1" (real name). Slug is "Foo_1" (tilde slugified). If there are also two "Foo" instances, filesystem has Foo/, Foo~1/ (dedup), Foo_1/ (slugified). Ref to the "Foo~1" instance uses slug path "Parent/Foo_1". Verify the resolver finds the correct instance.
+ - Two-way sync ref update: Plugin sends a property change that triggers a dedup suffix reassignment on the server. Server must update all Rojo_Ref_* paths in affected files AND the patch sent back to the plugin must reflect the correct ref targets.
+ - Concurrent ref + rename in same batch: In a single /api/write request, one instance is renamed (changing its slug) and another instance has a Ref property update pointing to the renamed instance. The ref path must use the NEW slug, not the old one.
+ - Forward sync ref resolution after manual edit: User manually edits a ref path in a meta file on disk (changes "Part/Attachment~1" to "Part/Attachment~2"). Server re-snapshots and resolves the ref. Verify it points to the correct instance or logs a warning if invalid.
+ - Fallback to $id system: Instance inside a user .rbxm file has no instigating_source. Ref to this instance should use the $id/Rojo_Target_* system, not a slug path. Verify the ref resolves correctly after build.
+ - Mass ref update stress test: 50+ instances all referencing the same target. Target gets renamed. All 50 Rojo_Ref_* paths must update. Verify none are missed.
+* Matching algorithm tests (CRITICAL -- wrong pairing silently corrupts projects):
+ - Matching with ClassName discriminator: two "Part" instances, one is Part and one is MeshPart. Match by ClassName in Pass 1 (unique within same-Name group per class).
+ - Matching with Ref discriminator: two identical Folders "Data", one has a Ref from an ObjectValue pointing to it. Match via Ref in Pass 2.
+ - Matching with property similarity: two Scripts "Handler" with different Source. Match the one with closer Source in Pass 3.
+ - Matching stability: run matching on same input twice, verify identical pairing both times.
+ - Matching preserves existing pairings: during two-way sync, matched pairs should not reshuffle when a new sibling is added.
+ - Fast path verification: parent with all uniquely-named children skips Passes 2-3 entirely (verify via timing or instrumentation).
+* Dedup group collision tests:
+ - Folder "Foo" + ModuleScript "Foo" → no collision (Foo/ vs Foo.luau), no dedup suffix
+ - Folder "Foo" + Folder "Foo" → collision (both Foo/), dedup applied
+ - Script "Foo" (server) + Script "Foo" (client) → no collision (Foo.server.luau vs Foo.client.luau), no dedup suffix
+ - Script "Foo" (server) + Script "Foo" (server) → collision (both Foo.server.luau), dedup applied
+ - ModuleScript "Foo" + ModuleScript "Foo" → collision (both Foo.luau), dedup applied
+ - Instance "Foo?" + Instance "Foo*" → both slugify to "Foo_", filesystem collision, dedup applied. Different matching groups (different true names) but same dedup group (same slug).
+ - Instance "Foo" + Instance "foo" → case-insensitive collision on Windows/macOS, dedup applied for cross-platform safety.
+* Cross-system integration tests:
+ - Full roundtrip with duplicates: create place with duplicate-named instances → syncback → build → compare trees bit-for-bit
+ - Incremental syncback after rename: syncback, rename one duplicate in Studio, syncback again -- verify correct file is updated (not the wrong sibling)
+ - Two-way sync add duplicate: during live sync, add a third instance with same name -- verify correct ~N suffix assigned and refs intact
+ - Two-way sync delete from middle: during live sync, delete an instance from a dedup group -- verify gap tolerance (no renumbering)
+ - Forward sync edit dedup'd file: edit Attachment~1/init.meta.json5 on disk -- verify compute_patch_set pairs it to the correct tree instance
+ - Slugify + dedup interaction: instance named "What?Script" alongside "What_Script" alongside another "What?Script" -- first two slugify to same thing, third is a true duplicate of the first. Verify all three get correct unique filesystem names and refs resolve.
+ - Project file + filesystem duplicates: project defines child "Foo" via $path, filesystem sibling also named "Foo" -- project key wins (unique by definition), filesystem child coexists without dedup.
+* Sync invariant tests (from audit.md concepts):
+ - CLI syncback parity: run CLI syncback on a place with duplicates, then run two-way sync on the same place -- verify byte-identical filesystem output. Any divergence is a bug.
+ - 4 file format branches: verify dedup works for (1) directory with init.meta.json5, (2) standalone script with adjacent .meta.json5, (3) model file with inline name, (4) .txt/.csv with adjacent .meta.json5. Each must produce correct dedup'd names and meta name fields.
+ - Compound extension dedup: Script~1.server.luau pairs with Script~1.meta.json5 (not Script.server~1.luau or Script~1.server.meta.json5). Verify meta pairing is correct.
+ - InstigatingSource after dedup: verify that instances written with ~N suffixes have InstigatingSource::Path pointing to the dedup'd path (e.g., src/Foo~1.server.luau, not src/Foo.server.luau).
+ - File-to-folder transition with dedup: Script "Foo" (flat, Foo.server.luau) gets a child added → becomes Foo/init.server.luau. If another "Foo" folder already exists, dedup suffix must be applied to the new directory. All ref paths must update.
+ - Script type transition in dedup group: ModuleScript "Foo" and Script "Foo" don't collide (Foo.luau vs Foo.server.luau). Change ModuleScript to Script → now both are .server.luau → dedup collision created mid-session. Verify dedup suffix added and refs updated.
+ - Dual write path consistency: during /api/write, verify the file written to disk uses the same dedup suffix as the PatchSet sent to ChangeProcessor. Kill the server mid-sync and verify build from filesystem matches the in-memory tree state.
+ - Review dialogue with dedup: in Always sync mode, adding a duplicate-named instance shows the dedup assignment in the confirmation UI before applying.
+ - Atomicity: rename Attachment~1 to Attachment (suffix cleanup) while VFS watcher is active. Verify no intermediate state is snapshotted where both Attachment and Attachment~1 exist or neither exists.
+ - Determinism: build the same project 3 times from scratch -- verify all 3 outputs are bit-identical. No non-deterministic suffix assignment or child ordering.
+ - Idempotency: syncback twice on same input with no changes in between -- verify zero filesystem modifications on second run.
+ - Pre-seeded dedup: add a new instance "Foo" to a parent that already has Foo.server.luau on disk. Verify taken_names is seeded from instigating_source paths and the new instance gets ~1 (not overwriting the existing file).
+
+This is a large refactor, and I may be missing some critical details in this - ask many questions to make sure there is no ambiguity.
+
+
+
+XXH32.luau:
+
+--!strict
+--!optimize 2
+--!native
+
+local function XXH32(Message: buffer, Seed: number?): number
+	local PRIME_1, PRIME_1_HIGH, PRIME_1_LOW = 0x9e3779B1, 40503, 31153
+	local PRIME_2, PRIME_2_HIGH, PRIME_2_LOW = 0x85ebca77, 34283, 51831
+	local PRIME_3_HIGH, PRIME_3_LOW = 49842, 44605
+	local PRIME_4_HIGH, PRIME_4_LOW = 10196, 60207
+	local PRIME_5, PRIME_5_HIGH, PRIME_5_LOW = 0x165667b1, 5718, 26545
+
+	local UsedSeed = Seed or 0
+	local MessageLength = buffer.len(Message)
+	local Digest: number
+	local CurrentOffset = 0
+
+	if MessageLength >= 16 then
+		local Accumulator1 = UsedSeed + PRIME_1 + PRIME_2
+		local Accumulator2 = UsedSeed + PRIME_2
+		local Accumulator3 = UsedSeed
+		local Accumulator4 = UsedSeed - PRIME_1
+
+		while CurrentOffset <= MessageLength - 16 do
+			local Word1 = buffer.readu32(Message, CurrentOffset)
+			local Word2 = buffer.readu32(Message, CurrentOffset + 4)
+			local Word3 = buffer.readu32(Message, CurrentOffset + 8)
+			local Word4 = buffer.readu32(Message, CurrentOffset + 12)
+
+			local AHigh1, ALow1 = bit32.rshift(Word1, 16), bit32.band(Word1, 65535)
+			local Mult1 = bit32.lshift((AHigh1 * PRIME_2_LOW) + (ALow1 * PRIME_2_HIGH), 16) + (ALow1 * PRIME_2_LOW)
+
+			local Temp1 = bit32.lrotate(Accumulator1 + Mult1, 13)
+			local AHigh1_2, ALow1_2 = bit32.rshift(Temp1, 16), bit32.band(Temp1, 65535)
+			Accumulator1 = bit32.lshift((AHigh1_2 * PRIME_1_LOW) + (ALow1_2 * PRIME_1_HIGH), 16) + (ALow1_2 * PRIME_1_LOW)
+
+			local AHigh2, ALow2 = bit32.rshift(Word2, 16), bit32.band(Word2, 65535)
+			local Mult2 = bit32.lshift((AHigh2 * PRIME_2_LOW) + (ALow2 * PRIME_2_HIGH), 16) + (ALow2 * PRIME_2_LOW)
+
+			local Temp2 = bit32.lrotate(Accumulator2 + Mult2, 13)
+			local AHigh2_2, ALow2_2 = bit32.rshift(Temp2, 16), bit32.band(Temp2, 65535)
+			Accumulator2 = bit32.lshift((AHigh2_2 * PRIME_1_LOW) + (ALow2_2 * PRIME_1_HIGH), 16) + (ALow2_2 * PRIME_1_LOW)
+
+			local AHigh3, ALow3 = bit32.rshift(Word3, 16), bit32.band(Word3, 65535)
+			local Mult3 = bit32.lshift((AHigh3 * PRIME_2_LOW) + (ALow3 * PRIME_2_HIGH), 16) + (ALow3 * PRIME_2_LOW)
+
+			local Temp3 = bit32.lrotate(Accumulator3 + Mult3, 13)
+			local AHigh3_2, ALow3_2 = bit32.rshift(Temp3, 16), bit32.band(Temp3, 65535)
+			Accumulator3 = bit32.lshift((AHigh3_2 * PRIME_1_LOW) + (ALow3_2 * PRIME_1_HIGH), 16) + (ALow3_2 * PRIME_1_LOW)
+
+			local AHigh4, ALow4 = bit32.rshift(Word4, 16), bit32.band(Word4, 65535)
+			local Mult4 = bit32.lshift((AHigh4 * PRIME_2_LOW) + (ALow4 * PRIME_2_HIGH), 16) + (ALow4 * PRIME_2_LOW)
+
+			local Temp4 = bit32.lrotate(Accumulator4 + Mult4, 13)
+			local AHigh4_2, ALow4_2 = bit32.rshift(Temp4, 16), bit32.band(Temp4, 65535)
+			Accumulator4 = bit32.lshift((AHigh4_2 * PRIME_1_LOW) + (ALow4_2 * PRIME_1_HIGH), 16) + (ALow4_2 * PRIME_1_LOW)
+
+			CurrentOffset += 16
+		end
+
+		Digest = bit32.lrotate(Accumulator1, 1) + bit32.lrotate(Accumulator2, 7) + bit32.lrotate(Accumulator3, 12) + bit32.lrotate(Accumulator4, 18)
+	else
+		Digest = UsedSeed + PRIME_5
+	end
+
+	Digest += MessageLength
+
+	while CurrentOffset <= MessageLength - 4 do
+		if CurrentOffset + 4 <= buffer.len(Message) then
+			local Word = buffer.readu32(Message, CurrentOffset)
+
+			local AHigh_w, ALow_w = bit32.rshift(Word, 16), bit32.band(Word, 65535)
+			local Mult_w = bit32.lshift((AHigh_w * PRIME_3_LOW) + (ALow_w * PRIME_3_HIGH), 16) + (ALow_w * PRIME_3_LOW)
+
+			Digest += Mult_w
+
+			local Rotated = bit32.lrotate(Digest, 17)
+			local AHigh_r, ALow_r = bit32.rshift(Rotated, 16), bit32.band(Rotated, 65535)
+			Digest = bit32.lshift((AHigh_r * PRIME_4_LOW) + (ALow_r * PRIME_4_HIGH), 16) + (ALow_r * PRIME_4_LOW)
+		end
+		CurrentOffset += 4
+	end
+
+	while CurrentOffset < MessageLength do
+		if CurrentOffset < buffer.len(Message) then
+			local ByteValue = buffer.readu8(Message, CurrentOffset)
+
+			local AHigh_b, ALow_b = bit32.rshift(ByteValue, 16), bit32.band(ByteValue, 65535)
+			local Mult_b = bit32.lshift((AHigh_b * PRIME_5_LOW) + (ALow_b * PRIME_5_HIGH), 16) + (ALow_b * PRIME_5_LOW)
+
+			Digest += Mult_b
+
+			local Rotated_b = bit32.lrotate(Digest, 11)
+			local AHigh_rb, ALow_rb = bit32.rshift(Rotated_b, 16), bit32.band(Rotated_b, 65535)
+			Digest = bit32.lshift((AHigh_rb * PRIME_1_LOW) + (ALow_rb * PRIME_1_HIGH), 16) + (ALow_rb * PRIME_1_LOW)
+		end
+		CurrentOffset += 1
+	end
+
+	local XorResult1 = bit32.bxor(Digest, bit32.rshift(Digest, 15))
+	local AHigh_f1, ALow_f1 = bit32.rshift(XorResult1, 16), bit32.band(XorResult1, 65535)
+	Digest = bit32.lshift((AHigh_f1 * PRIME_2_LOW) + (ALow_f1 * PRIME_2_HIGH), 16) + (ALow_f1 * PRIME_2_LOW)
+
+	local XorResult2 = bit32.bxor(Digest, bit32.rshift(Digest, 13))
+	local AHigh_f2, ALow_f2 = bit32.rshift(XorResult2, 16), bit32.band(XorResult2, 65535)
+	Digest = bit32.lshift((AHigh_f2 * PRIME_3_LOW) + (ALow_f2 * PRIME_3_HIGH), 16) + (ALow_f2 * PRIME_3_LOW)
+
+	return bit32.bxor(Digest, bit32.rshift(Digest, 16))
+end
+
+return XXH32

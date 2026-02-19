@@ -12,135 +12,10 @@ local getProperty = require(script.Parent.getProperty)
 local Error = require(script.Parent.Error)
 local decodeValue = require(script.Parent.decodeValue)
 
+local trueEquals = require(script.Parent.trueEquals)
+
 local function isEmpty(table)
 	return next(table) == nil
-end
-
--- Finds duplicate names among children and returns a set of names that are duplicated
-local function findDuplicateNames(
-	children: { Instance } | { string },
-	virtualInstances: { [string]: any }?
-): { [string]: boolean }
-	local nameCounts: { [string]: number } = {}
-	local duplicates: { [string]: boolean } = {}
-
-	for _, child in children do
-		local name: string
-		if typeof(child) == "Instance" then
-			name = child.Name
-		elseif virtualInstances then
-			-- child is a virtual instance ID
-			local virtualChild = virtualInstances[child]
-			name = virtualChild and virtualChild.Name or ""
-		else
-			continue
-		end
-
-		nameCounts[name] = (nameCounts[name] or 0) + 1
-		if nameCounts[name] > 1 then
-			duplicates[name] = true
-		end
-	end
-
-	return duplicates
-end
-
-local function fuzzyEq(a: number, b: number, epsilon: number): boolean
-	local diff = math.abs(a - b)
-	-- Use both absolute and relative epsilon for better precision handling
-	-- Absolute: for small numbers near zero
-	-- Relative: for larger numbers where absolute epsilon is too tight
-	local maxVal = math.max(math.abs(a), math.abs(b), 1)
-	return diff < epsilon or diff < maxVal * epsilon
-end
-
-local function trueEquals(a, b): boolean
-	-- Exit early for simple equality values
-	if a == b then
-		return true
-	end
-
-	-- Treat nil and { Ref = "000...0" } as equal
-	if
-		(a == nil and type(b) == "table" and b.Ref == "00000000000000000000000000000000")
-		or (b == nil and type(a) == "table" and a.Ref == "00000000000000000000000000000000")
-	then
-		return true
-	end
-
-	local typeA, typeB = typeof(a), typeof(b)
-
-	-- For tables, try recursive deep equality
-	if typeA == "table" and typeB == "table" then
-		local checkedKeys = {}
-		for key, value in a do
-			checkedKeys[key] = true
-			if not trueEquals(value, b[key]) then
-				return false
-			end
-		end
-		for key, value in b do
-			if checkedKeys[key] then
-				continue
-			end
-			if not trueEquals(value, a[key]) then
-				return false
-			end
-		end
-		return true
-
-	-- For NaN, check if both values are not equal to themselves
-	elseif a ~= a and b ~= b then
-		return true
-
-	-- For numbers, compare with epsilon of 0.0001 to avoid floating point inequality
-	elseif typeA == "number" and typeB == "number" then
-		return fuzzyEq(a, b, 0.0001)
-
-	-- For EnumItem->number, compare the EnumItem's value
-	elseif typeA == "number" and typeB == "EnumItem" then
-		return a == b.Value
-	elseif typeA == "EnumItem" and typeB == "number" then
-		return a.Value == b
-
-	-- For Color3s, compare to RGB ints to avoid floating point inequality
-	elseif typeA == "Color3" and typeB == "Color3" then
-		local aR, aG, aB = math.floor(a.R * 255), math.floor(a.G * 255), math.floor(a.B * 255)
-		local bR, bG, bB = math.floor(b.R * 255), math.floor(b.G * 255), math.floor(b.B * 255)
-		return aR == bR and aG == bG and aB == bB
-
-	-- For CFrames, compare to components with epsilon of 0.0001 to avoid floating point inequality
-	elseif typeA == "CFrame" and typeB == "CFrame" then
-		local aComponents, bComponents = { a:GetComponents() }, { b:GetComponents() }
-		for i, aComponent in aComponents do
-			if not fuzzyEq(aComponent, bComponents[i], 0.0001) then
-				return false
-			end
-		end
-		return true
-
-	-- For Vector3s, compare to components with epsilon of 0.0001 to avoid floating point inequality
-	elseif typeA == "Vector3" and typeB == "Vector3" then
-		local aComponents, bComponents = { a.X, a.Y, a.Z }, { b.X, b.Y, b.Z }
-		for i, aComponent in aComponents do
-			if not fuzzyEq(aComponent, bComponents[i], 0.0001) then
-				return false
-			end
-		end
-		return true
-
-	-- For Vector2s, compare to components with epsilon of 0.0001 to avoid floating point inequality
-	elseif typeA == "Vector2" and typeB == "Vector2" then
-		local aComponents, bComponents = { a.X, a.Y }, { b.X, b.Y }
-		for i, aComponent in aComponents do
-			if not fuzzyEq(aComponent, bComponents[i], 0.0001) then
-				return false
-			end
-		end
-		return true
-	end
-
-	return false
 end
 
 local function shouldDeleteUnknownInstances(virtualInstance)
@@ -175,12 +50,16 @@ local function shouldDeleteChild(virtualInstance, childInstance)
 	return false
 end
 
+local DIFF_YIELD_INTERVAL = 1000
+
 local function diff(instanceMap, virtualInstances, rootId, serverInfo)
 	local patch = {
 		removed = {},
 		added = {},
 		updated = {},
 	}
+
+	local diffCount = 0
 
 	-- Build a lookup table for visible services (for ignoreHiddenServices check)
 	local visibleServicesSet: { [string]: boolean } = {}
@@ -190,86 +69,9 @@ local function diff(instanceMap, virtualInstances, rootId, serverInfo)
 		end
 	end
 
-	-- Count of locations with duplicate-named siblings
-	local skippedDuplicateCount = 0
-
-	-- Pre-scan to find ALL instances that are in an ambiguous path
-	-- (i.e., they or any of their ancestors have duplicate-named siblings)
-	local ambiguousIds: { [string]: boolean } = {}
-
-	local function markSubtreeAmbiguous(id)
-		if ambiguousIds[id] then
-			return
-		end
-		ambiguousIds[id] = true
-
-		local virtualInstance = virtualInstances[id]
-		if virtualInstance then
-			for _, childId in ipairs(virtualInstance.Children) do
-				markSubtreeAmbiguous(childId)
-			end
-		end
-	end
-
-	-- Recursively scan for duplicates and mark ambiguous subtrees
-	local function scanForDuplicates(id)
-		local virtualInstance = virtualInstances[id]
-		if not virtualInstance then
-			return
-		end
-
-		local instance = instanceMap.fromIds[id]
-
-		-- Detect duplicate names among real DOM children (if instance exists)
-		local realDuplicates: { [string]: boolean } = {}
-		if instance then
-			local realChildren = instance:GetChildren()
-			realDuplicates = findDuplicateNames(realChildren)
-
-			-- Count locations with duplicates
-			if next(realDuplicates) then
-				skippedDuplicateCount += 1
-			end
-		end
-
-		-- Detect duplicate names among virtual DOM children
-		local virtualDuplicates = findDuplicateNames(virtualInstance.Children, virtualInstances)
-
-		-- Merge duplicates from both sides
-		local allDuplicates: { [string]: boolean } = {}
-		for name in realDuplicates do
-			allDuplicates[name] = true
-		end
-		for name in virtualDuplicates do
-			allDuplicates[name] = true
-		end
-
-		-- Mark all children with duplicate names (and their entire subtrees) as ambiguous
-		for _, childId in ipairs(virtualInstance.Children) do
-			local virtualChild = virtualInstances[childId]
-			if virtualChild and allDuplicates[virtualChild.Name] then
-				markSubtreeAmbiguous(childId)
-			end
-		end
-
-		-- Recurse into non-ambiguous children to find deeper duplicates
-		for _, childId in ipairs(virtualInstance.Children) do
-			if not ambiguousIds[childId] then
-				scanForDuplicates(childId)
-			end
-		end
-	end
-
-	-- First pass: scan entire tree to find all ambiguous paths
-	scanForDuplicates(rootId)
-
 	-- Add a virtual instance and all of its descendants to the patch, marked as
-	-- being added. Skip ambiguous instances.
+	-- being added.
 	local function markIdAdded(id)
-		if ambiguousIds[id] then
-			return
-		end
-
 		local virtualInstance = virtualInstances[id]
 		patch.added[id] = virtualInstance
 
@@ -280,11 +82,10 @@ local function diff(instanceMap, virtualInstances, rootId, serverInfo)
 
 	-- Internal recursive kernel for diffing an instance with the given ID.
 	local function diffInternal(id)
-		-- Skip entirely if this instance is in an ambiguous path
-		if ambiguousIds[id] then
-			return true
+		diffCount += 1
+		if diffCount % DIFF_YIELD_INTERVAL == 0 then
+			task.wait()
 		end
-
 		local virtualInstance = virtualInstances[id]
 		local instance = instanceMap.fromIds[id]
 
@@ -387,11 +188,6 @@ local function diff(instanceMap, virtualInstances, rootId, serverInfo)
 
 			local childId = instanceMap.fromInstances[childInstance]
 
-			-- Skip children in ambiguous paths
-			if childId and ambiguousIds[childId] then
-				continue
-			end
-
 			if childId == nil then
 				-- pcall to avoid security permission errors
 				local success, skip = pcall(function()
@@ -400,14 +196,6 @@ local function diff(instanceMap, virtualInstances, rootId, serverInfo)
 					return childInstance.Archivable == false
 				end)
 				if success and skip then
-					continue
-				end
-
-				-- Check if this unmapped child has a duplicate name among siblings
-				-- If so, skip it (we can't reliably determine what to do with it)
-				local siblings = instance:GetChildren()
-				local siblingDuplicates = findDuplicateNames(siblings)
-				if siblingDuplicates[childInstance.Name] then
 					continue
 				end
 
@@ -441,11 +229,6 @@ local function diff(instanceMap, virtualInstances, rootId, serverInfo)
 		-- Traverse the list of children in the virtual DOM. Any virtual
 		-- instance that has no corresponding real instance should be created.
 		for _, childId in ipairs(virtualInstance.Children) do
-			-- Skip children in ambiguous paths
-			if ambiguousIds[childId] then
-				continue
-			end
-
 			local childInstance = instanceMap.fromIds[childId]
 
 			if childInstance == nil then
@@ -459,11 +242,6 @@ local function diff(instanceMap, virtualInstances, rootId, serverInfo)
 	end
 
 	local diffSuccess, err = diffInternal(rootId)
-
-	-- Log count of skipped duplicates
-	if skippedDuplicateCount > 0 then
-		Log.warn("Skipped {} location(s) with duplicate-named siblings (cannot reliably sync)", skippedDuplicateCount)
-	end
 
 	if not diffSuccess then
 		return false, err

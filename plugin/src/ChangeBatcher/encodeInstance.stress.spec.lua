@@ -30,11 +30,10 @@ return function()
 			local root = LargeTreeGenerator.createDeepTree({ depth = 10 })
 			root.Parent = container
 
-			local encoded, skippedCount = encodeInstance(root, "PARENT_ID")
+			local encoded = encodeInstance(root, "PARENT_ID")
 
 			expect(encoded).to.be.ok()
 			expect(encoded.name).to.equal("DeepRoot")
-			expect(skippedCount).to.equal(0)
 
 			-- Verify depth (root + 10 children = 11 total levels)
 			local current = encoded
@@ -52,10 +51,9 @@ return function()
 			local root = LargeTreeGenerator.createDeepTree({ depth = 30 })
 			root.Parent = container
 
-			local encoded, skippedCount = encodeInstance(root, "PARENT_ID")
+			local encoded = encodeInstance(root, "PARENT_ID")
 
 			expect(encoded).to.be.ok()
-			expect(skippedCount).to.equal(0)
 
 			root:Destroy()
 		end)
@@ -66,11 +64,10 @@ return function()
 			local root = LargeTreeGenerator.createWideTree({ width = 50, levels = 1 })
 			root.Parent = container
 
-			local encoded, skippedCount = encodeInstance(root, "PARENT_ID")
+			local encoded = encodeInstance(root, "PARENT_ID")
 
 			expect(encoded).to.be.ok()
 			expect(#encoded.children).to.equal(50)
-			expect(skippedCount).to.equal(0)
 
 			root:Destroy()
 		end)
@@ -79,11 +76,10 @@ return function()
 			local root = LargeTreeGenerator.createWideTree({ width = 100, levels = 1 })
 			root.Parent = container
 
-			local encoded, skippedCount = encodeInstance(root, "PARENT_ID")
+			local encoded = encodeInstance(root, "PARENT_ID")
 
 			expect(encoded).to.be.ok()
 			expect(#encoded.children).to.equal(100)
-			expect(skippedCount).to.equal(0)
 
 			root:Destroy()
 		end)
@@ -108,13 +104,11 @@ return function()
 			unique.Name = "Unique"
 			unique.Parent = root
 
-			local encoded, skippedCount = encodeInstance(root, "PARENT_ID")
+			local encoded = encodeInstance(root, "PARENT_ID")
 
 			expect(encoded).to.be.ok()
-			-- Should only have the unique child
-			expect(#encoded.children).to.equal(1)
-			expect(encoded.children[1].name).to.equal("Unique")
-			expect(skippedCount).to.equal(2) -- Both duplicates skipped
+			-- Duplicates are now included alongside unique child
+			expect(#encoded.children).to.equal(3)
 		end)
 
 		it("should skip entire subtree for instances with duplicate-named siblings in path", function()
@@ -139,12 +133,11 @@ return function()
 			dup2Child.Name = "ChildOfDup2"
 			dup2Child.Parent = dup2
 
-			local encoded, skippedCount = encodeInstance(root, "PARENT_ID")
+			local encoded = encodeInstance(root, "PARENT_ID")
 
 			expect(encoded).to.be.ok()
-			-- Both duplicates and their children should be skipped
-			expect(#encoded.children).to.equal(0)
-			expect(skippedCount).to.equal(2) -- The two duplicates
+			-- Duplicates are now included with their children
+			expect(#encoded.children).to.equal(2)
 		end)
 	end)
 

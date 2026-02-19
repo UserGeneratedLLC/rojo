@@ -1,0 +1,579 @@
+---
+globs: src/syncback/file_names.rs,src/syncback/dedup_suffix.rs,src/syncback/matching.rs,src/syncback/ref_properties.rs,src/snapshot/matching.rs,src/snapshot/tree.rs,src/snapshot/patch_compute.rs,src/rojo_ref.rs,src/variant_eq.rs,src/change_processor.rs,src/web/api.rs,plugin/src/Reconciler/matching.lua,plugin/src/Reconciler/trueEquals.lua,plugin/src/Reconciler/hydrate.lua,plugin/src/Reconciler/diff.lua,plugin/src/XXH32.luau,tests/tests/two_way_sync.rs,tests/tests/syncback_roundtrip.rs
+alwaysApply: false
+---
+
+# Atlas Dedup System
+
+> Atlas is a fork of Rojo. Many internal identifiers, API endpoints, and struct names still reference the original "Rojo" naming.
+
+## Quality Standard
+
+This is a production-grade synchronization system. The filesystem must represent a 1:1 copy of the Studio place. The core invariant:
+
+**Round-trip identity:** Syncback (or two-way sync) writes a directory tree. Building an rbxl from that directory tree and forward-syncing it back must produce a bit-identical instance tree -- same names, same classes, same properties, same hierarchy, same ref targets. Any deviation is a bug.
+
+**CLI syncback parity:** Plugin-based two-way sync must produce exactly the same filesystem output as `atlas syncback`. Byte-for-byte identical files, identical directory structures, identical naming. Any divergence is a bug until proven otherwise.
+
+## Architecture Overview
+
+The dedup system replaced the old "skip duplicates" blacklist with three interlocking subsystems:
+
+```
+Matching Algorithm → Dedup System → Ref Path System
+(pairs instances)    (assigns FS names)  (paths use final FS names)
+```
+
+**Execution order per sync operation:** Matching runs first (pairs instances), dedup runs second (assigns filesystem names), ref paths are computed last (using final filesystem names).
+
+### Three Implementations of Matching
+
+The matching algorithm exists in 3 parallel implementations that must produce identical pairings:
+
+1. **Rust syncback** -- `src/syncback/matching.rs` (operates on `WeakDom` instances)
+2. **Rust forward sync** -- `src/snapshot/matching.rs` (operates on `InstanceSnapshot` vs `RojoTree`)
+3. **Lua plugin** -- `plugin/src/Reconciler/matching.lua` (operates on Studio instances vs virtual instances)
+
+All three use the same recursive change-count scoring + greedy assignment algorithm. Changes to the algorithm must be applied to all three.
+
+All three now have **`MatchingSession` caching** to avoid redundant recursive scoring:
+- **Rust:** `cost_cache: RefCell<HashMap<(Ref, Ref), u32>>` -- caches `compute_change_count` results
+- **Lua:** `matchCache` (parent virtual ID → Studio instance → MatchResult), `costCache` (virtual ID → Studio instance → cost)
+
+### Key Files Map
+
+| File | Subsystem | Purpose |
+|------|-----------|---------|
+| `src/syncback/file_names.rs` | Dedup | `slugify_name`, `deduplicate_name_with_ext`, `name_for_inst`, `name_needs_slugify` |
+| `src/syncback/dedup_suffix.rs` | Dedup | `compute_cleanup_action`, `DedupCleanupAction`, `parse_dedup_suffix`, `build_dedup_name` |
+| `src/syncback/matching.rs` | Matching | Syncback matching: `match_children` (WeakDom) |
+| `src/snapshot/matching.rs` | Matching | Forward sync matching: `match_forward` (Snapshot vs Tree) |
+| `plugin/src/Reconciler/matching.lua` | Matching | Lua matching: `Matching.matchChildren` (Virtual vs Studio) |
+| `src/rojo_ref.rs` | Ref Paths | `ref_target_path_from_tree`, `compute_relative_ref_path`, `resolve_ref_path_to_absolute`, `RefPathIndex`, `Rojo_Ref_*` constants |
+| `src/snapshot/tree.rs` | Ref Paths | `get_instance_by_path`, `filesystem_name_for` |
+| `src/syncback/ref_properties.rs` | Ref Paths | `collect_referents`, `tentative_fs_path`, `RefLinks` |
+| `src/variant_eq.rs` | Matching | `variant_eq` property comparison (Rust) |
+| `plugin/src/Reconciler/trueEquals.lua` | Matching | `trueEquals` property comparison (Lua) |
+| `src/change_processor.rs` | Integration | Dedup cleanup on deletion, VFS suppression, ref path updates |
+| `src/web/api.rs` | Integration | `added_paths`, `syncback_updated_properties`, ref-to-attribute conversion |
+| `plugin/src/ChangeBatcher/encodeHelpers.lua` | Encoding | Shared property filtering/encoding helpers (`encodeAttributes`, `encodeTags`, `forEachEncodableProperty`). Used by `encodeInstance.lua` and `encodeService.lua`. |
+
+---
+
+## Subsystem 1: Slugification and Dedup (`file_names.rs`)
+
+### slugify_name
+
+Pure, stateless. Replaces forbidden filesystem characters with `_`.
+
+**Constants:**
+```rust
+const FORBIDDEN_CHARS: [char; 9] = ['<', '>', ':', '"', '/', '|', '?', '*', '\\'];
+const SLUGIFY_CHARS: [char; 10] = ['<', '>', ':', '"', '/', '|', '?', '*', '\\', '~'];
+const DANGEROUS_SUFFIXES: [&str; 8] = [".server", ".client", ".plugin", ".local", ".legacy", ".meta", ".model", ".project"];
+const INVALID_WINDOWS_NAMES: [&str; 22] = ["CON", "PRN", "AUX", "NUL", "COM1".."COM9", "LPT1".."LPT9"];
+```
+
+**Behavior:**
+- Replaces each `SLUGIFY_CHARS` char with `_` (including `~` to prevent natural names from looking like dedup suffixes)
+- Strips leading/trailing spaces and dots
+- Neutralizes Windows reserved names (`CON` → `CON_`)
+- Neutralizes dangerous suffixes (`.server` etc.) that would be misinterpreted as middleware extensions
+
+**Key invariant:** `slugify_name` is idempotent. Applying it twice produces the same result.
+
+### name_needs_slugify
+
+Returns `true` if the name requires slugification. Checks for: `SLUGIFY_CHARS`, control characters, leading/trailing spaces, trailing dots, dangerous suffixes (`.server` etc.), Windows reserved names (`CON` etc.), and empty string. Used to decide whether metadata `name` field is needed.
+
+### deduplicate_name_with_ext
+
+Stateful collision resolver. Takes a base slug and extension, checks against `taken_names` set (case-insensitive).
+
+```rust
+pub fn deduplicate_name_with_ext(
+    base: &str,
+    extension: Option<&str>,
+    taken_names: &HashSet<String>,
+) -> (String, String)
+// Returns: (deduped_slug, full_fs_name)
+// "Foo" + ".server.luau" with collision → ("Foo~2", "Foo~2.server.luau")
+```
+
+**Key invariant:** Suffix goes on the stem BEFORE the compound extension: `Foo~2.server.luau`, NOT `Foo.server~2.luau`.
+
+### Dedup Key Semantics
+
+The dedup key is the **full filesystem name component** (slug + extension), lowercased. This means:
+
+- `Folder "Foo"` (key: `"foo"`) and `Script "Foo"` (key: `"foo.server.luau"`) do NOT collide
+- `Script "Foo" (server)` and `Script "Foo" (server)` both key `"foo.server.luau"` → collision, dedup applied
+- `Folder "Foo"` and init-style `Script "Foo"` both key `"foo"` (both directories) → collision, dedup applied
+
+### name_for_inst
+
+The primary entry point for generating filesystem names during syncback:
+
+```rust
+pub fn name_for_inst<'a>(
+    middleware: Middleware,
+    new_inst: &'a Instance,
+    old_inst: Option<InstanceWithMeta<'a>>,
+    taken_names: &HashSet<String>,
+) -> anyhow::Result<(Cow<'a, str>, bool, String)>
+// Returns: (filename, needs_meta_name, dedup_key)
+```
+
+- In incremental mode (`old_inst` is `Some`): preserves existing filesystem path
+- In clean mode: slugifies name, adds middleware extension, deduplicates against `taken_names`
+- Returns `needs_meta_name = true` when slug differs from real name (including dedup suffix)
+
+### parse_dedup_suffix (in `dedup_suffix.rs`)
+
+Parses `~N` suffix from a stem: `"Foo~3"` → `Some(("Foo", 3))`, `"Foo"` → `None`. Returns `None` for `~0` (invalid) and `~abc` (non-numeric).
+
+### Metadata `name` Field
+
+When the filesystem name differs from the instance name (due to slugification or dedup), the real name is stored in `.meta.json5` or `.model.json5` `name` field. This is the authoritative instance name during forward sync.
+
+```
+Instance "Hey/Bro"  → Hey_Bro.luau         + meta: {"name": "Hey/Bro"}
+Instance "Folder"   → Folder/              (no meta needed, name == slug)
+Instance "Folder"   → Folder~2/            + meta: {"name": "Folder"}
+```
+
+---
+
+## Subsystem 2: Dedup Suffix Cleanup (`dedup_suffix.rs`)
+
+When instances are deleted, the remaining dedup group may need suffix adjustments.
+
+### DedupCleanupAction
+
+```rust
+pub enum DedupCleanupAction {
+    None,
+    RemoveSuffix { from: PathBuf, to: PathBuf },
+    PromoteLowest { from: PathBuf, to: PathBuf },
+}
+```
+
+### Three Cleanup Rules
+
+1. **Gap-tolerant deletion:** Deleting `~2` from `{Foo, Foo~2, Foo~3}` leaves `{Foo, Foo~3}`. No renumbering. Gaps are tolerated.
+
+2. **Base-name promotion:** Deleting `Foo` (base) from `{Foo, Foo~2, Foo~3}` promotes `Foo~2` to `Foo`. `Foo~3` stays. The lowest-numbered suffix becomes the new base.
+
+3. **Group-to-1 cleanup:** Reducing the group to 1 member removes the suffix entirely. Deleting from `{Foo, Foo~2}` leaves one instance → renamed to clean `Foo`.
+
+### compute_cleanup_action
+
+```rust
+pub fn compute_cleanup_action(
+    base_stem: &str,
+    extension: Option<&str>,
+    remaining_stems: &[String],
+    deleted_was_base: bool,
+    parent_dir: &Path,
+) -> DedupCleanupAction
+```
+
+**Critical integration detail:** The `remaining_stems` input must exclude co-removed siblings (instances being deleted in the same batch). The `change_processor.rs` builds a `removed_set: HashSet<Ref>` and skips those refs during sibling enumeration.
+
+---
+
+## Subsystem 3: Matching Algorithm
+
+### Entry Points
+
+**Rust syncback:**
+```rust
+pub fn match_children(
+    new_children: &[Ref], old_children: &[Ref],
+    new_dom: &WeakDom, old_dom: &WeakDom,
+    new_hashes: Option<&HashMap<Ref, Hash>>,
+    old_hashes: Option<&HashMap<Ref, Hash>>,
+) -> MatchResult
+```
+
+**Rust forward sync:**
+```rust
+pub fn match_forward(
+    snapshot_children: Vec<InstanceSnapshot>,
+    tree_children: &[Ref],
+    tree: &RojoTree,
+) -> ForwardMatchResult
+```
+
+**Lua plugin:**
+```lua
+function Matching.matchChildren(
+    virtualChildren: { string },      -- array of virtual instance IDs
+    studioChildren: { Instance },      -- array of Studio Instance objects
+    virtualInstances: { [string]: any } -- map of virtual ID → virtual instance data
+) -> { matched, unmatchedVirtual, unmatchedStudio }
+```
+
+### Algorithm (All Three Implementations)
+
+**Fast-path: (Name, ClassName) Grouping.** Group children by `(Name, ClassName)`. 1:1 groups get instant-matched with zero scoring.
+
+**Ambiguous Groups: Recursive Scoring + Greedy Assignment.** For groups with multiple candidates on at least one side:
+
+```
+for each (A, B) in cross-product:
+    cost = computeChangeCount(A, B, bestSoFar)
+    if cost < bestSoFar: bestSoFar = cost
+
+stable sort by cost ascending (ties broken by child order)
+greedy assign: pick lowest-cost pair, remove both, repeat
+```
+
+### computeChangeCount (Recursive)
+
+`computeChangeCount` and `matchChildren` are **mutually recursive**:
+
+```
+computeChangeCount(A, B, bestSoFar):
+    cost = countOwnDiffs(A, B)  // properties + tags + attributes
+    if cost >= bestSoFar: return cost  // early exit
+
+    childResult = matchChildren(A.children, B.children)  // RECURSE
+    for matched pair: cost += computeChangeCount(childA, childB, bestSoFar - cost)
+    cost += count(unmatched) * UNMATCHED_PENALTY
+    return cost
+```
+
+### Constants
+
+```rust
+const UNMATCHED_PENALTY: u32 = 10_000;  // Unmatched child = categorically expensive
+const MAX_SCORING_DEPTH: u32 = 3;       // Depth limit prevents O(n^k) explosion
+```
+
+### countOwnDiffs
+
+Counts property-level changes needed to turn A into B:
+- Each differing property = +1 (using `variant_eq` / `trueEquals`)
+- Each tag in symmetric difference = +1
+- Each differing attribute = +1
+- Name and ClassName NOT counted (grouping guarantees match)
+
+### Hash Fast-Path (Syncback Only)
+
+Syncback matching has precomputed blake3 subtree hashes. If `new_hash == old_hash`, return cost 0 immediately (skips property comparison and recursion).
+
+### Sort Stability
+
+- **Rust:** `slice::sort_by` is natively stable. Ties preserve child order.
+- **Lua:** `table.sort` is NOT stable. Comparator breaks ties by insertion index: `if a.cost == b.cost then return a.idx < b.idx end`.
+
+### Property Comparison
+
+**Rust (`variant_eq`):** Type check first; float comparison uses `approx_eq!` with epsilon. Special handling for CFrame, Color3, Vector3, ColorSequence, NumberSequence, Attributes (sorted), Tags (sorted).
+
+**Lua (`trueEquals`):** Recursive deep equality. Treats `nil` and null ref (`{Ref = "000...0"}`) as equal. Floats use epsilon 0.0001 (absolute + relative). CFrame/Vector3 component-wise. Color3 via RGB ints. EnumItem via `.Value`.
+
+### Session Caching
+
+All three implementations wrap scoring in a `MatchingSession` that caches results:
+- **Rust:** `compute_change_count` checks `cost_cache` before scoring. If `(ref_a, ref_b)` was scored before, returns cached value.
+- **Lua:** `computePairCost` checks `costCache`; `matchChildren` checks `matchCache`. Avoids redundant work when hydrate re-calls matching on the same children.
+
+The Lua matching file uses `--!native` and `--!optimize 2` file-level directives for native codegen performance. `cacheVirtual()` filters children to only those existing in `virtualInstances`, preventing crashes on incomplete virtual instance trees.
+
+### Known Limitation: Greedy vs Optimal
+
+The greedy algorithm is NOT globally optimal. Edge cases exist where a locally-best pick forces a globally-worse assignment. The Hungarian algorithm (O(N^3)) would give optimal results, but ambiguous groups are typically small (2-10 instances). Accepted for current release.
+
+---
+
+## Subsystem 4: Ref Path System
+
+### Path Format
+
+Ref paths use **full filesystem names** including extensions and dedup suffixes:
+
+```
+Folder "Foo"           → segment "Foo"
+ModuleScript "Foo"     → segment "Foo.luau"
+Script "Foo" (server)  → segment "Foo.server.luau"
+Dedup'd ModuleScript   → segment "Foo~2.luau"
+Init-style Script      → segment "Foo" (directory)
+```
+
+Absolute paths are slash-separated from DataModel's children downward: `"Workspace/TestModel/Part1.model.json5"`.
+
+### Luau-Style Relative Ref Paths
+
+Syncback now writes **relative** ref paths using Luau require-by-string semantics via `compute_relative_ref_path()`:
+
+- `@self` -- target is the source instance itself
+- `@self/Child.luau` -- target is a descendant of source
+- `./Sibling.luau` -- target is a same-parent sibling
+- `../Uncle.luau` -- target is a parent's sibling
+- `@game/Service/Path` -- cross-service reference
+
+Forward sync resolves both absolute and relative formats via `resolve_ref_path_to_absolute()` + `get_instance_by_path()`.
+
+**Placeholder system:** During syncback, before dedup suffixes are finalized, ref paths are written as `__ROJO_REF_<source>_TO_<target>__` placeholders. After the syncback walk assigns final filesystem names, `fix_ref_paths()` substitutes placeholders with actual relative paths.
+
+### Key Functions
+
+**Building paths:**
+```rust
+// From RojoTree (two-way sync, change_processor):
+pub fn ref_target_path_from_tree(tree: &RojoTree, target_ref: Ref) -> String
+// Uses filesystem_name_for() for each ancestor
+
+// From WeakDom (CLI syncback, legacy instance-name paths):
+pub fn ref_target_path(dom: &WeakDom, target_ref: Ref) -> String
+// Uses dom.ancestors_of() with escape_ref_path_segment (instance names, NOT filesystem names)
+
+// Tentative path (before dedup suffixes assigned):
+fn tentative_fs_path(dom: &WeakDom, target_ref: Ref) -> String
+// Uses slugified name + extension based on class
+```
+
+**Resolving paths:**
+```rust
+// In tree.rs:
+pub fn get_instance_by_path(&self, path: &str) -> Option<Ref>
+// Splits by "/", matches segments case-insensitive against filesystem_name_for()
+// Fallback: matches against instance name (case-insensitive)
+
+pub fn filesystem_name_for(&self, id: Ref) -> String
+// Returns filename from instigating_source, falls back to instance name
+```
+
+**Computing filesystem names for refs:**
+```rust
+// In ref_properties.rs:
+fn tentative_fs_name(inst: &Instance) -> String
+// Slugified name + extension based on class and children count
+// Used before dedup suffixes are assigned
+
+pub fn collect_referents(
+    dom: &WeakDom,
+    pre_prune_paths: &HashMap<Ref, String>,
+    final_paths: Option<&HashMap<Ref, String>>,
+) -> RefLinks
+// Uses final_paths (dedup-aware) when available, otherwise tentative_fs_path
+```
+
+### Attribute Format
+
+Ref properties are stored as `Rojo_Ref_*` attributes in meta/model files:
+
+```json5
+{
+  "attributes": {
+    "Rojo_Ref_PrimaryPart": "Workspace/TestModel/Part1.model.json5"
+  }
+}
+```
+
+Constants in `rojo_ref.rs`:
+```rust
+pub const REF_PATH_ATTRIBUTE_PREFIX: &str = "Rojo_Ref_";
+pub const REF_POINTER_ATTRIBUTE_PREFIX: &str = "Rojo_Target_";
+pub const REF_ID_ATTRIBUTE_NAME: &str = "Rojo_Id";
+```
+
+### RefPathIndex
+
+Tracks which filesystem files contain which ref paths, enabling efficient updates on rename:
+
+```rust
+pub struct RefPathIndex {
+    paths_to_files: HashMap<String, HashSet<PathBuf>>,
+}
+```
+
+Used by `update_ref_paths_after_rename` in `change_processor.rs` to find and update all files containing a given ref path prefix when a dedup rename occurs.
+
+---
+
+## Integration Point 1: change_processor.rs (Dedup Cleanup)
+
+### Deletion Flow
+
+When instances are removed via two-way sync, `handle_tree_event` runs dedup cleanup **before** `apply_patch_set` removes instances from the tree:
+
+1. Build `removed_set: HashSet<Ref>` from ALL removals in the batch
+2. For each removed instance:
+   a. Get parent ref and filesystem name
+   b. Parse dedup suffix from stem
+   c. Enumerate remaining siblings (skipping co-removed via `removed_set`)
+   d. Group by extension (prevents cross-middleware false matches)
+   e. Call `compute_cleanup_action`
+3. Execute cleanup action (rename file, suppress VFS, update ref paths)
+
+### VFS Suppression
+
+Dedup renames must suppress VFS events to prevent feedback loops:
+- `suppress_path_any(&old_path)` -- old path may trigger REMOVE (Linux/Windows) or stale CREATE (macOS)
+- `suppress_path(&new_path)` -- new path triggers Create/Write
+- `unsuppress_path(&new_path)` -- rollback if rename fails
+
+**Critical:** New instance additions must NOT be suppressed. The VFS watcher needs to pick up new files for forward sync.
+
+### Ref Path Updates After Dedup Rename
+
+After successful dedup rename (e.g., `Foo~2` → `Foo`):
+1. Compute old and new ref path segments
+2. Call `update_ref_paths_after_rename(&old_prefix, &new_prefix)`
+3. This function uses `RefPathIndex` to find affected files
+4. Updates `Rojo_Ref_*` attribute values in each affected file
+5. Updates the index: both path keys and filesystem paths
+6. Suppresses VFS events for each file write
+
+### Ref Path Updates After User-Initiated Rename
+
+User-initiated renames (via the plugin's two-way sync) also update `Rojo_Ref_*` paths. The flow:
+1. `old_ref_path` is captured BEFORE the rename (line ~1268, `ref_target_path_from_tree`)
+2. Rename handler sets `new_ref_segment` to the new filesystem name (directory rename line ~1350, file rename line ~1512)
+3. After rename handling, `update_ref_paths_after_rename(old_ref_path, new_ref_path)` is called (line ~1812) to update all meta/model files containing refs to the renamed instance
+
+This ensures both dedup-triggered and user-initiated renames maintain ref path integrity.
+
+### Metadata Consistency
+
+After dedup rename, the survivor's metadata must be updated:
+- `InstigatingSource::Path` updated to new filesystem path
+- Path indexes updated in-memory
+- Suppression counters kept consistent with updated path
+
+---
+
+## Integration Point 2: api.rs (Two-Way Sync Write)
+
+### added_paths (Same-Batch Ref Targets)
+
+When `/api/write` adds instances and sets Ref properties targeting them in the same batch, `added_paths` pre-computes filesystem paths:
+
+```rust
+let added_paths: HashMap<Ref, String> = request.added.iter()
+    .filter_map(|(guid, added)| {
+        let parent_path = ref_target_path_from_tree(&tree, added.parent?);
+        let fs_name = added_instance_fs_segment(added); // slug + extension
+        Some((*guid, format!("{}/{}", parent_path, fs_name)))
+    })
+    .collect();
+```
+
+`added_instance_fs_segment` mirrors `tentative_fs_name` logic but operates on `AddedInstance` fields (class_name, children, properties).
+
+### Ref-to-Attribute Conversion
+
+`syncback_updated_properties` converts `Variant::Ref` properties to `Rojo_Ref_*` attributes:
+
+1. Extract Ref properties from `changed_properties` BEFORE `filter_properties_for_meta`
+2. For each Ref property:
+   - **Nil ref:** Mark `Rojo_Ref_PropertyName` for removal
+   - **Valid target in tree:** Compute path via `ref_target_path_from_tree`, add to `ref_attributes`
+   - **Target in `added_paths`:** Use pre-computed path
+   - **Target not found:** Log warning and skip
+3. Merge `ref_attributes` into attributes map
+4. Pass `remove_attributes` to `merge_or_build_meta`
+
+### merge_or_build_meta Attribute Lifecycle
+
+```
+1. Remove stale attributes (remove_attributes list)
+2. Merge new attributes (including Rojo_Ref_* from ref properties)
+3. Remove wins over add if same key in both lists? No -- adds happen AFTER removes, so add wins
+```
+
+### syncback_added_instance
+
+When adding instances, dedup is handled via `sibling_slugs: &mut HashSet<String>`:
+- Tracks filesystem names claimed in the current batch
+- Prevents duplicate slug assignment when multiple instances added simultaneously
+- Passed to `syncback_instance_to_path_with_stats` for dedup suffix assignment
+
+---
+
+## Key Invariants
+
+1. **Round-trip identity:** syncback → build → compare = bit-identical trees
+2. **CLI syncback parity:** two-way sync produces byte-identical filesystem output to CLI syncback
+3. **Determinism:** same input always produces same filesystem output (sorted child ordering, deterministic suffix assignment)
+4. **InstigatingSource consistency:** dedup'd paths reflected in `InstigatingSource::Path`
+5. **Compound extensions:** suffix before compound extension (`Foo~2.server.luau`, NOT `Foo.server~2.luau`)
+6. **Meta pairing:** `Foo~2.server.luau` pairs with `Foo~2.meta.json5` (strip script suffix, keep dedup suffix)
+7. **Dedup key = full FS name:** collisions checked using complete filesystem name (slug + extension), lowercased
+8. **Co-removed exclusion:** batch removal skips co-removed siblings when computing cleanup actions
+
+---
+
+## Known Limitations (Accepted)
+
+### ProjectNode Duplicate-Named Children
+
+Duplicate-named children under ProjectNode are currently skipped during syncback with warnings (`src/snapshot_middleware/project.rs`). Project keys are unique by JSON definition, but filesystem children under project nodes could collide. Accepted for current release.
+
+### Greedy Matching Not Globally Optimal
+
+The greedy assignment may produce suboptimal pairing in rare ambiguous groups. A globally optimal algorithm (Hungarian, O(N^3)) would be better but is deferred since ambiguous groups are typically small.
+
+### ~~Matching Cache Not Implemented~~ (Resolved)
+
+`MatchingSession` caching is now implemented in all three matching implementations. See "Session Caching" in Subsystem 3. The per-parent invalidation cache (mapping `parent_ref → (children_list_hash, match_assignments)`) remains deferred.
+
+### ~~Stale Ref Paths After Rename~~ (Resolved)
+
+Both dedup-triggered renames and user-initiated renames now update `Rojo_Ref_*` paths automatically. See "Ref Path Updates" in the Integration Point 1 section for details.
+
+---
+
+## Deferred Refactors
+
+- **Shared filesystem-segment derivation:** Consolidate tentative filesystem name computation into one shared helper used by `rojo_ref.rs`, `tree.rs`, `api.rs`, and `ref_properties.rs`. Currently duplicated across 4+ call sites.
+- **Optimal assignment algorithm:** Replace greedy with Hungarian for large ambiguous groups.
+- **Per-parent matching invalidation cache:** `MatchingSession` cost/match caching is implemented, but the per-parent cache with `children_list_hash` invalidation (avoids re-running matching when children haven't changed) remains deferred.
+- **Duplicated name→index grouping:** All three matching implementations repeat the same HashMap pattern. Could be factored but types differ.
+
+---
+
+## Testing Strategy
+
+### Test Locations
+
+- Rust unit tests: `#[cfg(test)]` blocks in source files
+- Rust integration tests: `tests/tests/two_way_sync.rs`, `tests/tests/syncback_roundtrip.rs`
+- Test fixtures: `rojo-test/syncback-tests/`, `rojo-test/build-tests/`
+- Lua spec tests: `.spec.lua` files
+- Snapshot tests: `cargo insta review`
+
+### Critical Test Scenarios
+
+**Dedup:** Same-named Folders, Folders with different children, Folder + Script same name (no dedup), Folder + init-style Script (dedup), natural tilde name, third duplicate added, suffix cleanup (group-to-1), gap tolerance, base-name promotion, idempotency, roundtrip.
+
+**Ref paths:** Basic ref survives syncback, ref to dedup'd instance, ref survives cleanup rename, ref survives base-name promotion, ref survives group-to-1, deeply nested through dedup layers, cross-file ref update, tilde-named instance ref, two-way sync ref update, forward sync manual edit.
+
+**Matching:** ClassName discriminator, property similarity scoring, matching stability across runs, preserves existing pairings, fast path verification, recursive depth limit, hash fast-path short circuit.
+
+**Dedup collision:** Folder + ModuleScript (no collision, different keys), Server + Client script (no collision), ModuleScript + ModuleScript (collision), slug collision ("Foo?" + "Foo*"), case-insensitive collision ("Foo" + "foo").
+
+**Cross-system:** Full roundtrip with duplicates, two-way sync add/delete, forward sync edit dedup'd file, project file + filesystem duplicates, batch-remove 2 of 3 same-named siblings, same-batch add + ref.
+
+---
+
+## Historical Context
+
+The dedup system was built across these plans (chronological):
+
+1. **nuke_path_encoding** -- Replaced `%NAME%` encoding with slugify + dedup + metadata `name` field foundation
+2. **two-way_sync_refs** -- Added Ref property support to two-way sync with `Rojo_Ref_*` path-based attributes
+3. **atlas_fork_isolation** -- Renamed binary/plugin for coexistence (preserved `Rojo_Ref_*` attribute names for backward compatibility)
+4. **ambiguous_path_handling** -- Core feature: 3-pass matching algorithm, filesystem-collision dedup, filesystem-name ref paths, dedup suffix cleanup
+5. **ref_path_and_dedup_integration** -- Migrated `collect_referents` to filesystem-name paths, integrated cleanup rules into change_processor
+6. **rewrite_matching_algorithm** -- Replaced multi-pass with recursive change-count scoring + greedy assignment
+7. **audit_ambiguous_path_handling** -- First audit: fixed forward sync re-matching, case sensitivity, ProjectNode paths, Lua require crash, dead code, ref format mismatch
+8. **ambiguous_paths_audit_fixes** -- Second audit: recursive matching, `added_paths` format, dedup-aware ref collection, full-FS-name cleanup grouping, shared `trueEquals`
+9. **audit_ambiguous_paths_followup** -- Third audit: metadata drift after cleanup rename, co-removed sibling exclusion, `added_paths` extension/suffix, attribute-scoped final paths
+10. **audit_ref_two-way_sync** -- Ref audit: round-trip fidelity, path computation correctness, meta lifecycle, VFS suppression, wire format
+11. **matching_session_caching** -- Session-scoped caching for all three matching implementations, `--!native`/`--!optimize 2` for Lua, valid children tracking
+12. **luau-style_ref_paths** -- Relative ref paths (`@self`, `./`, `../`, `@game/`), source-aware placeholder system
+13. **live_syncback** -- One-click full sync from Studio via `POST /api/syncback`, service property encoding, server restart

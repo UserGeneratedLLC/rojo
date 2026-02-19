@@ -11,11 +11,6 @@ local bindingUtil = require(Plugin.App.bindingUtil)
 
 local SlicedImage = require(script.Parent.SlicedImage)
 
-local SPRING_PROPS = {
-	frequency = 5,
-	dampingRatio = 1,
-}
-
 local e = Roact.createElement
 
 local TextInput = Roact.Component:extend("TextInput")
@@ -31,7 +26,7 @@ end
 function TextInput:didUpdate(lastProps)
 	if lastProps.enabled ~= self.props.enabled then
 		self.motor:setGoal({
-			enabled = Flipper.Spring.new(self.props.enabled and 1 or 0),
+			enabled = Flipper.Instant.new(self.props.enabled and 1 or 0),
 		})
 	end
 end
@@ -98,13 +93,13 @@ function TextInput:render()
 
 				[Roact.Event.MouseEnter] = function()
 					self.motor:setGoal({
-						hover = Flipper.Spring.new(1, SPRING_PROPS),
+						hover = Flipper.Instant.new(1),
 					})
 				end,
 
 				[Roact.Event.MouseLeave] = function()
 					self.motor:setGoal({
-						hover = Flipper.Spring.new(0, SPRING_PROPS),
+						hover = Flipper.Instant.new(0),
 					})
 				end,
 

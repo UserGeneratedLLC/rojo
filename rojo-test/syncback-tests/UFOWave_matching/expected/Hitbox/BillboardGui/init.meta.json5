@@ -1,0 +1,26 @@
+{
+  className: "BillboardGui",
+  properties: {
+    Active: true,
+    LightInfluence: 1,
+    ResetOnSpawn: false,
+    Size: {
+      UDim2: [
+        [
+          60,
+          0
+        ],
+        [
+          40,
+          0
+        ]
+      ]
+    },
+    StudsOffset: [
+      0,
+      75,
+      0
+    ],
+    ZIndexBehavior: "Sibling"
+  }
+}

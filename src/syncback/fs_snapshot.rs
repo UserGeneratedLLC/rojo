@@ -446,4 +446,345 @@ impl FsSnapshot {
         removed_dirs.sort_unstable();
         removed_dirs
     }
+
+    /// Replace `__ROJO_REF_<hex>__` placeholders in a line using HashMap lookup.
+    /// Scans the line for `__ROJO_REF_` markers and extracts each full
+    /// placeholder key for O(1) lookup, avoiding O(n) iteration over all
+    /// substitutions.
+    fn replace_placeholders(line: &str, sub_map: &std::collections::HashMap<&str, &str>) -> String {
+        const PREFIX: &str = "__ROJO_REF_";
+        const SUFFIX: &str = "__";
+
+        let mut result = String::with_capacity(line.len());
+        let mut remaining = line;
+
+        while let Some(start) = remaining.find(PREFIX) {
+            result.push_str(&remaining[..start]);
+            let after_prefix = &remaining[start + PREFIX.len()..];
+            if let Some(end) = after_prefix.find(SUFFIX) {
+                let placeholder = &remaining[start..start + PREFIX.len() + end + SUFFIX.len()];
+                if let Some(replacement) = sub_map.get(placeholder) {
+                    result.push_str(replacement);
+                } else {
+                    result.push_str(placeholder);
+                }
+                remaining = &remaining[start + PREFIX.len() + end + SUFFIX.len()..];
+            } else {
+                result.push_str(&remaining[start..]);
+                remaining = "";
+                break;
+            }
+        }
+        result.push_str(remaining);
+        result
+    }
+
+    /// Post-process `Rojo_Ref_*` attribute paths in meta/model JSON files.
+    ///
+    /// For each entry in `substitutions` (old_path → new_path), finds all
+    /// `.meta.json5` and `.model.json5` files in the snapshot and replaces
+    /// occurrences of the old path with the new path **only on lines that
+    /// contain a `Rojo_Ref_` key**. This prevents unrelated string values
+    /// (property values, comments, etc.) from being altered by the
+    /// substitution.
+    pub fn fix_ref_paths(&mut self, substitutions: &[(String, String)]) {
+        if substitutions.is_empty() {
+            return;
+        }
+
+        let sub_map: std::collections::HashMap<&str, &str> = substitutions
+            .iter()
+            .map(|(k, v)| (k.as_str(), v.as_str()))
+            .collect();
+
+        let ref_paths: Vec<PathBuf> = self
+            .added_files
+            .keys()
+            .filter(|p| {
+                let name = p.file_name().and_then(|f| f.to_str()).unwrap_or("");
+                name.ends_with(".meta.json5")
+                    || name.ends_with(".meta.json")
+                    || name.ends_with(".model.json5")
+                    || name.ends_with(".model.json")
+            })
+            .cloned()
+            .collect();
+
+        for path in ref_paths {
+            let Some(contents) = self.added_files.get_mut(&path) else {
+                continue;
+            };
+            let Ok(text) = std::str::from_utf8(contents) else {
+                continue;
+            };
+            if !text.contains("__ROJO_REF_") && !text.contains("Rojo_Ref_") {
+                continue;
+            }
+
+            let mut modified_lines: Vec<String> = Vec::new();
+            let mut any_changed = false;
+            for line in text.split('\n') {
+                if line.contains("__ROJO_REF_") {
+                    let new_line = Self::replace_placeholders(line, &sub_map);
+                    if new_line != line {
+                        any_changed = true;
+                    }
+                    modified_lines.push(new_line);
+                } else if line.contains("Rojo_Ref_") {
+                    let mut new_line = line.to_string();
+                    for (old_path, new_path) in substitutions {
+                        if old_path != new_path && new_line.contains(old_path.as_str()) {
+                            new_line = new_line.replace(old_path.as_str(), new_path.as_str());
+                        }
+                    }
+                    if new_line != line {
+                        any_changed = true;
+                    }
+                    modified_lines.push(new_line);
+                } else {
+                    modified_lines.push(line.to_string());
+                }
+            }
+
+            if any_changed {
+                *contents = modified_lines.join("\n").into_bytes();
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fix_ref_paths_only_touches_ref_lines() {
+        let mut snap = FsSnapshot::new();
+
+        let meta_content = r#"{
+  "properties": {
+    "Description": "Path is Workspace/Foo"
+  },
+  "attributes": {
+    "Rojo_Ref_PrimaryPart": "Workspace/Foo"
+  }
+}"#;
+        snap.added_files.insert(
+            PathBuf::from("/test/init.meta.json5"),
+            meta_content.as_bytes().to_vec(),
+        );
+
+        let substitutions = vec![("Workspace/Foo".to_string(), "./Foo~2".to_string())];
+        snap.fix_ref_paths(&substitutions);
+
+        let result = std::str::from_utf8(
+            snap.added_files
+                .get(Path::new("/test/init.meta.json5"))
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert!(
+            result.contains(r#""Rojo_Ref_PrimaryPart": "./Foo~2""#),
+            "Rojo_Ref line should be updated. Got:\n{}",
+            result
+        );
+        assert!(
+            result.contains(r#""Description": "Path is Workspace/Foo""#),
+            "Non-ref property line should NOT be changed. Got:\n{}",
+            result
+        );
+    }
+
+    #[test]
+    fn fix_ref_paths_ignores_non_meta_files() {
+        let mut snap = FsSnapshot::new();
+
+        snap.added_files.insert(
+            PathBuf::from("/test/script.luau"),
+            b"-- Rojo_Ref_PrimaryPart Workspace/Foo".to_vec(),
+        );
+
+        let substitutions = vec![("Workspace/Foo".to_string(), "./Foo~2".to_string())];
+        snap.fix_ref_paths(&substitutions);
+
+        let result = std::str::from_utf8(
+            snap.added_files
+                .get(Path::new("/test/script.luau"))
+                .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            result.contains("Workspace/Foo"),
+            "Non-meta file should not be touched. Got: {}",
+            result
+        );
+        assert!(
+            !result.contains("./Foo~2"),
+            "Non-meta file should not have substitution applied"
+        );
+    }
+
+    /// Regression test: the old approach used tentative paths (e.g.,
+    /// "Beams1/001") as substitution keys. When multiple duplicate-named
+    /// instances shared the same tentative path, sequential `str::replace`
+    /// calls would chain — each substitution's result contained the next
+    /// substitution's search key as a prefix, producing corrupted paths
+    /// like "001~5~7~4~6~3~8~2".
+    ///
+    /// The fix uses unique per-Ref placeholders as keys, making each
+    /// substitution independent. This test verifies the old failure mode
+    /// cannot recur.
+    #[test]
+    fn fix_ref_paths_no_chaining_with_unique_placeholders() {
+        let mut snap = FsSnapshot::new();
+
+        // Simulate a Beam with Attachment0 → placeholder for one specific
+        // Attachment, and Attachment1 → placeholder for another.
+        let meta_content = r#"{
+  "attributes": {
+    "Rojo_Ref_Attachment0": "__ROJO_REF_00000000000000000000000000000001__",
+    "Rojo_Ref_Attachment1": "__ROJO_REF_00000000000000000000000000000002__"
+  },
+  "className": "Beam"
+}"#;
+        snap.added_files.insert(
+            PathBuf::from("/test/BeamA.model.json5"),
+            meta_content.as_bytes().to_vec(),
+        );
+
+        // Each placeholder maps to a distinct dedup'd path.
+        let substitutions = vec![
+            (
+                "__ROJO_REF_00000000000000000000000000000001__".to_string(),
+                "./001~5".to_string(),
+            ),
+            (
+                "__ROJO_REF_00000000000000000000000000000002__".to_string(),
+                "./002~7.model.json5".to_string(),
+            ),
+        ];
+        snap.fix_ref_paths(&substitutions);
+
+        let result = std::str::from_utf8(
+            snap.added_files
+                .get(Path::new("/test/BeamA.model.json5"))
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert!(
+            result.contains(r#""Rojo_Ref_Attachment0": "./001~5""#),
+            "Attachment0 should resolve to 001~5. Got:\n{result}"
+        );
+        assert!(
+            result.contains(r#""Rojo_Ref_Attachment1": "./002~7.model.json5""#),
+            "Attachment1 should resolve to 002~7. Got:\n{result}"
+        );
+        assert!(
+            !result.contains("__ROJO_REF_"),
+            "no placeholders should remain. Got:\n{result}"
+        );
+    }
+
+    /// Regression test: verifies that the OLD tentative-path approach
+    /// would chain substitutions, producing corrupted paths. This test
+    /// documents the exact failure mode to prevent future regressions.
+    #[test]
+    fn old_tentative_substitution_would_chain() {
+        let mut snap = FsSnapshot::new();
+
+        let meta_content = r#"{
+  "attributes": {
+    "Rojo_Ref_Attachment0": "Beams1/001"
+  }
+}"#;
+        snap.added_files.insert(
+            PathBuf::from("/test/BeamA.model.json5"),
+            meta_content.as_bytes().to_vec(),
+        );
+
+        // Simulate the old broken substitution list: same source, different targets.
+        // This is what happened when all 8 duplicate "001" Attachments shared
+        // the tentative path "Beams1/001".
+        let substitutions = vec![
+            ("Beams1/001".to_string(), "Beams1/001~5".to_string()),
+            ("Beams1/001".to_string(), "Beams1/001~3".to_string()),
+            ("Beams1/001".to_string(), "Beams1/001~2".to_string()),
+        ];
+        snap.fix_ref_paths(&substitutions);
+
+        let result = std::str::from_utf8(
+            snap.added_files
+                .get(Path::new("/test/BeamA.model.json5"))
+                .unwrap(),
+        )
+        .unwrap();
+
+        // The old approach chains: "001" → "001~5" → "001~3~5" → "001~2~3~5"
+        // This is the documented bug — the result is corrupted.
+        assert!(
+            result.contains("~5") && result.contains("~3") && result.contains("~2"),
+            "old approach should chain suffixes (documenting the bug). Got:\n{result}"
+        );
+        assert!(
+            !result.contains(r#""Rojo_Ref_Attachment0": "Beams1/001~5""#),
+            "old approach should NOT produce the correct single-suffix result"
+        );
+    }
+
+    /// Tests that multiple Rojo_Ref_* attributes on the same line or in
+    /// the same file each resolve to their correct target independently.
+    #[test]
+    fn fix_ref_paths_multiple_refs_same_file() {
+        let mut snap = FsSnapshot::new();
+
+        let meta_content = r#"{
+  "attributes": {
+    "Rojo_Ref_Attachment0": "__ROJO_REF_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa__",
+    "Rojo_Ref_Attachment1": "__ROJO_REF_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb__",
+    "Rojo_Ref_PrimaryPart": "__ROJO_REF_cccccccccccccccccccccccccccccccc__"
+  }
+}"#;
+        snap.added_files.insert(
+            PathBuf::from("/test/init.meta.json5"),
+            meta_content.as_bytes().to_vec(),
+        );
+
+        let substitutions = vec![
+            (
+                "__ROJO_REF_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa__".to_string(),
+                "./001~2".to_string(),
+            ),
+            (
+                "__ROJO_REF_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb__".to_string(),
+                "./001~5".to_string(),
+            ),
+            (
+                "__ROJO_REF_cccccccccccccccccccccccccccccccc__".to_string(),
+                "@self/Handle.model.json5".to_string(),
+            ),
+        ];
+        snap.fix_ref_paths(&substitutions);
+
+        let result = std::str::from_utf8(
+            snap.added_files
+                .get(Path::new("/test/init.meta.json5"))
+                .unwrap(),
+        )
+        .unwrap();
+
+        assert!(
+            result.contains(r#""Rojo_Ref_Attachment0": "./001~2""#),
+            "Attachment0 wrong. Got:\n{result}"
+        );
+        assert!(
+            result.contains(r#""Rojo_Ref_Attachment1": "./001~5""#),
+            "Attachment1 wrong. Got:\n{result}"
+        );
+        assert!(
+            result.contains(r#""Rojo_Ref_PrimaryPart": "@self/Handle.model.json5""#),
+            "PrimaryPart wrong. Got:\n{result}"
+        );
+    }
 }

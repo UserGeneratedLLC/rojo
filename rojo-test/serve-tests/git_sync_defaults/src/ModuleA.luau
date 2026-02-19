@@ -1,0 +1,2 @@
+local ModuleA = {}
+return ModuleA

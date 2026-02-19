@@ -1,0 +1,409 @@
+---
+globs: src/**,crates/**
+alwaysApply: false
+---
+
+# Rojo Server/CLI (Rust)
+
+Core implementation: CLI, HTTP/WebSocket server, snapshot system, filesystem transformations.
+
+**Entry:** `src/main.rs` (CLI) | `src/lib.rs` (public API)
+
+## Core Systems
+
+### 1. Snapshot System (`src/snapshot/`)
+
+Pure functions: filesystem → instance tree → minimal patches → apply changes
+
+**Key files:**
+- `mod.rs` - System overview with detailed explanation
+- `patch_compute.rs` - Generate diffs (uses matching algorithm)
+- `patch_apply.rs` - Apply changes (resolves `Rojo_Ref_*` and `Rojo_Target_*` refs)
+- `matching.rs` - Forward sync matching algorithm (recursive change-count scoring, `MatchingSession` caching)
+- `instance_snapshot.rs` - Core snapshot type
+
+```rust
+pub struct InstanceSnapshot {
+    pub snapshot_id: Ref,
+    pub metadata: InstanceMetadata,
+    pub name: Cow<'static, str>,
+    pub class_name: Ustr,
+    pub properties: UstrMap<Variant>,
+    pub children: Vec<InstanceSnapshot>,  // Nested snapshots, not Refs!
+}
+```
+
+### 2. Snapshot Middleware (`src/snapshot_middleware/`)
+
+Transforms files → `InstanceSnapshot`. Main entry: `snapshot_from_vfs()`
+
+| File | Handler | Result | Note |
+|------|---------|--------|------|
+| `*.luau` | `lua.rs` | ModuleScript | Preferred |
+| `*.server.luau` | `lua.rs` | Script (RunContext.Server) | Preferred |
+| `*.client.luau` | `lua.rs` | Script (RunContext.Client) | Preferred |
+| `*.plugin.luau` | `lua.rs` | Script (RunContext.Plugin) | |
+| `*.local.luau` | `lua.rs` | LocalScript | |
+| `*.legacy.luau` | `lua.rs` | Script (RunContext.Legacy) | |
+| `*.lua` | `lua.rs` | ModuleScript | Legacy |
+| `*.server.lua` | `lua.rs` | Script (RunContext.Legacy) | Legacy |
+| `*.client.lua` | `lua.rs` | LocalScript | Legacy |
+| `*.rbxm` / `*.rbxmx` | `rbxm.rs` / `rbxmx.rs` | Binary/XML model tree | |
+| `*.model.json5` | `json_model.rs` | JSON instance | Preferred |
+| `*.model.json` | `json_model.rs` | JSON instance | Legacy |
+| `*.project.json5` | `project.rs` | Nested project | Preferred |
+| `*.project.json` | `project.rs` | Nested project | Legacy |
+| `*.csv` / `*.txt` | `csv.rs` / `txt.rs` | LocalizationTable / StringValue | |
+| `*.toml` / `*.json5` / `*.yaml` | Data → ModuleScript | |
+| Directory | `dir.rs` | Folder or inferred service | |
+| `*.meta.json5` | `meta_file.rs` | Metadata overlay | Preferred |
+| `*.meta.json` | `meta_file.rs` | Metadata overlay | Legacy |
+
+**Init files:** `init.luau`, `init.server.luau`, etc. → Instance named after parent directory (`.lua` legacy supported)
+
+**Context passed to middleware:**
+
+```rust
+pub struct InstanceContext {
+    pub path_ignore_rules: Arc<Vec<PathIgnoreRule>>,
+    pub sync_rules: Vec<SyncRule>,
+}
+```
+
+**Filename handling (syncback/two-way sync):**
+
+Instance names with forbidden filesystem chars (`<>:"/\|?*~`) are handled by:
+1. `slugify_name()` -- replaces forbidden chars with `_` (pure, stateless)
+2. `deduplicate_name_with_ext()` -- dedup key = full filesystem name (slug + extension), case-insensitive; appends `~2`, `~3`, etc. on collision (stateful)
+3. Metadata `name` field -- stores the real instance name in `.meta.json5`/`.model.json5` when the slug differs
+
+### 3. Commands (`src/cli/`)
+
+- `serve.rs` - Live sync with WebSocket; live syncback via `run_live_syncback()` + `build_dom_from_chunks()` (server restarts after syncback)
+- `build.rs` - Generate rbxl/rbxm/rbxmx/rbxlx
+- `upload.rs` - Upload to Roblox.com
+- `sourcemap.rs` - Generate sourcemaps
+- `syncback.rs` - Roblox → filesystem
+- `init.rs` / `fmt_project.rs` / `doc.rs` / `plugin.rs`
+
+### 4. Syncback (`src/syncback/`)
+
+Reverse: Roblox file → filesystem
+
+- `snapshot.rs` - Convert instances to snapshots
+- `fs_snapshot.rs` - Filesystem representation
+- `matching.rs` - Syncback matching algorithm (recursive change-count scoring, `MatchingSession` caching)
+- `dedup_suffix.rs` - Dedup cleanup rules (gap-tolerant, base-name promotion, group-to-1)
+- `meta.rs` - Meta file read/write helpers (upsert/remove name, update ref paths)
+- `ref_properties.rs` - Ref property path linking (`Rojo_Ref_*`, tentative_fs_path, placeholder system)
+- `hash/` - Content hashing for change detection
+- `fs_snapshot.rs` - Filesystem representation, parallel writes (`write_to_vfs_parallel`), ref path post-processing (`fix_ref_paths`)
+- `property_filter.rs` - Apply syncback rules (default: `sync_unscriptable = false`)
+
+### 5. Web Server (`src/web/`)
+
+- `api.rs` - HTTP/WebSocket endpoints, including `POST /api/syncback` handler (`handle_api_syncback`)
+- `interface.rs` - Wire types: patches, `SyncbackRequest`, `ServiceChunk`, `SyncbackPayload`, `ServerExitReason`
+- `mod.rs` - `SyncbackSignal` (Mutex + Notify pattern), `LiveServer` (uses `tokio::select!` to wait for connections or syncback signal)
+- Protocol version enforcement
+
+### 6. Project System (`src/project.rs`)
+
+Parse/validate `.project.json5` (or legacy `.project.json`), handle nested projects, manage sync rules.
+
+## Command Implementations
+
+### `rojo serve`
+
+1. Load project
+2. Build initial snapshot tree
+3. Start HTTP server (Hyper)
+4. Open WebSocket at `/api/rojo`
+5. Watch filesystem (memofs VFS)
+6. Generate patches on changes
+7. Send to connected plugins
+
+**Key:** `src/serve_session.rs` manages active sessions
+
+**Live syncback integration:** The serve loop checks for `ServerExitReason::SyncbackRequested(payload)`. When received, calls `run_live_syncback()` which reconstructs the DOM from the plugin's rbxm blob + service chunks via `build_dom_from_chunks()`, runs `syncback_loop(incremental=false)` (clean mode), writes files via `write_to_vfs_parallel()`, refreshes git index, then restarts the serve loop.
+
+### `rojo build`
+
+1. Load project
+2. Build snapshot tree
+3. Convert to `WeakDom` (rbx_dom_weak)
+4. Serialize with `rbx_binary` or `rbx_xml`
+5. Write output
+
+**Flags:** `--output`, `--plugin`, `--watch`
+
+### `rojo syncback`
+
+1. Load project
+2. Read Roblox file (rbxl/rbxm)
+3. Parse with `rbx_binary`
+4. Match instances to project
+5. Write files per syncback rules
+
+**Rules:**
+```rust
+pub struct SyncbackRules {
+    ignore_trees: Vec<String>,           // Roblox tree paths to ignore
+    ignore_paths: Vec<String>,           // Filesystem path patterns
+    ignore_properties: IndexMap<Ustr, Vec<Ustr>>,  // Class → properties
+    ignore_classes: Vec<String>,         // Classes to skip entirely
+    sync_current_camera: Option<bool>,   // Default: false
+    sync_unscriptable: Option<bool>,     // Default: false
+    ignore_referents: Option<bool>,      // Skip Ref properties, default: false
+}
+```
+
+## Error Handling Patterns
+
+**CLI (anyhow):**
+```rust
+use anyhow::{Context, Result};
+
+pub fn load_project(path: &Path) -> Result<Project> {
+    fs::read_to_string(path)
+        .context("Failed to read project file")?;
+    // ...
+}
+```
+
+**Library (thiserror):**
+```rust
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum SnapshotError {
+    #[error("Instance {0} not found")]
+    InstanceNotFound(Ref),
+}
+```
+
+**Context chaining:**
+```rust
+.with_context(|| format!("Failed for {}", path.display()))?
+```
+
+## Testing
+
+**Unit tests:** Co-located with code
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_something() {
+        assert_eq!(result, expected);
+    }
+}
+```
+
+**Integration tests:** `tests/` directory with `gen_build_tests!` macro
+
+**Snapshot tests:** `insta` crate
+```rust
+use insta::assert_snapshot;
+
+#[test]
+fn test_output() {
+    let result = build_something();
+    assert_snapshot!(result);
+}
+```
+
+Review: `cargo insta review`
+
+**Test utilities:** `tests/rojo_test/` - io_util, roundtrip_util, serve_util, syncback_util
+
+## Web API
+
+**HTTP:**
+- `GET /` - Browser UI
+- `GET /api/rojo` - Server info (version, project name, protocol)
+- `POST /api/syncback` - Live syncback: full Roblox → filesystem sync (validates protocol, version, place ID)
+
+**WebSocket:** `ws://host:port/api/rojo`
+
+**Protocol v6:**
+```json
+// Handshake
+{"type": "ServerInfo", "protocolVersion": 6, "serverVersion": "7.7.0"}
+
+// Patch
+{
+  "type": "ApplyPatch",
+  "sessionId": "<uuid>",
+  "patch": {
+    "removed": [id1, id2],
+    "added": {id3: {...}},
+    "updated": {id4: {changedProperties: {...}}}
+  }
+}
+```
+
+**Session:** `src/serve_session.rs` manages state, VFS, message queue
+
+## Project File Structure
+
+**ProjectNode:**
+```rust
+pub struct ProjectNode {
+    pub class_name: Option<Ustr>,                       // $className
+    pub id: Option<String>,                             // $id for Ref linking
+    pub children: BTreeMap<String, ProjectNode>,        // Child nodes (flattened)
+    pub properties: BTreeMap<Ustr, UnresolvedValue>,    // $properties
+    pub attributes: BTreeMap<String, UnresolvedValue>,  // $attributes
+    pub ignore_unknown_instances: Option<bool>,         // $ignoreUnknownInstances
+    pub path: Option<PathNode>,                         // $path
+}
+```
+
+**SyncRule:**
+```rust
+pub struct SyncRule {
+    pub include: Glob,           // Serialized as "pattern"
+    pub exclude: Option<Glob>,   // Optional exclusion pattern
+    pub middleware: Middleware,  // Serialized as "use"
+    pub suffix: Option<String>,  // Optional suffix to trim
+    pub base_path: PathBuf,      // Internal: glob base path
+}
+```
+
+## Common Operations
+
+**Load project:**
+```rust
+use librojo::Project;
+let project = Project::load_from_slice(path, contents)?;
+```
+
+**Build snapshot:**
+```rust
+use librojo::{InstanceContext, snapshot_from_vfs};
+let snapshot = snapshot_from_vfs(&context, &vfs, &path)?;
+```
+
+**Generate patch:**
+```rust
+use librojo::snapshot::compute_patch_set;
+let patch = compute_patch_set(&old_snap, &new_snap, &old_tree, &new_tree);
+```
+
+**Serialize to binary:**
+```rust
+use rbx_binary::to_writer;
+use rbx_dom_weak::WeakDom;
+
+let dom = WeakDom::new(root);
+to_writer(&mut buffer, &dom, dom.root())?;
+```
+
+## Performance
+
+**Profiling:** Enable Tracy with `--features profile-with-tracy`
+
+**Optimization:** Use `#[profiling::function]` on hot paths
+
+**Parallelization:** Use `rayon` for parallel operations (sparingly - I/O often bottlenecks)
+
+**VFS:** `memofs::Vfs` caches file contents, invalidates on watch events
+
+## Key Dependencies
+
+**Core:** rbx_binary, rbx_xml, rbx_dom_weak, memofs (local crate)
+**Async:** tokio, hyper, hyper-tungstenite
+**Serialization:** serde, json5, toml, yaml-rust2, csv
+**Float precision:** lexical-write-float (for roundtrip-safe f32/f64 formatting in JSON)
+**Utilities:** clap, anyhow, thiserror, crossbeam-channel, rayon, globset
+
+## Module Organization
+
+See `src/snapshot/mod.rs` for canonical example:
+- Module doc explaining purpose, data flow
+- Private submodules, public exports
+- Tests in `#[cfg(test)] mod tests`
+
+## Contributing Guidelines
+
+### Adding File Type Support
+
+1. Create middleware in `src/snapshot_middleware/`
+2. Add to `Middleware` enum
+3. Register in `snapshot_from_vfs()`
+4. Add syncback support if applicable
+5. Add tests in `rojo-test/build-tests/`
+
+### Adding Command
+
+1. Create file in `src/cli/`
+2. Add to `Subcommand` enum
+3. Implement with clap derives
+4. Add `run()` method
+
+### Modifying Snapshots
+
+**Critical:** Add extensive tests first, consider migration path, test with real projects
+
+## Debugging
+
+**Verbose logging:**
+```bash
+RUST_LOG=trace rojo serve
+RUST_LOG=rojo=debug rojo build
+```
+
+**Inspect snapshots:** Add `eprintln!("Snapshot: {:#?}", snapshot);`
+
+**Test specific middleware:** Create minimal test in `rojo-test/build-tests/`
+
+**Watch events:** `RUST_LOG=memofs=trace`
+
+**Protocol issues:** Browser dev tools on `http://localhost:34872`
+
+## Common Pitfalls
+
+**Path separators:** Always use `Path::join()`, never string concatenation
+**Watch events:** Can fire multiple times - use `change_processor` to dedupe
+**Property types:** Use rbx_reflection to validate expected types
+**Protocol version:** Bump in both plugin AND server when changing communication
+**Backwards compat:** Support legacy formats where possible
+
+## File Locations
+
+```
+src/
+  cli/                  - Commands
+  snapshot/             - Core system
+    matching.rs         - Forward sync matching algorithm
+  snapshot_middleware/   - File handlers
+  syncback/             - Reverse sync
+    matching.rs         - Syncback matching algorithm
+    dedup_suffix.rs     - Dedup cleanup rules
+    meta.rs             - Meta file helpers
+  web/                  - HTTP/WebSocket (incl. SyncbackSignal, LiveServer)
+    interface.rs        - Wire types (patches, syncback requests)
+  change_processor.rs   - Two-way sync filesystem writer
+  git.rs                - Git integration (changed files, SHA1 hashing, auto-staging)
+  rojo_ref.rs           - Ref path system (Rojo_Ref_*, RefPathIndex, Luau-style relative paths)
+  variant_eq.rs         - Property value comparison
+  lib.rs                - Public API
+  main.rs               - CLI entry
+
+crates/
+  memofs/        - Virtual filesystem
+
+tests/
+  rojo_test/     - Test utilities
+  tests/         - Integration tests
+```
+
+## Additional Resources
+
+- **Snapshot system:** `src/snapshot/mod.rs` (comprehensive explanation)
+- **Middleware examples:** `src/snapshot_middleware/lua.rs`, `dir.rs`
+- **Test examples:** `tests/tests/build.rs`, `serve.rs`
+- **Project parsing:** `src/project.rs`

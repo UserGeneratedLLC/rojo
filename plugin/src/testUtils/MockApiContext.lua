@@ -10,6 +10,41 @@
 
 local HttpService = game:GetService("HttpService")
 
+local MockPromise = {}
+MockPromise.__index = MockPromise
+
+function MockPromise.resolve(value)
+	return setmetatable({ _value = value, _rejected = false }, MockPromise)
+end
+
+function MockPromise.reject(err)
+	return setmetatable({ _value = err, _rejected = true }, MockPromise)
+end
+
+function MockPromise:andThen(callback)
+	if not self._rejected then
+		local ok, result = pcall(callback, self._value)
+		if ok then
+			return MockPromise.resolve(result)
+		else
+			return MockPromise.reject(result)
+		end
+	end
+	return self
+end
+
+function MockPromise:catch(callback)
+	if self._rejected then
+		local ok, result = pcall(callback, self._value)
+		if ok then
+			return MockPromise.resolve(result)
+		else
+			return MockPromise.reject(result)
+		end
+	end
+	return self
+end
+
 local MockApiContext = {}
 MockApiContext.__index = MockApiContext
 
@@ -155,22 +190,15 @@ function MockApiContext:write(patch)
 	self:_maybeDelay()
 
 	if self.failOnWrite then
-		return false, "Mock write failure"
+		return MockPromise.reject("Mock write failure")
 	end
 
 	if self.onWrite then
-		local result = self.onWrite(self, patch)
-		if result ~= nil then
-			return result
-		end
+		self.onWrite(self, patch)
 	end
 
-	if self.writeResponse then
-		return true, self.writeResponse
-	end
-
-	-- Default success response
-	return true, { success = true }
+	local response = self.writeResponse or { success = true }
+	return MockPromise.resolve(response)
 end
 
 --[[

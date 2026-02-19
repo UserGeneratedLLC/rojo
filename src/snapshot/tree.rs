@@ -10,7 +10,7 @@ use rbx_dom_weak::{
 
 use crate::{multimap::MultiMap, RojoRef};
 
-use super::{InstanceMetadata, InstanceSnapshot};
+use super::{InstanceMetadata, InstanceSnapshot, InstigatingSource};
 
 /// An expanded variant of rbx_dom_weak's `WeakDom` that tracks additional
 /// metadata per instance that's Rojo-specific.
@@ -231,33 +231,49 @@ impl RojoTree {
         self.specified_id_to_refs.insert(specified, id);
     }
 
-    /// Looks up an instance by its path in the tree (e.g., "SoundService/MySoundGroup").
-    /// The path is relative to the root of the tree, with segments separated by "/".
-    /// Returns the Ref if found, None otherwise.
+    /// Looks up an instance by its filesystem-name path in the tree.
+    ///
+    /// Each segment is matched against the **filesystem name** of child
+    /// instances (derived from `instigating_source` path), falling back to
+    /// the instance name for instances without filesystem backing.
+    ///
+    /// Path format: `"Workspace/Model.model.json5/Attachment~2.luau"`
+    /// Segments are separated by `/` (no escaping needed since filesystem
+    /// names can't contain `/`).
     pub fn get_instance_by_path(&self, path: &str) -> Option<Ref> {
         if path.is_empty() {
             return Some(self.get_root_id());
         }
 
-        // Use split_ref_path to handle escaped "/" in instance names.
-        // An instance named "A/B" is stored as "A\/B" in the path.
-        let segments = crate::split_ref_path(path);
+        let segments: Vec<&str> = path.split('/').collect();
         let mut current_ref = self.get_root_id();
 
-        // The root of the tree doesn't appear in the path, so we start with
-        // the root's children.
-        for segment in segments.iter() {
+        for segment in &segments {
             let current = self.inner.get_by_ref(current_ref)?;
-
             let children = current.children();
 
             let mut found = false;
             for &child_ref in children {
-                let child = self.inner.get_by_ref(child_ref)?;
-                if child.name == segment.as_str() {
+                let fs_name = self.filesystem_name_for(child_ref);
+                if fs_name.eq_ignore_ascii_case(segment) {
                     current_ref = child_ref;
                     found = true;
                     break;
+                }
+            }
+
+            if !found {
+                // Fallback: try matching by instance name (for backward
+                // compatibility with legacy ref paths and instances without
+                // filesystem backing). Case-insensitive to match the primary
+                // lookup semantics.
+                for &child_ref in children {
+                    let child = self.inner.get_by_ref(child_ref)?;
+                    if child.name.eq_ignore_ascii_case(segment) {
+                        current_ref = child_ref;
+                        found = true;
+                        break;
+                    }
                 }
             }
 
@@ -267,6 +283,138 @@ impl RojoTree {
         }
 
         Some(current_ref)
+    }
+
+    /// Resolve a Luau require-by-string style ref path to a target instance.
+    ///
+    /// `source_ref` is the instance that owns the `Rojo_Ref_*` attribute.
+    /// Prefix semantics (per Roblox require-by-string):
+    /// - `@game/rest` -- resolve from DataModel root
+    /// - `@self` -- return source_ref
+    /// - `@self/rest` -- resolve from source_ref
+    /// - `./rest` -- resolve from source_ref's parent
+    /// - `../rest` -- resolve from source_ref's grandparent
+    /// - bare path (no prefix) -- legacy fallback, resolve like `@game/`
+    ///
+    /// During segment walk, `..` navigates to the parent.
+    pub fn resolve_ref_path(&self, path: &str, source_ref: Ref) -> Option<Ref> {
+        if let Some(rest) = path.strip_prefix("@game/") {
+            return self.walk_segments(self.get_root_id(), rest);
+        }
+        if path == "@game" {
+            return Some(self.get_root_id());
+        }
+        if path == "@self" {
+            return Some(source_ref);
+        }
+        if let Some(rest) = path.strip_prefix("@self/") {
+            return self.walk_segments(source_ref, rest);
+        }
+        if let Some(rest) = path.strip_prefix("./") {
+            let parent = self.inner.get_by_ref(source_ref)?.parent();
+            if parent.is_none() {
+                return None;
+            }
+            return self.walk_segments(parent, rest);
+        }
+        if let Some(rest) = path.strip_prefix("../") {
+            let parent = self.inner.get_by_ref(source_ref)?.parent();
+            if parent.is_none() {
+                return None;
+            }
+            let grandparent = self.inner.get_by_ref(parent)?.parent();
+            if grandparent.is_none() {
+                return None;
+            }
+            return self.walk_segments(grandparent, rest);
+        }
+
+        // Bare path (no prefix) -- legacy backward compatibility
+        self.walk_segments(self.get_root_id(), path)
+    }
+
+    /// Walk `/`-separated segments from a starting Ref, handling `..` as
+    /// "go to parent". Each non-`..` segment matches a child by filesystem
+    /// name (case-insensitive), falling back to instance name.
+    fn walk_segments(&self, start: Ref, rest: &str) -> Option<Ref> {
+        if rest.is_empty() {
+            return Some(start);
+        }
+
+        let mut current_ref = start;
+        for segment in rest.split('/') {
+            if segment.is_empty() {
+                continue;
+            }
+            if segment == ".." {
+                let inst = self.inner.get_by_ref(current_ref)?;
+                let parent = inst.parent();
+                if parent.is_none() {
+                    return None;
+                }
+                current_ref = parent;
+                continue;
+            }
+
+            let current = self.inner.get_by_ref(current_ref)?;
+            let children = current.children();
+
+            let mut found = false;
+            for &child_ref in children {
+                let fs_name = self.filesystem_name_for(child_ref);
+                if fs_name.eq_ignore_ascii_case(segment) {
+                    current_ref = child_ref;
+                    found = true;
+                    break;
+                }
+            }
+
+            if !found {
+                for &child_ref in children {
+                    let child = self.inner.get_by_ref(child_ref)?;
+                    if child.name.eq_ignore_ascii_case(segment) {
+                        current_ref = child_ref;
+                        found = true;
+                        break;
+                    }
+                }
+            }
+
+            if !found {
+                return None;
+            }
+        }
+
+        Some(current_ref)
+    }
+
+    /// Returns the filesystem name for an instance (the filename or directory
+    /// name on disk). Derived from `instigating_source` if available, otherwise
+    /// falls back to the instance name.
+    pub fn filesystem_name_for(&self, id: Ref) -> String {
+        if let Some(meta) = self.metadata_map.get(&id) {
+            if let Some(source) = &meta.instigating_source {
+                match source {
+                    InstigatingSource::Path(_) => {
+                        if let Some(name) = source.path().file_name().and_then(|f| f.to_str()) {
+                            return name.to_string();
+                        }
+                    }
+                    InstigatingSource::ProjectNode { .. } => {
+                        // Project-sourced instance: use instance name, not the
+                        // project file path (which would be e.g. "default.project.json5").
+                        if let Some(inst) = self.inner.get_by_ref(id) {
+                            return inst.name.clone();
+                        }
+                    }
+                }
+            }
+        }
+        // Fallback: use instance name
+        self.inner
+            .get_by_ref(id)
+            .map(|inst| inst.name.clone())
+            .unwrap_or_default()
     }
 
     fn insert_metadata(&mut self, id: Ref, metadata: InstanceMetadata) {

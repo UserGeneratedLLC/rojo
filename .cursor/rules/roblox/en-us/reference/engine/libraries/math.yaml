@@ -283,6 +283,56 @@ functions:
     tags: []
     code_samples: []
     deprecation_message: ''
+  - name: math.isfinite
+    summary: |
+      Returns true if `x` is a finite number.
+    description: |
+      Returns true if `x` is a finite number, meaning it is neither NaN nor
+      positive or negative infinity (±`Library.math.huge`).
+    parameters:
+      - name: x
+        type: number
+        default:
+        summary: ''
+    returns:
+      - type: boolean
+        summary: ''
+    tags: []
+    code_samples: []
+    deprecation_message: ''
+  - name: math.isinf
+    summary: |
+      Returns true if `x` is positive or negative infinity and false otherwise.
+    description: |
+      Returns true if `x` is positive or negative infinity
+      (±`Library.math.huge`) and false otherwise.
+    parameters:
+      - name: x
+        type: number
+        default:
+        summary: ''
+    returns:
+      - type: boolean
+        summary: ''
+    tags: []
+    code_samples: []
+    deprecation_message: ''
+  - name: math.isnan
+    summary: |
+      Returns true if `x` is not a number (NaN) and false otherwise.
+    description: |
+      Returns true if `x` is not a number (NaN) and false otherwise.
+    parameters:
+      - name: x
+        type: number
+        default:
+        summary: ''
+    returns:
+      - type: boolean
+        summary: ''
+    tags: []
+    code_samples: []
+    deprecation_message: ''
   - name: math.ldexp
     summary: |
       Returns `x`\*`2`^`e` (`e` should be an integer).

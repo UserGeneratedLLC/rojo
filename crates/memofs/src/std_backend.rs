@@ -82,6 +82,11 @@ impl StdBackend {
                     );
                     false // keep watcher running
                 }
+                WatcherCriticalError::ChannelSendFailed(_) => {
+                    // The event receiver was dropped (VFS shutdown). This is
+                    // normal during process exit -- stop the thread silently.
+                    true
+                }
                 _ => {
                     log::error!("{}. File watching is no longer reliable.", err);
                     std::process::exit(1);
@@ -339,7 +344,7 @@ impl VfsBackend for StdBackend {
             // This prevents a failed watch from permanently marking the path as "watched"
             match self.debouncer.watch(path, RecursiveMode::Recursive) {
                 Ok(()) => {
-                    log::info!("Watching path: {}", path.display());
+                    log::debug!("Watching path: {}", path.display());
                     self.watches.insert(path.to_path_buf());
                     Ok(())
                 }
@@ -352,22 +357,31 @@ impl VfsBackend for StdBackend {
     }
 
     fn unwatch(&mut self, path: &Path) -> io::Result<()> {
-        // Only remove from watches if unwatch succeeds
-        // This keeps state consistent if unwatch fails (e.g., path wasn't directly watched)
+        let was_watched = self.watches.contains(path);
+
         match self.debouncer.unwatch(path) {
             Ok(()) => {
-                log::info!("Unwatched path: {}", path.display());
+                if was_watched {
+                    log::info!("Unwatched path: {}", path.display());
+                } else {
+                    log::trace!(
+                        "Unwatched path (was not actively watched): {}",
+                        path.display()
+                    );
+                }
                 self.watches.remove(path);
                 Ok(())
             }
             Err(err) => {
-                // If the path wasn't being watched (common when parent dir is watched),
-                // still remove from our tracking set but don't propagate the error
-                if matches!(
+                let is_not_watched = matches!(
                     err.kind,
                     notify::ErrorKind::WatchNotFound | notify::ErrorKind::PathNotFound
-                ) {
-                    log::info!(
+                ) || matches!(
+                    &err.kind,
+                    notify::ErrorKind::Generic(msg) if msg.contains("No watch was found")
+                );
+                if is_not_watched {
+                    log::trace!(
                         "Path was not directly watched (likely covered by parent): {}",
                         path.display()
                     );

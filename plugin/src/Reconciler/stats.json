@@ -1,0 +1,28 @@
+{
+        "lines": 629,
+        "bytecode": 6261,
+        "bytecodeInstructionCount": 986,
+        "codegen": 0,
+        "readTime": 0.000094,
+        "miscTime": 0.000053,
+        "parseTime": 0.000251,
+        "compileTime": 0.000709,
+        "codegenTime": 0.000000,
+        "lowerStats": {
+            "totalFunctions": 0,
+            "skippedFunctions": 0,
+            "spillsToSlot": 0,
+            "spillsToRestore": 0,
+            "maxSpillSlotsUsed": 0,
+            "blocksPreOpt": 0,
+            "blocksPostOpt": 0,
+            "maxBlockInstructions": 0,
+            "regAllocErrors": 0,
+            "loweringErrors": 0,
+            "blockLinearizationStats": {
+                "constPropInstructionCount": 0,
+                "timeSeconds": 0.000000
+            },
+            "functions": []
+        }
+    }

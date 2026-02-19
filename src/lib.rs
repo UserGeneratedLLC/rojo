@@ -8,6 +8,7 @@ pub mod cli;
 mod tree_view;
 
 mod change_processor;
+pub mod git;
 mod glob;
 mod json;
 mod lua_ast;
@@ -19,10 +20,10 @@ mod resolution;
 mod rojo_ref;
 mod serve_session;
 mod session_id;
-mod snapshot;
+pub mod snapshot;
 mod snapshot_middleware;
-mod syncback;
-mod variant_eq;
+pub mod syncback;
+pub mod variant_eq;
 mod web;
 
 // TODO: Work out what we should expose publicly

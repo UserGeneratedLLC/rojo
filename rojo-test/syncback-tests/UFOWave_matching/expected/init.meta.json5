@@ -1,0 +1,52 @@
+{
+  attributes: {
+    Rojo_Ref_PrimaryPart: "@self/TsunamiWave",
+    Speed: 10,
+    ZonesPassed: {
+      Float32: 0
+    }
+  },
+  className: "Model",
+  properties: {
+    ModelMeshCFrame: [
+      -740.2847900390625,
+      -71.00001525878906,
+      -369.2483825683594,
+      -2.6309862732887268e-8,
+      0,
+      -1.000003695487976,
+      0,
+      1,
+      0,
+      1.000003695487976,
+      0,
+      -2.6309862732887268e-8
+    ],
+    WorldPivotData: {
+      OptionalCFrame: {
+        orientation: [
+          [
+            1,
+            0,
+            0
+          ],
+          [
+            0,
+            1,
+            0
+          ],
+          [
+            0,
+            0,
+            1
+          ]
+        ],
+        position: [
+          801.715576171875,
+          36.375,
+          0.00000762939453125
+        ]
+      }
+    }
+  }
+}

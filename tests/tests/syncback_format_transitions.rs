@@ -75,6 +75,7 @@ fn send_write_request(
         removed: vec![],
         added: added_map,
         updated: vec![],
+        stage_ids: Vec::new(),
     };
 
     session
@@ -904,6 +905,7 @@ fn rapid_syncs_dont_create_duplicates() {
                 removed: vec![],
                 added: added_map,
                 updated: vec![],
+                stage_ids: Vec::new(),
             };
 
             session
@@ -1179,6 +1181,7 @@ fn scripts_only_mode_rapid_syncs() {
                 removed: vec![],
                 added: added_map,
                 updated: vec![],
+                stage_ids: Vec::new(),
             };
 
             session
@@ -1802,6 +1805,7 @@ fn sync_immediate_double_sync() {
             removed: vec![],
             added: added_map,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request).unwrap();
 
@@ -1826,6 +1830,7 @@ fn sync_immediate_double_sync() {
             removed: vec![],
             added: added_map2,
             updated: vec![],
+            stage_ids: Vec::new(),
         };
         session.post_api_write(&write_request2).unwrap();
 
@@ -1871,6 +1876,7 @@ fn stress_test_50_rapid_syncs() {
                 removed: vec![],
                 added: added_map,
                 updated: vec![],
+                stage_ids: Vec::new(),
             };
             session.post_api_write(&write_request).unwrap();
             // No delay between syncs!

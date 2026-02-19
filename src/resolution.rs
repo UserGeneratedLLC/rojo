@@ -2,8 +2,10 @@ use std::borrow::Borrow;
 
 use anyhow::{bail, format_err};
 use rbx_dom_weak::types::{
-    Attributes, CFrame, Color3, Content, ContentId, ContentType, Enum, Font, MaterialColors,
-    Matrix3, Tags, Variant, VariantType, Vector2, Vector3,
+    Attributes, CFrame, Color3, ColorSequence, ColorSequenceKeypoint, Content, ContentId,
+    ContentType, CustomPhysicalProperties, Enum, Font, MaterialColors, Matrix3, NumberSequence,
+    NumberSequenceKeypoint, PhysicalProperties, Ray, Rect, Region3, Tags, UDim, UDim2, Variant,
+    VariantType, Vector2, Vector3,
 };
 use rbx_reflection::{DataType, PropertyDescriptor};
 use serde::{Deserialize, Serialize};
@@ -64,7 +66,7 @@ impl UnresolvedValue {
                     return Self::FullyQualified(variant);
                 }
                 Variant::Bool(bool) => AmbiguousValue::Bool(bool),
-                Variant::Float32(n) => AmbiguousValue::Number(n as f64),
+                Variant::Float32(n) => AmbiguousValue::Number32(n),
                 Variant::Float64(n) => AmbiguousValue::Number(n),
                 Variant::Int32(n) => AmbiguousValue::Number(n as f64),
                 Variant::Int64(n) => AmbiguousValue::Number(n as f64),
@@ -79,28 +81,149 @@ impl UnresolvedValue {
                 },
                 Variant::ContentId(content) => AmbiguousValue::String(content.into_string()),
                 Variant::Vector2(vector) => {
-                    AmbiguousValue::Array2([vector.x as f64, vector.y as f64])
+                    AmbiguousValue::Array2([cleanup_f32(vector.x), cleanup_f32(vector.y)])
                 }
-                Variant::Vector3(vector) => {
-                    AmbiguousValue::Array3([vector.x as f64, vector.y as f64, vector.z as f64])
-                }
-                Variant::Color3(color) => {
-                    AmbiguousValue::Array3([color.r as f64, color.g as f64, color.b as f64])
-                }
-                Variant::CFrame(cf) => AmbiguousValue::Array12([
-                    cf.position.x as f64,
-                    cf.position.y as f64,
-                    cf.position.z as f64,
-                    cf.orientation.x.x as f64,
-                    cf.orientation.x.y as f64,
-                    cf.orientation.x.z as f64,
-                    cf.orientation.y.x as f64,
-                    cf.orientation.y.y as f64,
-                    cf.orientation.y.z as f64,
-                    cf.orientation.z.x as f64,
-                    cf.orientation.z.y as f64,
-                    cf.orientation.z.z as f64,
+                Variant::Vector3(vector) => AmbiguousValue::Array3([
+                    cleanup_f32(vector.x),
+                    cleanup_f32(vector.y),
+                    cleanup_f32(vector.z),
                 ]),
+                Variant::Color3(color) => AmbiguousValue::Array3([
+                    cleanup_f32(color.r),
+                    cleanup_f32(color.g),
+                    cleanup_f32(color.b),
+                ]),
+                Variant::CFrame(cf) => AmbiguousValue::Array12([
+                    cleanup_f32(cf.position.x),
+                    cleanup_f32(cf.position.y),
+                    cleanup_f32(cf.position.z),
+                    cleanup_f32(cf.orientation.x.x),
+                    cleanup_f32(cf.orientation.x.y),
+                    cleanup_f32(cf.orientation.x.z),
+                    cleanup_f32(cf.orientation.y.x),
+                    cleanup_f32(cf.orientation.y.y),
+                    cleanup_f32(cf.orientation.y.z),
+                    cleanup_f32(cf.orientation.z.x),
+                    cleanup_f32(cf.orientation.z.y),
+                    cleanup_f32(cf.orientation.z.z),
+                ]),
+                Variant::UDim(udim) => {
+                    return Self::FullyQualified(Variant::UDim(UDim::new(
+                        cleanup_f32(udim.scale),
+                        udim.offset,
+                    )));
+                }
+                Variant::UDim2(udim2) => {
+                    return Self::FullyQualified(Variant::UDim2(UDim2::new(
+                        UDim::new(cleanup_f32(udim2.x.scale), udim2.x.offset),
+                        UDim::new(cleanup_f32(udim2.y.scale), udim2.y.offset),
+                    )));
+                }
+                Variant::OptionalCFrame(Some(cf)) => {
+                    return Self::FullyQualified(Variant::OptionalCFrame(Some(CFrame::new(
+                        Vector3::new(
+                            cleanup_f32(cf.position.x),
+                            cleanup_f32(cf.position.y),
+                            cleanup_f32(cf.position.z),
+                        ),
+                        Matrix3::new(
+                            Vector3::new(
+                                cleanup_f32(cf.orientation.x.x),
+                                cleanup_f32(cf.orientation.x.y),
+                                cleanup_f32(cf.orientation.x.z),
+                            ),
+                            Vector3::new(
+                                cleanup_f32(cf.orientation.y.x),
+                                cleanup_f32(cf.orientation.y.y),
+                                cleanup_f32(cf.orientation.y.z),
+                            ),
+                            Vector3::new(
+                                cleanup_f32(cf.orientation.z.x),
+                                cleanup_f32(cf.orientation.z.y),
+                                cleanup_f32(cf.orientation.z.z),
+                            ),
+                        ),
+                    ))));
+                }
+                Variant::Rect(rect) => {
+                    return Self::FullyQualified(Variant::Rect(Rect::new(
+                        Vector2::new(cleanup_f32(rect.min.x), cleanup_f32(rect.min.y)),
+                        Vector2::new(cleanup_f32(rect.max.x), cleanup_f32(rect.max.y)),
+                    )));
+                }
+                Variant::Ray(ray) => {
+                    return Self::FullyQualified(Variant::Ray(Ray::new(
+                        Vector3::new(
+                            cleanup_f32(ray.origin.x),
+                            cleanup_f32(ray.origin.y),
+                            cleanup_f32(ray.origin.z),
+                        ),
+                        Vector3::new(
+                            cleanup_f32(ray.direction.x),
+                            cleanup_f32(ray.direction.y),
+                            cleanup_f32(ray.direction.z),
+                        ),
+                    )));
+                }
+                Variant::Region3(region) => {
+                    return Self::FullyQualified(Variant::Region3(Region3::new(
+                        Vector3::new(
+                            cleanup_f32(region.min.x),
+                            cleanup_f32(region.min.y),
+                            cleanup_f32(region.min.z),
+                        ),
+                        Vector3::new(
+                            cleanup_f32(region.max.x),
+                            cleanup_f32(region.max.y),
+                            cleanup_f32(region.max.z),
+                        ),
+                    )));
+                }
+                Variant::NumberSequence(seq) => {
+                    return Self::FullyQualified(Variant::NumberSequence(NumberSequence {
+                        keypoints: seq
+                            .keypoints
+                            .into_iter()
+                            .map(|kp| {
+                                NumberSequenceKeypoint::new(
+                                    cleanup_f32(kp.time),
+                                    cleanup_f32(kp.value),
+                                    cleanup_f32(kp.envelope),
+                                )
+                            })
+                            .collect(),
+                    }));
+                }
+                Variant::ColorSequence(seq) => {
+                    return Self::FullyQualified(Variant::ColorSequence(ColorSequence {
+                        keypoints: seq
+                            .keypoints
+                            .into_iter()
+                            .map(|kp| {
+                                ColorSequenceKeypoint::new(
+                                    cleanup_f32(kp.time),
+                                    Color3::new(
+                                        cleanup_f32(kp.color.r),
+                                        cleanup_f32(kp.color.g),
+                                        cleanup_f32(kp.color.b),
+                                    ),
+                                )
+                            })
+                            .collect(),
+                    }));
+                }
+                Variant::PhysicalProperties(PhysicalProperties::Custom(cpp)) => {
+                    return Self::FullyQualified(Variant::PhysicalProperties(
+                        PhysicalProperties::Custom(CustomPhysicalProperties::new(
+                            cleanup_f32(cpp.density()),
+                            cleanup_f32(cpp.friction()),
+                            cleanup_f32(cpp.elasticity()),
+                            cleanup_f32(cpp.friction_weight()),
+                            cleanup_f32(cpp.elasticity_weight()),
+                            cleanup_f32(cpp.acoustic_absorption()),
+                        )),
+                    ));
+                }
                 Variant::Attributes(attr) => AmbiguousValue::Attributes(attr),
                 Variant::Font(font) => AmbiguousValue::Font(font),
                 Variant::MaterialColors(colors) => AmbiguousValue::MaterialColors(colors),
@@ -138,10 +261,11 @@ pub enum AmbiguousValue {
     String(String),
     StringArray(Vec<String>),
     Number(f64),
-    Array2([f64; 2]),
-    Array3([f64; 3]),
-    Array4([f64; 4]),
-    Array12([f64; 12]),
+    Number32(f32),
+    Array2([f32; 2]),
+    Array3([f32; 3]),
+    Array4([f32; 4]),
+    Array12([f32; 12]),
     Attributes(Attributes),
     Font(Font),
     MaterialColors(MaterialColors),
@@ -196,6 +320,7 @@ impl AmbiguousValue {
             DataType::Value(variant_ty) => match (variant_ty, self) {
                 (VariantType::Bool, AmbiguousValue::Bool(value)) => Ok(value.into()),
 
+                (VariantType::Float32, AmbiguousValue::Number32(value)) => Ok(value.into()),
                 (VariantType::Float32, AmbiguousValue::Number(value)) => Ok((value as f32).into()),
                 (VariantType::Float64, AmbiguousValue::Number(value)) => Ok(value.into()),
                 (VariantType::Int32, AmbiguousValue::Number(value)) => Ok((value as i32).into()),
@@ -213,19 +338,19 @@ impl AmbiguousValue {
                 }
 
                 (VariantType::Vector2, AmbiguousValue::Array2(value)) => {
-                    Ok(Vector2::new(value[0] as f32, value[1] as f32).into())
+                    Ok(Vector2::new(value[0], value[1]).into())
                 }
 
                 (VariantType::Vector3, AmbiguousValue::Array3(value)) => {
-                    Ok(Vector3::new(value[0] as f32, value[1] as f32, value[2] as f32).into())
+                    Ok(Vector3::new(value[0], value[1], value[2]).into())
                 }
 
                 (VariantType::Color3, AmbiguousValue::Array3(value)) => {
-                    Ok(Color3::new(value[0] as f32, value[1] as f32, value[2] as f32).into())
+                    Ok(Color3::new(value[0], value[1], value[2]).into())
                 }
 
                 (VariantType::CFrame, AmbiguousValue::Array12(value)) => {
-                    let value = value.map(|v| v as f32);
+                    let value = value.map(|v| v);
                     let pos = Vector3::new(value[0], value[1], value[2]);
                     let orientation = Matrix3::new(
                         Vector3::new(value[3], value[4], value[5]),
@@ -280,6 +405,7 @@ impl AmbiguousValue {
             AmbiguousValue::String(_) => "a string",
             AmbiguousValue::StringArray(_) => "an array of strings",
             AmbiguousValue::Number(_) => "a number",
+            AmbiguousValue::Number32(_) => "a number",
             AmbiguousValue::Array2(_) => "an array of two numbers",
             AmbiguousValue::Array3(_) => "an array of three numbers",
             AmbiguousValue::Array4(_) => "an array of four numbers",
@@ -288,6 +414,15 @@ impl AmbiguousValue {
             AmbiguousValue::Font(_) => "an object describing a Font",
             AmbiguousValue::MaterialColors(_) => "an object describing MaterialColors",
         }
+    }
+}
+
+pub(crate) fn cleanup_f32(v: f32) -> f32 {
+    let cleaned = format!("{:.6}", v).parse::<f32>().unwrap_or(v);
+    if cleaned == 0.0 {
+        0.0
+    } else {
+        cleaned
     }
 }
 
@@ -415,6 +550,12 @@ mod test {
 
         assert_eq!(resolve("Part", "Transparency", "1"), Variant::Float32(1.0));
         assert_eq!(resolve("NumberValue", "Value", "1"), Variant::Float64(1.0));
+        assert_eq!(
+            UnresolvedValue::from_variant(Variant::Float32(0.125), "Part", "Transparency")
+                .resolve("Part", "Transparency")
+                .unwrap(),
+            Variant::Float32(0.125),
+        );
 
         assert_eq!(resolve_unambiguous("12.5"), Variant::Float64(12.5));
     }

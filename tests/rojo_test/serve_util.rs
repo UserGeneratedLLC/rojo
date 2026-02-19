@@ -130,55 +130,211 @@ impl TestServeSession {
         }
     }
 
+    /// Creates a test session using a specific (non-default) project file
+    /// inside the fixture directory. The fixture is copied as usual, but
+    /// `atlas serve` is pointed at `project_file` within the copied dir
+    /// instead of the directory itself.
+    pub fn new_with_project_file(name: &str, project_file: &str) -> Self {
+        let working_dir = get_working_dir_path();
+
+        let source_path = Path::new(SERVE_TESTS_PATH).join(name);
+        let dir = tempdir().expect("Couldn't create temporary directory");
+        let fixture_dir = dir
+            .path()
+            .canonicalize()
+            .expect("Couldn't canonicalize temporary directory path")
+            .join(name);
+
+        fs::create_dir(&fixture_dir).expect("Couldn't create temporary project subdirectory");
+        copy_recursive(&source_path, &fixture_dir)
+            .expect("Couldn't copy project to temporary directory");
+
+        let project_path = fixture_dir.join(project_file);
+        assert!(
+            project_path.exists(),
+            "Project file {} does not exist in fixture {}",
+            project_file,
+            name
+        );
+
+        #[cfg(target_os = "macos")]
+        std::thread::sleep(Duration::from_millis(100));
+
+        let port = get_port_number();
+        let port_string = port.to_string();
+
+        let rojo_process = Command::new(ROJO_PATH)
+            .args([
+                "serve",
+                project_path.to_str().unwrap(),
+                "--port",
+                port_string.as_str(),
+            ])
+            .current_dir(working_dir)
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Couldn't start Rojo");
+
+        TestServeSession {
+            rojo_process: KillOnDrop(rojo_process),
+            _dir: dir,
+            port,
+            project_path: fixture_dir,
+        }
+    }
+
+    /// Creates a test session with a git repo initialized in the project dir.
+    /// The `setup` callback runs after the fixture is copied and git is initialized
+    /// but BEFORE the serve process starts. Use it to commit initial files and
+    /// make modifications that should appear as git changes.
+    pub fn new_with_git(name: &str, setup: impl FnOnce(&Path)) -> Self {
+        let working_dir = get_working_dir_path();
+
+        let source_path = Path::new(SERVE_TESTS_PATH).join(name);
+        let dir = tempdir().expect("Couldn't create temporary directory");
+        let project_path = dir
+            .path()
+            .canonicalize()
+            .expect("Couldn't canonicalize temporary directory path")
+            .join(name);
+
+        fs::create_dir(&project_path).expect("Couldn't create temporary project subdirectory");
+        copy_recursive(&source_path, &project_path)
+            .expect("Couldn't copy project to temporary directory");
+
+        // Initialize git repo and run setup callback
+        Command::new("git")
+            .args(["init"])
+            .current_dir(&project_path)
+            .output()
+            .expect("git init failed");
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(&project_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(&project_path)
+            .output()
+            .unwrap();
+
+        setup(&project_path);
+
+        #[cfg(target_os = "macos")]
+        std::thread::sleep(Duration::from_millis(100));
+
+        let port = get_port_number();
+        let port_string = port.to_string();
+
+        let rojo_process = Command::new(ROJO_PATH)
+            .args([
+                "serve",
+                project_path.to_str().unwrap(),
+                "--port",
+                port_string.as_str(),
+            ])
+            .current_dir(working_dir)
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Couldn't start Rojo");
+
+        TestServeSession {
+            rojo_process: KillOnDrop(rojo_process),
+            _dir: dir,
+            port,
+            project_path,
+        }
+    }
+
     pub fn path(&self) -> &Path {
         &self.project_path
     }
 
+    #[allow(dead_code)]
     pub fn port(&self) -> usize {
         self.port
     }
 
-    /// Waits for the `rojo serve` server to come online with expontential
-    /// backoff.
-    pub fn wait_to_come_online(&mut self) -> ServerInfoResponse {
-        const BASE_DURATION_MS: f32 = 30.0;
-        const EXP_BACKOFF_FACTOR: f32 = 1.3;
-        const MAX_TRIES: u32 = 5;
+    fn respawn_with_new_port(&mut self) {
+        let port = get_port_number();
+        let port_string = port.to_string();
+        let working_dir = get_working_dir_path();
 
-        for i in 1..=MAX_TRIES {
-            match self.rojo_process.0.try_wait() {
-                Ok(Some(status)) => {
-                    let mut stderr_output = String::new();
-                    if let Some(mut stderr) = self.rojo_process.0.stderr.take() {
-                        let _ = stderr.read_to_string(&mut stderr_output);
+        let rojo_process = Command::new(ROJO_PATH)
+            .args([
+                "serve",
+                self.project_path.to_str().unwrap(),
+                "--port",
+                port_string.as_str(),
+            ])
+            .current_dir(working_dir)
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Couldn't start Rojo");
+
+        self.rojo_process = KillOnDrop(rojo_process);
+        self.port = port;
+    }
+
+    /// Waits for the `rojo serve` server to come online with exponential
+    /// backoff. If the process dies with `AddrInUse`, respawns with a new
+    /// random port (up to `MAX_PORT_RETRIES` times).
+    pub fn wait_to_come_online(&mut self) -> ServerInfoResponse {
+        const BASE_DURATION_MS: f32 = 100.0;
+        const EXP_BACKOFF_FACTOR: f32 = 1.3;
+        const MAX_TRIES: u32 = 10;
+        const MAX_PORT_RETRIES: u32 = 3;
+
+        let mut port_retries = 0u32;
+
+        'retry_port: loop {
+            for i in 1..=MAX_TRIES {
+                match self.rojo_process.0.try_wait() {
+                    Ok(Some(status)) => {
+                        let mut stderr_output = String::new();
+                        if let Some(mut stderr) = self.rojo_process.0.stderr.take() {
+                            let _ = stderr.read_to_string(&mut stderr_output);
+                        }
+                        if stderr_output.contains("AddrInUse") && port_retries < MAX_PORT_RETRIES {
+                            port_retries += 1;
+                            log::warn!(
+                                "Port {} in use, respawning with new port (attempt {}/{})",
+                                self.port,
+                                port_retries,
+                                MAX_PORT_RETRIES
+                            );
+                            self.respawn_with_new_port();
+                            continue 'retry_port;
+                        }
+                        panic!(
+                            "Rojo process exited with status {}\nstderr:\n{}",
+                            status, stderr_output
+                        );
                     }
-                    panic!(
-                        "Rojo process exited with status {}\nstderr:\n{}",
-                        status, stderr_output
-                    );
+                    Ok(None) => { /* The process is still running, as expected */ }
+                    Err(err) => panic!("Failed to wait on Rojo process: {}", err),
                 }
-                Ok(None) => { /* The process is still running, as expected */ }
-                Err(err) => panic!("Failed to wait on Rojo process: {}", err),
+
+                let info = match self.get_api_rojo() {
+                    Ok(info) => info,
+                    Err(err) => {
+                        let retry_time_ms = BASE_DURATION_MS * (i as f32).powf(EXP_BACKOFF_FACTOR);
+                        let retry_time = Duration::from_millis(retry_time_ms as u64);
+
+                        log::info!("Server error, retrying in {:?}: {}", retry_time, err);
+                        thread::sleep(retry_time);
+                        continue;
+                    }
+                };
+
+                log::info!("Got session info: {:?}", info);
+
+                return info;
             }
 
-            let info = match self.get_api_rojo() {
-                Ok(info) => info,
-                Err(err) => {
-                    let retry_time_ms = BASE_DURATION_MS * (i as f32).powf(EXP_BACKOFF_FACTOR);
-                    let retry_time = Duration::from_millis(retry_time_ms as u64);
-
-                    log::info!("Server error, retrying in {:?}: {}", retry_time, err);
-                    thread::sleep(retry_time);
-                    continue;
-                }
-            };
-
-            log::info!("Got session info: {:?}", info);
-
-            return info;
+            panic!("Rojo server did not respond after {} tries.", MAX_TRIES);
         }
-
-        panic!("Rojo server did not respond after {} tries.", MAX_TRIES);
     }
 
     pub fn get_api_rojo(&self) -> Result<ServerInfoResponse, reqwest::Error> {
@@ -405,6 +561,351 @@ fn get_port_number() -> usize {
     port
 }
 
+/// A service entry plus its children and ObjectValue ref carriers (before
+/// serialization into the shared rbxm blob). Use `build_syncback_request`
+/// to finalize.
+pub struct ServiceEntry {
+    pub chunk: librojo::web_api::ServiceChunk,
+    pub children: Vec<rbx_dom_weak::InstanceBuilder>,
+    pub ref_targets: Vec<rbx_dom_weak::InstanceBuilder>,
+}
+
+/// Build a ServiceEntry with children and no extra properties.
+pub fn make_service_chunk(
+    class_name: &str,
+    children: Vec<rbx_dom_weak::InstanceBuilder>,
+) -> ServiceEntry {
+    make_service_chunk_full(class_name, vec![], vec![], vec![], children)
+}
+
+/// Build a ServiceEntry with explicit service-level properties, ObjectValue
+/// ref carriers, and refs (1-based indices into `ref_targets`).
+pub fn make_service_chunk_full(
+    class_name: &str,
+    properties: Vec<(&str, rbx_dom_weak::types::Variant)>,
+    refs: Vec<(&str, u32)>,
+    ref_targets: Vec<rbx_dom_weak::InstanceBuilder>,
+    children: Vec<rbx_dom_weak::InstanceBuilder>,
+) -> ServiceEntry {
+    use std::collections::HashMap;
+
+    let props_map: HashMap<String, rbx_dom_weak::types::Variant> = properties
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+    let refs_map: HashMap<String, u32> = refs
+        .into_iter()
+        .map(|(prop, idx)| (prop.to_string(), idx))
+        .collect();
+
+    ServiceEntry {
+        chunk: librojo::web_api::ServiceChunk {
+            class_name: class_name.to_string(),
+            child_count: children.len() as u32,
+            ref_target_count: ref_targets.len() as u32,
+            properties: props_map,
+            refs: refs_map,
+        },
+        children,
+        ref_targets,
+    }
+}
+
+/// Serialize all ServiceEntries into the final wire format: a single rbxm
+/// data blob and a Vec of ServiceChunks (metadata only).
+pub fn build_syncback_request(
+    entries: Vec<ServiceEntry>,
+) -> (Vec<u8>, Vec<librojo::web_api::ServiceChunk>) {
+    use rbx_dom_weak::WeakDom;
+
+    let mut dom = WeakDom::new(rbx_dom_weak::InstanceBuilder::new("DataModel"));
+    let root = dom.root_ref();
+
+    let mut chunks = Vec::new();
+    for mut entry in entries {
+        for child in entry.children {
+            dom.insert(root, child);
+        }
+        entry.chunk.ref_target_count = entry.ref_targets.len() as u32;
+        for carrier in entry.ref_targets {
+            dom.insert(root, carrier);
+        }
+        chunks.push(entry.chunk);
+    }
+
+    let all_refs: Vec<Ref> = dom.root().children().to_vec();
+    let mut data = Vec::new();
+    if !all_refs.is_empty() {
+        rbx_binary::to_writer(&mut data, &dom, &all_refs).unwrap();
+    }
+
+    (data, chunks)
+}
+
+/// Build a complete rbxl file from the single-rbxm data blob + service
+/// chunks, mirroring the same data that live syncback receives.
+pub fn make_rbxl_from_chunks(data: &[u8], chunks: &[librojo::web_api::ServiceChunk]) -> Vec<u8> {
+    use rbx_dom_weak::types::Variant;
+    use rbx_dom_weak::WeakDom;
+    use std::collections::HashMap;
+    use std::io::Cursor;
+
+    let mut dom = WeakDom::new(rbx_dom_weak::InstanceBuilder::new("DataModel"));
+    let root_ref = dom.root_ref();
+
+    let cloned_children: Vec<Ref> = if !data.is_empty() {
+        let chunk_dom = rbx_binary::from_reader(Cursor::new(data))
+            .unwrap_or_else(|e| panic!("Failed to parse rbxm data blob: {e}"));
+
+        let mut ref_map: HashMap<Ref, Ref> = HashMap::new();
+        let mut cloned = Vec::new();
+        for &child_ref in chunk_dom.root().children() {
+            deep_clone_into_test(&chunk_dom, &mut dom, child_ref, root_ref, &mut ref_map);
+            cloned.push(*ref_map.get(&child_ref).unwrap());
+        }
+
+        let all_refs: Vec<Ref> = ref_map.values().copied().collect();
+        for inst_ref in all_refs {
+            let props_to_fix: Vec<(String, Ref)> = {
+                let inst = dom.get_by_ref(inst_ref).unwrap();
+                inst.properties
+                    .iter()
+                    .filter_map(|(key, value)| {
+                        if let Variant::Ref(r) = value {
+                            ref_map.get(r).map(|&mapped| (key.to_string(), mapped))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            };
+            if !props_to_fix.is_empty() {
+                let inst = dom.get_by_ref_mut(inst_ref).unwrap();
+                for (key, new_ref) in props_to_fix {
+                    inst.properties.insert(key.into(), Variant::Ref(new_ref));
+                }
+            }
+        }
+        cloned
+    } else {
+        Vec::new()
+    };
+
+    let mut cursor = 0usize;
+    for chunk in chunks {
+        let mut builder = rbx_dom_weak::InstanceBuilder::new(&chunk.class_name);
+        for (key, value) in &chunk.properties {
+            builder = builder.with_property(key.as_str(), value.clone());
+        }
+        let service_ref = dom.insert(root_ref, builder);
+
+        let child_count = chunk.child_count as usize;
+        let ref_count = chunk.ref_target_count as usize;
+        let total = child_count + ref_count;
+        let end = (cursor + total).min(cloned_children.len());
+        let service_range: Vec<Ref> = cloned_children[cursor..end].to_vec();
+
+        for &child_ref in &service_range[..child_count.min(service_range.len())] {
+            dom.transfer_within(child_ref, service_ref);
+        }
+
+        let carrier_start = child_count;
+        let carrier_end = service_range.len();
+        let carriers: Vec<Ref> = service_range[carrier_start..carrier_end].to_vec();
+
+        for (prop_name, &idx) in &chunk.refs {
+            if idx == 0 || (idx as usize) > carriers.len() {
+                continue;
+            }
+            let carrier_ref = carriers[idx as usize - 1];
+            if let Some(Variant::Ref(actual_target)) = dom
+                .get_by_ref(carrier_ref)
+                .and_then(|inst| inst.properties.get(&rbx_dom_weak::ustr("Value")).cloned())
+            {
+                let service = dom.get_by_ref_mut(service_ref).unwrap();
+                service
+                    .properties
+                    .insert(prop_name.as_str().into(), Variant::Ref(actual_target));
+            }
+        }
+
+        for carrier_ref in carriers {
+            dom.destroy(carrier_ref);
+        }
+
+        cursor = end;
+    }
+
+    let existing: std::collections::HashSet<String> =
+        chunks.iter().map(|c| c.class_name.clone()).collect();
+    for &svc in librojo::syncback::VISIBLE_SERVICES {
+        if !existing.contains(svc) {
+            dom.insert(root_ref, rbx_dom_weak::InstanceBuilder::new(svc));
+        }
+    }
+
+    let service_refs: Vec<Ref> = dom.root().children().to_vec();
+    let mut buf = Vec::new();
+    rbx_binary::to_writer(&mut buf, &dom, &service_refs).unwrap();
+    buf
+}
+
+fn deep_clone_into_test(
+    source: &rbx_dom_weak::WeakDom,
+    target: &mut rbx_dom_weak::WeakDom,
+    source_ref: Ref,
+    target_parent: Ref,
+    ref_map: &mut std::collections::HashMap<Ref, Ref>,
+) {
+    let inst = source.get_by_ref(source_ref).unwrap();
+    let mut builder =
+        rbx_dom_weak::InstanceBuilder::new(inst.class.as_str()).with_name(inst.name.as_str());
+
+    for (key, value) in &inst.properties {
+        builder = builder.with_property(key.as_str(), value.clone());
+    }
+
+    let new_ref = target.insert(target_parent, builder);
+    ref_map.insert(source_ref, new_ref);
+
+    for &child_ref in inst.children() {
+        deep_clone_into_test(source, target, child_ref, new_ref, ref_map);
+    }
+}
+
+/// Run CLI syncback on a fresh copy of a fixture using the same data
+/// that was sent to live syncback. Returns the temp dir (keep alive) and
+/// project path.
+pub fn run_cli_syncback_on_chunks(
+    fixture_name: &str,
+    data: &[u8],
+    chunks: &[librojo::web_api::ServiceChunk],
+) -> (TempDir, PathBuf) {
+    use crate::rojo_test::io_util::{copy_recursive, ROJO_PATH, SERVE_TESTS_PATH};
+
+    let source_path = Path::new(SERVE_TESTS_PATH).join(fixture_name);
+    let dir = tempdir().expect("Couldn't create temp dir for CLI syncback");
+    let project_path = dir.path().join(fixture_name);
+    fs::create_dir(&project_path).expect("Couldn't create project subdirectory");
+    copy_recursive(&source_path, &project_path).expect("Couldn't copy fixture");
+
+    let rbxl_data = make_rbxl_from_chunks(data, chunks);
+    let rbxl_path = dir.path().join("input.rbxl");
+    fs::write(&rbxl_path, rbxl_data).expect("Failed to write rbxl");
+
+    let output = std::process::Command::new(ROJO_PATH)
+        .args([
+            "syncback",
+            project_path.to_str().unwrap(),
+            "--input",
+            rbxl_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("Failed to run atlas syncback");
+
+    if !output.status.success() {
+        panic!(
+            "atlas syncback failed:\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    (dir, project_path)
+}
+
+impl TestServeSession {
+    /// Post to /api/syncback with raw bytes. Returns the full response
+    /// for status code inspection.
+    pub fn post_api_syncback_raw(&self, body: Vec<u8>) -> reqwest::blocking::Response {
+        let url = format!("http://localhost:{}/api/syncback", self.port);
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .build()
+            .expect("Failed to build reqwest client");
+        client
+            .post(url)
+            .body(body)
+            .send()
+            .expect("Failed to send syncback request")
+    }
+
+    /// Post to /api/syncback with correct version/protocol info.
+    /// `data` is the single rbxm blob; `services` are the metadata chunks.
+    /// Panics if the response is not 200.
+    pub fn post_api_syncback(
+        &self,
+        place_id: Option<u64>,
+        data: Vec<u8>,
+        services: Vec<librojo::web_api::ServiceChunk>,
+    ) {
+        use serde::Serialize;
+
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct Req {
+            protocol_version: u64,
+            server_version: String,
+            place_id: Option<u64>,
+            #[serde(with = "serde_bytes")]
+            data: Vec<u8>,
+            services: Vec<librojo::web_api::ServiceChunk>,
+        }
+
+        let request = Req {
+            protocol_version: librojo::web_api::PROTOCOL_VERSION,
+            server_version: env!("CARGO_PKG_VERSION").to_string(),
+            place_id,
+            data,
+            services,
+        };
+
+        let mut body = Vec::new();
+        let mut serializer = rmp_serde::Serializer::new(&mut body)
+            .with_human_readable()
+            .with_struct_map();
+        request
+            .serialize(&mut serializer)
+            .expect("Failed to serialize syncback request");
+
+        let response = self.post_api_syncback_raw(body);
+        assert!(
+            response.status().is_success(),
+            "Syncback request failed with status {}: {}",
+            response.status(),
+            response.text().unwrap_or_default()
+        );
+    }
+
+    /// Wait for the server to come back online after a syncback-triggered
+    /// restart. Uses longer timeouts than initial startup since syncback
+    /// runs between teardown and restart.
+    pub fn wait_to_come_back_online(&self) -> ServerInfoResponse {
+        const BASE_DURATION_MS: f32 = 200.0;
+        const EXP_BACKOFF_FACTOR: f32 = 1.3;
+        const MAX_TRIES: u32 = 20;
+
+        for i in 1..=MAX_TRIES {
+            let info = match self.get_api_rojo() {
+                Ok(info) => info,
+                Err(_) => {
+                    let retry_time_ms = BASE_DURATION_MS * (i as f32).powf(EXP_BACKOFF_FACTOR);
+                    let retry_time = Duration::from_millis(retry_time_ms as u64);
+                    thread::sleep(retry_time);
+                    continue;
+                }
+            };
+
+            return info;
+        }
+
+        panic!(
+            "Server did not come back online after syncback ({} tries)",
+            MAX_TRIES
+        );
+    }
+}
+
 /// Extract the message cursor from a SocketPacket for use in subsequent
 /// WebSocket subscriptions when chaining multi-step tests.
 pub fn get_message_cursor(packet: &SocketPacket) -> u32 {
@@ -475,49 +976,63 @@ pub fn fresh_rebuild_read(project_path: &Path) -> NormalizedInstance {
         );
     };
 
-    let port = get_port_number();
-    let port_string = port.to_string();
-    let working_dir = get_working_dir_path();
-
-    let process = Command::new(ROJO_PATH)
-        .args([
-            "serve",
-            project_file.to_str().unwrap(),
-            "--port",
-            port_string.as_str(),
-        ])
-        .current_dir(working_dir)
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Couldn't start fresh Rojo for round-trip check");
-
-    let mut kill_guard = KillOnDrop(process);
-
-    // Wait for fresh server to come online with same backoff
-    const BASE_DURATION_MS: f32 = 30.0;
+    const BASE_DURATION_MS: f32 = 100.0;
     const EXP_BACKOFF_FACTOR: f32 = 1.3;
-    const MAX_TRIES: u32 = 5;
+    const MAX_TRIES: u32 = 10;
+    const MAX_PORT_RETRIES: u32 = 3;
 
-    let mut info = None;
-    for i in 1..=MAX_TRIES {
-        match kill_guard.0.try_wait() {
-            Ok(Some(status)) => {
-                let mut stderr_output = String::new();
-                if let Some(mut stderr) = kill_guard.0.stderr.take() {
-                    let _ = stderr.read_to_string(&mut stderr_output);
+    let working_dir = get_working_dir_path();
+    let mut port_retries = 0u32;
+
+    loop {
+        let port = get_port_number();
+        let port_string = port.to_string();
+
+        let process = Command::new(ROJO_PATH)
+            .args([
+                "serve",
+                project_file.to_str().unwrap(),
+                "--port",
+                port_string.as_str(),
+            ])
+            .current_dir(&working_dir)
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("Couldn't start fresh Rojo for round-trip check");
+
+        let mut kill_guard = KillOnDrop(process);
+        let mut info = None;
+        let mut needs_port_retry = false;
+
+        for i in 1..=MAX_TRIES {
+            match kill_guard.0.try_wait() {
+                Ok(Some(status)) => {
+                    let mut stderr_output = String::new();
+                    if let Some(mut stderr) = kill_guard.0.stderr.take() {
+                        let _ = stderr.read_to_string(&mut stderr_output);
+                    }
+                    if stderr_output.contains("AddrInUse") && port_retries < MAX_PORT_RETRIES {
+                        port_retries += 1;
+                        log::warn!(
+                            "Port {} in use, retrying with new port (attempt {}/{})",
+                            port,
+                            port_retries,
+                            MAX_PORT_RETRIES
+                        );
+                        needs_port_retry = true;
+                        break;
+                    }
+                    panic!(
+                        "Fresh Rojo process exited with status {}\nstderr:\n{}",
+                        status, stderr_output
+                    );
                 }
-                panic!(
-                    "Fresh Rojo process exited with status {}\nstderr:\n{}",
-                    status, stderr_output
-                );
+                Ok(None) => {}
+                Err(err) => panic!("Failed to wait on fresh Rojo process: {}", err),
             }
-            Ok(None) => {}
-            Err(err) => panic!("Failed to wait on fresh Rojo process: {}", err),
-        }
 
-        let url = format!("http://localhost:{}/api/rojo", port);
-        match reqwest::blocking::get(&url) {
-            Ok(resp) => {
+            let url = format!("http://localhost:{}/api/rojo", port);
+            if let Ok(resp) = reqwest::blocking::get(&url) {
                 if let Ok(body) = resp.bytes() {
                     if let Ok(server_info) = deserialize_msgpack::<ServerInfoResponse>(&body) {
                         info = Some(server_info);
@@ -525,24 +1040,27 @@ pub fn fresh_rebuild_read(project_path: &Path) -> NormalizedInstance {
                     }
                 }
             }
-            Err(_) => {}
+            let retry_time_ms = BASE_DURATION_MS * (i as f32).powf(EXP_BACKOFF_FACTOR);
+            thread::sleep(Duration::from_millis(retry_time_ms as u64));
         }
-        let retry_time_ms = BASE_DURATION_MS * (i as f32).powf(EXP_BACKOFF_FACTOR);
-        thread::sleep(Duration::from_millis(retry_time_ms as u64));
+
+        if needs_port_retry {
+            continue;
+        }
+
+        let info = info.expect("Fresh Rojo server did not respond");
+        let root_id = info.root_instance_id;
+
+        let url = format!("http://localhost:{}/api/read/{}", port, root_id);
+        let body = reqwest::blocking::get(&url)
+            .expect("Failed to read from fresh server")
+            .bytes()
+            .expect("Failed to get bytes from fresh server");
+        let read: ReadResponse =
+            deserialize_msgpack(&body).expect("Fresh server returned malformed response");
+
+        return normalize_read_response(&read, root_id);
     }
-
-    let info = info.expect("Fresh Rojo server did not respond");
-    let root_id = info.root_instance_id;
-
-    let url = format!("http://localhost:{}/api/read/{}", port, root_id);
-    let body = reqwest::blocking::get(&url)
-        .expect("Failed to read from fresh server")
-        .bytes()
-        .expect("Failed to get bytes from fresh server");
-    let read: ReadResponse =
-        deserialize_msgpack(&body).expect("Fresh server returned malformed response");
-
-    normalize_read_response(&read, root_id)
 }
 
 /// Assert that the live session tree matches a fresh rebuild from the filesystem.

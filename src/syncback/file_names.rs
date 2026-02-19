@@ -15,10 +15,13 @@ use crate::{snapshot::InstanceWithMeta, snapshot_middleware::Middleware};
 /// - `filename`: The full filesystem name (including extension for file middleware).
 /// - `needs_meta_name`: `true` when the filesystem name differs from the instance
 ///   name (meaning a `name` field must be written in metadata).
-/// - `dedup_key`: The bare slug (without extension) that callers must insert into
-///   `taken_names`. This is the name-level identifier used for collision detection.
-///   Callers should **always** use `dedup_key` (not `filename`) when accumulating
-///   into `taken_names`.
+/// - `dedup_key`: The **full filesystem name component** (slug + extension for
+///   files, directory name for dirs). Callers should insert
+///   `dedup_key.to_lowercase()` into `taken_names`.
+///
+///   This means `Folder "Foo"` (key `"Foo"`) and `Script "Foo"` (key
+///   `"Foo.server.luau"`) do NOT collide, while two `Folder "Foo"` instances
+///   (both key `"Foo"`) DO collide and receive dedup suffixes.
 ///
 /// If `old_inst` exists, its existing path is preserved (incremental mode).
 /// For new instances, names with forbidden chars are slugified and deduplicated
@@ -35,10 +38,9 @@ pub fn name_for_inst<'a>(
                 .file_name()
                 .and_then(|s| s.to_str())
                 .context("sources on the file system should be valid unicode and not be stubs")?;
-            // Derive dedup_key by stripping the middleware extension from the
-            // filename. For Dir middleware the extension is empty so this is a
-            // no-op. This keeps extension logic inside this function.
-            let dedup_key = strip_middleware_extension(name, middleware);
+            // dedup_key is the full filesystem name (including extension).
+            // For Dir middleware the filename IS the directory name (no extension).
+            let dedup_key = name.to_string();
             Ok((Cow::Borrowed(name), false, dedup_key))
         } else {
             anyhow::bail!(
@@ -55,32 +57,30 @@ pub fn name_for_inst<'a>(
             new_inst.name.clone()
         };
 
-        match middleware {
+        let is_dir = matches!(
+            middleware,
             Middleware::Dir
-            | Middleware::CsvDir
-            | Middleware::ServerScriptDir
-            | Middleware::ClientScriptDir
-            | Middleware::ModuleScriptDir
-            | Middleware::PluginScriptDir
-            | Middleware::LocalScriptDir
-            | Middleware::LegacyScriptDir => {
-                let deduped = deduplicate_name(&base, taken_names);
-                let needs_meta = needs_slugify || deduped != base;
-                let dedup_key = deduped.clone();
-                Ok((Cow::Owned(deduped), needs_meta, dedup_key))
-            }
-            _ => {
-                let extension = extension_for_middleware(middleware);
-                let deduped = deduplicate_name(&base, taken_names);
-                let needs_meta = needs_slugify || deduped != base;
-                let dedup_key = deduped.clone();
-                Ok((
-                    Cow::Owned(format!("{deduped}.{extension}")),
-                    needs_meta,
-                    dedup_key,
-                ))
-            }
-        }
+                | Middleware::CsvDir
+                | Middleware::ServerScriptDir
+                | Middleware::ClientScriptDir
+                | Middleware::ModuleScriptDir
+                | Middleware::PluginScriptDir
+                | Middleware::LocalScriptDir
+                | Middleware::LegacyScriptDir
+        );
+
+        let extension = if is_dir {
+            None
+        } else {
+            Some(extension_for_middleware(middleware))
+        };
+
+        let (_deduped_slug, full_fs_name) =
+            deduplicate_name_with_ext(&base, extension, taken_names);
+        let needs_meta = needs_slugify;
+
+        let filename = full_fs_name.clone();
+        Ok((Cow::Owned(filename), needs_meta, full_fs_name))
     }
 }
 
@@ -268,18 +268,52 @@ pub fn slugify_name(name: &str) -> String {
     result
 }
 
-/// Appends ~1, ~2, etc. to avoid collisions. Returns the name as-is if
-/// unclaimed.
+/// Appends ~2, ~3, etc. to the slug to avoid filesystem-level collisions.
+/// Returns `(deduped_slug, full_fs_name)`.
+///
+/// `extension` is `None` for directory middleware, `Some("server.luau")` etc.
+/// for file middleware. The collision check uses the full filesystem name
+/// (slug + extension) so that `Folder "Foo"` (key `"foo"`) and `Script "Foo"`
+/// (key `"foo.server.luau"`) do NOT collide.
 ///
 /// Comparisons are **case-insensitive** because Windows and macOS have
 /// case-insensitive filesystems. `taken_names` must contain **lowercased**
-/// entries for this to work correctly.
+/// full filesystem name entries for this to work correctly.
+pub fn deduplicate_name_with_ext(
+    base: &str,
+    extension: Option<&str>,
+    taken_names: &std::collections::HashSet<String>,
+) -> (String, String) {
+    let build_full = |slug: &str| -> String {
+        match extension {
+            Some(ext) => format!("{slug}.{ext}"),
+            None => slug.to_string(),
+        }
+    };
+
+    let full_name = build_full(base);
+    if !taken_names.contains(&full_name.to_lowercase()) {
+        return (base.to_string(), full_name);
+    }
+    for i in 2.. {
+        let candidate_slug = format!("{base}~{i}");
+        let candidate_full = build_full(&candidate_slug);
+        if !taken_names.contains(&candidate_full.to_lowercase()) {
+            return (candidate_slug, candidate_full);
+        }
+    }
+    unreachable!()
+}
+
+/// Legacy wrapper: appends ~2, ~3, etc. to avoid collisions using bare slug
+/// as the collision key. Used by callers that don't yet use full filesystem
+/// name dedup (e.g., change_processor.rs renames).
 pub fn deduplicate_name(base: &str, taken_names: &std::collections::HashSet<String>) -> String {
     let base_lower = base.to_lowercase();
     if !taken_names.contains(&base_lower) {
         return base.to_string();
     }
-    for i in 1.. {
+    for i in 2.. {
         let candidate = format!("{base}~{i}");
         if !taken_names.contains(&candidate.to_lowercase()) {
             return candidate;
@@ -536,7 +570,7 @@ mod tests {
     #[test]
     fn dedup_single_collision() {
         let taken: HashSet<String> = ["foo".to_string()].into_iter().collect();
-        assert_eq!(deduplicate_name("Foo", &taken), "Foo~1");
+        assert_eq!(deduplicate_name("Foo", &taken), "Foo~2");
     }
 
     #[test]
@@ -556,14 +590,14 @@ mod tests {
 
     #[test]
     fn dedup_gap_in_suffixes() {
-        let taken: HashSet<String> = ["foo", "foo~2"].into_iter().map(String::from).collect();
-        assert_eq!(deduplicate_name("Foo", &taken), "Foo~1");
+        let taken: HashSet<String> = ["foo", "foo~3"].into_iter().map(String::from).collect();
+        assert_eq!(deduplicate_name("Foo", &taken), "Foo~2");
     }
 
     #[test]
     fn dedup_natural_vs_slug_collision() {
         let taken: HashSet<String> = ["hey_bro".to_string()].into_iter().collect();
-        assert_eq!(deduplicate_name("Hey_Bro", &taken), "Hey_Bro~1");
+        assert_eq!(deduplicate_name("Hey_Bro", &taken), "Hey_Bro~2");
     }
 
     #[test]
@@ -576,16 +610,16 @@ mod tests {
     fn dedup_case_insensitive() {
         // "foo" is taken, "Foo" should collide (case-insensitive filesystem)
         let taken: HashSet<String> = ["foo".to_string()].into_iter().collect();
-        assert_eq!(deduplicate_name("Foo", &taken), "Foo~1");
-        assert_eq!(deduplicate_name("FOO", &taken), "FOO~1");
-        assert_eq!(deduplicate_name("foo", &taken), "foo~1");
+        assert_eq!(deduplicate_name("Foo", &taken), "Foo~2");
+        assert_eq!(deduplicate_name("FOO", &taken), "FOO~2");
+        assert_eq!(deduplicate_name("foo", &taken), "foo~2");
     }
 
     #[test]
     fn dedup_case_only_difference() {
-        // Two instances: "MyScript" and "myscript" - second must get ~1
+        // Two instances: "MyScript" and "myscript" - second must get ~2
         let taken: HashSet<String> = ["myscript".to_string()].into_iter().collect();
-        assert_eq!(deduplicate_name("MyScript", &taken), "MyScript~1");
+        assert_eq!(deduplicate_name("MyScript", &taken), "MyScript~2");
     }
 
     // ── name_needs_slugify ──────────────────────────────────────────────
@@ -794,12 +828,15 @@ mod tests {
         let dom = make_inst("Foo", "ModuleScript");
         let child_ref = dom.root().children()[0];
         let child = dom.get_by_ref(child_ref).unwrap();
-        let taken: HashSet<String> = ["foo".to_string()].into_iter().collect();
+        let taken: HashSet<String> = ["foo.luau".to_string()].into_iter().collect();
 
         let (filename, needs_meta, _dk) =
             name_for_inst(Middleware::ModuleScript, child, None, &taken).unwrap();
-        assert_eq!(filename.as_ref(), "Foo~1.luau");
-        assert!(needs_meta, "deduped name differs from original");
+        assert_eq!(filename.as_ref(), "Foo~2.luau");
+        assert!(
+            !needs_meta,
+            "dedup-only: forward sync strips ~N automatically"
+        );
     }
 
     #[test]
@@ -811,21 +848,24 @@ mod tests {
 
         let (filename, needs_meta, _dk) =
             name_for_inst(Middleware::Dir, child, None, &taken).unwrap();
-        assert_eq!(filename.as_ref(), "Stuff~1");
-        assert!(needs_meta);
+        assert_eq!(filename.as_ref(), "Stuff~2");
+        assert!(
+            !needs_meta,
+            "dedup-only: forward sync strips ~N automatically"
+        );
     }
 
     #[test]
     fn name_for_inst_slug_plus_dedup() {
-        // Name with forbidden chars AND collision with existing slug
+        // Name with forbidden chars AND collision with existing full filesystem name
         let dom = make_inst("Hey/Bro", "ModuleScript");
         let child_ref = dom.root().children()[0];
         let child = dom.get_by_ref(child_ref).unwrap();
-        let taken: HashSet<String> = ["hey_bro".to_string()].into_iter().collect();
+        let taken: HashSet<String> = ["hey_bro.luau".to_string()].into_iter().collect();
 
         let (filename, needs_meta, _dk) =
             name_for_inst(Middleware::ModuleScript, child, None, &taken).unwrap();
-        assert_eq!(filename.as_ref(), "Hey_Bro~1.luau");
+        assert_eq!(filename.as_ref(), "Hey_Bro~2.luau");
         assert!(needs_meta);
     }
 
@@ -1112,7 +1152,7 @@ mod tests {
     fn nfi_slug_collides_with_existing_dir() {
         // "Hey/Bro" slugifies to "Hey_Bro", which is already taken as a dir name
         let (f, m) = nfi("Hey/Bro", Middleware::Dir, &["hey_bro"]);
-        assert_eq!(f, "Hey_Bro~1");
+        assert_eq!(f, "Hey_Bro~2");
         assert!(m);
     }
 
@@ -1120,15 +1160,15 @@ mod tests {
     fn nfi_slug_collides_with_natural_dir() {
         // Dir "Hey_Bro" exists naturally, then "Hey:Bro" slugifies to same
         let (f, m) = nfi("Hey:Bro", Middleware::Dir, &["hey_bro"]);
-        assert_eq!(f, "Hey_Bro~1");
+        assert_eq!(f, "Hey_Bro~2");
         assert!(m);
     }
 
     #[test]
     fn nfi_two_slugs_collide_dir() {
-        // Both "A/B" and "A:B" slugify to "A_B". First taken, second gets ~1
+        // Both "A/B" and "A:B" slugify to "A_B". First taken, second gets ~2
         let (f, m) = nfi("A:B", Middleware::Dir, &["a_b"]);
-        assert_eq!(f, "A_B~1");
+        assert_eq!(f, "A_B~2");
         assert!(m);
     }
 
@@ -1139,29 +1179,26 @@ mod tests {
     }
 
     #[test]
-    fn nfi_clean_name_dedup_still_needs_meta_dir() {
-        // Clean name "Foo", but "foo" is already taken → dedup adds ~1 → needs meta
+    fn nfi_clean_name_dedup_no_meta_dir() {
+        // Clean name "Foo", but "foo" is already taken → dedup adds ~2.
+        // Forward sync strips ~N, so no meta name needed.
         let (f, m) = nfi("Foo", Middleware::Dir, &["foo"]);
-        assert_eq!(f, "Foo~1");
-        assert!(
-            m,
-            "dedup suffix means filesystem name differs from instance name"
-        );
+        assert_eq!(f, "Foo~2");
+        assert!(!m, "dedup-only: forward sync strips ~N automatically");
     }
 
     #[test]
     fn nfi_case_collision_dir() {
         let (f, m) = nfi("Assets", Middleware::Dir, &["assets"]);
-        assert_eq!(f, "Assets~1");
-        assert!(m);
+        assert_eq!(f, "Assets~2");
+        assert!(!m, "dedup-only: forward sync strips ~N automatically");
     }
 
     #[test]
     fn nfi_slug_collision_file_middleware() {
-        // For file middleware, dedup compares bare slug against taken.
-        // Using bare names to verify the dedup logic works.
-        let (f, m) = nfi("Hey/Bro", Middleware::ModuleScript, &["hey_bro"]);
-        assert_eq!(f, "Hey_Bro~1.luau");
+        // For file middleware, dedup compares full filesystem name against taken.
+        let (f, m) = nfi("Hey/Bro", Middleware::ModuleScript, &["hey_bro.luau"]);
+        assert_eq!(f, "Hey_Bro~2.luau");
         assert!(m);
     }
 
@@ -1190,16 +1227,16 @@ mod tests {
         let r = process_siblings_dir(&["Foo", "Foo"]);
         assert_eq!(r[0].1, "Foo");
         assert!(!r[0].2);
-        assert_eq!(r[1].1, "Foo~1");
-        assert!(r[1].2);
+        assert_eq!(r[1].1, "Foo~2");
+        assert!(!r[1].2, "dedup-only: forward sync strips ~N automatically");
     }
 
     #[test]
     fn ordering_three_identical_names() {
         let r = process_siblings_dir(&["X", "X", "X"]);
         assert_eq!(r[0].1, "X");
-        assert_eq!(r[1].1, "X~1");
-        assert_eq!(r[2].1, "X~2");
+        assert_eq!(r[1].1, "X~2");
+        assert_eq!(r[2].1, "X~3");
     }
 
     #[test]
@@ -1208,7 +1245,7 @@ mod tests {
         let r = process_siblings_dir(&["Hey_Bro", "Hey/Bro"]);
         assert_eq!(r[0].1, "Hey_Bro");
         assert!(!r[0].2);
-        assert_eq!(r[1].1, "Hey_Bro~1");
+        assert_eq!(r[1].1, "Hey_Bro~2");
         assert!(r[1].2);
     }
 
@@ -1218,8 +1255,8 @@ mod tests {
         let r = process_siblings_dir(&["Hey/Bro", "Hey_Bro"]);
         assert_eq!(r[0].1, "Hey_Bro");
         assert!(r[0].2);
-        assert_eq!(r[1].1, "Hey_Bro~1");
-        assert!(r[1].2, "dedup suffix → needs meta even for natural name");
+        assert_eq!(r[1].1, "Hey_Bro~2");
+        assert!(!r[1].2, "dedup-only: natural name, forward sync strips ~N");
     }
 
     #[test]
@@ -1227,10 +1264,10 @@ mod tests {
         let r = process_siblings_dir(&["Script", "script", "SCRIPT"]);
         assert_eq!(r[0].1, "Script");
         assert!(!r[0].2);
-        assert_eq!(r[1].1, "script~1");
-        assert!(r[1].2);
-        assert_eq!(r[2].1, "SCRIPT~2");
-        assert!(r[2].2);
+        assert_eq!(r[1].1, "script~2");
+        assert!(!r[1].2, "dedup-only: forward sync strips ~N automatically");
+        assert_eq!(r[2].1, "SCRIPT~3");
+        assert!(!r[2].2, "dedup-only: forward sync strips ~N automatically");
     }
 
     #[test]
@@ -1238,8 +1275,8 @@ mod tests {
         // All three slugify to "A_B"
         let r = process_siblings_dir(&["A/B", "A:B", "A*B"]);
         assert_eq!(r[0].1, "A_B");
-        assert_eq!(r[1].1, "A_B~1");
-        assert_eq!(r[2].1, "A_B~2");
+        assert_eq!(r[1].1, "A_B~2");
+        assert_eq!(r[2].1, "A_B~3");
         assert!(r[0].2);
         assert!(r[1].2);
         assert!(r[2].2);
@@ -1261,8 +1298,8 @@ mod tests {
         let r = process_siblings_dir(&["CON", "CON_"]);
         assert_eq!(r[0].1, "CON_");
         assert!(r[0].2);
-        assert_eq!(r[1].1, "CON_~1");
-        assert!(r[1].2);
+        assert_eq!(r[1].1, "CON_~2");
+        assert!(!r[1].2, "dedup-only: natural name, forward sync strips ~N");
     }
 
     #[test]
@@ -1270,18 +1307,18 @@ mod tests {
         let r = process_siblings_dir(&[
             "Utils",  // first claim
             "utils",  // case collision with Utils
-            "Utils",  // exact collision (already taken + ~1 taken)
+            "Utils",  // exact collision (already taken + ~2 taken)
             "UTILS",  // case collision
             "Uti/ls", // different slug "Uti_ls", no collision
         ]);
         assert_eq!(r[0].1, "Utils");
         assert!(!r[0].2);
-        assert_eq!(r[1].1, "utils~1");
-        assert!(r[1].2);
-        assert_eq!(r[2].1, "Utils~2");
-        assert!(r[2].2);
-        assert_eq!(r[3].1, "UTILS~3");
-        assert!(r[3].2);
+        assert_eq!(r[1].1, "utils~2");
+        assert!(!r[1].2, "dedup-only: forward sync strips ~N");
+        assert_eq!(r[2].1, "Utils~3");
+        assert!(!r[2].2, "dedup-only: forward sync strips ~N");
+        assert_eq!(r[3].1, "UTILS~4");
+        assert!(!r[3].2, "dedup-only: forward sync strips ~N");
         assert_eq!(r[4].1, "Uti_ls");
         assert!(r[4].2);
     }
@@ -1291,20 +1328,20 @@ mod tests {
         // All six slugify to "X_Y" as dirs
         let r = process_siblings_dir(&["X/Y", "X:Y", "X*Y", "X?Y", "X<Y", "X>Y"]);
         assert_eq!(r[0].1, "X_Y");
-        assert_eq!(r[1].1, "X_Y~1");
-        assert_eq!(r[2].1, "X_Y~2");
-        assert_eq!(r[3].1, "X_Y~3");
-        assert_eq!(r[4].1, "X_Y~4");
-        assert_eq!(r[5].1, "X_Y~5");
+        assert_eq!(r[1].1, "X_Y~2");
+        assert_eq!(r[2].1, "X_Y~3");
+        assert_eq!(r[3].1, "X_Y~4");
+        assert_eq!(r[4].1, "X_Y~5");
+        assert_eq!(r[5].1, "X_Y~6");
     }
 
     #[test]
     fn ordering_tilde_in_name_vs_dedup_suffix() {
-        // "Foo~1" (tilde slugified to "Foo_1") vs dedup suffix "Foo~1"
-        // The slugified "Foo~1" → "Foo_1" which is different from dedup "Foo~1"
+        // "Foo~1" (tilde slugified to "Foo_1") vs dedup suffix "Foo~2"
+        // The slugified "Foo~1" → "Foo_1" which is different from dedup "Foo~2"
         let r = process_siblings_dir(&["Foo", "Foo", "Foo~1"]);
         assert_eq!(r[0].1, "Foo");
-        assert_eq!(r[1].1, "Foo~1"); // dedup suffix
+        assert_eq!(r[1].1, "Foo~2"); // dedup suffix
         assert_eq!(r[2].1, "Foo_1"); // tilde was slugified to _
         assert!(r[2].2);
     }
@@ -1318,10 +1355,10 @@ mod tests {
         ]);
         assert_eq!(r[0].1, "Leading");
         assert!(r[0].2, "leading space was stripped");
-        assert_eq!(r[1].1, "Leading~1");
-        assert!(r[1].2);
-        assert_eq!(r[2].1, "Leading~2");
-        assert!(r[2].2);
+        assert_eq!(r[1].1, "Leading~2");
+        assert!(!r[1].2, "dedup-only: clean name, forward sync strips ~N");
+        assert_eq!(r[2].1, "Leading~3");
+        assert!(r[2].2, "trailing space stripped → slug differs");
     }
 
     // ── Every middleware type with slugified name ─────────────────────
@@ -1524,26 +1561,26 @@ mod tests {
     #[test]
     fn disk_seed_prevents_overwrite_of_existing_dir() {
         // "Utils" directory exists on disk. New instance "Utils" (dir)
-        // must get "Utils~1".
+        // must get "Utils~2".
         let r = process_new_children_with_disk_seed(&["utils"], &[("Utils", Middleware::Dir)]);
-        assert_eq!(r[0].1, "Utils~1");
-        assert!(r[0].2);
+        assert_eq!(r[0].1, "Utils~2");
+        assert!(!r[0].2, "dedup-only: forward sync strips ~N");
     }
 
     #[test]
     fn disk_seed_prevents_overwrite_of_existing_dir_case_insensitive() {
         // "SCRIPTS" directory on disk, new instance "Scripts" (dir) must dedup.
         let r = process_new_children_with_disk_seed(&["scripts"], &[("Scripts", Middleware::Dir)]);
-        assert_eq!(r[0].1, "Scripts~1");
-        assert!(r[0].2);
+        assert_eq!(r[0].1, "Scripts~2");
+        assert!(!r[0].2, "dedup-only: forward sync strips ~N");
     }
 
     #[test]
     fn disk_seed_slug_collision_with_existing_dir() {
         // "Hey_Bro" directory on disk. New instance "Hey/Bro" slugifies
-        // to "Hey_Bro" — must dedup to "Hey_Bro~1".
+        // to "Hey_Bro" — must dedup to "Hey_Bro~2".
         let r = process_new_children_with_disk_seed(&["hey_bro"], &[("Hey/Bro", Middleware::Dir)]);
-        assert_eq!(r[0].1, "Hey_Bro~1");
+        assert_eq!(r[0].1, "Hey_Bro~2");
         assert!(r[0].2);
     }
 
@@ -1559,10 +1596,10 @@ mod tests {
                 ("NewThing", Middleware::Dir),
             ],
         );
-        assert_eq!(r[0].1, "Utils~1", "Utils collides with utils/ on disk");
-        assert!(r[0].2);
-        assert_eq!(r[1].1, "Config~1", "Config collides with config/ on disk");
-        assert!(r[1].2);
+        assert_eq!(r[0].1, "Utils~2", "Utils collides with utils/ on disk");
+        assert!(!r[0].2, "dedup-only: forward sync strips ~N");
+        assert_eq!(r[1].1, "Config~2", "Config collides with config/ on disk");
+        assert!(!r[1].2, "dedup-only: forward sync strips ~N");
         assert_eq!(r[2].1, "NewThing", "NewThing is clean");
         assert!(!r[2].2);
     }
@@ -1575,27 +1612,28 @@ mod tests {
             &["stuff", "stuff.meta.json5", "other.luau"],
             &[("Stuff", Middleware::Dir)],
         );
-        assert_eq!(r[0].1, "Stuff~1");
-        assert!(r[0].2);
+        assert_eq!(r[0].1, "Stuff~2");
+        assert!(!r[0].2, "dedup-only: forward sync strips ~N");
     }
 
     #[test]
     fn disk_seed_file_middleware_collides_with_bare_slug() {
-        // taken_names now uses bare slugs (dedup_keys), so file-format
-        // dedup works correctly. "mymodule" in taken matches slug "MyModule".
+        // taken_names stores full filesystem names (lowercased).
+        // A bare directory name "mymodule" does NOT collide with "mymodule.luau".
+        // Seed with "mymodule.luau" to test file-file collision.
         let r = process_new_children_with_disk_seed(
-            &["mymodule"],
+            &["mymodule.luau"],
             &[("MyModule", Middleware::ModuleScript)],
         );
-        assert_eq!(r[0].1, "MyModule~1.luau");
-        assert!(r[0].2, "dedup suffix means needs meta");
+        assert_eq!(r[0].1, "MyModule~2.luau");
+        assert!(!r[0].2, "dedup-only: forward sync strips ~N");
     }
 
     #[test]
     fn disk_seed_file_middleware_sibling_slug_collision_deduped() {
         // Two file-middleware children whose names slugify to the same base.
         // Since taken_names accumulates dedup_keys (bare slugs), the second
-        // child correctly detects the collision and gets ~1.
+        // child correctly detects the collision and gets ~2.
         let r = process_new_children_with_disk_seed(
             &[],
             &[
@@ -1605,7 +1643,7 @@ mod tests {
         );
         assert_eq!(r[0].1, "A_B.luau");
         assert!(r[0].2);
-        assert_eq!(r[1].1, "A_B~1.luau");
+        assert_eq!(r[1].1, "A_B~2.luau");
         assert!(r[1].2);
     }
 
@@ -1646,7 +1684,7 @@ mod tests {
         // New "Foo" dir must skip both and land on "Foo~2".
         let r = process_new_children_with_disk_seed(&["foo", "foo~1"], &[("Foo", Middleware::Dir)]);
         assert_eq!(r[0].1, "Foo~2");
-        assert!(r[0].2);
+        assert!(!r[0].2, "dedup-only: forward sync strips ~N");
     }
 
     #[test]
@@ -1694,12 +1732,12 @@ mod tests {
     fn project_siblings_same_slug_different_names() {
         // Two new project children: "A/B" and "A:B" both slug to "A_B".
         // Before fix: both got "A_B" path (collision!).
-        // After fix: second gets "A_B~1".
+        // After fix: second gets "A_B~2".
         let r =
             process_project_siblings(&[], &[("A/B", Middleware::Dir), ("A:B", Middleware::Dir)]);
         assert_eq!(r[0].1, "A_B");
         assert!(r[0].2);
-        assert_eq!(r[1].1, "A_B~1");
+        assert_eq!(r[1].1, "A_B~2");
         assert!(r[1].2);
     }
 
@@ -1713,13 +1751,13 @@ mod tests {
         );
         assert_eq!(r[0].1, "Hey_Bro");
         assert!(!r[0].2);
-        assert_eq!(r[1].1, "Hey_Bro~1");
+        assert_eq!(r[1].1, "Hey_Bro~2");
         assert!(r[1].2);
     }
 
     #[test]
     fn project_siblings_three_way_slug_collision() {
-        // Three siblings all slug to "X_Y" — must get X_Y, X_Y~1, X_Y~2.
+        // Three siblings all slug to "X_Y" — must get X_Y, X_Y~2, X_Y~3.
         let r = process_project_siblings(
             &[],
             &[
@@ -1729,23 +1767,23 @@ mod tests {
             ],
         );
         assert_eq!(r[0].1, "X_Y");
-        assert_eq!(r[1].1, "X_Y~1");
-        assert_eq!(r[2].1, "X_Y~2");
+        assert_eq!(r[1].1, "X_Y~2");
+        assert_eq!(r[2].1, "X_Y~3");
     }
 
     #[test]
     fn project_siblings_disk_plus_siblings_collision_dir() {
         // "Helper" directory already on disk. Two new dir siblings: "Helper" x2.
-        // First → "Helper~1" (disk has "helper").
-        // Second → "Helper~2" (both disk and first sibling taken).
+        // First → "Helper~2" (disk has "helper").
+        // Second → "Helper~3" (both disk and first sibling taken).
         let r = process_project_siblings(
             &["helper"],
             &[("Helper", Middleware::Dir), ("Helper", Middleware::Dir)],
         );
-        assert_eq!(r[0].1, "Helper~1");
-        assert!(r[0].2);
-        assert_eq!(r[1].1, "Helper~2");
-        assert!(r[1].2);
+        assert_eq!(r[0].1, "Helper~2");
+        assert!(!r[0].2, "dedup-only: forward sync strips ~N");
+        assert_eq!(r[1].1, "Helper~3");
+        assert!(!r[1].2, "dedup-only: forward sync strips ~N");
     }
 
     #[test]
@@ -1762,12 +1800,12 @@ mod tests {
         );
         assert_eq!(r[0].1, "Test");
         assert!(!r[0].2);
-        assert_eq!(r[1].1, "test~1");
-        assert!(r[1].2);
-        assert_eq!(r[2].1, "TEST~2");
-        assert!(r[2].2);
-        assert_eq!(r[3].1, "tEsT~3");
-        assert!(r[3].2);
+        assert_eq!(r[1].1, "test~2");
+        assert!(!r[1].2, "dedup-only: forward sync strips ~N");
+        assert_eq!(r[2].1, "TEST~3");
+        assert!(!r[2].2, "dedup-only: forward sync strips ~N");
+        assert_eq!(r[3].1, "tEsT~4");
+        assert!(!r[3].2, "dedup-only: forward sync strips ~N");
     }
 
     // ══════════════════════════════════════════════════════════════════
@@ -1786,7 +1824,7 @@ mod tests {
         let r = process_siblings_dir(&["CON", "CON/"]);
         assert_eq!(r[0].1, "CON_");
         assert!(r[0].2);
-        assert_eq!(r[1].1, "CON_~1");
+        assert_eq!(r[1].1, "CON_~2");
         assert!(r[1].2);
     }
 
@@ -1796,29 +1834,29 @@ mod tests {
         let r = process_siblings_dir(&["foo.server", "foo/server"]);
         assert_eq!(r[0].1, "foo_server");
         assert!(r[0].2);
-        assert_eq!(r[1].1, "foo_server~1");
+        assert_eq!(r[1].1, "foo_server~2");
         assert!(r[1].2);
     }
 
     #[test]
     fn nightmare_tilde_looks_like_dedup_but_gets_slugified() {
         // "Foo~1" has tilde slugified to "Foo_1". Then real "Foo" gets
-        // dedup "Foo~1". These should NOT collide because tilde-in-name
+        // dedup "Foo~2". These should NOT collide because tilde-in-name
         // becomes underscore, but dedup adds actual tilde.
         let r = process_siblings_dir(&["Foo~1", "Foo", "Foo"]);
         assert_eq!(r[0].1, "Foo_1", "tilde slugified");
         assert_eq!(r[1].1, "Foo", "clean, no collision");
-        assert_eq!(r[2].1, "Foo~1", "dedup suffix, different from Foo_1");
+        assert_eq!(r[2].1, "Foo~2", "dedup suffix, different from Foo_1");
     }
 
     #[test]
     fn nightmare_dedup_suffix_avoids_slugified_tilde_name() {
-        // Process "Foo", then "Foo" again (dedup to "Foo~1"), then "Foo~1"
-        // (tilde slugified to "Foo_1"). The dedup "Foo~1" and slug "Foo_1"
+        // Process "Foo", then "Foo" again (dedup to "Foo~2"), then "Foo~1"
+        // (tilde slugified to "Foo_1"). The dedup "Foo~2" and slug "Foo_1"
         // should coexist.
         let r = process_siblings_dir(&["Foo", "Foo", "Foo~1"]);
         assert_eq!(r[0].1, "Foo");
-        assert_eq!(r[1].1, "Foo~1");
+        assert_eq!(r[1].1, "Foo~2");
         assert_eq!(r[2].1, "Foo_1");
         // All three have distinct lowercased names
         let names: HashSet<String> = r.iter().map(|(_, f, _)| f.to_lowercase()).collect();
@@ -1830,7 +1868,7 @@ mod tests {
         // "カフェ/Bar" → "カフェ_Bar", "カフェ:Bar" → "カフェ_Bar" — collision
         let r = process_siblings_dir(&["カフェ/Bar", "カフェ:Bar"]);
         assert_eq!(r[0].1, "カフェ_Bar");
-        assert_eq!(r[1].1, "カフェ_Bar~1");
+        assert_eq!(r[1].1, "カフェ_Bar~2");
     }
 
     #[test]
@@ -1839,8 +1877,8 @@ mod tests {
         let r = process_siblings_dir(&["🎮 Games", "🎮 Games"]);
         assert_eq!(r[0].1, "🎮 Games");
         assert!(!r[0].2, "emoji name is clean");
-        assert_eq!(r[1].1, "🎮 Games~1");
-        assert!(r[1].2);
+        assert_eq!(r[1].1, "🎮 Games~2");
+        assert!(!r[1].2, "dedup-only: forward sync strips ~N");
     }
 
     #[test]
@@ -1850,9 +1888,9 @@ mod tests {
         let r = process_siblings_dir(&["CON", "CON_", "con"]);
         assert_eq!(r[0].1, "CON_");
         assert!(r[0].2);
-        assert_eq!(r[1].1, "CON_~1");
-        assert!(r[1].2, "natural CON_ collides with reserved CON's slug");
-        assert_eq!(r[2].1, "con_~2");
+        assert_eq!(r[1].1, "CON_~2");
+        assert!(!r[1].2, "dedup-only: natural CON_ needs no meta");
+        assert_eq!(r[2].1, "con_~3");
         assert!(r[2].2);
     }
 
@@ -1862,8 +1900,8 @@ mod tests {
         let r = process_siblings_dir(&["test.", "test"]);
         assert_eq!(r[0].1, "test");
         assert!(r[0].2, "trailing dot stripped → slug differs");
-        assert_eq!(r[1].1, "test~1");
-        assert!(r[1].2);
+        assert_eq!(r[1].1, "test~2");
+        assert!(!r[1].2, "dedup-only: clean name, forward sync strips ~N");
     }
 
     #[test]
@@ -1872,10 +1910,10 @@ mod tests {
         let r = process_siblings_dir(&[" A", "A", "  A"]);
         assert_eq!(r[0].1, "A");
         assert!(r[0].2, "leading space stripped");
-        assert_eq!(r[1].1, "A~1");
-        assert!(r[1].2);
-        assert_eq!(r[2].1, "A~2");
-        assert!(r[2].2);
+        assert_eq!(r[1].1, "A~2");
+        assert!(!r[1].2, "dedup-only: clean name, forward sync strips ~N");
+        assert_eq!(r[2].1, "A~3");
+        assert!(r[2].2, "leading spaces stripped → slug differs");
     }
 
     #[test]
@@ -1920,10 +1958,9 @@ mod tests {
 
     #[test]
     fn nightmare_mixed_middleware_dir_then_file() {
-        // "Shared" as Dir (filename "Shared") then ModuleScript.
-        // Dir filename "Shared" → taken gets "shared".
-        // ModuleScript dedup checks "shared" → MATCH → dedup to "Shared~1".
-        // Then final filename becomes "Shared~1.luau".
+        // "Shared" as Dir (filename "Shared", dedup_key "Shared") then ModuleScript.
+        // Dir dedup_key "shared" in taken does NOT collide with "shared.luau".
+        // Dir and file with same base name occupy different filesystem namespaces.
         let r = process_new_children_with_disk_seed(
             &[],
             &[
@@ -1933,17 +1970,16 @@ mod tests {
         );
         assert_eq!(r[0].1, "Shared");
         assert!(!r[0].2);
-        // File middleware bare slug "Shared" matches dir entry "shared" in taken.
-        assert_eq!(r[1].1, "Shared~1.luau");
-        assert!(r[1].2);
+        assert_eq!(r[1].1, "Shared.luau");
+        assert!(!r[1].2);
     }
 
     #[test]
     fn nightmare_mixed_middleware_file_then_dir() {
         // Reverse order: ModuleScript first, Dir second.
-        // ModuleScript "Shared" → dedup_key "shared" → taken gets "shared"
-        // Dir "Shared" → slug "Shared" → dedup checks "shared" → MATCH
-        // (dedup_key-based taken catches this correctly) → "Shared~1"
+        // ModuleScript "Shared" → dedup_key "shared.luau" in taken.
+        // Dir "Shared" → full_name "Shared", checks "shared" against taken.
+        // "shared" != "shared.luau" → no collision. Dir and file coexist.
         let r = process_new_children_with_disk_seed(
             &[],
             &[
@@ -1953,9 +1989,8 @@ mod tests {
         );
         assert_eq!(r[0].1, "Shared.luau");
         assert!(!r[0].2);
-        // Dir slug "Shared" collides with dedup_key "shared" from the ModuleScript
-        assert_eq!(r[1].1, "Shared~1");
-        assert!(r[1].2, "dedup suffix means different from instance name");
+        assert_eq!(r[1].1, "Shared");
+        assert!(!r[1].2);
     }
 
     #[test]
@@ -1974,11 +2009,7 @@ mod tests {
         ];
         let r = process_new_children_with_disk_seed(&["a_b"], &new_children);
         for (i, (_, filename, needs_meta)) in r.iter().enumerate() {
-            let expected = if i == 0 {
-                "A_B~1".to_string()
-            } else {
-                format!("A_B~{}", i + 1)
-            };
+            let expected = format!("A_B~{}", i + 2);
             assert_eq!(filename, &expected, "child {i}");
             assert!(needs_meta, "child {i} needs meta");
         }
@@ -1989,8 +2020,8 @@ mod tests {
         // Multiple instances with empty names. All slugify to "instance".
         let r = process_siblings_dir(&["", "", ""]);
         assert_eq!(r[0].1, "instance");
-        assert_eq!(r[1].1, "instance~1");
-        assert_eq!(r[2].1, "instance~2");
+        assert_eq!(r[1].1, "instance~2");
+        assert_eq!(r[2].1, "instance~3");
     }
 
     #[test]
@@ -1998,10 +2029,10 @@ mod tests {
         // Names that are entirely forbidden chars → all become "instance".
         let r = process_siblings_dir(&["<>", ":/", "?*", "|\\", "\"~"]);
         assert_eq!(r[0].1, "instance");
-        assert_eq!(r[1].1, "instance~1");
-        assert_eq!(r[2].1, "instance~2");
-        assert_eq!(r[3].1, "instance~3");
-        assert_eq!(r[4].1, "instance~4");
+        assert_eq!(r[1].1, "instance~2");
+        assert_eq!(r[2].1, "instance~3");
+        assert_eq!(r[3].1, "instance~4");
+        assert_eq!(r[4].1, "instance~5");
     }
 
     #[test]
@@ -2009,7 +2040,7 @@ mod tests {
         // "Hello\x00World" → "Hello_World", "Hello/World" → "Hello_World"
         let r = process_siblings_dir(&["Hello\x00World", "Hello/World"]);
         assert_eq!(r[0].1, "Hello_World");
-        assert_eq!(r[1].1, "Hello_World~1");
+        assert_eq!(r[1].1, "Hello_World~2");
     }
 
     #[test]
@@ -2029,7 +2060,7 @@ mod tests {
         // "init/meta" → slug "init_meta" → collision!
         let r = process_siblings_dir(&["init.meta", "init/meta"]);
         assert_eq!(r[0].1, "init_meta");
-        assert_eq!(r[1].1, "init_meta~1");
+        assert_eq!(r[1].1, "init_meta~2");
     }
 
     #[test]
@@ -2038,10 +2069,10 @@ mod tests {
         let r = process_siblings_dir(&["a.project", "a/project", "a_project"]);
         assert_eq!(r[0].1, "a_project");
         assert!(r[0].2);
-        assert_eq!(r[1].1, "a_project~1");
+        assert_eq!(r[1].1, "a_project~2");
         assert!(r[1].2);
-        assert_eq!(r[2].1, "a_project~2");
-        assert!(r[2].2, "natural name collides with slugified siblings");
+        assert_eq!(r[2].1, "a_project~3");
+        assert!(!r[2].2, "dedup-only: natural name, forward sync strips ~N");
     }
 
     #[test]
@@ -2052,8 +2083,8 @@ mod tests {
         assert_eq!(r[0].1, "Script");
         assert!(!r[0].2);
         for (i, entry) in r.iter().enumerate().skip(1) {
-            assert_eq!(entry.1, format!("Script~{i}"));
-            assert!(entry.2);
+            assert_eq!(entry.1, format!("Script~{}", i + 1));
+            assert!(!entry.2, "dedup-only: forward sync strips ~N");
         }
         // All filenames must be unique
         let unique: HashSet<String> = r.iter().map(|(_, f, _)| f.to_lowercase()).collect();
@@ -2067,22 +2098,22 @@ mod tests {
         let r = process_siblings_dir(&[
             "A_B", // clean, claims "A_B"
             "C_D", // clean, claims "C_D"
-            "A/B", // slug "A_B" → collision → "A_B~1"
+            "A/B", // slug "A_B" → collision → "A_B~2"
             "E_F", // clean, claims "E_F"
-            "C:D", // slug "C_D" → collision → "C_D~1"
-            "A:B", // slug "A_B" → collision with A_B and A_B~1 → "A_B~2"
+            "C:D", // slug "C_D" → collision → "C_D~2"
+            "A:B", // slug "A_B" → collision with A_B and A_B~2 → "A_B~3"
         ]);
         assert_eq!(r[0].1, "A_B");
         assert!(!r[0].2);
         assert_eq!(r[1].1, "C_D");
         assert!(!r[1].2);
-        assert_eq!(r[2].1, "A_B~1");
+        assert_eq!(r[2].1, "A_B~2");
         assert!(r[2].2);
         assert_eq!(r[3].1, "E_F");
         assert!(!r[3].2);
-        assert_eq!(r[4].1, "C_D~1");
+        assert_eq!(r[4].1, "C_D~2");
         assert!(r[4].2);
-        assert_eq!(r[5].1, "A_B~2");
+        assert_eq!(r[5].1, "A_B~3");
         assert!(r[5].2);
     }
 
@@ -2287,7 +2318,7 @@ mod tests {
     #[test]
     fn tilde_dedup_collision_roundtrip() {
         // Two instances "A/B" and "A_B" both slugify to "A_B".
-        // First gets "A_B", second gets "A_B~1".
+        // First gets "A_B", second gets "A_B~2".
         let mut taken = HashSet::new();
 
         let dom1 = make_inst("A/B", "ModuleScript");
@@ -2306,18 +2337,16 @@ mod tests {
 
         assert_eq!(name1.as_ref(), "A_B.luau");
         assert!(meta1, "A/B was slugified, needs meta name");
-        assert_eq!(name2.as_ref(), "A_B~1.luau");
-        assert!(meta2, "A_B was deduped to ~1, needs meta name");
+        assert_eq!(name2.as_ref(), "A_B~2.luau");
+        assert!(!meta2, "dedup-only: natural A_B, forward sync strips ~2");
     }
 
     #[test]
     fn tilde_in_filename_not_parsed_as_dedup_marker() {
-        // A file named "Foo~1" should produce instance name "Foo~1",
-        // NOT be interpreted as "Foo" with dedup suffix ~1.
-        // This is verified by the fact that name_needs_slugify("Foo~1")
-        // returns true (tilde is in SLUGIFY_CHARS), so a file named
-        // "Foo~1.luau" can only exist if it was written by the dedup
-        // system. Forward sync reads the filename as-is.
+        // An instance literally named "Foo~1" gets slugified to "Foo_1"
+        // because tilde is in SLUGIFY_CHARS. This means a file named
+        // "Foo~1.luau" on disk can only have been produced by the dedup
+        // system, so forward sync correctly strips ~1 to derive "Foo".
         assert!(
             name_needs_slugify("Foo~1"),
             "tilde should trigger slugification"
@@ -2393,14 +2422,9 @@ mod tests {
         assert_eq!(name1.as_ref(), "Hey_Bro.luau");
         assert!(meta1);
 
-        // On the old-inst path the existing filename is preserved,
-        // so a second syncback (incremental) should not change the name.
-        // We can't easily test the full old-inst path here since it
-        // requires InstanceWithMeta, but we verify the dedup_key is
-        // stable: calling strip_middleware_extension on the result gives
-        // the same dedup_key.
-        let dk_from_filename = strip_middleware_extension(&name1, Middleware::ModuleScript);
-        assert_eq!(dk_from_filename.to_lowercase(), dk1.to_lowercase());
+        // dedup_key is now the full filesystem name (including extension).
+        // For file middleware, dedup_key == filename.
+        assert_eq!(dk1.to_lowercase(), name1.as_ref().to_lowercase());
     }
 
     #[test]
@@ -2424,7 +2448,7 @@ mod tests {
         .unwrap();
         assert_eq!(filename.as_ref(), "Hey_Bro.luau");
         assert!(needs_meta);
-        assert_eq!(dedup_key, "Hey_Bro");
+        assert_eq!(dedup_key, "Hey_Bro.luau");
     }
 
     #[test]
@@ -2461,7 +2485,7 @@ mod tests {
 
         assert_eq!(f1.as_ref(), "A_B.luau");
         assert!(m1);
-        assert_eq!(f2.as_ref(), "A_B~1.luau");
+        assert_eq!(f2.as_ref(), "A_B~2.luau");
         assert!(m2);
         assert_ne!(dk1.to_lowercase(), dk2.to_lowercase());
     }
@@ -2470,7 +2494,7 @@ mod tests {
     fn syncback_idempotency_same_input_same_output() {
         // Run the same set of instances through name_for_inst twice
         // and verify identical output (determinism).
-        let names = vec!["Alpha", "Beta/Gamma", "Beta:Gamma", "Delta", "CON"];
+        let names = ["Alpha", "Beta/Gamma", "Beta:Gamma", "Delta", "CON"];
         let mw = crate::snapshot_middleware::Middleware::ModuleScript;
 
         let mut dom = rbx_dom_weak::WeakDom::new(rbx_dom_weak::InstanceBuilder::new("Folder"));

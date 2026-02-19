@@ -1,12 +1,5 @@
 ---
-description: "Project file format specification: .project.json5 schema, file extensions, middleware types, init files, sync rules, and property reference."
-globs:
-  - "**/*.project.json5"
-  - "**/*.project.json"
-  - "**/*.meta.json5"
-  - "**/*.meta.json"
-  - "**/*.model.json5"
-  - "**/*.model.json"
+alwaysApply: true
 ---
 
 # Atlas Project File Format
@@ -198,7 +191,7 @@ Configure `syncbackRules` object for Roblox → filesystem sync:
 | `ignoreProperties` | object | `{}` | Properties to skip per class: `{"ClassName": ["Prop1", "Prop2"]}` |
 | `ignoreClasses` | string[] | `[]` | Instance classes to skip entirely |
 | `syncCurrentCamera` | bool | `false` | Whether to sync `Workspace.CurrentCamera` |
-| `syncUnscriptable` | bool | `true` | Whether to sync unscriptable properties |
+| `syncUnscriptable` | bool | `false` | Whether to sync unscriptable properties |
 | `ignoreReferents` | bool | `false` | Whether to skip Ref properties (e.g., `Model.PrimaryPart`) |
 | `createIgnoreDirPaths` | bool | `false` | Whether `/**` in ignore paths also matches the directory itself |
 | `ignoreHiddenServices` | bool | — | Override root-level `ignoreHiddenServices` for syncback |
@@ -215,7 +208,7 @@ Configure `syncbackRules` object for Roblox → filesystem sync:
     },
     "ignoreClasses": ["Terrain", "Camera"],
     "syncCurrentCamera": false,
-    "syncUnscriptable": true,
+    "syncUnscriptable": false,
     "ignoreReferents": false,
     "createIgnoreDirPaths": false,
     "warnDuplicateNames": false
@@ -254,7 +247,9 @@ Add metadata to file-based instances. Meta files use **camelCase keys** (no `$` 
 
 **Key differences from ProjectNode:** Meta uses `className`, `properties`, `attributes` (camelCase, no `$` prefix). Adjacent meta does NOT support `className`.
 
-**`name` field (slugify support):** When an instance name contains forbidden filesystem characters (`: / ? * < > | " \`), syncback slugifies the filename (forbidden chars → `_`) and stores the real name in the `name` field. On forward sync, `name` overrides the filename-derived instance name. On collisions (e.g. `A/B` and `A_B` both slugify to `A_B`), `~1`, `~2` suffixes are appended and meta `name` fields distinguish them.
+**`name` field (slugify support):** When an instance name contains forbidden filesystem characters (`: / ? * < > | " \`), syncback slugifies the filename (forbidden chars → `_`) and stores the real name in the `name` field. On forward sync, `name` overrides the filename-derived instance name. On collisions (e.g. `A/B` and `A_B` both slugify to `A_B`), `~2`, `~3` suffixes are appended and meta `name` fields distinguish them.
+
+**`Rojo_Ref_*` attributes:** Meta files may also contain `Rojo_Ref_PropertyName` attributes written by syncback/two-way sync for Ref property linking. These are managed automatically and should not be hand-edited.
 
 **Meta files CAN'T:** Set `$path`, have children.
 
@@ -331,6 +326,33 @@ Same format as properties. Limitations: no Ref, no NumberSequence/ColorSequence,
 
 ## Ref Property Linking
 
+Two systems for linking instance references, both supported:
+
+### Path-Based: `Rojo_Ref_*` (preferred, written by syncback/two-way sync)
+
+Uses filesystem-name paths (slugified, dedup'd) to reference target instances:
+
+```json5
+// In meta file for an instance with PrimaryPart pointing to Handle
+{
+  "attributes": {
+    "Rojo_Ref_PrimaryPart": "Workspace/MyModel/Handle.model.json5"
+  }
+}
+```
+
+**Attribute format:** `Rojo_Ref_<PropertyName> = "<path>"`
+
+Syncback writes **Luau-style relative paths**:
+- `@self` / `@self/Child.luau` -- target is same instance or a descendant
+- `./Sibling.luau` -- target is a same-parent sibling
+- `../Uncle.luau` -- target is a parent's sibling
+- `@game/Service/Path` -- cross-service reference
+
+Forward sync resolves both relative and absolute formats via `resolve_ref_path_to_absolute()` + `get_instance_by_path()`. Path segments use full filesystem names (slug + extension + dedup suffix), matched case-insensitive with instance name fallback.
+
+### ID-Based: `Rojo_Target_*` + `$id` (legacy, still read by forward sync)
+
 Link instances via `$id` and special attributes:
 
 ```json5
@@ -346,6 +368,8 @@ Link instances via `$id` and special attributes:
 ```
 
 **Attribute format:** `Rojo_Target_<PropertyName>`
+
+**Priority:** When both `Rojo_Ref_*` and `Rojo_Target_*` exist for the same property, `Rojo_Ref_*` takes precedence.
 
 ## Property Types
 

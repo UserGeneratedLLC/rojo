@@ -28,6 +28,9 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Rokit
+        uses: CompeyDev/setup-rokit@v0.1.2
+
       - name: Build Atlas
         run: cargo build --release --locked
 
@@ -45,6 +48,13 @@ jobs:
         with:
           name: Atlas.rbxm
           path: Atlas.rbxm
+
+      - name: Upload Plugin to Roblox
+        env:
+          RBX_API_KEY: ${{ secrets.PLUGIN_UPLOAD_TOKEN }}
+          RBX_UNIVERSE_ID: ${{ vars.PLUGIN_CI_UNIVERSE_ID }}
+          RBX_PLACE_ID: ${{ vars.PLUGIN_CI_PLACE_ID }}
+        run: lune run upload-plugin Atlas.rbxm
 
   build-vscode:
     needs: ["create-release"]
