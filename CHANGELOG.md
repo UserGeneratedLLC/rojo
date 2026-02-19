@@ -31,6 +31,8 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+## [8.4.0] (February 19th, 2026)
+
 * Implement ambiguous path handling in the Reconciler with a 3-pass matching algorithm (exact match, property-weighted scoring, recursive change-count) that correctly reconciles instances when multiple children share the same name.
 * Add default property caching and enhance property comparison logic for more accurate instance matching during reconciliation.
 * Implement recursive change-count matching as a tiebreaker when property-weighted scoring produces ambiguous results.
@@ -72,6 +74,8 @@ Making a new release? Simply add the new header with the version and date undern
 * Increase server initialization backoff duration and maximum retry attempts.
 * Refactor logging levels to debug for improved performance.
 * Update rbx-dom submodule and reflection database.
+* Add plugin upload workflow using Lune and OpenCloud for automated Roblox marketplace publishing.
+* Add `publish-plugin` scripts (PowerShell and Bash) and integrate plugin upload step into the GitHub Actions release workflow.
 
 <details>
 <summary>Full commit log</summary>
@@ -183,6 +187,8 @@ Making a new release? Simply add the new header with the version and date undern
 - `d9459638` Update submodule: rbx-dom to latest commit b75dd401
 - `d360ebe6` Enhance file and directory removal logic in VFS
 - `d252b138` Increase backoff duration and maximum retry attempts in server initialization
+- `8cf140af` Add enhancements and fixes to VFS and syncback processes
+- `4918fb80` Add plugin upload workflow and related enhancements
 
 </details>
 
@@ -216,6 +222,7 @@ Making a new release? Simply add the new header with the version and date undern
 
 </details>
 
+[8.4.0]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.4.0
 [8.3.0]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.3.0
 [#2]: https://github.com/UserGeneratedLLC/rojo/pull/2
 
