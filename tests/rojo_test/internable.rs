@@ -104,19 +104,22 @@ fn intern_instance_additions(
 
     for (id, added) in additions {
         let parent_id = added.parent;
-        let parent_redacted = redactions.get_redacted_value(parent_id);
-
-        // Here, we assume that instances are only added to other instances that
-        // we've already interned. If that's not true, then we'll have some
-        // dangling unredacted IDs.
-        if let Some(parent_redacted) = parent_redacted {
-            added_roots.push((id, parent_redacted));
-        }
+        let parent_redacted = match redactions.get_redacted_value(parent_id) {
+            Some(v) => v,
+            None => {
+                redactions.intern(parent_id);
+                redactions.get_redacted_value(parent_id).unwrap()
+            }
+        };
+        added_roots.push((id, parent_redacted));
     }
 
-    // Sort the input by the redacted key, which should match the traversal
-    // order we need for the tree.
-    added_roots.sort_unstable_by(|a, b| a.1.cmp(&b.1));
+    // Sort by redacted parent, then by name for deterministic ordering when
+    // multiple children share the same parent.
+    added_roots.sort_unstable_by(|a, b| {
+        a.1.cmp(&b.1)
+            .then_with(|| additions[a.0].name.cmp(&additions[b.0].name))
+    });
 
     for (root_id, _redacted_id) in added_roots {
         additions[root_id].intern(redactions, additions);

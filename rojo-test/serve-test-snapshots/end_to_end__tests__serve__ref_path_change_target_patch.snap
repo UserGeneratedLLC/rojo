@@ -12,10 +12,6 @@ body:
           changedMetadata: ~
           changedName: ~
           changedProperties:
-            Attributes:
-              "!Attributes":
-                Rojo_Ref_PrimaryPart:
-                  "!String": "@self/OtherPart"
             PrimaryPart:
               "!Ref": id-4
           id: id-3

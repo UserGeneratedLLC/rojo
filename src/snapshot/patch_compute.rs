@@ -9,7 +9,8 @@ use rbx_dom_weak::{
 };
 
 use crate::{
-    variant_eq::variant_eq, RojoRef, REF_PATH_ATTRIBUTE_PREFIX, REF_POINTER_ATTRIBUTE_PREFIX,
+    variant_eq::variant_eq, RojoRef, REF_ID_ATTRIBUTE_NAME, REF_PATH_ATTRIBUTE_PREFIX,
+    REF_POINTER_ATTRIBUTE_PREFIX,
 };
 
 use super::{
@@ -109,6 +110,29 @@ fn compute_property_patches(
     let mut changed_properties = UstrMap::new();
 
     let attribute_ref_properties = compute_ref_properties(snapshot, tree, instance.id());
+
+    // Strip Rojo ref transport attributes from the snapshot before comparison.
+    // finalize_patch_application strips these from the tree after resolving refs,
+    // so the snapshot must be stripped too to prevent spurious diffs on duplicate
+    // VFS events (common on macOS). The refs were already extracted above.
+    if let Some(Variant::Attributes(attrs)) = snapshot.properties.get_mut(&ustr("Attributes")) {
+        let keys_to_remove: Vec<String> = attrs
+            .iter()
+            .filter_map(|(name, _)| {
+                if name == REF_ID_ATTRIBUTE_NAME
+                    || name.starts_with(REF_POINTER_ATTRIBUTE_PREFIX)
+                    || name.starts_with(REF_PATH_ATTRIBUTE_PREFIX)
+                {
+                    Some(name.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        for key in keys_to_remove {
+            attrs.remove(key);
+        }
+    }
 
     let changed_name = if snapshot.name == instance.name() {
         None

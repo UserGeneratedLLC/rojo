@@ -12,10 +12,6 @@ body:
           changedMetadata: ~
           changedName: ~
           changedProperties:
-            Attributes:
-              "!Attributes":
-                Rojo_Target_PrimaryPart:
-                  "!String": model target
             Scale:
               "!Float32": 1
           id: id-8

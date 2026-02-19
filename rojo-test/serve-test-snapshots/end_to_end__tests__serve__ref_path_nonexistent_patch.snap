@@ -12,10 +12,6 @@ body:
           changedMetadata: ~
           changedName: ~
           changedProperties:
-            Attributes:
-              "!Attributes":
-                Rojo_Ref_PrimaryPart:
-                  "!String": "./NonExistent/Part"
             PrimaryPart: ~
           id: id-3
 packetType: messages

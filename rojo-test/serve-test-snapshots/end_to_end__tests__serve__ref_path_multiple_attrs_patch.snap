@@ -12,12 +12,6 @@ body:
           changedMetadata: ~
           changedName: ~
           changedProperties:
-            Attributes:
-              "!Attributes":
-                Rojo_Ref_CustomRef:
-                  "!String": "@self/OtherPart"
-                Rojo_Ref_PrimaryPart:
-                  "!String": "@self/Target"
             CustomRef:
               "!Ref": id-4
           id: id-3

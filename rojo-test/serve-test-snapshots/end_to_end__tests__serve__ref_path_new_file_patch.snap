@@ -20,15 +20,6 @@ body:
             Value:
               "!Ref": id-5
       removed: []
-      updated:
-        - changedClassName: ~
-          changedMetadata: ~
-          changedName: ~
-          changedProperties:
-            Attributes:
-              "!Attributes":
-                Rojo_Ref_PrimaryPart:
-                  "!String": "@self/Target"
-          id: id-3
+      updated: []
 packetType: messages
 sessionId: id-1
