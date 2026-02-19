@@ -880,10 +880,8 @@ mod tests {
         let mut new_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
         let new_root = new_dom.root_ref();
 
-        let new_model_a = new_dom.insert(
-            new_root,
-            InstanceBuilder::new("Model").with_name("Weapon"),
-        );
+        let new_model_a =
+            new_dom.insert(new_root, InstanceBuilder::new("Model").with_name("Weapon"));
         let new_handle = new_dom.insert(
             new_model_a,
             InstanceBuilder::new("Part").with_name("Handle"),
@@ -894,14 +892,9 @@ mod tests {
             .properties
             .insert("PrimaryPart".into(), Variant::Ref(new_handle));
 
-        let new_model_b = new_dom.insert(
-            new_root,
-            InstanceBuilder::new("Model").with_name("Weapon"),
-        );
-        let new_grip = new_dom.insert(
-            new_model_b,
-            InstanceBuilder::new("Part").with_name("Grip"),
-        );
+        let new_model_b =
+            new_dom.insert(new_root, InstanceBuilder::new("Model").with_name("Weapon"));
+        let new_grip = new_dom.insert(new_model_b, InstanceBuilder::new("Part").with_name("Grip"));
         new_dom
             .get_by_ref_mut(new_model_b)
             .unwrap()
@@ -912,24 +905,17 @@ mod tests {
         let mut old_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
         let old_root = old_dom.root_ref();
 
-        let old_model_b = old_dom.insert(
-            old_root,
-            InstanceBuilder::new("Model").with_name("Weapon"),
-        );
-        let old_grip = old_dom.insert(
-            old_model_b,
-            InstanceBuilder::new("Part").with_name("Grip"),
-        );
+        let old_model_b =
+            old_dom.insert(old_root, InstanceBuilder::new("Model").with_name("Weapon"));
+        let old_grip = old_dom.insert(old_model_b, InstanceBuilder::new("Part").with_name("Grip"));
         old_dom
             .get_by_ref_mut(old_model_b)
             .unwrap()
             .properties
             .insert("PrimaryPart".into(), Variant::Ref(old_grip));
 
-        let old_model_a = old_dom.insert(
-            old_root,
-            InstanceBuilder::new("Model").with_name("Weapon"),
-        );
+        let old_model_a =
+            old_dom.insert(old_root, InstanceBuilder::new("Model").with_name("Weapon"));
         let old_handle = old_dom.insert(
             old_model_a,
             InstanceBuilder::new("Part").with_name("Handle"),
@@ -961,14 +947,8 @@ mod tests {
             let new_inst = new_dom.get_by_ref(*new_ref).unwrap();
             let old_inst = old_dom.get_by_ref(*old_ref).unwrap();
 
-            let new_child_name = &new_dom
-                .get_by_ref(new_inst.children()[0])
-                .unwrap()
-                .name;
-            let old_child_name = &old_dom
-                .get_by_ref(old_inst.children()[0])
-                .unwrap()
-                .name;
+            let new_child_name = &new_dom.get_by_ref(new_inst.children()[0]).unwrap().name;
+            let old_child_name = &old_dom.get_by_ref(old_inst.children()[0]).unwrap().name;
             assert_eq!(
                 new_child_name, old_child_name,
                 "Ref scoring failed: new model with child '{}' matched old model with child '{}'",

@@ -29,7 +29,7 @@ pub const PROTOCOL_VERSION: u64 = 6;
 
 /// Metadata for a single service in the live syncback request.
 ///
-/// Children are NOT stored here — they live in the top-level `data` blob
+/// Children are NOT stored here -- they live in the top-level `data` blob
 /// (a single rbxm containing all children from all services).
 ///
 /// Each service's range in the blob is `child_count + ref_target_count`
@@ -37,10 +37,9 @@ pub const PROTOCOL_VERSION: u64 = 6;
 /// to the service). The next `ref_target_count` are ObjectValue carriers
 /// whose `Value` property holds a Ref to the actual target.
 ///
-/// `refs` maps property names to 1-based indices into the carrier slice
-/// (the ObjectValue entries after the children). Index 1 is the first
-/// carrier, 2 the second, etc. The server reads carriers via
-/// `carriers[idx - 1]`.
+/// `refs` maps property names to 1-based indices into the carrier subrange
+/// (NOT the full service range). Index 1 = first carrier, index 2 = second,
+/// etc. Index 0 or out-of-range values are ignored (treated as nil).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ServiceChunk {

@@ -1,7 +1,6 @@
 use std::{
     collections::HashMap,
     io::Cursor,
-    mem::forget,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     path::{Path, PathBuf},
     sync::Arc,
@@ -58,7 +57,7 @@ impl ServeCommand {
                 .port
                 .or_else(|| session.project_port())
                 .unwrap_or(DEFAULT_PORT);
-            forget(session);
+            drop(session);
             (ip, port)
         };
 
@@ -83,8 +82,12 @@ impl ServeCommand {
             match server.start(addr) {
                 ServerExitReason::SyncbackRequested(payload) => {
                     log::info!("Live syncback requested, running...");
-                    run_live_syncback(&project_path, payload)?;
-                    log::info!("Syncback complete, restarting serve...");
+                    match run_live_syncback(&project_path, payload) {
+                        Ok(()) => log::info!("Syncback complete, restarting serve..."),
+                        Err(err) => {
+                            log::error!("Live syncback failed: {err:#}. Restarting serve...")
+                        }
+                    }
                     continue;
                 }
             }
@@ -132,7 +135,7 @@ fn run_live_syncback(project_path: &Path, payload: SyncbackPayload) -> anyhow::R
 
     crate::git::refresh_git_index(base_path);
 
-    forget(session_old);
+    drop(session_old);
 
     Ok(())
 }
@@ -184,7 +187,15 @@ fn build_dom_from_chunks(payload: SyncbackPayload) -> anyhow::Result<WeakDom> {
         let child_count = chunk.child_count as usize;
         let ref_count = chunk.ref_target_count as usize;
         let total = child_count + ref_count;
-        let end = (cursor + total).min(cloned_children.len());
+        let end = cursor + total;
+        anyhow::ensure!(
+            end <= cloned_children.len(),
+            "Service '{}' claims {} children + {} carriers but only {} instances remain in blob",
+            chunk.class_name,
+            child_count,
+            ref_count,
+            cloned_children.len().saturating_sub(cursor)
+        );
         let service_range: Vec<Ref> = cloned_children[cursor..end].to_vec();
 
         for &child_ref in &service_range[..child_count.min(service_range.len())] {
@@ -209,6 +220,13 @@ fn build_dom_from_chunks(payload: SyncbackPayload) -> anyhow::Result<WeakDom> {
         all_carriers.extend_from_slice(carriers);
         cursor = end;
     }
+
+    anyhow::ensure!(
+        cursor == cloned_children.len(),
+        "Service chunks account for {} instances but rbxm blob contains {}",
+        cursor,
+        cloned_children.len()
+    );
 
     for &service_name in VISIBLE_SERVICES {
         if !created_services.contains(service_name) {

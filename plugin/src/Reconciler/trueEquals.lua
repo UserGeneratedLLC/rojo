@@ -132,7 +132,13 @@ local function trueEquals(a: any, b: any): boolean
 			return false
 		end
 		for i = 1, #aKp do
-			if not (fuzzyEq(aKp[i].Time, bKp[i].Time) and fuzzyEq(aKp[i].Value, bKp[i].Value) and fuzzyEq(aKp[i].Envelope, bKp[i].Envelope)) then
+			if
+				not (
+					fuzzyEq(aKp[i].Time, bKp[i].Time)
+					and fuzzyEq(aKp[i].Value, bKp[i].Value)
+					and fuzzyEq(aKp[i].Envelope, bKp[i].Envelope)
+				)
+			then
 				return false
 			end
 		end

@@ -256,7 +256,12 @@ async fn handle_api_syncback(
         data: syncback_request.data,
         services: syncback_request.services,
     };
-    syncback_signal.fire(payload);
+    if !syncback_signal.fire(payload) {
+        return msgpack(
+            ErrorResponse::bad_request("A syncback is already in progress"),
+            StatusCode::CONFLICT,
+        );
+    }
 
     msgpack_ok(serde_json::json!({"status": "syncback_initiated"}))
 }

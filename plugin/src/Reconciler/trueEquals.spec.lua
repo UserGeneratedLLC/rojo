@@ -452,40 +452,54 @@ return function()
 		end)
 
 		it("from Vector2 identical", function()
-			expect(trueEquals(
-				Rect.new(Vector2.new(10, 20), Vector2.new(30, 40)),
-				Rect.new(Vector2.new(10, 20), Vector2.new(30, 40))
-			)).to.equal(true)
+			expect(
+				trueEquals(
+					Rect.new(Vector2.new(10, 20), Vector2.new(30, 40)),
+					Rect.new(Vector2.new(10, 20), Vector2.new(30, 40))
+				)
+			).to.equal(true)
 		end)
 	end)
 
 	describe("NumberSequence", function()
 		it("identical two-keypoint", function()
-			expect(trueEquals(
-				NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) }),
-				NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) })
-			)).to.equal(true)
+			expect(
+				trueEquals(
+					NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) }),
+					NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) })
+				)
+			).to.equal(true)
 		end)
 
 		it("value within epsilon", function()
-			expect(trueEquals(
-				NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) }),
-				NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1.00005) })
-			)).to.equal(true)
+			expect(
+				trueEquals(
+					NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) }),
+					NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1.00005) })
+				)
+			).to.equal(true)
 		end)
 
 		it("value beyond epsilon", function()
-			expect(trueEquals(
-				NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) }),
-				NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1.002) })
-			)).to.equal(false)
+			expect(
+				trueEquals(
+					NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) }),
+					NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1.002) })
+				)
+			).to.equal(false)
 		end)
 
 		it("different keypoint count", function()
-			expect(trueEquals(
-				NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) }),
-				NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(0.5, 0.5), NumberSequenceKeypoint.new(1, 1) })
-			)).to.equal(false)
+			expect(
+				trueEquals(
+					NumberSequence.new({ NumberSequenceKeypoint.new(0, 0), NumberSequenceKeypoint.new(1, 1) }),
+					NumberSequence.new({
+						NumberSequenceKeypoint.new(0, 0),
+						NumberSequenceKeypoint.new(0.5, 0.5),
+						NumberSequenceKeypoint.new(1, 1),
+					})
+				)
+			).to.equal(false)
 		end)
 
 		it("simple constructor identical", function()
@@ -493,51 +507,99 @@ return function()
 		end)
 
 		it("envelope within epsilon", function()
-			expect(trueEquals(
-				NumberSequence.new({ NumberSequenceKeypoint.new(0, 1, 0.5), NumberSequenceKeypoint.new(1, 1, 0.5) }),
-				NumberSequence.new({ NumberSequenceKeypoint.new(0, 1, 0.50005), NumberSequenceKeypoint.new(1, 1, 0.5) })
-			)).to.equal(true)
+			expect(
+				trueEquals(
+					NumberSequence.new({ NumberSequenceKeypoint.new(0, 1, 0.5), NumberSequenceKeypoint.new(1, 1, 0.5) }),
+					NumberSequence.new({
+						NumberSequenceKeypoint.new(0, 1, 0.50005),
+						NumberSequenceKeypoint.new(1, 1, 0.5),
+					})
+				)
+			).to.equal(true)
 		end)
 	end)
 
 	describe("ColorSequence", function()
 		it("identical two-keypoint", function()
-			expect(trueEquals(
-				ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) }),
-				ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) })
-			)).to.equal(true)
+			expect(
+				trueEquals(
+					ColorSequence.new({
+						ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)),
+						ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+					}),
+					ColorSequence.new({
+						ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)),
+						ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+					})
+				)
+			).to.equal(true)
 		end)
 
 		it("color within epsilon", function()
-			expect(trueEquals(
-				ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.new(0.5, 0, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) }),
-				ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.new(0.50005, 0, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) })
-			)).to.equal(true)
+			expect(
+				trueEquals(
+					ColorSequence.new({
+						ColorSequenceKeypoint.new(0, Color3.new(0.5, 0, 0)),
+						ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+					}),
+					ColorSequence.new({
+						ColorSequenceKeypoint.new(0, Color3.new(0.50005, 0, 0)),
+						ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+					})
+				)
+			).to.equal(true)
 		end)
 
 		it("color beyond epsilon", function()
-			expect(trueEquals(
-				ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.new(0.5, 0, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) }),
-				ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.new(0.6, 0, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) })
-			)).to.equal(false)
+			expect(
+				trueEquals(
+					ColorSequence.new({
+						ColorSequenceKeypoint.new(0, Color3.new(0.5, 0, 0)),
+						ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+					}),
+					ColorSequence.new({
+						ColorSequenceKeypoint.new(0, Color3.new(0.6, 0, 0)),
+						ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+					})
+				)
+			).to.equal(false)
 		end)
 
 		it("different keypoint count", function()
-			expect(trueEquals(
-				ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) }),
-				ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)), ColorSequenceKeypoint.new(0.5, Color3.new(0, 1, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) })
-			)).to.equal(false)
+			expect(
+				trueEquals(
+					ColorSequence.new({
+						ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)),
+						ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+					}),
+					ColorSequence.new({
+						ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)),
+						ColorSequenceKeypoint.new(0.5, Color3.new(0, 1, 0)),
+						ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+					})
+				)
+			).to.equal(false)
 		end)
 
 		it("simple constructor identical", function()
-			expect(trueEquals(ColorSequence.new(Color3.new(1, 0, 0)), ColorSequence.new(Color3.new(1, 0, 0)))).to.equal(true)
+			expect(trueEquals(ColorSequence.new(Color3.new(1, 0, 0)), ColorSequence.new(Color3.new(1, 0, 0)))).to.equal(
+				true
+			)
 		end)
 
 		it("time within epsilon", function()
-			expect(trueEquals(
-				ColorSequence.new({ ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) }),
-				ColorSequence.new({ ColorSequenceKeypoint.new(0.00005, Color3.new(1, 0, 0)), ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)) })
-			)).to.equal(true)
+			expect(
+				trueEquals(
+					ColorSequence.new({
+						ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)),
+						ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+					}),
+					ColorSequence.new({
+						ColorSequenceKeypoint.new(0.00005, Color3.new(1, 0, 0)),
+						ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+					})
+				)
+			).to.equal(true)
 		end)
 	end)
 

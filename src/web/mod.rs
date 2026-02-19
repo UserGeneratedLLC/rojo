@@ -40,9 +40,14 @@ impl SyncbackSignal {
         }
     }
 
-    pub fn fire(&self, payload: SyncbackPayload) {
-        *self.payload.lock().unwrap_or_else(|e| e.into_inner()) = Some(payload);
+    pub fn fire(&self, payload: SyncbackPayload) -> bool {
+        let mut guard = self.payload.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_some() {
+            return false;
+        }
+        *guard = Some(payload);
         self.notify.notify_one();
+        true
     }
 
     pub fn take_payload(&self) -> Option<SyncbackPayload> {

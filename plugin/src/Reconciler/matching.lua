@@ -621,7 +621,14 @@ matchChildren = function(
 		if precomputed ~= nil then
 			totalCost += precomputed
 		else
-			totalCost += computePairCost(session, pair.virtualId, pair.studioInstance, virtualInstances, math.huge, depth)
+			totalCost += computePairCost(
+				session,
+				pair.virtualId,
+				pair.studioInstance,
+				virtualInstances,
+				math.huge,
+				depth
+			)
 		end
 	end
 	totalCost += (#unmatchedVirtual + #unmatchedStudio) * UNMATCHED_PENALTY

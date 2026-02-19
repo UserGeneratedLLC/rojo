@@ -786,3 +786,200 @@ fn roundtrip_build_syncback_rebuild() {
         compare_trees(&dom_a, dom_a.root_ref(), &dom_b, dom_b.root_ref(), "root");
     });
 }
+
+// ── Additional edge-case parity tests ────────────────────────────
+
+#[test]
+fn parity_children_with_attributes_and_tags() {
+    use rbx_dom_weak::types::{Attributes, Tags, Variant};
+
+    let mut attrs = Attributes::new();
+    attrs.insert("CustomFloat".to_string(), Variant::Float32(1.5));
+    attrs.insert("CustomBool".to_string(), Variant::Bool(true));
+
+    let mut tags = Tags::new();
+    tags.push("TestTag");
+    tags.push("AnotherTag");
+
+    let chunks = vec![make_service_chunk(
+        "ReplicatedStorage",
+        vec![
+            InstanceBuilder::new("Folder")
+                .with_name("TaggedFolder")
+                .with_property("Attributes", Variant::Attributes(attrs))
+                .with_property("Tags", Variant::Tags(tags)),
+            InstanceBuilder::new("ModuleScript")
+                .with_name("Utils")
+                .with_property("Source", Variant::String("return {}".into())),
+        ],
+    )];
+    assert_live_matches_cli("live_syncback", chunks, None);
+}
+
+#[test]
+fn parity_multiple_cross_service_refs() {
+    use rbx_dom_weak::types::Variant;
+
+    let target_part = InstanceBuilder::new("Part")
+        .with_name("Target1")
+        .with_property("Anchored", Variant::Bool(true));
+
+    let target_folder = InstanceBuilder::new("Folder").with_name("Target2");
+
+    let obj_value_a = InstanceBuilder::new("ObjectValue")
+        .with_name("PointerA")
+        .with_property("Value", Variant::Ref(target_part.referent()));
+
+    let obj_value_b = InstanceBuilder::new("ObjectValue")
+        .with_name("PointerB")
+        .with_property("Value", Variant::Ref(target_folder.referent()));
+
+    let chunks = vec![
+        make_service_chunk("Workspace", vec![target_part, target_folder]),
+        make_service_chunk(
+            "ReplicatedStorage",
+            vec![InstanceBuilder::new("Folder")
+                .with_name("Refs")
+                .with_child(obj_value_a)
+                .with_child(obj_value_b)],
+        ),
+    ];
+    assert_live_matches_cli("live_syncback", chunks, None);
+}
+
+#[test]
+fn parity_properties_only_no_children() {
+    use rbx_dom_weak::types::{Color3, Variant};
+
+    let chunks = vec![
+        make_service_chunk_full(
+            "Lighting",
+            vec![
+                ("Ambient", Variant::Color3(Color3::new(0.1, 0.1, 0.1))),
+                ("Brightness", Variant::Float32(1.5)),
+            ],
+            vec![],
+            vec![],
+            vec![],
+        ),
+        make_service_chunk_full(
+            "SoundService",
+            vec![("DistanceFactor", Variant::Float32(8.0))],
+            vec![],
+            vec![],
+            vec![],
+        ),
+        make_service_chunk_full(
+            "TextChatService",
+            vec![(
+                "ChatVersion",
+                Variant::Enum(rbx_dom_weak::types::Enum::from_u32(2)),
+            )],
+            vec![],
+            vec![],
+            vec![],
+        ),
+    ];
+    assert_live_matches_cli("live_syncback", chunks, None);
+}
+
+// ── Resilience tests ─────────────────────────────────────────────
+
+#[test]
+fn rapid_sequential_syncbacks() {
+    let (data_a, chunks_a) = build_syncback_request(vec![make_service_chunk(
+        "ReplicatedStorage",
+        vec![InstanceBuilder::new("Folder").with_name("RapidA")],
+    )]);
+    let (data_b, chunks_b) = build_syncback_request(vec![make_service_chunk(
+        "ReplicatedStorage",
+        vec![InstanceBuilder::new("Folder").with_name("RapidB")],
+    )]);
+
+    run_serve_test("live_syncback", |session, _| {
+        session.post_api_syncback(None, data_a, chunks_a);
+        session.wait_to_come_back_online();
+
+        session.post_api_syncback(None, data_b, chunks_b);
+        session.wait_to_come_back_online();
+
+        assert!(
+            !session.path().join("src/shared/RapidA").exists(),
+            "RapidA should be gone after second syncback (clean mode)"
+        );
+        assert!(
+            session.path().join("src/shared/RapidB").exists(),
+            "Second syncback should create RapidB"
+        );
+    });
+}
+
+#[test]
+fn recovers_from_malformed_chunks() {
+    run_serve_test("live_syncback", |session, _| {
+        let initial_info = session.get_api_rojo().unwrap();
+
+        let bad_chunk = librojo::web_api::ServiceChunk {
+            class_name: "ReplicatedStorage".to_string(),
+            child_count: 999,
+            ref_target_count: 0,
+            properties: std::collections::HashMap::new(),
+            refs: std::collections::HashMap::new(),
+        };
+
+        let body = build_raw_syncback_body(None, &[], &[bad_chunk]);
+        let response = session.post_api_syncback_raw(body);
+        assert!(
+            response.status().is_success(),
+            "Server should accept the request (validation happens async), got {}",
+            response.status()
+        );
+
+        let new_info = session.wait_to_come_back_online();
+        assert_ne!(
+            initial_info.session_id, new_info.session_id,
+            "Server should have restarted (new session ID)"
+        );
+
+        assert!(
+            session.path().join("src").exists(),
+            "Filesystem should be intact (malformed syncback should not have written)"
+        );
+    });
+}
+
+fn build_raw_syncback_body(
+    place_id: Option<u64>,
+    data: &[u8],
+    services: &[librojo::web_api::ServiceChunk],
+) -> Vec<u8> {
+    use serde::Serialize;
+
+    #[derive(Serialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Req<'a> {
+        protocol_version: u64,
+        server_version: String,
+        place_id: Option<u64>,
+        #[serde(with = "serde_bytes")]
+        data: &'a [u8],
+        services: &'a [librojo::web_api::ServiceChunk],
+    }
+
+    let request = Req {
+        protocol_version: PROTOCOL_VERSION,
+        server_version: env!("CARGO_PKG_VERSION").to_string(),
+        place_id,
+        data,
+        services,
+    };
+
+    let mut body = Vec::new();
+    let mut serializer = rmp_serde::Serializer::new(&mut body)
+        .with_human_readable()
+        .with_struct_map();
+    request
+        .serialize(&mut serializer)
+        .expect("Failed to serialize syncback request");
+    body
+}

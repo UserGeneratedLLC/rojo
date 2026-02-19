@@ -1528,16 +1528,10 @@ mod tests {
                 .insert(ustr("Transparency"), Variant::Float32(0.0));
             s
         };
-        let tree_model_grip_snap = make_snapshot_with_children(
-            "Weapon",
-            "Model",
-            vec![tree_child_grip],
-        );
-        let tree_model_handle_snap = make_snapshot_with_children(
-            "Weapon",
-            "Model",
-            vec![tree_child_handle],
-        );
+        let tree_model_grip_snap =
+            make_snapshot_with_children("Weapon", "Model", vec![tree_child_grip]);
+        let tree_model_handle_snap =
+            make_snapshot_with_children("Weapon", "Model", vec![tree_child_handle]);
 
         let (tree2, tree_refs2) =
             make_tree_from_snapshots(vec![tree_model_grip_snap, tree_model_handle_snap]);
@@ -1559,11 +1553,8 @@ mod tests {
             s
         };
         let snap_grip2 = {
-            let mut s = make_snapshot_with_children(
-                "Weapon",
-                "Model",
-                vec![make_snapshot("Grip", "Part")],
-            );
+            let mut s =
+                make_snapshot_with_children("Weapon", "Model", vec![make_snapshot("Grip", "Part")]);
             s.properties
                 .insert(ustr("PrimaryPart"), Variant::Ref(tree2_grip_ref));
             s
