@@ -131,6 +131,10 @@ impl InitCommand {
                 ("core.autocrlf", "false"),
                 ("core.eol", "lf"),
                 ("core.safecrlf", "false"),
+                ("core.splitIndex", "true"),
+                // ("core.fsmonitor", "true"),
+                ("core.untrackedcache", "true"),
+                ("feature.manyFiles", "true"),
             ] {
                 let _ = Command::new("git")
                     .args(["config", "--local", key, value])
