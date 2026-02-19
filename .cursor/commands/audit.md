@@ -33,7 +33,7 @@ Any divergence between the two-way sync path and the CLI syncback path is a bug 
 
 ## Sync System Layout
 
-The auditor MUST read the relevant files from each pipeline when tracing round-trip identity. This section maps every file involved in both sync systems. Read these files -- do not skip any that are in the scope of the feature being audited.
+The auditor MUST read the relevant files from each pipeline when tracing round-trip identity. This section maps every file involved in all three sync systems. Read these files -- do not skip any that are in the scope of the feature being audited.
 
 ### CLI Syncback Pipeline (`atlas syncback`)
 
@@ -54,10 +54,11 @@ Syncback Core
 │                                           middleware context through the pipeline. Methods:
 │                                           with_joined_path(), get_path_filtered_properties().
 ├── src/syncback/file_names.rs             Filename generation. slugify_name() replaces forbidden
-│                                           chars with '_'. deduplicate_name() appends ~1, ~2 on
-│                                           collision. name_for_inst() is the main entry point.
-│                                           adjacent_meta_path() computes .meta.json5 paths for
-│                                           scripts (strips .server/.client suffixes from stem).
+│                                           chars (incl. ~) with '_'. deduplicate_name_with_ext()
+│                                           appends ~2, ~3 on collision. name_for_inst() is the
+│                                           main entry point. adjacent_meta_path() computes
+│                                           .meta.json5 paths for scripts (strips .server/.client
+│                                           suffixes from stem).
 ├── src/syncback/property_filter.rs        Property filtering. filter_properties() removes Name,
 │                                           Parent, Source (scripts), Value (StringValue), Contents
 │                                           (LocalizationTable), Ref/UniqueId, unscriptable props.
@@ -148,13 +149,28 @@ Change Batching (Plugin)
 │                                           Encodes a single property value using RbxDom.EncodedValue.
 │                                           encode(). Maps Roblox values to wire format.
 ├── plugin/src/ChangeBatcher/encodeInstance.lua
-│                                           Full instance encoding for additions. All children are
-│                                           encoded including those with duplicate names -- the server
-│                                           handles dedup. Skips Ref properties (target has no server
-│                                           ID during addition). Attributes/Tags support.
+│                                           Full instance encoding for additions. Uses encodeHelpers
+│                                           for property iteration. All children encoded including
+│                                           duplicates -- server handles dedup. Duplicate detection
+│                                           helpers: findDuplicateNames(), hasDuplicateSiblings(),
+│                                           isPathUnique(). Skips Ref properties during addition.
+├── plugin/src/ChangeBatcher/encodeHelpers.lua
+│                                           Shared encoding helpers used by encodeInstance and
+│                                           encodeService. Exports: encodeAttributes(),
+│                                           encodeTags(), forEachEncodableProperty(). Defines
+│                                           SKIP_PROPERTIES (Parent, Name, Archivable). Filters
+│                                           by scriptability, serialization, and data type.
+├── plugin/src/ChangeBatcher/encodeService.lua
+│                                           Service-level property encoding for live syncback.
+│                                           Encodes properties via RbxDom.findClassDescriptor().
+│                                           Skips: Parent, Name, Archivable, Attributes, Tags.
+│                                           Ref properties: creates temporary ObjectValue carriers
+│                                           (Name=propertyName, Value=target). Returns (chunk,
+│                                           refTargets). Class-specific excludes (Lighting.ClockTime).
 └── plugin/src/ChangeBatcher/propertyFilter.lua
-                                            Filters which properties are synced. Controls which data
-                                            types and property names are included/excluded.
+                                            Filters which properties are synced. Only UniqueId is
+                                            blocked. Ref properties are explicitly allowed (handled
+                                            by encodePatchUpdate via InstanceMap resolution).
 
 Session & Transport (Plugin)
 ├── plugin/src/ServeSession.lua            Orchestrates the session. onInstanceChanged → guards
@@ -194,7 +210,8 @@ Server Write Processing (receives plugin writes)
 │                                           updates on rename. Constants: REF_PATH_ATTRIBUTE_PREFIX,
 │                                           REF_POINTER_ATTRIBUTE_PREFIX, REF_ID_ATTRIBUTE_NAME.
 ├── src/variant_eq.rs                      Property value comparison. variant_eq() compares Variant
-│                                           values with fuzzy float matching (approx_eq! with epsilon).
+│                                           values with fuzzy float matching (custom fuzzy_eq_f32/
+│                                           fuzzy_eq_f64 with EPSILON 0.0001, absolute+relative).
 │                                           Used by matching algorithms for property diff scoring.
 └── src/serve_session.rs                   Server-side session. Owns RojoTree, ChangeProcessor,
                                             MessageQueue, RefPathIndex, git_repo_root. Coordinates
@@ -287,7 +304,93 @@ Patch Application (Plugin)
 └── plugin/src/Reconciler/Error.lua        Error types for reconciliation failures.
 ```
 
-### Shared Infrastructure (used by both pipelines)
+### Live Syncback Pipeline (`POST /api/syncback`)
+
+One-click full sync from Studio to filesystem. Does NOT require an active WebSocket connection -- the plugin POSTs directly from the NotConnected page. The server restarts after completion.
+
+```
+PLUGIN SIDE (encoding and transport)
+====================================
+
+UI & Orchestration
+├── plugin/src/App/init.lua              SyncbackConfirm floating dialog (StudioPluginGui with
+│                                         isEphemeral=true). Rendered when showingSyncbackConfirm
+│                                         is true. SYNCBACK_SERVICES constant (14 services):
+│                                         Lighting, MaterialService, ReplicatedFirst,
+│                                         ReplicatedStorage, ServerScriptService, ServerStorage,
+│                                         SoundService, StarterGui, StarterPack, StarterPlayer,
+│                                         Teams, TextChatService, VoiceChatService, Workspace.
+│                                         performSyncback() iterates services, encodes each via
+│                                         encodeService(), serializes all children via
+│                                         SerializationService:SerializeInstancesAsync() into a
+│                                         single buffer, destroys temporary carriers, POSTs to
+│                                         /api/syncback. Triggered from NotConnected page.
+└── plugin/src/App/StatusPages/NotConnected.lua
+                                          "Syncback" button (Danger style) opens SyncbackConfirm.
+
+Service Encoding
+├── plugin/src/ChangeBatcher/encodeService.lua
+│                                         Encodes service-level properties for a single service.
+│                                         Returns (chunk, refTargets). chunk = { className,
+│                                         childCount, refTargetCount, properties?, refs? }.
+│                                         Ref properties use temporary ObjectValue carriers
+│                                         (carrier.Name = propertyName, carrier.Value = target).
+│                                         refs map stores 1-based carrier indices.
+│                                         Class-specific excludes: Lighting.ClockTime.
+│                                         Skips: Parent, Name, Archivable, Attributes, Tags.
+└── plugin/src/ChangeBatcher/encodeHelpers.lua
+                                          Shared helpers used by encodeService. encodeAttributes(),
+                                          encodeTags(), forEachEncodableProperty().
+
+Transport: HTTP POST /api/syncback (MessagePack body)
+  Request: { protocolVersion, serverVersion, placeId, data, services }
+
+SERVER SIDE (validation, DOM reconstruction, syncback)
+======================================================
+
+API Handler
+├── src/web/api.rs                        handle_api_syncback() validates:
+│                                           (1) protocol version == PROTOCOL_VERSION (6)
+│                                           (2) server version MAJOR.MINOR matches
+│                                           (3) place ID passes servePlaceIds/blockedPlaceIds
+│                                         Fires SyncbackSignal with payload.
+│                                         Returns 400 (protocol/version mismatch), 403 (place ID),
+│                                         or 409 (syncback already in progress).
+
+Signal & Server Lifecycle
+├── src/web/mod.rs                        SyncbackSignal: Mutex<Option<SyncbackPayload>> + Notify.
+│                                         fire() deposits payload and notifies.
+│                                         take_payload() retrieves and clears.
+│                                         LiveServer::start() uses tokio::select! to wait for
+│                                         new connections OR syncback signal. Exits accept loop
+│                                         when signal fires.
+
+Wire Types
+├── src/web/interface.rs                  SyncbackRequest { protocol_version: f64,
+│                                           server_version: String, place_id: Option<f64>,
+│                                           data: Vec<u8>, services: Vec<ServiceChunk> }
+│                                         ServiceChunk { class_name, child_count, ref_target_count,
+│                                           properties: HashMap<String, Variant>,
+│                                           refs: HashMap<String, u32> }
+│                                         SyncbackPayload { data: Vec<u8>,
+│                                           services: Vec<ServiceChunk> }
+│                                         ServerExitReason::SyncbackRequested(SyncbackPayload)
+
+DOM Reconstruction & Syncback
+└── src/cli/serve.rs                      run_live_syncback() is the main handler.
+                                           build_dom_from_chunks() reconstructs WeakDom:
+                                             (1) parses rbxm blob with rbx_binary::from_reader()
+                                             (2) creates services from ServiceChunk metadata
+                                             (3) distributes children using child_count + 
+                                                 ref_target_count ranges per service
+                                             (4) resolves Ref properties via ObjectValue carriers
+                                             (5) ensures all VISIBLE_SERVICES exist
+                                           Runs syncback_loop(incremental=false) -- always clean
+                                           mode. write_to_vfs_parallel() writes files.
+                                           refresh_git_index() updates git. Serve loop restarts.
+```
+
+### Shared Infrastructure (used by all three pipelines)
 
 ```
 Snapshot System
@@ -353,6 +456,26 @@ Plugin Shared Modules
 ├── plugin/src/ChangeMetadata.lua          Change metadata tracking for sync operations.
 ├── plugin/src/strict.lua                  Module export wrapper (strict mode enforcement).
 └── plugin/src/DiffUtil.lua                Diff utilities for comparing instance data.
+
+Integration Tests (tests/tests/)
+├── tests/tests/build.rs                   Build tests (gen_build_tests! macro).
+├── tests/tests/serve.rs                   Forward-sync serve tests.
+├── tests/tests/connected_mode.rs          Connected mode tests.
+├── tests/tests/two_way_sync.rs            Two-way sync via /api/write tests.
+├── tests/tests/syncback.rs                CLI syncback tests.
+├── tests/tests/syncback_roundtrip.rs      Full round-trip (syncback → build → compare).
+├── tests/tests/syncback_format_transitions.rs  File-to-folder and folder-to-file.
+├── tests/tests/clean_mode.rs              Clean mode syncback tests.
+├── tests/tests/clean_mode_stress.rs       Clean mode stress tests.
+├── tests/tests/live_syncback.rs           Live syncback parity tests (live output matches CLI),
+│                                           validation tests (protocol/version/placeId), lifecycle
+│                                           tests (server restart, sequential syncbacks), edge cases
+│                                           (attributes, tags, cross-service refs, rapid sequential).
+├── tests/tests/git_sync_defaults.rs       Git-based sync default selection tests.
+│                                           Hash computation parity, default selection logic,
+│                                           auto-staging flow, no-git-repo fallback.
+└── tests/tests/matching_fixtures.rs       Matching algorithm fixture tests across all three
+                                            implementations (Rust syncback, Rust forward, Lua plugin).
 ```
 
 ### Audit Reading Order
@@ -368,6 +491,7 @@ When auditing a feature, read files in this order to build understanding before 
 7. **Ref properties:** `src/rojo_ref.rs` (constants, `RefPathIndex`, `ref_target_path_from_tree`), `src/syncback/ref_properties.rs` (syncback ref linking), `src/snapshot/patch_apply.rs` (deferred ref resolution) -- understand cross-instance references
 8. **Matching algorithms:** `src/snapshot/matching.rs` (forward sync), `src/syncback/matching.rs` (CLI syncback), `plugin/src/Reconciler/matching.lua` (plugin) -- three parallel implementations that must produce identical pairings. Also `src/variant_eq.rs` (Rust) and `plugin/src/Reconciler/trueEquals.lua` (Lua) for property comparison
 9. **Git integration:** `src/git.rs` (server-side git metadata, blob hashing, auto-staging), `plugin/src/PatchTree.lua` (default selection logic using gitMetadata), `plugin/src/SHA1.luau` (plugin-side hash computation)
+10. **Live syncback:** `plugin/src/ChangeBatcher/encodeService.lua` (service encoding), `plugin/src/App/init.lua` (`performSyncback`, `SyncbackConfirm`, `SYNCBACK_SERVICES`), `src/web/api.rs` (`handle_api_syncback`), `src/web/mod.rs` (`SyncbackSignal`, `LiveServer`), `src/cli/serve.rs` (`build_dom_from_chunks`, `run_live_syncback`), `src/web/interface.rs` (`SyncbackRequest`, `ServiceChunk`)
 
 ---
 
@@ -666,6 +790,49 @@ The confirmation dialog uses git metadata for smart default selections (`PatchTr
 - **Auto-staging (`stageIds`)**: After confirmation, `api.rs` receives `stageIds` and calls `git_add`. Push-accepted items are always staged. Pull-accepted items are only staged if auto-selected (`defaultSelection ~= nil`). Manually-chosen pulls are left unstaged. Is this flow correct?
 - **Staging split**: `api.rs` stages additions/removals/push files directly. `change_processor` stages Source writes after they complete (via `stage_ids` on PatchSet). Verify both paths handle the `stage_ids` list correctly.
 - **No git repo**: When `git_repo_root` is `None`, all defaults should be `nil` and no staging should be attempted.
+
+#### 11n. Live Syncback Parity
+
+Live syncback (`POST /api/syncback`) is a third sync path that must produce filesystem output identical to CLI syncback. It runs in clean mode (`incremental=false`) and restarts the server after completion.
+
+**Verify plugin-side encoding:**
+- Does `encodeService.lua` encode all service-level properties that CLI syncback captures? Compare against `filter_properties()` in `property_filter.rs`.
+- Are `Attributes` and `Tags` handled correctly? (`encodeService` skips them from the property loop but `encodeHelpers.encodeAttributes/encodeTags` handle them separately.)
+- Are class-specific excludes (`Lighting.ClockTime`) consistent with CLI syncback behavior?
+- Is the `SKIP_PROPERTIES` list in `encodeHelpers.lua` (Parent, Name, Archivable) consistent with server-side filtering?
+
+**Verify ObjectValue carrier lifecycle:**
+- Are carriers created correctly? (`carrier.Name = propertyName`, `carrier.Value = targetInstance`)
+- Are carriers included in the serialization buffer? (appended to service's children range)
+- Are carriers destroyed after serialization? (cleanup in `performSyncback()`)
+- Does `build_dom_from_chunks()` correctly parse the `ref_target_count` range and resolve carriers?
+- Does the server destroy carriers after resolving Ref properties? (they must not appear in the synced tree)
+
+**Verify rbxm blob reconstruction:**
+- Does `build_dom_from_chunks()` distribute children correctly using `child_count` + `ref_target_count` ranges?
+- Are services with zero children handled? (empty services still get created)
+- Are `VISIBLE_SERVICES` in Rust consistent with `SYNCBACK_SERVICES` in Lua? (must list the same 14 services)
+- Does the server handle out-of-range or zero-index carrier references gracefully?
+
+**Verify clean mode semantics:**
+- Live syncback always uses `incremental=false`. Does this match CLI syncback behavior for the same input?
+- Are old files properly removed before new files are written?
+- Is `refresh_git_index()` called after writes?
+
+**Verify server restart behavior:**
+- Does the server exit the accept loop cleanly when `SyncbackSignal` fires?
+- Is the serve loop restarted with a new session after syncback completes?
+- Can a new plugin connection be established after restart?
+- Does `SyncbackSignal.fire()` return false if syncback is already in progress? (409 Conflict)
+
+**Verify validation:**
+- Protocol version mismatch → 400
+- Server version MAJOR.MINOR mismatch → 400
+- Place ID not in `servePlaceIds` whitelist → 403
+- Place ID in `blockedPlaceIds` → 403
+- No restrictions configured → any place ID allowed
+
+**Verify round-trip:** Build → live syncback → rebuild → compare. The rebuilt instance tree must be bit-identical to the original (same as CLI syncback round-trip test).
 
 ### 12. Run Static Analysis
 

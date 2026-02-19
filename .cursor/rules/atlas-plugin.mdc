@@ -14,7 +14,7 @@ Built with Roact (React-like), handles WebSocket sync with server, patch applica
 ### Key Components
 
 **1. UI Layer** (`App/`)
-- **init.lua** - Root component, manages connection state, auto-reconnect, sync reminders, playtest server auto-connect
+- **init.lua** - Root component, manages connection state, auto-reconnect, sync reminders, playtest server auto-connect. Also renders `SyncbackConfirm` floating dialog (StudioPluginGui with `isEphemeral=true`, not a StatusPage file). Contains `performSyncback()` and `SYNCBACK_SERVICES` constant.
 - **Theme.lua** - Studio-matched color palette (auto light/dark)
 - **Page.lua** - Page wrapper component
 - **Components/** - Reusable UI components
@@ -28,7 +28,6 @@ Built with Roact (React-like), handles WebSocket sync with server, patch applica
   - `NotConnected.lua` - Connection form (host/port input), "Syncback" button (Danger style)
   - `Connecting.lua` - Loading screen
   - `Confirming.lua` - Patch confirmation dialog with push/pull/ignore per-node selections
-  - `SyncbackConfirm` - Floating dialog for live syncback confirmation (rendered by `App/init.lua`)
   - `Connected.lua` - Status display with patch history
   - `Error.lua` - Error display
   - `Settings/` - Settings UI (`init.lua`, `Setting.lua`)
@@ -57,7 +56,8 @@ Built with Roact (React-like), handles WebSocket sync with server, patch applica
 - **init.lua** - Main batcher: accumulates changes every 200ms, pause/resume, deferred Ref resolution
 - **createPatchSet.lua** - Converts pending changes to PatchSet
 - **encodePatchUpdate.lua** - Encodes property updates including Ref properties via InstanceMap
-- **encodeInstance.lua** - Full instance encoding (for additions/syncback); includes duplicate detection helpers (`findDuplicateNames`, `hasDuplicateSiblings`, `isPathUnique`)
+- **encodeInstance.lua** - Full instance encoding (for additions/syncback); uses `encodeHelpers` for property iteration; includes duplicate detection helpers (`findDuplicateNames`, `hasDuplicateSiblings`, `isPathUnique`)
+- **encodeHelpers.lua** - Shared property encoding helpers (`encodeAttributes`, `encodeTags`, `forEachEncodableProperty`). Used by `encodeInstance.lua` and `encodeService.lua`. Defines `SKIP_PROPERTIES` (Parent, Name, Archivable).
 - **encodeService.lua** - Encodes service-level properties/attributes/refs for live syncback; uses ObjectValue carriers for Ref properties
 - **encodeProperty.lua** - Single property value encoding via RbxDom
 - **propertyFilter.lua** - Property type filtering (only `UniqueId` blocked; `Ref` is allowed)

@@ -56,6 +56,7 @@ All three now have **`MatchingSession` caching** to avoid redundant recursive sc
 | `plugin/src/Reconciler/trueEquals.lua` | Matching | `trueEquals` property comparison (Lua) |
 | `src/change_processor.rs` | Integration | Dedup cleanup on deletion, VFS suppression, ref path updates |
 | `src/web/api.rs` | Integration | `added_paths`, `syncback_updated_properties`, ref-to-attribute conversion |
+| `plugin/src/ChangeBatcher/encodeHelpers.lua` | Encoding | Shared property filtering/encoding helpers (`encodeAttributes`, `encodeTags`, `forEachEncodableProperty`). Used by `encodeInstance.lua` and `encodeService.lua`. |
 
 ---
 

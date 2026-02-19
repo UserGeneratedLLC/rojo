@@ -408,7 +408,9 @@ end
 | `init.lua` | Main batcher: accumulator, RenderStepped loop, pause/resume, deferred refs |
 | `createPatchSet.lua` | Converts pending changes → PatchSet (passes instanceMap for Ref resolution) |
 | `encodePatchUpdate.lua` | Encodes property updates including Ref properties via InstanceMap |
-| `encodeInstance.lua` | Full instance encoding (for additions/syncback) |
+| `encodeInstance.lua` | Full instance encoding (for additions/syncback); uses `encodeHelpers` for property iteration; includes duplicate detection helpers (`findDuplicateNames`, `hasDuplicateSiblings`, `isPathUnique`) |
+| `encodeHelpers.lua` | Shared encoding helpers: `encodeAttributes`, `encodeTags`, `forEachEncodableProperty`. Used by `encodeInstance.lua` and `encodeService.lua`. Defines `SKIP_PROPERTIES` (Parent, Name, Archivable). |
+| `encodeService.lua` | Encodes service-level properties/attributes/refs for live syncback; uses ObjectValue carriers for Ref properties |
 | `encodeProperty.lua` | Single property value encoding via RbxDom |
 | `propertyFilter.lua` | Property type filtering (only `UniqueId` blocked; `Ref` is allowed) |
 
@@ -548,14 +550,14 @@ end
 
 ### encodeInstance.lua: Full Instance Encoding (Syncback/Additions)
 
-Used when pulling new instances from Studio to filesystem. Duplicate-named instances are encoded and sent to the server; the server handles filesystem collisions via the dedup suffix system (`~N`).
+Used when pulling new instances from Studio to filesystem. Uses `encodeHelpers.forEachEncodableProperty()` for property iteration (shared with `encodeService.lua`). Duplicate-named instances are encoded and sent to the server; the server handles filesystem collisions via the dedup suffix system (`~N`). Includes duplicate detection helpers (`findDuplicateNames`, `hasDuplicateSiblings`, `isPathUnique`).
 
 ```lua
 function encodeInstance(instance, parentId, _skipPathCheck)
     local properties = {}
     
-    encodeAttributes(instance, properties)
-    encodeTags(instance, properties)
+    Helpers.encodeAttributes(instance, properties)
+    Helpers.encodeTags(instance, properties)
     
     if SCRIPT_CLASS_NAMES[instance.ClassName] then
         local success, encoded = encodeProperty(instance, "Source", descriptor)
@@ -563,24 +565,13 @@ function encodeInstance(instance, parentId, _skipPathCheck)
         properties.Source = encoded
     end
     
-    local classDescriptor = RbxDom.findClassDescriptor(instance.ClassName)
-    for propertyName, meta in classDescriptor.properties do
-        if SKIP_PROPERTIES[propertyName] then continue end
-        if SKIP_PROPERTIES_BY_CLASS[instance.ClassName]?[propertyName] then continue end
-        
-        local isReadable = meta.scriptability == "ReadWrite" or meta.scriptability == "Read"
-        local doesSerialize = meta.serialization ~= "DoesNotSerialize"
-        
-        if isReadable and doesSerialize then
-            local success, encoded = encodeProperty(instance, propertyName, descriptor)
-            if success and encoded ~= nil then
-                properties[propertyName] = encoded
-            end
+    Helpers.forEachEncodableProperty(instance.ClassName, SKIP_PROPERTIES_BY_CLASS, function(propertyName, descriptor)
+        local success, encoded = encodeProperty(instance, propertyName, descriptor)
+        if success and encoded ~= nil then
+            properties[propertyName] = encoded
         end
-    end
+    end)
     
-    -- All children encoded (including those with duplicate names;
-    -- the server handles duplicates via dedup suffix system)
     local children = {}
     for _, child in instance:GetChildren() do
         local encoded = encodeInstance(child, nil, true)

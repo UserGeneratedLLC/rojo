@@ -521,64 +521,56 @@ return function()
 
 	describe("ColorSequence", function()
 		it("identical two-keypoint", function()
-			expect(
-				trueEquals(
-					ColorSequence.new({
-						ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)),
-						ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
-					}),
-					ColorSequence.new({
-						ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)),
-						ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
-					})
-				)
-			).to.equal(true)
+			expect(trueEquals(
+				ColorSequence.new({
+					ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)),
+					ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+				}),
+				ColorSequence.new({
+					ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)),
+					ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+				})
+			)).to.equal(true)
 		end)
 
 		it("color within epsilon", function()
-			expect(
-				trueEquals(
-					ColorSequence.new({
-						ColorSequenceKeypoint.new(0, Color3.new(0.5, 0, 0)),
-						ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
-					}),
-					ColorSequence.new({
-						ColorSequenceKeypoint.new(0, Color3.new(0.50005, 0, 0)),
-						ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
-					})
-				)
-			).to.equal(true)
+			expect(trueEquals(
+				ColorSequence.new({
+					ColorSequenceKeypoint.new(0, Color3.new(0.5, 0, 0)),
+					ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+				}),
+				ColorSequence.new({
+					ColorSequenceKeypoint.new(0, Color3.new(0.50005, 0, 0)),
+					ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+				})
+			)).to.equal(true)
 		end)
 
 		it("color beyond epsilon", function()
-			expect(
-				trueEquals(
-					ColorSequence.new({
-						ColorSequenceKeypoint.new(0, Color3.new(0.5, 0, 0)),
-						ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
-					}),
-					ColorSequence.new({
-						ColorSequenceKeypoint.new(0, Color3.new(0.6, 0, 0)),
-						ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
-					})
-				)
-			).to.equal(false)
+			expect(trueEquals(
+				ColorSequence.new({
+					ColorSequenceKeypoint.new(0, Color3.new(0.5, 0, 0)),
+					ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+				}),
+				ColorSequence.new({
+					ColorSequenceKeypoint.new(0, Color3.new(0.6, 0, 0)),
+					ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+				})
+			)).to.equal(false)
 		end)
 
 		it("different keypoint count", function()
-			expect(
-				trueEquals(
-					ColorSequence.new({
-						ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)),
-						ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
-					}),
-					ColorSequence.new({
-						ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)),
-						ColorSequenceKeypoint.new(0.5, Color3.new(0, 1, 0)),
-						ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
-					})
-				)
-			).to.equal(false)
+			expect(trueEquals(
+				ColorSequence.new({
+					ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)),
+					ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+				}),
+				ColorSequence.new({
+					ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)),
+					ColorSequenceKeypoint.new(0.5, Color3.new(0, 1, 0)),
+					ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+				})
+			)).to.equal(false)
 		end)
 
 		it("simple constructor identical", function()
@@ -588,18 +580,16 @@ return function()
 		end)
 
 		it("time within epsilon", function()
-			expect(
-				trueEquals(
-					ColorSequence.new({
-						ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)),
-						ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
-					}),
-					ColorSequence.new({
-						ColorSequenceKeypoint.new(0.00005, Color3.new(1, 0, 0)),
-						ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
-					})
-				)
-			).to.equal(true)
+			expect(trueEquals(
+				ColorSequence.new({
+					ColorSequenceKeypoint.new(0, Color3.new(1, 0, 0)),
+					ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+				}),
+				ColorSequence.new({
+					ColorSequenceKeypoint.new(0.00005, Color3.new(1, 0, 0)),
+					ColorSequenceKeypoint.new(1, Color3.new(0, 0, 1)),
+				})
+			)).to.equal(true)
 		end)
 	end)
 
