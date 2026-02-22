@@ -5,6 +5,14 @@ get the schemas for everything into cursor somehow
 setup nightly build
 suffix version for beta
 
+[mcp]
+* atlas_sync
+ - Invokes Atlas sync from Roblox
+ - If there are NO unselected items in the tree (e.g. all were automatically selected), it just automatically hits accept
+ - Does nothing if we are running in connected-mode (already syncing)
+ - Agent should await the completion of this sync before proceeding
+  - If we are in connected-mode we will need to figure out a way to await syncing to finish to ensure state is good
+
 [merging]
 we should make the property diffs have arrows next to eachother so you can like "undo" certain things
 need proper merging support in this UI.
