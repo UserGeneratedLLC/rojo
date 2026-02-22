@@ -1,6 +1,10 @@
 [vscode extension]
 get the schemas for everything into cursor somehow
 
+[versioning]
+setup nightly build
+suffix version for beta
+
 [merging]
 we should make the property diffs have arrows next to eachother so you can like "undo" certain things
 need proper merging support in this UI.
