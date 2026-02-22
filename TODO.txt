@@ -1,0 +1,328 @@
+[vscode extension]
+get the schemas for everything into cursor somehow
+
+[merging]
+we should make the property diffs have arrows next to eachother so you can like "undo" certain things
+need proper merging support in this UI.
+make sure for fully deleted/added files we can use the merge UI as expected.
+
+[syncback]
+maybe make syncback automatically create a branch and merge it in, rather than overwriting your project files?
+
+[automated review of all changes done, similar to cursor agent review for the game]
+send in discord
+require people to green check it when done
+have the cursor style issue context copyable
+tag who last modified the file, too
+https://cursor.com/dashboard?tab=bugbot
+
+[Move tests to dedicated location]
+Right now we have a severe amount of tests in the actual implementation files. I'd like to move those to a dedicated location because it's bloating the implementation files.
+
+[Make instance creation/syncing more consistent and levelled up with how rbxsync does it]
+* Terrain syncback / sync
+* Order of operations (e.g. applying the Tag after full-sync routine complete so that things listening for tag updates get updated after it has been fully constructed, including it's children)
+* CSG parts - requires very special handling to reproduce
+* MeshPart creation must be done via CreateMeshPartAsync https://create.roblox.com/docs/reference/engine/classes/AssetService#CreateMeshPartAsync
+* Special handling props (e.g. Skybox, ColorMap/ColorMapContent stuff)
+* MeshId swaps for updates, need to re-create via CreateMeshPartAsync
+* Queueing up material updates to properly support MaterialService changes so they appear correctly in studio without having to reboot
+* Refer to rbxsync D:\UserGenerated\rbxsync\plugin\src\Serializer.luau and D:\UserGenerated\rbxsync\plugin\src\Sync.luau for reference, this system works correctly for the above use cases.
+* You can search that whole rbxsync project for details/information.
+
+[reify]
+I noticed that in the reify/encodeInstance/decodeInstance/diff etc system we are not applying tags? Should the tag application / update behavior not be in here?
+Tags should be applied once ALL updates have been performed on the instance
+Tags should not be applied until EVERYTHING, including refs/attributes/properties are set.
+Also, I noticed that attributes were not being doing in that system either, that should be done there I think?
+Also, I noticed that it can fail to create an Instance - do we properly handle creating MeshPart's using InsertService?
+Do we handle rebuilding CSG parts appropriately?
+Do we handle swapping MeshId properly?
+Are we performing operations in the correct order?
+I feel like we added a lot of sync-logic that was supposed to be in these systems, but was placed elsewhere..
+Refer to rbxsync D:\UserGenerated\rbxsync\plugin\src\Serializer.luau and D:\UserGenerated\rbxsync\plugin\src\Sync.luau for reference, this system works correctly for the above use cases.
+You can search that whole rbxsync project for details/information.
+
+[--!strict the plugin and make it --!native in hotpaths]
+Need to get stuff inlined...
+the entire syncing system needs to have it's types corrected and use strict,native,optimize.
+we need to optimize the matching system heavily, it's so slow...
+
+[Always mode]
+MEDIUM - Issue 5: Ongoing "Always" mode patches don't support per-item selections yet
+The existing code at ServeSession.lua line 311-314 explicitly says:
+> "Table-type responses from the selection-based UI are not yet handled here. Ongoing WebSocket patches with per-item selections would need the same logic."
+So in "Always" mode, ongoing patches currently only support "Accept"/"Abort"/"Skip" -- not per-item push/pull/ignore. The git defaults would be set in the PatchTree but the user can't act on them for ongoing patches. This is a pre-existing limitation, not introduced by us, but worth noting.
+
+[two-way sync-back non scripts with a checkbox?]
+we should just two-way sync everything backwards property wise, its really about not forward-syncing properties when that scripts only mode is on..
+
+[testing which actually runs studio, syncs, etc]
+we could make an automated testing system which truly simulates opening a place file and syncing to a running server automatically
+this would close the gap on testing HEAVILY
+use run-in-roblox utility like we use everywhere else.
+so this expands beyond just that TestEZ system, where it tests spec files. this is separate from that, but same idea, just expanded upon.
+
+[two way sync]
+Make the two-way sync system respect the syncback configuration fully
+ensure that live-syncback respects the syncback configuration fully
+
+[refs]
+-- Ref properties cannot be encoded during instance addition because the
+-- target instance has no server ID yet. They are handled separately by
+-- encodePatchUpdate.lua via the InstanceMap.
+if descriptor.dataType == "Ref" then return end
+I thought we were supposed to generate a uid and then send that table to the server so it can resolve those based on like a client uid?
+
+[cli]
+make console tabbing support work
+we should make commands for inspecting .rbxl and .rbxm files for ai agents
+even inspecting ones from the website directly
+could we find an endpoint for downloading the "client side" of any game on the platform for context?
+
+[Crates]
+publish as a crate https://crates.io/crates/rojo
+
+[syncback]
+detect when the output file hash is the same, and dont write to it
+
+[sync]
+manually selection Studio should NOT automatically stage changes!
+
+[auto select studio/atlas]
+when things get added AFTER the fact because we send the git history hashes on connect rather than continiously, it auto-selects Studio for things that are being edited in real-time in the sync dialog
+how should we handle new files? because it could have been that someone just deleted it in studio. we can actually check if its a truly new file in Studio, like A but not staged!
+
+[merge visualizer]
+we should make the outline green or something to show when everything is ready to go. maybe the accept button
+
+[tree reconciling spooky!]
+[INFO  librojo::cli::serve] Listening: http://localhost:34873
+[INFO  librojo::change_processor] VFS event: WRITE d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau -> src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau affects IDs [Ref(Some(162268450181648175032536457080084761373))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau for instance Ref(Some(162268450181648175032536457080084761373))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] VFS event applied: 0 added, 0 removed, 1 updated
+[INFO  librojo::change_processor] Tree reconciliation: corrected 4 added, 4 removed (14.0s)
+[INFO  librojo::change_processor] VFS event: WRITE d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: 0 added, 0 removed, 1 updated
+[INFO  librojo::change_processor] VFS event: WRITE src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] Tree reconciliation: corrected 4 added, 4 removed (12.1s)
+[INFO  librojo::change_processor] VFS event: WRITE d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: 0 added, 0 removed, 1 updated
+[INFO  librojo::change_processor] VFS event: WRITE src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] Tree reconciliation: corrected 4 added, 4 removed (13.3s)
+[INFO  librojo::change_processor] VFS event: WRITE d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: 0 added, 0 removed, 1 updated
+[INFO  librojo::change_processor] VFS event: WRITE src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] Tree reconciliation: corrected 4 added, 4 removed (13.5s)
+[INFO  librojo::change_processor] VFS event: WRITE d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: 0 added, 0 removed, 1 updated
+[INFO  librojo::change_processor] VFS event: WRITE src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] VFS event: WRITE d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] VFS event: WRITE src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] Tree reconciliation: corrected 4 added, 4 removed (14.0s)
+[INFO  librojo::change_processor] VFS event: WRITE d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: 0 added, 0 removed, 1 updated
+[INFO  librojo::change_processor] VFS event: WRITE src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] Tree reconciliation: corrected 4 added, 4 removed (13.8s)
+[INFO  librojo::change_processor] VFS event: WRITE d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: 0 added, 0 removed, 1 updated
+[INFO  librojo::change_processor] VFS event: WRITE src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] VFS event: WRITE d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] VFS event: WRITE src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] Tree reconciliation: corrected 4 added, 4 removed (13.0s)
+[INFO  librojo::change_processor] VFS event: WRITE d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: 0 added, 0 removed, 1 updated
+[INFO  librojo::change_processor] VFS event: WRITE src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] VFS event: WRITE d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] VFS event: WRITE src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] Tree reconciliation: corrected 4 added, 4 removed (13.6s)
+[INFO  librojo::change_processor] VFS event: WRITE d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: 0 added, 0 removed, 1 updated
+[INFO  librojo::change_processor] VFS event: WRITE src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for src\ReplicatedStorage\Client\Controllers\UI\HUD.luau -> src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\HUD.luau affects IDs [Ref(Some(294452550321273018071988539960330649902))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau for instance Ref(Some(294452550321273018071988539960330649902))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\HUD.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] Tree reconciliation: corrected 4 added, 4 removed (13.8s)
+[INFO  librojo::change_processor] VFS event: WRITE d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau -> src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau affects IDs [Ref(Some(162268450181648175032536457080084761373))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau for instance Ref(Some(162268450181648175032536457080084761373))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] VFS event applied: 0 added, 0 removed, 1 updated
+[INFO  librojo::change_processor] VFS event: WRITE src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau -> src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau affects IDs [Ref(Some(162268450181648175032536457080084761373))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau for instance Ref(Some(162268450181648175032536457080084761373))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] Tree reconciliation: corrected 4 added, 4 removed (12.5s)
+[INFO  librojo::change_processor] VFS event: WRITE d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau -> src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau affects IDs [Ref(Some(162268450181648175032536457080084761373))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau for instance Ref(Some(162268450181648175032536457080084761373))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] VFS event applied: 0 added, 0 removed, 1 updated
+[INFO  librojo::change_processor] VFS event: WRITE src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau -> src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau affects IDs [Ref(Some(162268450181648175032536457080084761373))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau for instance Ref(Some(162268450181648175032536457080084761373))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] Tree reconciliation: corrected 4 added, 4 removed (12.0s)
+[INFO  librojo::change_processor] VFS event: WRITE d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau -> src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau affects IDs [Ref(Some(162268450181648175032536457080084761373))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau for instance Ref(Some(162268450181648175032536457080084761373))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] VFS event applied: 0 added, 0 removed, 1 updated
+[INFO  librojo::change_processor] VFS event: WRITE src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau -> src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau affects IDs [Ref(Some(162268450181648175032536457080084761373))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau for instance Ref(Some(162268450181648175032536457080084761373))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] Tree reconciliation: corrected 4 added, 4 removed (13.6s)
+[INFO  librojo::web::api] Syncback: Updating properties for instance Ref(Some(235969869441813210778056584779662649683)): Source
+[INFO  librojo::web::api] Syncback: Updating properties for instance Ref(Some(291040600291607857644497431099122037291)): Source
+[INFO  librojo::change_processor] Two-way sync: Writing Source to d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Shared\Traits\Galaxy.luau
+[INFO  librojo::change_processor] Two-way sync: Writing Source to d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Shared\Traits\Magma.luau
+[INFO  librojo::change_processor] VFS event: WRITE d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Shared\Traits\Galaxy.luau
+[INFO  librojo::change_processor] VFS event SUPPRESSED (API syncback echo): d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Shared\Traits\Galaxy.luau
+[INFO  librojo::change_processor] VFS event: WRITE src\ReplicatedStorage\Shared\Traits\Galaxy.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for src\ReplicatedStorage\Shared\Traits\Galaxy.luau -> src\ReplicatedStorage\Shared\Traits\Galaxy.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Shared\Traits\Galaxy.luau affects IDs [Ref(Some(235969869441813210778056584779662649683))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Shared\Traits\Galaxy.luau for instance Ref(Some(235969869441813210778056584779662649683))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Shared\Traits\Galaxy.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] VFS event: WRITE d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Shared\Traits\Magma.luau
+[INFO  librojo::change_processor] VFS event SUPPRESSED (API syncback echo): d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Shared\Traits\Magma.luau
+[INFO  librojo::change_processor] VFS event: WRITE src\ReplicatedStorage\Shared\Traits\Magma.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for src\ReplicatedStorage\Shared\Traits\Magma.luau -> src\ReplicatedStorage\Shared\Traits\Magma.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Shared\Traits\Magma.luau affects IDs [Ref(Some(291040600291607857644497431099122037291))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Shared\Traits\Magma.luau for instance Ref(Some(291040600291607857644497431099122037291))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Shared\Traits\Magma.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] Tree reconciliation: corrected 4 added, 4 removed (12.5s)
+[INFO  librojo::change_processor] VFS event: WRITE d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau -> src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau affects IDs [Ref(Some(162268450181648175032536457080084761373))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau for instance Ref(Some(162268450181648175032536457080084761373))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] VFS event applied: 0 added, 0 removed, 1 updated
+[INFO  librojo::change_processor] VFS event: WRITE src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] VFS: canonicalize OK for src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau -> src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] apply_patches: path src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau affects IDs [Ref(Some(162268450181648175032536457080084761373))]
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau for instance Ref(Some(162268450181648175032536457080084761373))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] Tree reconciliation: corrected 4 added, 4 removed (12.3s)
+
+I'm really confused why this was slamming over and over saying 4 added, 4 removed - seems like a bug.
+We need to investigate Tree reconciliation, make sure it's parallel, etc.
+I'd really like to just reconcile specific paths that were modified - but i'm not sure if that just defeats the purpose.. need to explore this topic later.
+Worst case - we reconcile only on connect, but do so in mega-parallel
+
+[change visualizer]
+we should support right-click to unselect the bubble (atlas/studio/skip)
