@@ -2,7 +2,7 @@
   "editor.tabSize": 2,
   "editor.insertSpaces": true,
   "editor.rulers": [
-    80
+    100
   ],
 
   "files.eol": "\n",
@@ -36,11 +36,11 @@
   "stylua.targetReleaseVersion": "latest",
   "[lua]": {
     "editor.defaultFormatter": "JohnnyMorganz.stylua",
-    "editor.formatOnSave": true
+    "editor.formatOnSave": false
   },
   "[luau]": {
     "editor.defaultFormatter": "JohnnyMorganz.stylua",
-    "editor.formatOnSave": true
+    "editor.formatOnSave": false
   },
 
   "git.ignoreLimitWarning": true,
