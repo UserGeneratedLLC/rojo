@@ -31,6 +31,8 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+* Added `AGENTS.md` with development environment setup instructions for Cursor Cloud agents ([#5])
+
 ## [8.4.1] (February 19th, 2026)
 
 * Fix spurious diffs during VFS events by removing redundant Rojo reference attributes from snapshot comparisons.
@@ -235,6 +237,7 @@ Making a new release? Simply add the new header with the version and date undern
 [8.4.0]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.4.0
 [8.3.0]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.3.0
 [#2]: https://github.com/UserGeneratedLLC/rojo/pull/2
+[#5]: https://github.com/UserGeneratedLLC/rojo/pull/5
 
 ## [8.2.0] (February 12th, 2026)
 
