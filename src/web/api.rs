@@ -23,7 +23,8 @@ use rbx_dom_weak::{
 use crate::{
     serve_session::ServeSession,
     snapshot::{
-        InstanceSnapshot, InstanceWithMeta, InstigatingSource, PatchAdd, PatchSet, PatchUpdate,
+        is_script_class, InstanceSnapshot, InstanceWithMeta, InstigatingSource, PatchAdd, PatchSet,
+        PatchUpdate,
     },
     syncback::{slugify_name, VISIBLE_SERVICES},
     web::{
@@ -559,6 +560,9 @@ impl ApiService {
                         if temp_to_real.contains_key(guid) {
                             continue;
                         }
+                        if !added.properties.is_empty() || !added.children.is_empty() {
+                            continue;
+                        }
                         let parent = added.parent.unwrap_or(Ref::none());
                         let real_parent = temp_to_real.get(&parent).copied().unwrap_or(parent);
                         if tree.get_instance(real_parent).is_none() {
@@ -593,6 +597,9 @@ impl ApiService {
                     for guid in temp_to_real.keys() {
                         updated_in_place.insert(*guid);
                     }
+                    request
+                        .added
+                        .retain(|guid, _| !temp_to_real.contains_key(guid));
                 }
             }
 
@@ -3603,8 +3610,6 @@ fn parent_requirements(class: &str) -> Option<&str> {
         _ => return None,
     })
 }
-
-use crate::snapshot::is_script_class;
 
 /// Filters a SubscribeMessage to only include scripts and their ancestors.
 /// Non-script ancestors get ignoreUnknownInstances: true.

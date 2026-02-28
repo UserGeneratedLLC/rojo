@@ -626,6 +626,29 @@ mod test {
     use super::RojoTree;
 
     #[test]
+    fn update_script_tracking_adds_and_removes() {
+        let snapshot = InstanceSnapshot::new().name("Root").class_name("DataModel");
+        let child = InstanceSnapshot::new()
+            .name("TestFolder")
+            .class_name("Folder");
+
+        let mut tree = RojoTree::new(snapshot);
+        let root = tree.get_root_id();
+        let folder_id = tree.insert_instance(root, child);
+
+        assert!(!tree.script_refs().contains(&folder_id));
+
+        tree.update_script_tracking(folder_id, "Folder", "ModuleScript");
+        assert!(tree.script_refs().contains(&folder_id));
+
+        tree.update_script_tracking(folder_id, "ModuleScript", "Script");
+        assert!(tree.script_refs().contains(&folder_id));
+
+        tree.update_script_tracking(folder_id, "Script", "Folder");
+        assert!(!tree.script_refs().contains(&folder_id));
+    }
+
+    #[test]
     fn swap_duped_specified_ids() {
         let custom_ref = RojoRef::new("MyCoolRef".into());
         let snapshot = InstanceSnapshot::new()

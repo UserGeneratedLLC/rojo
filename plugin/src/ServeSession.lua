@@ -1020,6 +1020,7 @@ end
 function ServeSession:__stopInternal(err)
 	self:__setStatus(Status.Disconnected, err)
 	self.__apiContext:disconnect()
+	table.clear(self.__instanceMap.scriptsOnlyTempIds)
 	self.__instanceMap:stop()
 	self.__changeBatcher:stop()
 

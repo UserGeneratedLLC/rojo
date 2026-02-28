@@ -73,7 +73,7 @@ fn scripts_only_read_ancestors_have_no_properties() {
         let root_id = info.root_instance_id;
         let read_response = session.get_api_read(root_id).unwrap();
 
-        for (_, inst) in &read_response.instances {
+        for inst in read_response.instances.values() {
             let is_script = matches!(
                 inst.class_name.as_str(),
                 "Script" | "LocalScript" | "ModuleScript"
