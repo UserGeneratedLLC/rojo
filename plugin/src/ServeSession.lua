@@ -961,7 +961,15 @@ function ServeSession:__connectScriptsOnlyWatchers()
 			end
 
 			local scriptTempId = string.gsub(HttpService:GenerateGUID(false), "-", ""):lower()
-			patch.added[scriptTempId] = encodeInstance(descendant, prevParentId)
+			local encoded = encodeInstance(descendant, prevParentId)
+			if not encoded then
+				Log.warn("Scripts-only: failed to encode new script {}, rolling back temp IDs", descendant:GetFullName())
+				for tempId in patch.added do
+					self.__instanceMap:removeId(tempId)
+				end
+				return
+			end
+			patch.added[scriptTempId] = encoded
 			self.__instanceMap:insert(scriptTempId, descendant)
 
 			Log.info(

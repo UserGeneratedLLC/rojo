@@ -547,6 +547,50 @@ impl ApiService {
 
         if !request.added.is_empty() {
             let tree = self.serve_session.tree();
+
+            // Phase 0: Resolve intermediate container temp IDs to real tree Refs.
+            // The DescendantAdded handler sends containers that already exist in the
+            // tree as "additions" with temp IDs. Resolve them so child additions
+            // (the actual new scripts) can find their parents.
+            let mut temp_to_real: HashMap<Ref, Ref> = HashMap::new();
+            let mut progress = true;
+            while progress {
+                progress = false;
+                for (guid, added) in request.added.iter() {
+                    if temp_to_real.contains_key(guid) {
+                        continue;
+                    }
+                    let parent = added.parent.unwrap_or(Ref::none());
+                    let real_parent =
+                        temp_to_real.get(&parent).copied().unwrap_or(parent);
+                    if tree.get_instance(real_parent).is_none() {
+                        continue;
+                    }
+                    if let Some(existing_ref) =
+                        Self::find_child_by_name(&tree, real_parent, &added.name)
+                    {
+                        temp_to_real.insert(*guid, existing_ref);
+                        progress = true;
+                    }
+                }
+            }
+            if !temp_to_real.is_empty() {
+                log::debug!(
+                    "Scripts-only temp ID resolution: resolved {} intermediate container(s)",
+                    temp_to_real.len()
+                );
+                for added in request.added.values_mut() {
+                    if let Some(parent) = added.parent {
+                        if let Some(&real) = temp_to_real.get(&parent) {
+                            added.parent = Some(real);
+                        }
+                    }
+                }
+                for guid in temp_to_real.keys() {
+                    updated_in_place.insert(*guid);
+                }
+            }
+
             // Pre-compute duplicate sibling info in O(N) for efficient path uniqueness checks
             // This makes all subsequent path checks O(d) instead of O(d × s)
             let duplicate_siblings_cache = Self::compute_tree_refs_with_duplicate_siblings(&tree);
@@ -3633,12 +3677,8 @@ fn filter_subscribe_message_for_scripts<'a>(
             .unwrap_or(false)
     });
 
-    // Only remove scripts (plugin will ignore unknown IDs anyway)
-    msg.removed.retain(|_id| {
-        // We can't check removed instances in the tree since they're gone,
-        // so we let all removals through - the plugin will ignore unknown IDs
-        true
-    });
+    // Removals are left unfiltered: we can't check removed instances in the
+    // tree (they're already gone), and the plugin ignores unknown IDs.
 }
 
 /// Creates an Instance for scripts-only mode.
