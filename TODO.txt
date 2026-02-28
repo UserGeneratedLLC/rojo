@@ -345,17 +345,8 @@ we should support right-click to unselect the bubble (atlas/studio/skip)
 [auto select issue]
 when you commit changes on git, it's considered unchanged. we should send like the last git hash too, like prior to head, too.
 
-[add ServerStorage/RBX_ANIMSAVES to ignore list!]
-	globIgnorePaths: ["src/ServerStorage/RBX_ANIMSAVES/**", "src/ServerStorage/MoonAnimator2Saves/**"],
-	syncbackRules: {
-		ignoreTrees: ["ServerStorage/RBX_ANIMSAVES/**", "ServerStorage/MoonAnimator2Saves/**"],
-	},
-
 [scripts only mode]
-when in scripts only mode, try to avoid the entire tree where scripts dont exist to make syncing from the Roblox plugin faster
-
-[luau-lsp sourcemap gen]
-luau-lsp sourcemap generator --watch is leaving instances of atlas running forever
+when in scripts only mode, try to avoid the entire tree where scripts dont exist to make syncing from the Roblox plugin faster. prune non-script leaves.
 
 [yielding after sync]
 there is some process that is making disconnecting after a one-shot sync completes take FOREVER if the server is yielding (usually from the reconciler)

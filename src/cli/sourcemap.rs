@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    io::{BufWriter, Write},
+    io::{BufWriter, IsTerminal, Write},
     mem::forget,
     path::{self, Path, PathBuf},
     process,
@@ -104,6 +104,22 @@ impl SourcemapCommand {
         )?;
 
         if self.watch {
+            if !std::io::stdin().is_terminal() {
+                std::thread::spawn(|| {
+                    use std::io::Read;
+                    let mut buf = [0u8; 1];
+                    loop {
+                        match std::io::stdin().lock().read(&mut buf) {
+                            Ok(0) | Err(_) => {
+                                log::trace!("stdin closed, exiting --watch");
+                                process::exit(0);
+                            }
+                            Ok(_) => {}
+                        }
+                    }
+                });
+            }
+
             let rt = Runtime::new().unwrap();
 
             loop {
