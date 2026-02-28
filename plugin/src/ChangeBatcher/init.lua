@@ -31,6 +31,7 @@ function ChangeBatcher.new(instanceMap, onChangesFlushed)
 		__onChangesFlushed = onChangesFlushed,
 		__pendingPropertyChanges = {},
 		__syncSourceOnly = false,
+		__syncScriptsOnly = false,
 		__paused = false,
 
 		-- Map of target Instance -> list of {sourceInstance, propertyName}
@@ -52,6 +53,10 @@ end
 
 function ChangeBatcher:setSyncSourceOnly(enabled)
 	self.__syncSourceOnly = enabled
+end
+
+function ChangeBatcher:setSyncScriptsOnly(enabled)
+	self.__syncScriptsOnly = enabled
 end
 
 -- Pause the batcher to prevent change accumulation during confirmation
@@ -118,6 +123,10 @@ function ChangeBatcher:__onTargetInstanceInserted(instance)
 end
 
 function ChangeBatcher:add(instance, propertyName)
+	if self.__syncScriptsOnly and not instance:IsA("LuaSourceContainer") then
+		return
+	end
+
 	local properties = self.__pendingPropertyChanges[instance]
 
 	if not properties then

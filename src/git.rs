@@ -10,13 +10,10 @@ use std::{
 use rbx_dom_weak::types::Ref;
 use sha1::{Digest, Sha1};
 
-use crate::{snapshot::RojoTree, web::interface::GitMetadata};
-
-const SCRIPT_CLASSES: &[&str] = &["Script", "LocalScript", "ModuleScript"];
-
-fn is_script_class(class: &str) -> bool {
-    SCRIPT_CLASSES.contains(&class)
-}
+use crate::{
+    snapshot::{is_script_class, RojoTree},
+    web::interface::GitMetadata,
+};
 
 pub fn git_repo_root(project_root: &Path) -> Option<PathBuf> {
     let output = Command::new("git")

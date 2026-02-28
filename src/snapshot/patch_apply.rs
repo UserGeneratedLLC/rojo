@@ -251,6 +251,13 @@ fn apply_update_child(context: &mut PatchApplyContext, tree: &mut RojoTree, patc
         applied_patch.changed_metadata = Some(metadata);
     }
 
+    // Capture old class name before the mutable borrow so we can update
+    // the script index afterward if the class changes.
+    let old_class_name = patch.changed_class_name.and_then(|_| {
+        tree.get_instance(patch.id)
+            .map(|inst| inst.class_name().to_string())
+    });
+
     let mut instance = match tree.get_instance_mut(patch.id) {
         Some(instance) => instance,
         None => {
@@ -305,6 +312,11 @@ fn apply_update_child(context: &mut PatchApplyContext, tree: &mut RojoTree, patc
         }
 
         applied_patch.changed_properties.insert(key, property_entry);
+    }
+
+    if let (Some(old_class), Some(new_class)) = (&old_class_name, &applied_patch.changed_class_name)
+    {
+        tree.update_script_tracking(patch.id, old_class, new_class.as_str());
     }
 
     defer_ref_properties(tree, patch.id, context);

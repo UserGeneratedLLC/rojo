@@ -113,6 +113,7 @@ function ServeSession.new(options)
 		__apiContext = options.apiContext,
 		__twoWaySync = options.twoWaySync,
 		__syncSourceOnly = false,
+		__syncScriptsOnly = false,
 		__reconciler = reconciler,
 		__instanceMap = instanceMap,
 		__changeBatcher = changeBatcher,
@@ -123,6 +124,7 @@ function ServeSession.new(options)
 		__serverInfo = nil,
 		__confirmingPatch = nil,
 		__isConfirming = false, -- Explicit confirmation state flag for defense-in-depth
+		__applyingPatch = false, -- Set during reconciler patch application to suppress DescendantAdded
 		__connections = connections,
 		__precommitCallbacks = {},
 		__postcommitCallbacks = {},
@@ -331,6 +333,9 @@ function ServeSession:start()
 			self.__syncSourceOnly = serverInfo.syncSourceOnly or false
 			self.__changeBatcher:setSyncSourceOnly(self.__syncSourceOnly)
 
+			self.__syncScriptsOnly = serverInfo.syncScriptsOnly or false
+			self.__changeBatcher:setSyncScriptsOnly(self.__syncScriptsOnly)
+
 			self.__serverInfo = serverInfo
 			return self:__computeInitialPatch(serverInfo):andThen(function(catchUpPatch)
 				self:setLoadingText("Starting sync loop...")
@@ -360,6 +365,8 @@ function ServeSession:start()
 			if self.__initialSyncCompleteCallback ~= nil then
 				self.__initialSyncCompleteCallback()
 			end
+
+			self:__connectScriptsOnlyWatchers()
 		end)
 		:catch(function(err)
 			if self.__status ~= Status.Disconnected then
@@ -555,8 +562,10 @@ function ServeSession:__applyPatch(patch)
 	end
 	Timer.stop()
 
+	self.__applyingPatch = true
 	local patchApplySuccess, unappliedPatch = pcall(self.__reconciler.applyPatch, self.__reconciler, patch)
 	if not patchApplySuccess then
+		self.__applyingPatch = false
 		if historyRecording then
 			ChangeHistoryService:FinishRecording(historyRecording, Enum.FinishRecordingOperation.Commit)
 		end
@@ -565,30 +574,37 @@ function ServeSession:__applyPatch(patch)
 		error(unappliedPatch)
 	end
 
-	if Settings:get("enableSyncFallback") and not PatchSet.isEmpty(unappliedPatch) then
-		-- Some changes did not apply, let's try replacing them instead
-		local addedIdList = PatchSet.addedIdList(unappliedPatch)
-		local updatedIdList = PatchSet.updatedIdList(unappliedPatch)
+	local fallbackOk, fallbackErr = pcall(function()
+		if Settings:get("enableSyncFallback") and not PatchSet.isEmpty(unappliedPatch) then
+			-- Some changes did not apply, let's try replacing them instead
+			local addedIdList = PatchSet.addedIdList(unappliedPatch)
+			local updatedIdList = PatchSet.updatedIdList(unappliedPatch)
 
-		Log.debug("ServeSession:__replaceInstances(unappliedPatch.added)")
-		Timer.start("ServeSession:__replaceInstances(unappliedPatch.added)")
-		local addSuccess, unappliedAddedRefs = self:__replaceInstances(addedIdList)
-		Timer.stop()
+			Log.debug("ServeSession:__replaceInstances(unappliedPatch.added)")
+			Timer.start("ServeSession:__replaceInstances(unappliedPatch.added)")
+			local addSuccess, unappliedAddedRefs = self:__replaceInstances(addedIdList)
+			Timer.stop()
 
-		Log.debug("ServeSession:__replaceInstances(unappliedPatch.updated)")
-		Timer.start("ServeSession:__replaceInstances(unappliedPatch.updated)")
-		local updateSuccess, unappliedUpdateRefs = self:__replaceInstances(updatedIdList)
-		Timer.stop()
+			Log.debug("ServeSession:__replaceInstances(unappliedPatch.updated)")
+			Timer.start("ServeSession:__replaceInstances(unappliedPatch.updated)")
+			local updateSuccess, unappliedUpdateRefs = self:__replaceInstances(updatedIdList)
+			Timer.stop()
 
-		-- Update the unapplied patch to reflect which Instances were replaced successfully
-		if addSuccess then
-			table.clear(unappliedPatch.added)
-			PatchSet.assign(unappliedPatch, unappliedAddedRefs)
+			-- Update the unapplied patch to reflect which Instances were replaced successfully
+			if addSuccess then
+				table.clear(unappliedPatch.added)
+				PatchSet.assign(unappliedPatch, unappliedAddedRefs)
+			end
+			if updateSuccess then
+				table.clear(unappliedPatch.updated)
+				PatchSet.assign(unappliedPatch, unappliedUpdateRefs)
+			end
 		end
-		if updateSuccess then
-			table.clear(unappliedPatch.updated)
-			PatchSet.assign(unappliedPatch, unappliedUpdateRefs)
-		end
+	end)
+	self.__applyingPatch = false
+
+	if not fallbackOk then
+		Log.warn("Sync fallback errored: {}", fallbackErr)
 	end
 
 	if not PatchSet.isEmpty(unappliedPatch) then
@@ -892,9 +908,172 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 	end
 end
 
+function ServeSession:__connectScriptsOnlyWatchers()
+	if not self.__syncScriptsOnly then
+		return
+	end
+	if not self.__twoWaySync then
+		return
+	end
+
+	local services = {}
+	if self.__serverInfo and self.__serverInfo.visibleServices then
+		for _, serviceName in ipairs(self.__serverInfo.visibleServices) do
+			local ok, service = pcall(game.GetService, game, serviceName)
+			if ok and service then
+				table.insert(services, service)
+			end
+		end
+	else
+		for _, instance in self.__instanceMap.fromIds do
+			if instance.Parent == game then
+				table.insert(services, instance)
+			end
+		end
+	end
+
+	for _, service in services do
+		local conn = service.DescendantAdded:Connect(function(descendant)
+			if not self.__twoWaySync then
+				return
+			end
+			if self.__status ~= Status.Connected then
+				return
+			end
+			if Settings:get("oneShotSync") then
+				return
+			end
+			if RunService:IsRunning() then
+				return
+			end
+			if self.__changeBatcher:isPaused() then
+				return
+			end
+			if self.__applyingPatch then
+				return
+			end
+			if not descendant:IsA("LuaSourceContainer") then
+				return
+			end
+			if self.__instanceMap.fromInstances[descendant] then
+				return
+			end
+
+			local chain = {}
+			local current = descendant.Parent
+			while current and current ~= game do
+				if self.__instanceMap.fromInstances[current] then
+					break
+				end
+				table.insert(chain, 1, current)
+				current = current.Parent
+			end
+
+			local mappedParent = current
+			local mappedParentId = mappedParent and self.__instanceMap.fromInstances[mappedParent]
+
+			if not mappedParentId then
+				local rootId = self.__instanceMap.fromInstances[game]
+				if not rootId then
+					return
+				end
+				table.insert(chain, 1, service)
+				mappedParentId = rootId
+			end
+
+			local patch = PatchSet.newEmpty()
+			local prevParentId = mappedParentId
+
+			for _, intermediate in chain do
+				local existingId = self.__instanceMap.fromInstances[intermediate]
+				if existingId then
+					prevParentId = existingId
+					continue
+				end
+				local tempId = string.gsub(HttpService:GenerateGUID(false), "-", ""):lower()
+				patch.added[tempId] = {
+					parent = prevParentId,
+					name = intermediate.Name,
+					className = intermediate.ClassName,
+					properties = {},
+					children = {},
+				}
+				self.__instanceMap:insert(tempId, intermediate)
+				self.__instanceMap.scriptsOnlyTempIds[tempId] = true
+				prevParentId = tempId
+			end
+
+			local scriptTempId = string.gsub(HttpService:GenerateGUID(false), "-", ""):lower()
+			local encoded = encodeInstance(descendant, prevParentId)
+			if not encoded then
+				Log.warn(
+					"Scripts-only: failed to encode new script {}, rolling back temp IDs",
+					descendant:GetFullName()
+				)
+				for tempId in patch.added do
+					self.__instanceMap:removeId(tempId)
+					self.__instanceMap.scriptsOnlyTempIds[tempId] = nil
+				end
+				return
+			end
+			patch.added[scriptTempId] = encoded
+			self.__instanceMap:insert(scriptTempId, descendant)
+			self.__instanceMap.scriptsOnlyTempIds[scriptTempId] = true
+
+			-- Transitive closure: ensure every temp-ID parent referenced by
+			-- a patch entry is itself included as a skeleton container. When
+			-- multiple scripts are created in the same pruned subtree (e.g.,
+			-- paste), later handlers find intermediates already in instanceMap
+			-- with temp IDs from earlier handlers. Without re-including those
+			-- skeletons, the server's Phase 0 can't resolve the temp parents.
+			local closureNeeded = true
+			while closureNeeded do
+				closureNeeded = false
+				local toAdd = {}
+				for _, entry in pairs(patch.added) do
+					local pid = entry.parent
+					if
+						pid
+						and self.__instanceMap.scriptsOnlyTempIds[pid]
+						and not patch.added[pid]
+						and not toAdd[pid]
+					then
+						local inst = self.__instanceMap.fromIds[pid]
+						if inst then
+							local pp = inst.Parent
+							local ppId = pp and self.__instanceMap.fromInstances[pp]
+							if ppId then
+								toAdd[pid] = {
+									parent = ppId,
+									name = inst.Name,
+									className = inst.ClassName,
+									properties = {},
+									children = {},
+								}
+								closureNeeded = true
+							end
+						end
+					end
+				end
+				for id, entry in toAdd do
+					patch.added[id] = entry
+				end
+			end
+
+			Log.info(
+				"Scripts-only: detected new script {} outside mapped tree, sending to server",
+				descendant:GetFullName()
+			)
+			self.__apiContext:write(patch)
+		end)
+		table.insert(self.__connections, conn)
+	end
+end
+
 function ServeSession:__stopInternal(err)
 	self:__setStatus(Status.Disconnected, err)
 	self.__apiContext:disconnect()
+	table.clear(self.__instanceMap.scriptsOnlyTempIds)
 	self.__instanceMap:stop()
 	self.__changeBatcher:stop()
 

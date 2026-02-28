@@ -31,6 +31,10 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+* Optimize scripts-only mode with a server-side script index on `RojoTree` for O(scripts × depth) reads instead of full-tree walks, send `syncScriptsOnly` flag to the plugin so `ChangeBatcher` skips non-script two-way sync work, and filter non-script updates in the write API as defense-in-depth.
+* Fix WebSocket ancestor injection in scripts-only mode so new scripts appearing in previously-pruned subtrees are sent with their full ancestor chain.
+* Add plugin-side `DescendantAdded` watchers in scripts-only mode to detect new scripts created in Studio outside the mapped tree and send them to the server with skeleton intermediate containers.
+
 ## [8.4.1] (February 19th, 2026)
 
 * Fix spurious diffs during VFS events by removing redundant Rojo reference attributes from snapshot comparisons.

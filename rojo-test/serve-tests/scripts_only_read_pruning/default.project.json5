@@ -1,0 +1,11 @@
+{
+  "name": "scripts_only_read_pruning",
+  "syncScriptsOnly": true,
+  "tree": {
+    "$className": "DataModel",
+    "ServerScriptService": {
+      "$className": "ServerScriptService",
+      "$path": "src"
+    }
+  }
+}

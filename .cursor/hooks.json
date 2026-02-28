@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "hooks": {
+    "stop": [
+      { "command": "cargo fmt" },
+      { "command": "stylua plugin/src" }
+    ]
+  }
+}
