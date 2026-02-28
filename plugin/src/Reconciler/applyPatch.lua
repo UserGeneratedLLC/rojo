@@ -71,24 +71,29 @@ local function applyPatch(instanceMap, patch)
 	-- When the plugin pre-inserts instances with temp IDs and the server
 	-- broadcasts the same instances with real Refs, remap the InstanceMap
 	-- entries rather than creating duplicates via reify.
-	local remapProgress = true
-	while remapProgress do
-		remapProgress = false
-		for id, virtualInstance in pairs(patch.added) do
-			local parentInstance = instanceMap.fromIds[virtualInstance.Parent]
-			if not parentInstance then
-				continue
-			end
-			for _, child in parentInstance:GetChildren() do
-				if child.Name == virtualInstance.Name and child.ClassName == virtualInstance.ClassName then
-					local existingId = instanceMap.fromInstances[child]
-					if existingId and existingId ~= id then
-						Log.trace("Echo remap: {} -> {} for {}", existingId, id, child:GetFullName())
-						instanceMap:removeId(existingId)
-						instanceMap:insert(id, child)
-						patch.added[id] = nil
-						remapProgress = true
-						break
+	-- Only remap IDs explicitly tracked as scripts-only temp IDs to avoid
+	-- false positives with legitimate same-named additions.
+	if next(instanceMap.scriptsOnlyTempIds) then
+		local remapProgress = true
+		while remapProgress do
+			remapProgress = false
+			for id, virtualInstance in pairs(patch.added) do
+				local parentInstance = instanceMap.fromIds[virtualInstance.Parent]
+				if not parentInstance then
+					continue
+				end
+				for _, child in parentInstance:GetChildren() do
+					if child.Name == virtualInstance.Name and child.ClassName == virtualInstance.ClassName then
+						local existingId = instanceMap.fromInstances[child]
+						if existingId and existingId ~= id and instanceMap.scriptsOnlyTempIds[existingId] then
+							Log.trace("Echo remap: {} -> {} for {}", existingId, id, child:GetFullName())
+							instanceMap.scriptsOnlyTempIds[existingId] = nil
+							instanceMap:removeId(existingId)
+							instanceMap:insert(id, child)
+							patch.added[id] = nil
+							remapProgress = true
+							break
+						end
 					end
 				end
 			end

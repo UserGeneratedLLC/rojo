@@ -355,3 +355,6 @@ there is some process that is making disconnecting after a one-shot sync complet
 [init scripts]
 scripts actually named init or probably even Init cause the sync engine to completely break. it will syncback, but then i cannot even serve the project.
 this needs to be slugified when the name exactly matches init, ignoring case [for anything, not just scripts!]
+
+[one shot mode change]
+new changes that come in / out during the review menu on the plugin is really disorienting.

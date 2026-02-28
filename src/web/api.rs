@@ -546,45 +546,53 @@ impl ApiService {
         if !request.added.is_empty() {
             let tree = self.serve_session.tree();
 
-            // Phase 0: Resolve intermediate container temp IDs to real tree Refs.
-            // The DescendantAdded handler sends containers that already exist in the
-            // tree as "additions" with temp IDs. Resolve them so child additions
-            // (the actual new scripts) can find their parents.
-            let mut temp_to_real: HashMap<Ref, Ref> = HashMap::new();
-            let mut progress = true;
-            while progress {
-                progress = false;
-                for (guid, added) in request.added.iter() {
-                    if temp_to_real.contains_key(guid) {
-                        continue;
-                    }
-                    let parent = added.parent.unwrap_or(Ref::none());
-                    let real_parent = temp_to_real.get(&parent).copied().unwrap_or(parent);
-                    if tree.get_instance(real_parent).is_none() {
-                        continue;
-                    }
-                    if let Some(existing_ref) =
-                        Self::find_child_by_name(&tree, real_parent, &added.name)
-                    {
-                        temp_to_real.insert(*guid, existing_ref);
-                        progress = true;
-                    }
-                }
-            }
-            if !temp_to_real.is_empty() {
-                log::debug!(
-                    "Scripts-only temp ID resolution: resolved {} intermediate container(s)",
-                    temp_to_real.len()
-                );
-                for added in request.added.values_mut() {
-                    if let Some(parent) = added.parent {
-                        if let Some(&real) = temp_to_real.get(&parent) {
-                            added.parent = Some(real);
+            if self.serve_session.sync_scripts_only() {
+                // Phase 0: Resolve intermediate container temp IDs to real tree Refs.
+                // The DescendantAdded handler sends containers that already exist in the
+                // tree as "additions" with temp IDs. Resolve them so child additions
+                // (the actual new scripts) can find their parents.
+                let mut temp_to_real: HashMap<Ref, Ref> = HashMap::new();
+                let mut progress = true;
+                while progress {
+                    progress = false;
+                    for (guid, added) in request.added.iter() {
+                        if temp_to_real.contains_key(guid) {
+                            continue;
+                        }
+                        let parent = added.parent.unwrap_or(Ref::none());
+                        let real_parent = temp_to_real.get(&parent).copied().unwrap_or(parent);
+                        if tree.get_instance(real_parent).is_none() {
+                            continue;
+                        }
+                        if let Some(existing_ref) =
+                            Self::find_child_by_name(&tree, real_parent, &added.name)
+                        {
+                            let class_matches = tree
+                                .get_instance(existing_ref)
+                                .map(|inst| inst.class_name().as_str() == added.class_name)
+                                .unwrap_or(false);
+                            if class_matches {
+                                temp_to_real.insert(*guid, existing_ref);
+                                progress = true;
+                            }
                         }
                     }
                 }
-                for guid in temp_to_real.keys() {
-                    updated_in_place.insert(*guid);
+                if !temp_to_real.is_empty() {
+                    log::debug!(
+                        "Scripts-only temp ID resolution: resolved {} intermediate container(s)",
+                        temp_to_real.len()
+                    );
+                    for added in request.added.values_mut() {
+                        if let Some(parent) = added.parent {
+                            if let Some(&real) = temp_to_real.get(&parent) {
+                                added.parent = Some(real);
+                            }
+                        }
+                    }
+                    for guid in temp_to_real.keys() {
+                        updated_in_place.insert(*guid);
+                    }
                 }
             }
 

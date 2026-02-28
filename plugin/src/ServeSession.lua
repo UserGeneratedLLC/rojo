@@ -906,16 +906,37 @@ function ServeSession:__connectScriptsOnlyWatchers()
 		return
 	end
 
-	for _, instance in self.__instanceMap.fromIds do
-		if instance.Parent ~= game then
-			continue
+	local services = {}
+	if self.__serverInfo and self.__serverInfo.visibleServices then
+		for _, serviceName in ipairs(self.__serverInfo.visibleServices) do
+			local ok, service = pcall(game.GetService, game, serviceName)
+			if ok and service then
+				table.insert(services, service)
+			end
 		end
+	else
+		for _, instance in self.__instanceMap.fromIds do
+			if instance.Parent == game then
+				table.insert(services, instance)
+			end
+		end
+	end
 
-		local conn = instance.DescendantAdded:Connect(function(descendant)
+	for _, service in services do
+		local conn = service.DescendantAdded:Connect(function(descendant)
 			if not self.__twoWaySync then
 				return
 			end
 			if self.__status ~= Status.Connected then
+				return
+			end
+			if Settings:get("oneShotSync") then
+				return
+			end
+			if RunService:IsRunning() then
+				return
+			end
+			if self.__changeBatcher:isPaused() then
 				return
 			end
 			if not descendant:IsA("LuaSourceContainer") then
@@ -936,18 +957,26 @@ function ServeSession:__connectScriptsOnlyWatchers()
 			end
 
 			local mappedParent = current
-			if not mappedParent then
-				return
-			end
-			local mappedParentId = self.__instanceMap.fromInstances[mappedParent]
+			local mappedParentId = mappedParent and self.__instanceMap.fromInstances[mappedParent]
+
 			if not mappedParentId then
-				return
+				local rootId = self.__instanceMap.fromInstances[game]
+				if not rootId then
+					return
+				end
+				table.insert(chain, 1, service)
+				mappedParentId = rootId
 			end
 
 			local patch = PatchSet.newEmpty()
 			local prevParentId = mappedParentId
 
 			for _, intermediate in chain do
+				local existingId = self.__instanceMap.fromInstances[intermediate]
+				if existingId then
+					prevParentId = existingId
+					continue
+				end
 				local tempId = string.gsub(HttpService:GenerateGUID(false), "-", ""):lower()
 				patch.added[tempId] = {
 					parent = prevParentId,
@@ -957,6 +986,7 @@ function ServeSession:__connectScriptsOnlyWatchers()
 					children = {},
 				}
 				self.__instanceMap:insert(tempId, intermediate)
+				self.__instanceMap.scriptsOnlyTempIds[tempId] = true
 				prevParentId = tempId
 			end
 
@@ -969,11 +999,13 @@ function ServeSession:__connectScriptsOnlyWatchers()
 				)
 				for tempId in patch.added do
 					self.__instanceMap:removeId(tempId)
+					self.__instanceMap.scriptsOnlyTempIds[tempId] = nil
 				end
 				return
 			end
 			patch.added[scriptTempId] = encoded
 			self.__instanceMap:insert(scriptTempId, descendant)
+			self.__instanceMap.scriptsOnlyTempIds[scriptTempId] = true
 
 			Log.info(
 				"Scripts-only: detected new script {} outside mapped tree, sending to server",

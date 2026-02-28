@@ -357,3 +357,142 @@ fn scripts_only_write_resolves_intermediate_temp_ids() {
         );
     });
 }
+
+#[test]
+fn normal_mode_addition_works_without_phase0() {
+    run_serve_test("add_folder", |session, _redactions| {
+        let info = session.get_api_rojo().unwrap();
+        assert!(
+            !info.sync_scripts_only,
+            "add_folder fixture should NOT have syncScriptsOnly"
+        );
+
+        let root_id = info.root_instance_id;
+
+        let temp_ref = Ref::new();
+        let mut props = HashMap::new();
+        props.insert(
+            "Source".to_string(),
+            Variant::String("print('hello')".to_string()),
+        );
+        let added = AddedInstance {
+            parent: Some(root_id),
+            name: "NormalModeScript".to_string(),
+            class_name: "Script".to_string(),
+            properties: props,
+            children: vec![],
+        };
+        let mut added_map = HashMap::new();
+        added_map.insert(temp_ref, added);
+
+        let write_request = WriteRequest {
+            session_id: info.session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![],
+            stage_ids: Vec::new(),
+        };
+
+        session
+            .post_api_write(&write_request)
+            .expect("Normal mode write should succeed without Phase 0");
+
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        let read_after = session.get_api_read(root_id).unwrap();
+        let names: Vec<&str> = read_after
+            .instances
+            .values()
+            .map(|inst| inst.name.as_ref())
+            .collect();
+        assert!(
+            names.contains(&"NormalModeScript"),
+            "Script should exist after normal-mode addition. Got: {:?}",
+            names
+        );
+    });
+}
+
+#[test]
+fn scripts_only_phase0_resolves_matching_class() {
+    run_serve_test("scripts_only_read_pruning", |session, _redactions| {
+        let info = session.get_api_rojo().unwrap();
+        let root_id = info.root_instance_id;
+        let read_response = session.get_api_read(root_id).unwrap();
+
+        let sss_id = read_response
+            .instances
+            .iter()
+            .find(|(_, inst)| inst.class_name == "ServerScriptService")
+            .map(|(id, _)| *id)
+            .expect("ServerScriptService should exist");
+
+        // DeepNest exists in the tree as a Folder. Send an intermediate
+        // container with matching name AND class. Phase 0 should resolve it.
+        let temp_folder_ref = Ref::new();
+        let temp_script_ref = Ref::new();
+
+        let folder_added = AddedInstance {
+            parent: Some(sss_id),
+            name: "DeepNest".to_string(),
+            class_name: "Folder".to_string(),
+            properties: HashMap::new(),
+            children: vec![],
+        };
+
+        let mut script_props = HashMap::new();
+        script_props.insert(
+            "Source".to_string(),
+            Variant::String("return 'matching class test'".to_string()),
+        );
+        let script_added = AddedInstance {
+            parent: Some(temp_folder_ref),
+            name: "MatchingClassScript".to_string(),
+            class_name: "ModuleScript".to_string(),
+            properties: script_props,
+            children: vec![],
+        };
+
+        let mut added_map = HashMap::new();
+        added_map.insert(temp_folder_ref, folder_added);
+        added_map.insert(temp_script_ref, script_added);
+
+        let write_request = WriteRequest {
+            session_id: info.session_id,
+            removed: vec![],
+            added: added_map,
+            updated: vec![],
+            stage_ids: Vec::new(),
+        };
+
+        session
+            .post_api_write(&write_request)
+            .expect("Write request should succeed");
+
+        std::thread::sleep(std::time::Duration::from_millis(500));
+
+        let read_after = session.get_api_read(root_id).unwrap();
+        let names: Vec<&str> = read_after
+            .instances
+            .values()
+            .map(|inst| inst.name.as_ref())
+            .collect();
+
+        assert!(
+            names.contains(&"MatchingClassScript"),
+            "Script should appear under resolved DeepNest. Got: {:?}",
+            names
+        );
+
+        // Verify there's still only ONE Folder named DeepNest (resolved, not duplicated)
+        let deep_nest_count = read_after
+            .instances
+            .values()
+            .filter(|inst| inst.name == "DeepNest" && inst.class_name == "Folder")
+            .count();
+        assert_eq!(
+            deep_nest_count, 1,
+            "Phase 0 should resolve to existing DeepNest, not create a duplicate"
+        );
+    });
+}
