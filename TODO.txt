@@ -331,6 +331,9 @@ we should make the outline green or something to show when everything is ready t
 [INFO  librojo::change_processor] VFS event applied: no changes
 [INFO  librojo::change_processor] Tree reconciliation: corrected 4 added, 4 removed (12.3s)
 
+CONSTANTLY happening everytime i modify a file:
+[INFO  librojo::change_processor] Tree reconciliation: corrected 4 added, 4 removed (22.1s)
+
 I'm really confused why this was slamming over and over saying 4 added, 4 removed - seems like a bug.
 We need to investigate Tree reconciliation, make sure it's parallel, etc.
 I'd really like to just reconcile specific paths that were modified - but i'm not sure if that just defeats the purpose.. need to explore this topic later.
@@ -343,3 +346,16 @@ we should support right-click to unselect the bubble (atlas/studio/skip)
 when you commit changes on git, it's considered unchanged. we should send like the last git hash too, like prior to head, too.
 
 [add ServerStorage/RBX_ANIMSAVES to ignore list!]
+	globIgnorePaths: ["src/ServerStorage/RBX_ANIMSAVES/**", "src/ServerStorage/MoonAnimator2Saves/**"],
+	syncbackRules: {
+		ignoreTrees: ["ServerStorage/RBX_ANIMSAVES/**", "ServerStorage/MoonAnimator2Saves/**"],
+	},
+
+[scripts only mode]
+when in scripts only mode, try to avoid the entire tree where scripts dont exist to make syncing from the Roblox plugin faster
+
+[luau-lsp sourcemap gen]
+luau-lsp sourcemap generator --watch is leaving instances of atlas running forever
+
+[yielding after sync]
+there is some process that is making disconnecting after a one-shot sync completes take FOREVER if the server is yielding (usually from the reconciler)

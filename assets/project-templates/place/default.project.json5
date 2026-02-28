@@ -2,6 +2,10 @@
 	name: "{project_name}",
 	servePlaceIds: [{place_id}],
 	syncScriptsOnly: true,
+	globIgnorePaths: ["src/ServerStorage/RBX_ANIMSAVES/**", "src/ServerStorage/MoonAnimator2Saves/**"],
+	syncbackRules: {
+		ignoreTrees: ["ServerStorage/RBX_ANIMSAVES/**", "ServerStorage/MoonAnimator2Saves/**"],
+	},
 	tree: {
 		$className: "DataModel",
 		$path: "src"
