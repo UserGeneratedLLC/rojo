@@ -11,6 +11,7 @@ use rbx_dom_weak::{
 
 use crate::{
     ref_attribute_name, ref_target_attribute_name,
+    snapshot::is_script_class,
     syncback::{name_needs_slugify, slugify_name},
     REF_ID_ATTRIBUTE_NAME, REF_PATH_ATTRIBUTE_PREFIX, REF_POINTER_ATTRIBUTE_PREFIX,
 };
@@ -129,10 +130,6 @@ fn tentative_fs_name(inst: &Instance) -> String {
     };
 
     format!("{slug}.{extension}")
-}
-
-fn is_script_class(class: &str) -> bool {
-    matches!(class, "Script" | "LocalScript" | "ModuleScript")
 }
 
 pub struct RefLinks {
