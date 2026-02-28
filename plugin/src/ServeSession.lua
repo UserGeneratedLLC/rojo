@@ -124,6 +124,7 @@ function ServeSession.new(options)
 		__serverInfo = nil,
 		__confirmingPatch = nil,
 		__isConfirming = false, -- Explicit confirmation state flag for defense-in-depth
+		__applyingPatch = false, -- Set during reconciler patch application to suppress DescendantAdded
 		__connections = connections,
 		__precommitCallbacks = {},
 		__postcommitCallbacks = {},
@@ -561,8 +562,10 @@ function ServeSession:__applyPatch(patch)
 	end
 	Timer.stop()
 
+	self.__applyingPatch = true
 	local patchApplySuccess, unappliedPatch = pcall(self.__reconciler.applyPatch, self.__reconciler, patch)
 	if not patchApplySuccess then
+		self.__applyingPatch = false
 		if historyRecording then
 			ChangeHistoryService:FinishRecording(historyRecording, Enum.FinishRecordingOperation.Commit)
 		end
@@ -596,6 +599,7 @@ function ServeSession:__applyPatch(patch)
 			PatchSet.assign(unappliedPatch, unappliedUpdateRefs)
 		end
 	end
+	self.__applyingPatch = false
 
 	if not PatchSet.isEmpty(unappliedPatch) then
 		Log.info(
@@ -937,6 +941,9 @@ function ServeSession:__connectScriptsOnlyWatchers()
 				return
 			end
 			if self.__changeBatcher:isPaused() then
+				return
+			end
+			if self.__applyingPatch then
 				return
 			end
 			if not descendant:IsA("LuaSourceContainer") then
