@@ -113,6 +113,7 @@ function ServeSession.new(options)
 		__apiContext = options.apiContext,
 		__twoWaySync = options.twoWaySync,
 		__syncSourceOnly = false,
+		__syncScriptsOnly = false,
 		__reconciler = reconciler,
 		__instanceMap = instanceMap,
 		__changeBatcher = changeBatcher,
@@ -331,6 +332,9 @@ function ServeSession:start()
 			self.__syncSourceOnly = serverInfo.syncSourceOnly or false
 			self.__changeBatcher:setSyncSourceOnly(self.__syncSourceOnly)
 
+			self.__syncScriptsOnly = serverInfo.syncScriptsOnly or false
+			self.__changeBatcher:setSyncScriptsOnly(self.__syncScriptsOnly)
+
 			self.__serverInfo = serverInfo
 			return self:__computeInitialPatch(serverInfo):andThen(function(catchUpPatch)
 				self:setLoadingText("Starting sync loop...")
@@ -360,6 +364,8 @@ function ServeSession:start()
 			if self.__initialSyncCompleteCallback ~= nil then
 				self.__initialSyncCompleteCallback()
 			end
+
+			self:__connectScriptsOnlyWatchers()
 		end)
 		:catch(function(err)
 			if self.__status ~= Status.Disconnected then
@@ -889,6 +895,82 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 		return Promise.resolve()
 	else
 		return Promise.reject("Invalid user decision: " .. tostring(userDecision))
+	end
+end
+
+function ServeSession:__connectScriptsOnlyWatchers()
+	if not self.__syncScriptsOnly then
+		return
+	end
+	if not self.__twoWaySync then
+		return
+	end
+
+	for _, instance in self.__instanceMap.fromIds do
+		if instance.Parent ~= game then
+			continue
+		end
+
+		local conn = instance.DescendantAdded:Connect(function(descendant)
+			if not self.__twoWaySync then
+				return
+			end
+			if self.__status ~= Status.Connected then
+				return
+			end
+			if not descendant:IsA("LuaSourceContainer") then
+				return
+			end
+			if self.__instanceMap.fromInstances[descendant] then
+				return
+			end
+
+			local chain = {}
+			local current = descendant.Parent
+			while current and current ~= game do
+				if self.__instanceMap.fromInstances[current] then
+					break
+				end
+				table.insert(chain, 1, current)
+				current = current.Parent
+			end
+
+			local mappedParent = current
+			if not mappedParent then
+				return
+			end
+			local mappedParentId = self.__instanceMap.fromInstances[mappedParent]
+			if not mappedParentId then
+				return
+			end
+
+			local patch = PatchSet.newEmpty()
+			local prevParentId = mappedParentId
+
+			for _, intermediate in chain do
+				local tempId = string.gsub(HttpService:GenerateGUID(false), "-", ""):lower()
+				patch.added[tempId] = {
+					parent = prevParentId,
+					name = intermediate.Name,
+					className = intermediate.ClassName,
+					properties = {},
+					children = {},
+				}
+				self.__instanceMap:insert(tempId, intermediate)
+				prevParentId = tempId
+			end
+
+			local scriptTempId = string.gsub(HttpService:GenerateGUID(false), "-", ""):lower()
+			patch.added[scriptTempId] = encodeInstance(descendant, prevParentId)
+			self.__instanceMap:insert(scriptTempId, descendant)
+
+			Log.info(
+				"Scripts-only: detected new script {} outside mapped tree, sending to server",
+				descendant:GetFullName()
+			)
+			self.__apiContext:write(patch)
+		end)
+		table.insert(self.__connections, conn)
 	end
 end
 

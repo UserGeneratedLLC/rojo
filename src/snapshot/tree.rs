@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     path::{Path, PathBuf},
 };
 
@@ -11,6 +11,11 @@ use rbx_dom_weak::{
 use crate::{multimap::MultiMap, RojoRef};
 
 use super::{InstanceMetadata, InstanceSnapshot, InstigatingSource};
+
+#[inline]
+pub(crate) fn is_script_class(class_name: &str) -> bool {
+    matches!(class_name, "Script" | "LocalScript" | "ModuleScript")
+}
 
 /// An expanded variant of rbx_dom_weak's `WeakDom` that tracks additional
 /// metadata per instance that's Rojo-specific.
@@ -39,6 +44,11 @@ pub struct RojoTree {
     /// the same RojoRef for multiple different instances. An entry containing
     /// multiple elements is an error condition that should be raised to the user.
     specified_id_to_refs: MultiMap<RojoRef, Ref>,
+
+    /// Refs of all Script, LocalScript, and ModuleScript instances in the tree.
+    /// Maintained incrementally for fast scripts-only mode filtering in the
+    /// serve API without walking the entire tree.
+    script_refs: HashSet<Ref>,
 }
 
 impl RojoTree {
@@ -52,6 +62,7 @@ impl RojoTree {
             metadata_map: HashMap::new(),
             path_to_ids: MultiMap::new(),
             specified_id_to_refs: MultiMap::new(),
+            script_refs: HashSet::new(),
         };
 
         let root_ref = tree.inner.root_ref();
@@ -124,6 +135,8 @@ impl RojoTree {
             _ => Vec::new(),
         };
 
+        let is_script = is_script_class(snapshot.class_name.as_ref());
+
         let builder = InstanceBuilder::empty()
             .with_class(snapshot.class_name)
             .with_name(snapshot.name.into_owned())
@@ -132,6 +145,10 @@ impl RojoTree {
 
         let referent = self.inner.insert(parent_ref, builder);
         self.insert_metadata(referent, snapshot.metadata);
+
+        if is_script {
+            self.script_refs.insert(referent);
+        }
 
         for child in snapshot.children {
             self.insert_instance(referent, child);
@@ -146,6 +163,7 @@ impl RojoTree {
 
         while let Some(id) = to_move.pop_front() {
             self.remove_metadata(id);
+            self.script_refs.remove(&id);
 
             if let Some(instance) = self.inner.get_by_ref(id) {
                 to_move.extend(instance.children().iter().copied());
@@ -229,6 +247,20 @@ impl RojoTree {
             }
         }
         self.specified_id_to_refs.insert(specified, id);
+    }
+
+    pub fn script_refs(&self) -> &HashSet<Ref> {
+        &self.script_refs
+    }
+
+    pub fn update_script_tracking(&mut self, id: Ref, old_class: &str, new_class: &str) {
+        let was_script = is_script_class(old_class);
+        let is_script = is_script_class(new_class);
+        if was_script && !is_script {
+            self.script_refs.remove(&id);
+        } else if !was_script && is_script {
+            self.script_refs.insert(id);
+        }
     }
 
     /// Looks up an instance by its filesystem-name path in the tree.

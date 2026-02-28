@@ -5,6 +5,7 @@ mod connected_mode;
 mod git_sync_defaults;
 mod live_syncback;
 mod matching_fixtures;
+mod scripts_only_pruning;
 mod serve;
 mod syncback;
 mod syncback_format_transitions;

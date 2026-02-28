@@ -258,6 +258,10 @@ pub struct ServerInfoResponse {
     /// Other property changes will be ignored.
     #[serde(default)]
     pub sync_source_only: bool,
+    /// When true, only script instances (and their ancestors for tree structure)
+    /// are synced. The plugin should skip non-script changes in two-way sync.
+    #[serde(default)]
+    pub sync_scripts_only: bool,
     /// When true, hidden/internal services should be ignored during sync.
     /// The plugin should not mark these services as "to delete" during forward sync.
     #[serde(default)]
