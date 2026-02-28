@@ -705,6 +705,32 @@ fn batch_script_rel_path(i: usize) -> String {
     format!("src/{}.luau", batch_script_name(i))
 }
 
+/// Poll until every `rel_paths` entry is staged, with exponential backoff.
+/// Panics after `timeout` if any file is still unstaged.
+fn wait_until_all_staged(dir: &Path, rel_paths: &[String], timeout: Duration) {
+    let start = std::time::Instant::now();
+    let mut interval = Duration::from_millis(200);
+    loop {
+        let all_staged = rel_paths.iter().all(|p| git_is_staged(dir, p));
+        if all_staged {
+            return;
+        }
+        if start.elapsed() >= timeout {
+            for p in rel_paths {
+                if !git_is_staged(dir, p) {
+                    panic!(
+                        "Timed out after {:?} waiting for staging: {} is not staged",
+                        timeout, p
+                    );
+                }
+            }
+            return;
+        }
+        thread::sleep(interval);
+        interval = (interval * 2).min(Duration::from_secs(2));
+    }
+}
+
 #[test]
 fn batch_stage_20_files_no_index_lock_race() {
     let mut session = TestServeSession::new_with_git("git_sync_defaults", |path| {
@@ -741,15 +767,11 @@ fn batch_stage_20_files_no_index_lock_race() {
         stage_ids,
     };
     session.post_api_write(&write_request).unwrap();
-    thread::sleep(Duration::from_millis(1500));
 
-    for i in 1..=BATCH_SCRIPT_COUNT {
-        assert!(
-            git_is_staged(session.path(), &batch_script_rel_path(i)),
-            "{} should be staged",
-            batch_script_name(i)
-        );
-    }
+    let rel_paths: Vec<String> = (1..=BATCH_SCRIPT_COUNT)
+        .map(batch_script_rel_path)
+        .collect();
+    wait_until_all_staged(session.path(), &rel_paths, Duration::from_secs(30));
 }
 
 #[test]
@@ -797,15 +819,14 @@ fn batch_source_write_20_files_all_staged() {
         stage_ids,
     };
     session.post_api_write(&write_request).unwrap();
-    thread::sleep(Duration::from_millis(2000));
+
+    let rel_paths: Vec<String> = (1..=BATCH_SCRIPT_COUNT)
+        .map(batch_script_rel_path)
+        .collect();
+    wait_until_all_staged(session.path(), &rel_paths, Duration::from_secs(30));
 
     for i in 1..=BATCH_SCRIPT_COUNT {
         let rel = batch_script_rel_path(i);
-        assert!(
-            git_is_staged(session.path(), &rel),
-            "{} should be staged after batch Source write",
-            batch_script_name(i)
-        );
         let content = fs::read_to_string(session.path().join(&rel)).unwrap();
         assert!(
             content.contains(&format!("batch pull {}", i)),
@@ -878,16 +899,11 @@ fn batch_mixed_stage_and_source_write() {
         stage_ids,
     };
     session.post_api_write(&write_request).unwrap();
-    thread::sleep(Duration::from_millis(2000));
 
-    // All 20 files should be staged
-    for i in 1..=BATCH_SCRIPT_COUNT {
-        assert!(
-            git_is_staged(session.path(), &batch_script_rel_path(i)),
-            "{} should be staged in mixed batch",
-            batch_script_name(i)
-        );
-    }
+    let rel_paths: Vec<String> = (1..=BATCH_SCRIPT_COUNT)
+        .map(batch_script_rel_path)
+        .collect();
+    wait_until_all_staged(session.path(), &rel_paths, Duration::from_secs(30));
 
     // Files 11-20 should have the new pull content
     for i in 11..=BATCH_SCRIPT_COUNT {
