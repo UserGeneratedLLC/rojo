@@ -345,9 +345,6 @@ we should support right-click to unselect the bubble (atlas/studio/skip)
 [auto select issue]
 when you commit changes on git, it's considered unchanged. we should send like the last git hash too, like prior to head, too.
 
-[scripts only mode]
-when in scripts only mode, try to avoid the entire tree where scripts dont exist to make syncing from the Roblox plugin faster. prune non-script leaves.
-
 [yielding after sync]
 there is some process that is making disconnecting after a one-shot sync completes take FOREVER if the server is yielding (usually from the reconciler)
  - once the one-shot sync completes, it should not be waiting for additional things to come from the server. it just needs to kill the connection immediately. and go back to the main page.

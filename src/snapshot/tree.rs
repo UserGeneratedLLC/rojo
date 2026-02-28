@@ -158,6 +158,10 @@ impl RojoTree {
     }
 
     pub fn remove(&mut self, id: Ref) {
+        if self.inner.get_by_ref(id).is_none() {
+            return;
+        }
+
         let mut to_move = VecDeque::new();
         to_move.push_back(id);
 
@@ -468,7 +472,9 @@ impl RojoTree {
     /// Moves the Rojo metadata from the instance with the given ID from this
     /// tree into some loose maps.
     fn remove_metadata(&mut self, id: Ref) {
-        let metadata = self.metadata_map.remove(&id).unwrap();
+        let Some(metadata) = self.metadata_map.remove(&id) else {
+            return;
+        };
 
         if let Some(specified) = metadata.specified_id {
             self.specified_id_to_refs.remove(&specified, id);
