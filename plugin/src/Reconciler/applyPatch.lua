@@ -76,10 +76,11 @@ local function applyPatch(instanceMap, patch)
 		remapProgress = false
 		for id, virtualInstance in pairs(patch.added) do
 			local parentInstance = instanceMap.fromIds[virtualInstance.Parent]
-			if not parentInstance then continue end
+			if not parentInstance then
+				continue
+			end
 			for _, child in parentInstance:GetChildren() do
-				if child.Name == virtualInstance.Name
-					and child.ClassName == virtualInstance.ClassName then
+				if child.Name == virtualInstance.Name and child.ClassName == virtualInstance.ClassName then
 					local existingId = instanceMap.fromInstances[child]
 					if existingId and existingId ~= id then
 						Log.trace("Echo remap: {} -> {} for {}", existingId, id, child:GetFullName())

@@ -473,9 +473,7 @@ impl ApiService {
             let before = request.updated.len();
             request.updated.retain(|update| {
                 tree.get_instance(update.id)
-                    .map(|inst| {
-                        crate::snapshot::is_script_class(inst.class_name().as_str())
-                    })
+                    .map(|inst| crate::snapshot::is_script_class(inst.class_name().as_str()))
                     .unwrap_or(false)
             });
             let filtered = before - request.updated.len();
@@ -561,8 +559,7 @@ impl ApiService {
                         continue;
                     }
                     let parent = added.parent.unwrap_or(Ref::none());
-                    let real_parent =
-                        temp_to_real.get(&parent).copied().unwrap_or(parent);
+                    let real_parent = temp_to_real.get(&parent).copied().unwrap_or(parent);
                     if tree.get_instance(real_parent).is_none() {
                         continue;
                     }
@@ -3642,10 +3639,10 @@ fn filter_subscribe_message_for_scripts<'a>(
     // in the tree but weren't part of this patch. Without injection the
     // plugin receives an orphaned script with an unknown parent.
     for id in included_ids.iter().copied().collect::<Vec<_>>() {
-        if !msg.added.contains_key(&id) {
+        if let std::collections::hash_map::Entry::Vacant(e) = msg.added.entry(id) {
             if let Some(tree_inst) = tree.get_instance(id) {
                 let inst = instance_for_scripts_only(tree_inst, &included_ids);
-                msg.added.insert(id, inst);
+                e.insert(inst);
             }
         }
     }

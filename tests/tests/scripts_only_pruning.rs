@@ -18,10 +18,7 @@ fn scripts_only_read_prunes_non_script_subtrees() {
             .map(|inst| inst.name.as_ref())
             .collect();
 
-        assert!(
-            names.contains(&"TopScript"),
-            "TopScript should be included"
-        );
+        assert!(names.contains(&"TopScript"), "TopScript should be included");
         assert!(
             names.contains(&"DeepScript"),
             "DeepScript should be included"
@@ -31,18 +28,9 @@ fn scripts_only_read_prunes_non_script_subtrees() {
             "SomeScript should be included"
         );
 
-        assert!(
-            !names.contains(&"PartA"),
-            "PartA should be pruned"
-        );
-        assert!(
-            !names.contains(&"PartB"),
-            "PartB should be pruned"
-        );
-        assert!(
-            !names.contains(&"SomeModel"),
-            "SomeModel should be pruned"
-        );
+        assert!(!names.contains(&"PartA"), "PartA should be pruned");
+        assert!(!names.contains(&"PartB"), "PartB should be pruned");
+        assert!(!names.contains(&"SomeModel"), "SomeModel should be pruned");
         assert!(
             !names.contains(&"PureParts"),
             "PureParts folder should be pruned (no script descendants)"
