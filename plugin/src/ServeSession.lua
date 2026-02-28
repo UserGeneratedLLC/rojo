@@ -574,32 +574,38 @@ function ServeSession:__applyPatch(patch)
 		error(unappliedPatch)
 	end
 
-	if Settings:get("enableSyncFallback") and not PatchSet.isEmpty(unappliedPatch) then
-		-- Some changes did not apply, let's try replacing them instead
-		local addedIdList = PatchSet.addedIdList(unappliedPatch)
-		local updatedIdList = PatchSet.updatedIdList(unappliedPatch)
+	local fallbackOk, fallbackErr = pcall(function()
+		if Settings:get("enableSyncFallback") and not PatchSet.isEmpty(unappliedPatch) then
+			-- Some changes did not apply, let's try replacing them instead
+			local addedIdList = PatchSet.addedIdList(unappliedPatch)
+			local updatedIdList = PatchSet.updatedIdList(unappliedPatch)
 
-		Log.debug("ServeSession:__replaceInstances(unappliedPatch.added)")
-		Timer.start("ServeSession:__replaceInstances(unappliedPatch.added)")
-		local addSuccess, unappliedAddedRefs = self:__replaceInstances(addedIdList)
-		Timer.stop()
+			Log.debug("ServeSession:__replaceInstances(unappliedPatch.added)")
+			Timer.start("ServeSession:__replaceInstances(unappliedPatch.added)")
+			local addSuccess, unappliedAddedRefs = self:__replaceInstances(addedIdList)
+			Timer.stop()
 
-		Log.debug("ServeSession:__replaceInstances(unappliedPatch.updated)")
-		Timer.start("ServeSession:__replaceInstances(unappliedPatch.updated)")
-		local updateSuccess, unappliedUpdateRefs = self:__replaceInstances(updatedIdList)
-		Timer.stop()
+			Log.debug("ServeSession:__replaceInstances(unappliedPatch.updated)")
+			Timer.start("ServeSession:__replaceInstances(unappliedPatch.updated)")
+			local updateSuccess, unappliedUpdateRefs = self:__replaceInstances(updatedIdList)
+			Timer.stop()
 
-		-- Update the unapplied patch to reflect which Instances were replaced successfully
-		if addSuccess then
-			table.clear(unappliedPatch.added)
-			PatchSet.assign(unappliedPatch, unappliedAddedRefs)
+			-- Update the unapplied patch to reflect which Instances were replaced successfully
+			if addSuccess then
+				table.clear(unappliedPatch.added)
+				PatchSet.assign(unappliedPatch, unappliedAddedRefs)
+			end
+			if updateSuccess then
+				table.clear(unappliedPatch.updated)
+				PatchSet.assign(unappliedPatch, unappliedUpdateRefs)
+			end
 		end
-		if updateSuccess then
-			table.clear(unappliedPatch.updated)
-			PatchSet.assign(unappliedPatch, unappliedUpdateRefs)
-		end
-	end
+	end)
 	self.__applyingPatch = false
+
+	if not fallbackOk then
+		Log.warn("Sync fallback errored: {}", fallbackErr)
+	end
 
 	if not PatchSet.isEmpty(unappliedPatch) then
 		Log.info(
@@ -1013,6 +1019,46 @@ function ServeSession:__connectScriptsOnlyWatchers()
 			patch.added[scriptTempId] = encoded
 			self.__instanceMap:insert(scriptTempId, descendant)
 			self.__instanceMap.scriptsOnlyTempIds[scriptTempId] = true
+
+			-- Transitive closure: ensure every temp-ID parent referenced by
+			-- a patch entry is itself included as a skeleton container. When
+			-- multiple scripts are created in the same pruned subtree (e.g.,
+			-- paste), later handlers find intermediates already in instanceMap
+			-- with temp IDs from earlier handlers. Without re-including those
+			-- skeletons, the server's Phase 0 can't resolve the temp parents.
+			local closureNeeded = true
+			while closureNeeded do
+				closureNeeded = false
+				local toAdd = {}
+				for _, entry in pairs(patch.added) do
+					local pid = entry.parent
+					if
+						pid
+						and self.__instanceMap.scriptsOnlyTempIds[pid]
+						and not patch.added[pid]
+						and not toAdd[pid]
+					then
+						local inst = self.__instanceMap.fromIds[pid]
+						if inst then
+							local pp = inst.Parent
+							local ppId = pp and self.__instanceMap.fromInstances[pp]
+							if ppId then
+								toAdd[pid] = {
+									parent = ppId,
+									name = inst.Name,
+									className = inst.ClassName,
+									properties = {},
+									children = {},
+								}
+								closureNeeded = true
+							end
+						end
+					end
+				end
+				for id, entry in toAdd do
+					patch.added[id] = entry
+				end
+			end
 
 			Log.info(
 				"Scripts-only: detected new script {} outside mapped tree, sending to server",
