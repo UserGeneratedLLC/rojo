@@ -69,6 +69,10 @@ impl RojoTree {
 
         tree.insert_metadata(root_ref, snapshot.metadata);
 
+        if is_script_class(snapshot.class_name.as_ref()) {
+            tree.script_refs.insert(root_ref);
+        }
+
         for child in snapshot.children {
             tree.insert_instance(root_ref, child);
         }
