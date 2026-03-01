@@ -197,6 +197,9 @@ pub fn name_needs_slugify(name: &str) -> bool {
             return true;
         }
     }
+    if name_lower == "init" {
+        return true;
+    }
     false
 }
 
@@ -258,6 +261,9 @@ pub fn slugify_name(name: &str) -> String {
             result.push('_');
             break;
         }
+    }
+    if result_lower == "init" {
+        result.push('_');
     }
 
     // If the result is empty or all underscores, use a fallback
@@ -466,6 +472,13 @@ mod tests {
     }
 
     #[test]
+    fn slugify_init_reserved() {
+        assert_eq!(slugify_name("init"), "init_");
+        assert_eq!(slugify_name("Init"), "Init_");
+        assert_eq!(slugify_name("INIT"), "INIT_");
+    }
+
+    #[test]
     fn slugify_trailing_dot() {
         // Trailing dots are stripped (invalid on Windows)
         assert_eq!(slugify_name("hello."), "hello");
@@ -666,6 +679,14 @@ mod tests {
         assert!(name_needs_slugify("CON"));
         assert!(name_needs_slugify("con"));
         assert!(name_needs_slugify("NUL"));
+    }
+
+    #[test]
+    fn needs_slugify_init_reserved() {
+        assert!(name_needs_slugify("init"));
+        assert!(name_needs_slugify("Init"));
+        assert!(name_needs_slugify("INIT"));
+        assert!(!name_needs_slugify("init_"));
     }
 
     #[test]
@@ -978,6 +999,37 @@ mod tests {
     fn nfi_dangerous_suffix_case_insensitive_Meta() {
         let (f, m) = nfi("stuff.Meta", Middleware::Dir, &[]);
         assert_eq!(f, "stuff_Meta");
+        assert!(m);
+    }
+
+    // ── Init reserved name through name_for_inst ─────────────────────
+
+    #[test]
+    fn nfi_init_module_script() {
+        let (f, m) = nfi("init", Middleware::ModuleScript, &[]);
+        assert_eq!(f, "init_.luau");
+        assert!(m, "init is reserved, needs meta name");
+    }
+
+    #[test]
+    fn nfi_init_server_script() {
+        let (f, m) = nfi("init", Middleware::ServerScript, &[]);
+        assert_eq!(f, "init_.server.luau");
+        assert!(m);
+    }
+
+    #[test]
+    fn nfi_init_dir() {
+        let (f, m) = nfi("init", Middleware::Dir, &[]);
+        assert_eq!(f, "init_");
+        assert!(m);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn nfi_init_case_insensitive_Init() {
+        let (f, m) = nfi("Init", Middleware::ModuleScript, &[]);
+        assert_eq!(f, "Init_.luau");
         assert!(m);
     }
 

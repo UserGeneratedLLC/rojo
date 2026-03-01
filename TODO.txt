@@ -95,19 +95,6 @@ could we find an endpoint for downloading the "client side" of any game on the p
 [Crates]
 publish as a crate https://crates.io/crates/rojo
 
-[syncback]
-detect when the output file hash is the same, and dont write to it
-
-[sync]
-manually selection Studio should NOT automatically stage changes!
-
-[auto select studio/atlas]
-when things get added AFTER the fact because we send the git history hashes on connect rather than continiously, it auto-selects Studio for things that are being edited in real-time in the sync dialog
-how should we handle new files? because it could have been that someone just deleted it in studio. we can actually check if its a truly new file in Studio, like A but not staged!
-
-[merge visualizer]
-we should make the outline green or something to show when everything is ready to go. maybe the accept button
-
 [tree reconciling spooky!]
 [INFO  librojo::cli::serve] Listening: http://localhost:34873
 [INFO  librojo::change_processor] VFS event: WRITE d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
@@ -352,3 +339,18 @@ this needs to be slugified when the name exactly matches init, ignoring case [fo
 
 [one shot mode change]
 new changes that come in / out during the review menu on the plugin is really disorienting.
+we should just make it stop accepting new changes once it has the full patch ready and displayed to the user
+any further changes should have to be done NEXT one-shot sync
+
+[syncback]
+detect when the output file hash is the same, and dont write to it
+
+[sync]
+for the automated git staging we do on sync, manually selection Studio should NOT automatically stage changes!
+
+[auto select studio/atlas]
+when things get added AFTER the fact because we send the git history hashes on connect rather than continiously, it auto-selects Studio for things that are being edited in real-time in the sync dialog
+how should we handle new files? because it could have been that someone just deleted it in studio. we can actually check if its a truly new file in Studio, like A but not staged!
+
+[merge visualizer]
+we should make the outline green or something to show when everything is ready to go. maybe the accept button
