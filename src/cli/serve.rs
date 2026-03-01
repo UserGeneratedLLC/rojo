@@ -120,9 +120,10 @@ fn run_live_syncback(project_path: &Path, payload: SyncbackPayload) -> anyhow::R
     drop(dom_old);
 
     log::info!("Writing to the file system...");
+    let git_cache = crate::git::GitIndexCache::new(base_path);
     result
         .fs_snapshot
-        .write_to_vfs_parallel(base_path, session_old.vfs())?;
+        .write_to_vfs_parallel(base_path, session_old.vfs(), git_cache.as_ref())?;
 
     log::info!(
         "Finished live syncback: wrote {} files/folders, removed {}.",

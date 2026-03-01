@@ -233,6 +233,8 @@ impl SyncbackCommand {
 
             log::info!("Writing to the file system...");
 
+            let git_cache = crate::git::GitIndexCache::new(base_path);
+
             if self.sourcemap {
                 let sourcemap_path = base_path.join("sourcemap.json");
 
@@ -241,9 +243,11 @@ impl SyncbackCommand {
                 // so it doesn't need to wait for files to be on disk.
                 let (write_result, sourcemap_result) = std::thread::scope(|s| {
                     let write_handle = s.spawn(|| {
-                        result
-                            .fs_snapshot
-                            .write_to_vfs_parallel(base_path, session_old.vfs())
+                        result.fs_snapshot.write_to_vfs_parallel(
+                            base_path,
+                            session_old.vfs(),
+                            git_cache.as_ref(),
+                        )
                     });
 
                     let sourcemap_handle = s.spawn(|| {
@@ -268,9 +272,11 @@ impl SyncbackCommand {
                     Err(e) => log::warn!("Could not generate sourcemap: {}", e),
                 }
             } else {
-                result
-                    .fs_snapshot
-                    .write_to_vfs_parallel(base_path, session_old.vfs())?;
+                result.fs_snapshot.write_to_vfs_parallel(
+                    base_path,
+                    session_old.vfs(),
+                    git_cache.as_ref(),
+                )?;
             }
 
             log::info!(

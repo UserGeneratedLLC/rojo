@@ -383,6 +383,67 @@ pub fn compute_blob_sha1(content: &str) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+pub fn compute_blob_sha1_bytes(content: &[u8]) -> String {
+    let header = format!("blob {}\0", content.len());
+    let mut hasher = Sha1::new();
+    hasher.update(header.as_bytes());
+    hasher.update(content);
+    format!("{:x}", hasher.finalize())
+}
+
+/// Pre-computed git index blob hashes for fast content comparison.
+///
+/// During syncback, we can avoid writing files whose content matches what's
+/// already on disk. For files tracked in the git index, comparing the blob
+/// SHA1 of the new content against the index entry's hash avoids reading
+/// the file from disk entirely.
+pub struct GitIndexCache {
+    entries: HashMap<PathBuf, String>,
+}
+
+impl GitIndexCache {
+    pub fn new(project_root: &Path) -> Option<Self> {
+        let repo = open_repo(project_root)?;
+        let repo_root = repo.workdir()?.to_owned();
+        let index = repo.open_index().ok()?;
+
+        let mut entries = HashMap::new();
+        for entry in index.entries() {
+            let path_bstr = entry.path(&index);
+            let path_str = path_bstr.to_str().ok()?;
+            let rel_path = PathBuf::from(path_str);
+            let hash_hex = entry.id.to_hex().to_string();
+
+            let abs_path = repo_root.join(&rel_path);
+            let project_rel = abs_path
+                .strip_prefix(project_root)
+                .unwrap_or(&rel_path)
+                .to_path_buf();
+            entries.insert(project_rel, hash_hex);
+        }
+
+        log::debug!("GitIndexCache: loaded {} index entries", entries.len());
+        Some(Self { entries })
+    }
+
+    /// Returns `true` if the new content's blob SHA1 matches the git index
+    /// entry for this path, meaning the file on disk almost certainly
+    /// already has this content.
+    pub fn file_matches_index(&self, rel_path: &Path, content: &[u8]) -> bool {
+        let normalized = PathBuf::from(rel_path.to_string_lossy().replace('\\', "/"));
+        let index_hash = match self
+            .entries
+            .get(&normalized)
+            .or_else(|| self.entries.get(rel_path))
+        {
+            Some(h) => h,
+            None => return false,
+        };
+        let content_hash = compute_blob_sha1_bytes(content);
+        &content_hash == index_hash
+    }
+}
+
 pub fn git_add(repo_root: &Path, paths: &[PathBuf]) {
     if paths.is_empty() {
         return;

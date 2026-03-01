@@ -11,6 +11,8 @@ use std::{thread, time::Duration};
 use memofs::Vfs;
 use rayon::prelude::*;
 
+use crate::git::GitIndexCache;
+
 /// Maximum number of retry attempts for filesystem operations on Windows.
 /// Windows can have transient "Access denied" errors due to antivirus scanning,
 /// filesystem timing, or file handle release delays.
@@ -274,16 +276,32 @@ impl FsSnapshot {
     /// Directory creation and removal remain sequential (ordering constraints),
     /// but file writes and file removals are parallelized using rayon.
     ///
+    /// Files whose content already matches what's on disk are skipped. When a
+    /// `GitIndexCache` is provided, tracked files are checked via blob SHA1
+    /// comparison (no disk read needed); all other files fall back to reading
+    /// the existing content and comparing bytes.
+    ///
     /// This bypasses the VFS lock for file writes, using `std::fs` directly.
     /// This is safe because syncback uses a oneshot VFS with no caching or watching.
-    pub fn write_to_vfs_parallel<P: AsRef<Path>>(&self, base: P, vfs: &Vfs) -> io::Result<()> {
+    pub fn write_to_vfs_parallel<P: AsRef<Path>>(
+        &self,
+        base: P,
+        vfs: &Vfs,
+        git_cache: Option<&GitIndexCache>,
+    ) -> io::Result<()> {
         let base_path = base.as_ref();
 
         // Phase 1: Create directories (sequential - parent must exist before child)
+        let skipped_dirs = AtomicUsize::new(0);
         {
             let mut lock = vfs.lock();
             for dir_path in &self.added_dirs {
-                match lock.create_dir_all(base_path.join(dir_path)) {
+                let full = base_path.join(dir_path);
+                if full.is_dir() {
+                    skipped_dirs.fetch_add(1, Ordering::Relaxed);
+                    continue;
+                }
+                match lock.create_dir_all(full) {
                     Ok(_) => (),
                     Err(err) if err.kind() == io::ErrorKind::AlreadyExists => (),
                     Err(err) => return Err(err),
@@ -292,13 +310,28 @@ impl FsSnapshot {
         } // Release lock before parallel phase
 
         // Phase 2: Write files (parallel - independent operations)
-        // On Windows, use retry logic for transient "Access denied" errors that can
-        // occur due to antivirus scanning or filesystem timing issues.
         let write_errors = AtomicUsize::new(0);
         let first_error: std::sync::Mutex<Option<io::Error>> = std::sync::Mutex::new(None);
+        let skipped_files = AtomicUsize::new(0);
 
         self.added_files.par_iter().for_each(|(path, contents)| {
             let full_path = base_path.join(path);
+
+            if let Some(cache) = git_cache {
+                if cache.file_matches_index(path, contents) {
+                    skipped_files.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+            }
+
+            match std::fs::read(&full_path) {
+                Ok(existing) if existing == *contents => {
+                    skipped_files.fetch_add(1, Ordering::Relaxed);
+                    return;
+                }
+                _ => {}
+            }
+
             if let Err(err) = write_with_retry(&full_path, contents) {
                 write_errors.fetch_add(1, Ordering::Relaxed);
                 let mut guard = first_error.lock().unwrap();
@@ -369,10 +402,17 @@ impl FsSnapshot {
             }
         }
 
-        log::debug!(
-            "Wrote {} directories and {} files to the file system (parallel)",
-            self.added_dirs.len(),
-            self.added_files.len()
+        let skipped_file_count = skipped_files.load(Ordering::Relaxed);
+        let skipped_dir_count = skipped_dirs.load(Ordering::Relaxed);
+        let written_files = self.added_files.len() - skipped_file_count;
+        let created_dirs = self.added_dirs.len() - skipped_dir_count;
+
+        log::info!(
+            "Wrote {} files and {} directories ({} files and {} directories unchanged, skipped)",
+            written_files,
+            created_dirs,
+            skipped_file_count,
+            skipped_dir_count,
         );
 
         let files_inside_dirs = self.removed_files.len() - files_to_remove.len();

@@ -328,9 +328,37 @@ in all 3 matchers, simply randomize the order of the children - this will break 
 can we allow the terminal to stay so i can like run some git commands myself without having to make a whole new terminal?
 
 [mcp]
+* sync
+ - add modes:
+  - standard (default): what we currently have where if there are changes it waits for the user to act
+  - manual: user must always interact
+  - fastfail: if there are non auto selected changes, immediately fail without waiting for the user to reject
+  - dryrun: just checks what would be done and then returns out immediately
+ - provide the agent hashes of the current scripts on studio involved in the merge
+ - allow the agent to specify patches it wants to accept automatically
+  - for sciprts, need to include a hash of the file ON roblox studio currently to signify there wasn't MORE new changes in the mid-term
+  - for properties, just include what we are accepting
+* get_script PATH [from draft?]
+ - allows the agent to read a script currently on studio
+ - by default directly reads the Source property on the script
+  - optional to allow the agent to read the draft
+ - this is needed when an agent tries to sync and it fails due to a conflict since we don't send back sources in the failure
+  - agen't can complete merges by itself with properties, so we don't need a way for the agent to read properties for things
+ - the PATH will be: ReplicatedStorage/Some/Path/Abc - like a direct instance path, not a atlas aware path.
+  - we should steal this system fully: D:\UserGenerated\studio-rust-mcp-server\plugin\Utils\Paths.luau
+  - in the sync feedback it gives, we should include Paths.GetRelativePath so the agent is able to find it via the read_script ALONGSIDE the current info we can give so it can also find it on the Atlas filesystem
+  - investigate this further, because i just want to give the agent the best possible way to query roblox instances, and also atlas instances on the filesystem. if using this Paths module is an overstep and we can accomplish it with a fully atlas-based approach, that's fine - aslong as it works CONSISTENTLY and is simple.
+* port all of the basic MCP endpoints offered via https://github.com/Roblox/studio-rust-mcp-server
+ - integrate them into how we've done our mcp in atlas
+ - make sure to handle the placeid filtering like we already do when establishing the connection
 * syncback
  - invokes plugin based syncback
  - ensure this doesn't interrupt the connection of the mcp, since i think we shutdown the api? we should just not shutdown the api or something
+* add logging for all agent connect/disconnects in the terminal
+ - also add logging for commands (including the json) it runs and the resulting json. try to keep this on one line please, json compact.
+
+[sync]
+right now sync is running REALLY slow
 
 [automated review of all changes done, similar to cursor agent review for the game]
 it's a discord bot

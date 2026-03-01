@@ -1787,6 +1787,18 @@ impl JobThreadContext {
 
                             if let Some(ref write_path) = source_path {
                                 if let Some(Variant::String(value)) = changed_value {
+                                    if let Ok(existing) = fs::read(write_path) {
+                                        if existing == value.as_bytes() {
+                                            log::debug!(
+                                                "Two-way sync: Skipping unchanged Source for {}",
+                                                self.display_path(write_path)
+                                            );
+                                            if patch_set.stage_ids.contains(&id) {
+                                                pending_stage_paths.push(write_path.clone());
+                                            }
+                                            continue;
+                                        }
+                                    }
                                     log::info!(
                                         "Two-way sync: Writing Source to {}",
                                         self.display_path(write_path)
