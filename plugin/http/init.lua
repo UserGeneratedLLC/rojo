@@ -18,10 +18,11 @@ local function performRequest(requestParams)
 	local requestId = lastRequestId + 1
 	lastRequestId = requestId
 
-	Log.trace("HTTP {}({}) {}", requestParams.Method, requestId, requestParams.Url)
-
-	if requestParams.Body ~= nil then
-		Log.trace("{}", requestParams.Body)
+	if Log.isTraceEnabled() then
+		Log.trace("HTTP {}({}) {}", requestParams.Method, requestId, requestParams.Url)
+		if requestParams.Body ~= nil then
+			Log.trace("{}", requestParams.Body)
+		end
 	end
 
 	return Promise.new(function(resolve, reject)
@@ -31,7 +32,9 @@ local function performRequest(requestParams)
 			end)
 
 		if success then
-			Log.trace("Request {} success, response {:#?}", requestId, response)
+			if Log.isTraceEnabled() then
+				Log.trace("Request {} success, response {:#?}", requestId, response)
+			end
 			local httpResponse = HttpResponse.fromRobloxResponse(response)
 			if httpResponse:isSuccess() then
 				resolve(httpResponse)
@@ -39,7 +42,9 @@ local function performRequest(requestParams)
 				reject(HttpError.fromResponse(httpResponse))
 			end
 		else
-				Log.trace("Request {} failure: {:?}", requestId, response)
+				if Log.isTraceEnabled() then
+					Log.trace("Request {} failure: {:?}", requestId, response)
+				end
 				reject(HttpError.fromRobloxErrorString(response))
 			end
 		end)()

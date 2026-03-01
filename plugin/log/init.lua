@@ -29,6 +29,10 @@ function Log.setLogLevelThunk(thunk)
 	getLogLevel = thunk
 end
 
+function Log.isTraceEnabled()
+	return getLogLevel() >= Level.Trace
+end
+
 function Log.trace(template, ...)
 	if getLogLevel() >= Level.Trace then
 		print(addTags(TRACE_TAG, Fmt.fmt(template, ...)))
