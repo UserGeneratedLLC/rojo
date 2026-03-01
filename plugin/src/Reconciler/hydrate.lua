@@ -68,9 +68,9 @@ local function hydrate(instanceMap, virtualInstances, rootId, rootInstance, sess
 
 	if matchElapsed > 10 then
 		Log.trace(
-			"[TIMING] matchChildren for '{}' took {:.1} ms ({} virtual, {} studio, {} matched)",
+			"[TIMING] matchChildren for '{}' took {} ms ({} virtual, {} studio, {} matched)",
 			virtualInstance.Name,
-			matchElapsed,
+			string.format("%.1f", matchElapsed),
 			#validVirtualIds,
 			#existingChildren,
 			#result.matched
@@ -98,10 +98,10 @@ local function hydrate(instanceMap, virtualInstances, rootId, rootInstance, sess
 
 	if isRoot then
 		Log.trace(
-			"[TIMING] hydrate() completed: {} instances processed, {} matched ({:.1} ms total)",
+			"[TIMING] hydrate() completed: {} instances processed, {} matched ({} ms total)",
 			session.hydrateCount,
 			#result.matched,
-			(os.clock() - session.hydrateClock) * 1000
+			string.format("%.1f", (os.clock() - session.hydrateClock) * 1000)
 		)
 	end
 end

@@ -1006,7 +1006,10 @@ function App:startSession()
 		Log.trace("[TIMING] PatchTree.build() starting")
 		local patchTree =
 			PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" }, serverInfo.gitMetadata)
-		Log.trace("[TIMING] PatchTree.build() completed ({:.1} ms)", (os.clock() - patchTreeClock) * 1000)
+		Log.trace(
+			"[TIMING] PatchTree.build() completed ({} ms)",
+			string.format("%.1f", (os.clock() - patchTreeClock) * 1000)
+		)
 		self:setState({
 			appStatus = AppStatus.Confirming,
 			patchTree = patchTree,

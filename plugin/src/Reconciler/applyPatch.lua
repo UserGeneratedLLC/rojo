@@ -77,7 +77,10 @@ local function applyPatch(instanceMap, patch)
 		end
 	end
 
-	Log.trace("[TIMING] applyPatch() removals completed ({:.1} ms)", (os.clock() - removalClock) * 1000)
+	Log.trace(
+		"[TIMING] applyPatch() removals completed ({} ms)",
+		string.format("%.1f", (os.clock() - removalClock) * 1000)
+	)
 
 	-- Detect echoed additions from DescendantAdded handler.
 	-- When the plugin pre-inserts instances with temp IDs and the server
@@ -160,7 +163,10 @@ local function applyPatch(instanceMap, patch)
 		end
 	end
 
-	Log.trace("[TIMING] applyPatch() additions completed ({:.1} ms)", (os.clock() - additionClock) * 1000)
+	Log.trace(
+		"[TIMING] applyPatch() additions completed ({} ms)",
+		string.format("%.1f", (os.clock() - additionClock) * 1000)
+	)
 
 	local updateClock = os.clock()
 	Log.trace("[TIMING] applyPatch() updates starting ({} updates)", #patch.updated)
@@ -332,14 +338,23 @@ local function applyPatch(instanceMap, patch)
 		end
 	end
 
-	Log.trace("[TIMING] applyPatch() updates completed ({:.1} ms)", (os.clock() - updateClock) * 1000)
+	Log.trace(
+		"[TIMING] applyPatch() updates completed ({} ms)",
+		string.format("%.1f", (os.clock() - updateClock) * 1000)
+	)
 
 	local refsClock = os.clock()
 	Log.trace("[TIMING] applyPatch() deferred refs starting ({} refs)", #deferredRefs)
 	applyDeferredRefs(instanceMap, deferredRefs, unappliedPatch)
-	Log.trace("[TIMING] applyPatch() deferred refs completed ({:.1} ms)", (os.clock() - refsClock) * 1000)
+	Log.trace(
+		"[TIMING] applyPatch() deferred refs completed ({} ms)",
+		string.format("%.1f", (os.clock() - refsClock) * 1000)
+	)
 
-	Log.trace("[TIMING] applyPatch() total completed ({:.1} ms)", (os.clock() - applyPatchClock) * 1000)
+	Log.trace(
+		"[TIMING] applyPatch() total completed ({} ms)",
+		string.format("%.1f", (os.clock() - applyPatchClock) * 1000)
+	)
 
 	return unappliedPatch
 end

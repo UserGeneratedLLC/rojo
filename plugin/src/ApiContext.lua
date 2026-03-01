@@ -169,8 +169,8 @@ function ApiContext:connect()
 	return Http.get(url)
 		:andThen(function(response)
 			Log.trace(
-				"[TIMING] ApiContext:connect() HTTP response received ({:.1} ms)",
-				(os.clock() - connectClock) * 1000
+				"[TIMING] ApiContext:connect() HTTP response received ({} ms)",
+				string.format("%.1f", (os.clock() - connectClock) * 1000)
 			)
 			return response
 		end)
@@ -191,8 +191,8 @@ function ApiContext:connect()
 		:andThen(function(body)
 			self.__sessionId = body.sessionId
 			Log.trace(
-				"[TIMING] ApiContext:connect() fully validated ({:.1} ms), sessionId={}",
-				(os.clock() - connectClock) * 1000,
+				"[TIMING] ApiContext:connect() fully validated ({} ms), sessionId={}",
+				string.format("%.1f", (os.clock() - connectClock) * 1000),
 				body.sessionId
 			)
 
@@ -208,8 +208,8 @@ function ApiContext:read(ids)
 	return Http.get(url)
 		:andThen(function(response)
 			Log.trace(
-				"[TIMING] ApiContext:read() HTTP response received ({:.1} ms, {} bytes)",
-				(os.clock() - readClock) * 1000,
+				"[TIMING] ApiContext:read() HTTP response received ({} ms, {} bytes)",
+				string.format("%.1f", (os.clock() - readClock) * 1000),
 				if response.body then #response.body else 0
 			)
 			return response
@@ -218,21 +218,19 @@ function ApiContext:read(ids)
 		:andThen(function(response)
 			local decodeClock = os.clock()
 			Log.trace("[TIMING] ApiContext:read() msgpack decode starting")
-			return Http.Response.msgpack(response):andThen(function(body)
-				Log.trace(
-					"[TIMING] ApiContext:read() msgpack decode completed ({:.1} ms)",
-					(os.clock() - decodeClock) * 1000
-				)
-				return body
-			end)
+			return Http.Response.msgpack(response)
 		end)
 		:andThen(function(body)
+			Log.trace("[TIMING] ApiContext:read() msgpack decoded")
 			if body.sessionId ~= self.__sessionId then
 				return Promise.reject("Server changed ID")
 			end
 
 			assert(validateApiRead(body))
-			Log.trace("[TIMING] ApiContext:read() fully completed ({:.1} ms)", (os.clock() - readClock) * 1000)
+			Log.trace(
+				"[TIMING] ApiContext:read() fully completed ({} ms)",
+				string.format("%.1f", (os.clock() - readClock) * 1000)
+			)
 
 			return body
 		end)
@@ -332,8 +330,8 @@ function ApiContext:connectWebSocket(packetHandlers)
 				Url = url,
 			})
 		Log.trace(
-			"[TIMING] WebSocket CreateWebStreamClient ({:.1} ms, success={})",
-			(os.clock() - wsClock) * 1000,
+			"[TIMING] WebSocket CreateWebStreamClient ({} ms, success={})",
+			string.format("%.1f", (os.clock() - wsClock) * 1000),
 			success
 		)
 		if not success then

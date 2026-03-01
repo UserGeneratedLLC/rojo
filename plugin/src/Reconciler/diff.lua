@@ -259,12 +259,12 @@ local function diff(instanceMap, virtualInstances, rootId, serverInfo)
 		addedCount += 1
 	end
 	Log.trace(
-		"[TIMING] diff() completed: {} instances diffed, {} removals, {} additions, {} updates ({:.1} ms)",
+		"[TIMING] diff() completed: {} instances diffed, {} removals, {} additions, {} updates ({} ms)",
 		diffCount,
 		#patch.removed,
 		addedCount,
 		#patch.updated,
-		(os.clock() - diffClock) * 1000
+		string.format("%.1f", (os.clock() - diffClock) * 1000)
 	)
 
 	return true, patch
