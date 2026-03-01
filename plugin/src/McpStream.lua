@@ -78,6 +78,7 @@ function McpStream:_tryConnect()
 		twoWaySync = self._getPluginConfig("twoWaySync"),
 		oneShotSync = self._getPluginConfig("oneShotSync"),
 		confirmationBehavior = self._getPluginConfig("confirmationBehavior"),
+		placeId = game.PlaceId,
 	})
 	pcall(function()
 		wsClient:Send(greeting)

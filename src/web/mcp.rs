@@ -21,6 +21,8 @@ pub struct PluginConfig {
     pub one_shot_sync: bool,
     #[serde(default)]
     pub confirmation_behavior: String,
+    #[serde(default)]
+    pub place_id: Option<f64>,
 }
 
 /// Command sent from the MCP handler to the plugin via the MCP stream WebSocket.

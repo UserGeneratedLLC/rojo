@@ -316,6 +316,7 @@ we can utilize the git hashes we also use for auto select, too. we use the same 
 because have already loaded it, we can detect this.
 this is an optimization to avoid writing 100,000 files or something on larger projects when file bytes match perfectly, or directories verifiably already exist.
 make sure this is applied to plugin-based syncback, too.
+can we do hash based comparisons, too? it seems most effective for actual file changes.. but im not sure..
 
 [fix dedup]
 dedup is broken due to relying on sort order
@@ -323,26 +324,8 @@ recreate broken state by forcing random order in all matching dedup systems of t
 if it cannot match correctly with randomization, then it is inherently broken
 in all 3 matchers, simply randomize the order of the children - this will break the tests.
 
-[mcp]
-* atlas_sync
- - Basically equiv to git fast-forward merge
- - Atlas plugin automatically connects (tries every 5s if nothing there, do not spam errors) via https://create.roblox.com/docs/reference/engine/classes/HttpService#CreateWebStreamClient
- - Atlas serve automatically hosts a http based mcp server (NOT stdio based!)
- - Decide whether it's easier to make a separate server from the api.rs file, or integrate it - integrating would be cleaner, but im not sure if it would support without a massive amount of changes
- - When an agent invokes atlas_sync, it invokes Atlas sync from Roblox in the plugin as if the user clicked the sync button
- - Must be on a mutex, so multiple agents cannot invoke it at the same time. Just refuses if it's currently happening
-  - Also it needs to refuse it if we're actively connected on the regular api layer too, not just the mcp based command.
-  - If we are connected already, respond to the agent with a proper notice. Make sure if we are in connected-mode where all things are syncing automatically all the time, we tell the agent. We need to tell the agent the configuration of the lua plugin probably?
-    - If we are in connected-mode we will need to figure out a way to await syncing to finish to ensure state is good?
- - Upon the plugin connecting, if there are NO changes (Always/Initial) it should just immediately accept
- - If all changes are pre-selected, e.g. from our git pre selection system, then we "fast-forward" by clicking accept immediately.
- - If there are actually changes, the agent should hang while waiting for the user to either accept/deny them
- - The output of the mcp request needs to conclude that it was a success and what changes were synced AND if it was rejected + what changes were presented to the user to sync.
-  - Let's just give a list of file paths on the actual disk (relative to project so like ReplicatedStorage/SomeFile.luau or ReplicatedStorage/SomeModel.json5 etc) ?
-  - Needs to include the DIRECTION, too.
-  - I'm not sure what is the most value on this, but we absolutely need to give the agent a response on what was actually synced, ideally what the content was(?), and the directions of sync.
- - Does nothing if we are running in connected-mode (already syncing)
- - Agent should await the completion of this sync before proceeding, this mcp command needs to yield and give the response as described above.
+[syncback via extension]
+can we allow the terminal to stay so i can like run some git commands myself without having to make a whole new terminal?
 
 [mcp]
 * syncback

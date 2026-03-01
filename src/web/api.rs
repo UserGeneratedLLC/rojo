@@ -137,7 +137,13 @@ pub async fn call(
         }
         (&Method::GET, "/api/mcp/stream") => {
             if is_upgrade_request(&request) {
-                handle_mcp_stream_upgrade(&mut request, mcp_state, active_api_connections).await
+                handle_mcp_stream_upgrade(
+                    &mut request,
+                    Arc::clone(&service.serve_session),
+                    mcp_state,
+                    active_api_connections,
+                )
+                .await
             } else {
                 msgpack(
                     ErrorResponse::bad_request(
@@ -3518,6 +3524,7 @@ fn pick_script_path(instance: InstanceWithMeta<'_>) -> Option<PathBuf> {
 
 async fn handle_mcp_stream_upgrade(
     request: &mut Request<Incoming>,
+    serve_session: Arc<ServeSession>,
     mcp_state: Arc<super::mcp::McpSyncState>,
     active_api_connections: Arc<std::sync::atomic::AtomicUsize>,
 ) -> Response<Full<Bytes>> {
@@ -3541,8 +3548,13 @@ async fn handle_mcp_stream_upgrade(
     };
 
     tokio::spawn(async move {
-        if let Err(e) =
-            handle_mcp_stream_connection(websocket, mcp_state, active_api_connections).await
+        if let Err(e) = handle_mcp_stream_connection(
+            websocket,
+            serve_session,
+            mcp_state,
+            active_api_connections,
+        )
+        .await
         {
             log::error!("MCP stream WebSocket error: {e}");
         }
@@ -3553,6 +3565,7 @@ async fn handle_mcp_stream_upgrade(
 
 async fn handle_mcp_stream_connection(
     websocket: HyperWebsocket,
+    serve_session: Arc<ServeSession>,
     mcp_state: Arc<super::mcp::McpSyncState>,
     active_api_connections: Arc<std::sync::atomic::AtomicUsize>,
 ) -> anyhow::Result<()> {
@@ -3577,6 +3590,61 @@ async fn handle_mcp_stream_connection(
         if let Ok(greeting) = serde_json::from_str::<serde_json::Value>(&text) {
             if greeting.get("type").and_then(|t| t.as_str()) == Some("hello") {
                 if let Ok(config) = serde_json::from_value::<PluginConfig>(greeting.clone()) {
+                    // Validate place ID against the project's servePlaceIds / blockedPlaceIds.
+                    if let Some(place_id_f64) = config.place_id {
+                        let place_id = place_id_f64 as u64;
+                        if let Some(expected) = serve_session.serve_place_ids() {
+                            if !expected.contains(&place_id) {
+                                log::trace!(
+                                    "MCP stream rejected: place ID {} not in servePlaceIds",
+                                    place_id
+                                );
+                                let reject = serde_json::json!({
+                                    "type": "rejected",
+                                    "reason": format!(
+                                        "Place ID {} is not in the servePlaceIds whitelist",
+                                        place_id
+                                    ),
+                                });
+                                let _ = websocket
+                                    .send(Message::Text(
+                                        serde_json::to_string(&reject).unwrap().into(),
+                                    ))
+                                    .await;
+                                let _ = websocket.send(Message::Close(None)).await;
+                                mcp_state
+                                    .plugin_stream_connected
+                                    .store(false, Ordering::SeqCst);
+                                return Ok(());
+                            }
+                        }
+                        if let Some(blocked) = serve_session.blocked_place_ids() {
+                            if blocked.contains(&place_id) {
+                                log::trace!(
+                                    "MCP stream rejected: place ID {} is in blockedPlaceIds",
+                                    place_id
+                                );
+                                let reject = serde_json::json!({
+                                    "type": "rejected",
+                                    "reason": format!(
+                                        "Place ID {} is in the blockedPlaceIds list",
+                                        place_id
+                                    ),
+                                });
+                                let _ = websocket
+                                    .send(Message::Text(
+                                        serde_json::to_string(&reject).unwrap().into(),
+                                    ))
+                                    .await;
+                                let _ = websocket.send(Message::Close(None)).await;
+                                mcp_state
+                                    .plugin_stream_connected
+                                    .store(false, Ordering::SeqCst);
+                                return Ok(());
+                            }
+                        }
+                    }
+
                     let mut slot = mcp_state
                         .plugin_config
                         .lock()
