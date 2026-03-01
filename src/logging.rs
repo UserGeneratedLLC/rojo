@@ -184,20 +184,20 @@ fn compress_old_logs(log_dir: &Path, command_name: &str) {
 /// Returns `(log::Level, cleaned_message)`.
 pub fn parse_roblox_log(message: &str, message_type: u64) -> (log::Level, String) {
     if let Some(rest) = message.strip_prefix("[Rojo-Trace] ") {
-        (log::Level::Trace, format!("[Rojo] {}", rest))
+        (log::Level::Trace, format!("[Studio] [Rojo] {}", rest))
     } else if let Some(rest) = message.strip_prefix("[Rojo-Debug] ") {
-        (log::Level::Debug, format!("[Rojo] {}", rest))
+        (log::Level::Debug, format!("[Studio] [Rojo] {}", rest))
     } else if let Some(rest) = message.strip_prefix("[Rojo-Info] ") {
-        (log::Level::Info, format!("[Rojo] {}", rest))
+        (log::Level::Info, format!("[Studio] [Rojo] {}", rest))
     } else if let Some(rest) = message.strip_prefix("[Rojo-Warn] ") {
-        (log::Level::Warn, format!("[Rojo] {}", rest))
+        (log::Level::Warn, format!("[Studio] [Rojo] {}", rest))
     } else {
         let lvl = match message_type {
             2 => log::Level::Warn,
             3 => log::Level::Error,
             _ => log::Level::Info,
         };
-        (lvl, message.to_string())
+        (lvl, format!("[Studio] {}", message))
     }
 }
 
@@ -251,77 +251,77 @@ mod tests {
     fn parse_roblox_log_rojo_trace() {
         let (level, msg) = parse_roblox_log("[Rojo-Trace] snapshot started", 0);
         assert_eq!(level, log::Level::Trace);
-        assert_eq!(msg, "[Rojo] snapshot started");
+        assert_eq!(msg, "[Studio] [Rojo] snapshot started");
     }
 
     #[test]
     fn parse_roblox_log_rojo_debug() {
         let (level, msg) = parse_roblox_log("[Rojo-Debug] loading project", 0);
         assert_eq!(level, log::Level::Debug);
-        assert_eq!(msg, "[Rojo] loading project");
+        assert_eq!(msg, "[Studio] [Rojo] loading project");
     }
 
     #[test]
     fn parse_roblox_log_rojo_info() {
         let (level, msg) = parse_roblox_log("[Rojo-Info] connected to server", 0);
         assert_eq!(level, log::Level::Info);
-        assert_eq!(msg, "[Rojo] connected to server");
+        assert_eq!(msg, "[Studio] [Rojo] connected to server");
     }
 
     #[test]
     fn parse_roblox_log_rojo_warn() {
         let (level, msg) = parse_roblox_log("[Rojo-Warn] something fishy", 0);
         assert_eq!(level, log::Level::Warn);
-        assert_eq!(msg, "[Rojo] something fishy");
+        assert_eq!(msg, "[Studio] [Rojo] something fishy");
     }
 
     #[test]
     fn parse_roblox_log_game_print() {
         let (level, msg) = parse_roblox_log("hello from game", 0);
         assert_eq!(level, log::Level::Info);
-        assert_eq!(msg, "hello from game");
+        assert_eq!(msg, "[Studio] hello from game");
     }
 
     #[test]
     fn parse_roblox_log_game_warn() {
         let (level, msg) = parse_roblox_log("something wrong", 2);
         assert_eq!(level, log::Level::Warn);
-        assert_eq!(msg, "something wrong");
+        assert_eq!(msg, "[Studio] something wrong");
     }
 
     #[test]
     fn parse_roblox_log_game_error() {
         let (level, msg) = parse_roblox_log("crash!", 3);
         assert_eq!(level, log::Level::Error);
-        assert_eq!(msg, "crash!");
+        assert_eq!(msg, "[Studio] crash!");
     }
 
     #[test]
     fn parse_roblox_log_message_info_type() {
         let (level, msg) = parse_roblox_log("info message", 1);
         assert_eq!(level, log::Level::Info);
-        assert_eq!(msg, "info message");
+        assert_eq!(msg, "[Studio] info message");
     }
 
     #[test]
     fn parse_roblox_log_unknown_message_type() {
         let (level, msg) = parse_roblox_log("weird type", 99);
         assert_eq!(level, log::Level::Info);
-        assert_eq!(msg, "weird type");
+        assert_eq!(msg, "[Studio] weird type");
     }
 
     #[test]
     fn parse_roblox_log_partial_prefix_not_stripped() {
         let (level, msg) = parse_roblox_log("[Rojo-Trace]no space", 0);
         assert_eq!(level, log::Level::Info);
-        assert_eq!(msg, "[Rojo-Trace]no space");
+        assert_eq!(msg, "[Studio] [Rojo-Trace]no space");
     }
 
     #[test]
     fn parse_roblox_log_empty_message_after_prefix() {
         let (level, msg) = parse_roblox_log("[Rojo-Info] ", 0);
         assert_eq!(level, log::Level::Info);
-        assert_eq!(msg, "[Rojo] ");
+        assert_eq!(msg, "[Studio] [Rojo] ");
     }
 
     #[test]
