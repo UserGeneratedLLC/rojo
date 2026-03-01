@@ -418,3 +418,7 @@ additional inspo: https://cursor.com/dashboard?tab=bugbot
   - alternatively, and this would be better: allow the user to specify their own OpenCloud api key (or cookie if we have to revert to that) to use (make sure providing this is very secure) and then we can let them have at it.
   - need to ensure that only certain perm users can use the bot
   - we need to make sure not just any public server with a bot link can just run this, because it will be using my system resources and could be insecure. this is a proprietary tool.
+
+[git]
+complete audit of our git module to see what we can leverage the gix api directly instead of hard coding in really slow ways ourselves
+we can probably just call built-in functions to accomplish a lot of that hardcore tasks we are doing that would give 10-100x speedups

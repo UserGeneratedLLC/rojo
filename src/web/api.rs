@@ -436,11 +436,48 @@ impl ApiService {
                 .serve_session
                 .initial_head_commit()
                 .map(|s| s.to_owned());
-            tokio::task::spawn_blocking(move || {
-                crate::git::compute_git_metadata(&tree_handle, &repo_root, initial_head.as_deref())
-            })
+
+            let mut project_roots = Vec::new();
+            crate::serve_session::collect_path_roots(
+                &self.serve_session.root_project().tree,
+                self.serve_session.root_dir(),
+                &mut project_roots,
+            );
+            let project_prefixes: Vec<String> = project_roots
+                .iter()
+                .filter_map(|abs| abs.strip_prefix(&repo_root).ok())
+                .map(|r| r.to_string_lossy().replace('\\', "/"))
+                .collect();
+
+            log::debug!(
+                "Git metadata: using {} project prefixes: {:?}",
+                project_prefixes.len(),
+                project_prefixes
+            );
+
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(10),
+                tokio::task::spawn_blocking(move || {
+                    crate::git::compute_git_metadata(
+                        &tree_handle,
+                        &repo_root,
+                        initial_head.as_deref(),
+                        &project_prefixes,
+                    )
+                }),
+            )
             .await
-            .ok()
+            {
+                Ok(Ok(meta)) => Some(meta),
+                Ok(Err(e)) => {
+                    log::warn!("Git metadata task failed: {}", e);
+                    None
+                }
+                Err(_) => {
+                    log::warn!("Git metadata computation timed out (>10s), skipping");
+                    None
+                }
+            }
         } else {
             None
         };

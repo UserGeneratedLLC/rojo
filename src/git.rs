@@ -5,7 +5,7 @@ use std::{
     time::Instant,
 };
 
-use gix::bstr::ByteSlice;
+use gix::bstr::{BString, ByteSlice};
 use rbx_dom_weak::types::Ref;
 use sha1::{Digest, Sha1};
 
@@ -75,337 +75,71 @@ fn resolve_tree_id(repo: &gix::Repository, rev: &str) -> Option<gix::ObjectId> {
 fn git_changed_files_impl(
     repo: &gix::Repository,
     initial_head: Option<&str>,
-    relevant_prefixes: &HashSet<PathBuf>,
+    project_prefixes: &[String],
 ) -> Option<ChangedFiles> {
     let mut tracked = HashSet::new();
     let mut untracked = HashSet::new();
 
+    let patterns: Vec<BString> = project_prefixes
+        .iter()
+        .map(|p| BString::from(p.as_str()))
+        .collect();
+
     let t = Instant::now();
-    let diff_base = initial_head.unwrap_or("HEAD");
-    let base_tree_id = resolve_tree_id(repo, diff_base);
-    let head_tree_id = resolve_tree_id(repo, "HEAD");
+    let mut platform = match repo.status(gix::progress::Discard) {
+        Ok(p) => p,
+        Err(e) => {
+            log::warn!("Failed to initialize git status: {}", e);
+            return None;
+        }
+    };
+
+    if let Some(ih) = initial_head {
+        if let Some(tree_id) = resolve_tree_id(repo, ih) {
+            platform = platform.head_tree(tree_id);
+        }
+    }
+
+    let iter = match platform.into_iter(patterns) {
+        Ok(i) => i,
+        Err(e) => {
+            log::warn!("Failed to create git status iterator: {}", e);
+            return None;
+        }
+    };
     log::debug!(
-        "[TIMING] compute_git_metadata: resolve_tree_id {}ms",
+        "[TIMING] compute_git_metadata: status iterator created {}ms",
         t.elapsed().as_millis()
     );
 
-    let diff_failed = base_tree_id.is_none();
-
-    // If initial_head differs from HEAD, diff those trees for committed-since-start changes
-    if let (Some(base_id), Some(head_id)) = (base_tree_id, head_tree_id) {
-        if base_id != head_id {
-            let t = Instant::now();
-            if let (Ok(base_obj), Ok(head_obj)) =
-                (repo.find_object(base_id), repo.find_object(head_id))
-            {
-                if let (Ok(base_tree), Ok(head_tree)) =
-                    (base_obj.peel_to_tree(), head_obj.peel_to_tree())
-                {
-                    collect_tree_diff_paths(repo, &base_tree, &head_tree, &mut tracked);
-                }
-            }
-            log::debug!(
-                "[TIMING] compute_git_metadata: collect_tree_diff_paths {}ms ({} found)",
-                t.elapsed().as_millis(),
-                tracked.len()
-            );
-        }
-    }
-
-    // Compare base tree vs index for staged changes, and index vs worktree for unstaged
-    if let Some(base_id) = base_tree_id.or(head_tree_id) {
-        if let Ok(index) = repo.open_index() {
-            let t = Instant::now();
-            collect_tree_index_changes(repo, base_id, &index, &mut tracked);
-            log::debug!(
-                "[TIMING] compute_git_metadata: collect_tree_index_changes {}ms",
-                t.elapsed().as_millis()
-            );
-
-            let t = Instant::now();
-            let before = tracked.len();
-            collect_index_worktree_changes(repo, &index, &mut tracked, relevant_prefixes);
-            log::debug!(
-                "[TIMING] compute_git_metadata: collect_index_worktree_changes {}ms ({} entries, {} worktree-dirty)",
-                t.elapsed().as_millis(),
-                index.entries().len(),
-                tracked.len() - before
-            );
-        }
-    } else if let Ok(index) = repo.open_index() {
-        for entry in index.entries() {
-            tracked.insert(PathBuf::from(entry.path(&index).to_str_lossy().as_ref()));
-        }
-        let t = Instant::now();
-        let before = tracked.len();
-        collect_index_worktree_changes(repo, &index, &mut tracked, relevant_prefixes);
-        log::debug!(
-            "[TIMING] compute_git_metadata: collect_index_worktree_changes (no tree) {}ms ({} entries, {} worktree-dirty)",
-            t.elapsed().as_millis(),
-            index.entries().len(),
-            tracked.len() - before
-        );
-    }
-
     let t = Instant::now();
-    collect_untracked_files(repo, &mut untracked, relevant_prefixes);
+    for item in iter {
+        let item = match item {
+            Ok(i) => i,
+            Err(_) => continue,
+        };
+        match &item {
+            gix::status::Item::TreeIndex(_) => {
+                tracked.insert(PathBuf::from(item.location().to_str_lossy().as_ref()));
+            }
+            gix::status::Item::IndexWorktree(iw_item) => match iw_item {
+                gix::status::index_worktree::Item::DirectoryContents { .. } => {
+                    untracked.insert(PathBuf::from(item.location().to_str_lossy().as_ref()));
+                }
+                _ => {
+                    tracked.insert(PathBuf::from(item.location().to_str_lossy().as_ref()));
+                }
+            },
+        }
+    }
     log::debug!(
-        "[TIMING] compute_git_metadata: collect_untracked_files {}ms ({} found)",
+        "[TIMING] compute_git_metadata: status iteration {}ms ({} tracked, {} untracked)",
         t.elapsed().as_millis(),
+        tracked.len(),
         untracked.len()
     );
 
-    if tracked.is_empty() && untracked.is_empty() && diff_failed {
-        return None;
-    }
-
     Some(ChangedFiles { tracked, untracked })
-}
-
-fn collect_tree_diff_paths(
-    repo: &gix::Repository,
-    old_tree: &gix::Tree<'_>,
-    new_tree: &gix::Tree<'_>,
-    tracked: &mut HashSet<PathBuf>,
-) {
-    if let Ok(changes) = repo.diff_tree_to_tree(old_tree, Some(new_tree), None) {
-        for change in changes {
-            let path_str = change.location().to_str_lossy();
-            tracked.insert(PathBuf::from(path_str.as_ref()));
-        }
-    }
-}
-
-fn collect_tree_index_changes(
-    repo: &gix::Repository,
-    tree_id: gix::ObjectId,
-    index: &gix::index::File,
-    tracked: &mut HashSet<PathBuf>,
-) {
-    let tree_obj = match repo.find_object(tree_id) {
-        Ok(o) => o,
-        Err(_) => return,
-    };
-    let tree = match tree_obj.peel_to_tree() {
-        Ok(t) => t,
-        Err(_) => return,
-    };
-
-    let mut tree_entries: HashMap<String, gix::ObjectId> = HashMap::new();
-    flatten_tree(repo, &tree, "", &mut tree_entries);
-
-    for entry in index.entries() {
-        let path_bstr = entry.path(index);
-        let path_str = path_bstr.to_str_lossy();
-
-        match tree_entries.remove(path_str.as_ref()) {
-            Some(tid) if tid == entry.id => {}
-            _ => {
-                tracked.insert(PathBuf::from(path_str.as_ref()));
-            }
-        }
-    }
-
-    for path in tree_entries.into_keys() {
-        tracked.insert(PathBuf::from(path));
-    }
-}
-
-fn flatten_tree(
-    repo: &gix::Repository,
-    tree: &gix::Tree<'_>,
-    prefix: &str,
-    out: &mut HashMap<String, gix::ObjectId>,
-) {
-    for entry in tree.iter() {
-        let entry = match entry {
-            Ok(e) => e,
-            Err(_) => continue,
-        };
-        let name = entry.filename().to_str_lossy();
-        let full_path = if prefix.is_empty() {
-            name.to_string()
-        } else {
-            format!("{}/{}", prefix, name)
-        };
-
-        if entry.mode().is_tree() {
-            if let Ok(sub_obj) = entry.id().object() {
-                if let Ok(sub_tree) = sub_obj.peel_to_tree() {
-                    flatten_tree(repo, &sub_tree, &full_path, out);
-                }
-            }
-        } else if entry.mode().is_blob() || entry.mode().is_executable() {
-            out.insert(full_path, entry.id().detach());
-        }
-    }
-}
-
-fn compute_blob_object_id(content: &[u8]) -> gix::ObjectId {
-    let header = format!("blob {}\0", content.len());
-    let mut hasher = Sha1::new();
-    hasher.update(header.as_bytes());
-    hasher.update(content);
-    gix::ObjectId::from_bytes_or_panic(&hasher.finalize())
-}
-
-fn collect_index_worktree_changes(
-    repo: &gix::Repository,
-    index: &gix::index::File,
-    tracked: &mut HashSet<PathBuf>,
-    relevant_prefixes: &HashSet<PathBuf>,
-) {
-    let work_dir = match repo.workdir() {
-        Some(d) => d.to_owned(),
-        None => return,
-    };
-
-    let stat_options: gix::index::entry::stat::Options = Default::default();
-    let index_mtime_secs = std::fs::metadata(repo.index_path())
-        .ok()
-        .and_then(|m| m.modified().ok())
-        .map(|t| {
-            t.duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as u32
-        })
-        .unwrap_or(u32::MAX);
-
-    for entry in index.entries() {
-        let path_bstr = entry.path(index);
-        let path_str = path_bstr.to_str_lossy();
-
-        if !relevant_prefixes.is_empty() {
-            let rel = Path::new(path_str.as_ref());
-            let parent = rel.parent().unwrap_or(Path::new(""));
-            if !relevant_prefixes
-                .iter()
-                .any(|prefix| parent.starts_with(prefix) || prefix.starts_with(parent))
-            {
-                continue;
-            }
-        }
-
-        let full_path = work_dir.join(path_str.as_ref());
-
-        match gix::index::fs::Metadata::from_path_no_follow(&full_path) {
-            Ok(fs_meta) => {
-                if let Ok(fs_stat) = gix::index::entry::Stat::from_fs(&fs_meta) {
-                    if fs_stat.size != entry.stat.size {
-                        tracked.insert(PathBuf::from(path_str.as_ref()));
-                        continue;
-                    }
-                    let not_racy = entry.stat.mtime.secs < index_mtime_secs;
-                    if not_racy && entry.stat.matches(&fs_stat, stat_options) {
-                        continue;
-                    }
-                }
-                let content = match std::fs::read(&full_path) {
-                    Ok(c) => c,
-                    Err(_) => {
-                        tracked.insert(PathBuf::from(path_str.as_ref()));
-                        continue;
-                    }
-                };
-                if compute_blob_object_id(&content) != entry.id {
-                    tracked.insert(PathBuf::from(path_str.as_ref()));
-                }
-            }
-            Err(_) => {
-                tracked.insert(PathBuf::from(path_str.as_ref()));
-            }
-        }
-    }
-}
-
-fn collect_untracked_files(
-    repo: &gix::Repository,
-    untracked: &mut HashSet<PathBuf>,
-    relevant_prefixes: &HashSet<PathBuf>,
-) {
-    let work_dir = match repo.workdir() {
-        Some(d) => d.to_owned(),
-        None => return,
-    };
-    let index = repo.open_index().unwrap_or_else(|_| {
-        gix::index::File::from_state(
-            gix::index::State::new(repo.object_hash()),
-            repo.index_path(),
-        )
-    });
-
-    let mut tracked_dirs: HashSet<String> = HashSet::new();
-    tracked_dirs.insert(String::new());
-    for entry in index.entries() {
-        let path_str = entry.path(&index).to_str_lossy();
-        let mut pos = 0;
-        while let Some(slash) = path_str[pos..].find('/') {
-            let prefix = &path_str[..pos + slash];
-            tracked_dirs.insert(prefix.to_string());
-            pos += slash + 1;
-        }
-    }
-
-    fn walk_dir(
-        base: &Path,
-        dir: &Path,
-        index: &gix::index::File,
-        tracked_dirs: &HashSet<String>,
-        untracked: &mut HashSet<PathBuf>,
-    ) {
-        let entries = match std::fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-
-        for entry in entries {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            let path = entry.path();
-            let name = match path.file_name().and_then(|n| n.to_str()) {
-                Some(n) => n,
-                None => continue,
-            };
-
-            if name == ".git" {
-                continue;
-            }
-
-            let rel = match path.strip_prefix(base) {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
-            let rel_str = rel.to_string_lossy().replace('\\', "/");
-
-            if let Ok(meta) = entry.metadata() {
-                if meta.is_dir() {
-                    if name.starts_with('.') && !tracked_dirs.contains(rel_str.as_ref() as &str) {
-                        continue;
-                    }
-                    walk_dir(base, &path, index, tracked_dirs, untracked);
-                } else if meta.is_file() {
-                    let path_as_bstr: &gix::bstr::BStr = rel_str.as_bytes().as_bstr();
-                    let is_tracked = index.entry_by_path(path_as_bstr).is_some();
-                    if !is_tracked {
-                        untracked.insert(PathBuf::from(&rel_str));
-                    }
-                }
-            }
-        }
-    }
-
-    if !relevant_prefixes.is_empty() {
-        for prefix in relevant_prefixes {
-            let dir = work_dir.join(prefix);
-            if dir.is_dir() {
-                walk_dir(&work_dir, &dir, &index, &tracked_dirs, untracked);
-            }
-        }
-    } else {
-        walk_dir(&work_dir, &work_dir, &index, &tracked_dirs, untracked);
-    }
 }
 
 fn resolve_object_ref(repo: &gix::Repository, object_ref: &str) -> Option<String> {
@@ -786,13 +520,14 @@ struct ResolvedInstance {
 /// cached at session start by `ServeSession`.
 ///
 /// Uses a three-phase approach to avoid holding the tree lock during I/O:
-/// 1. Use gix to get changed files (no lock)
+/// 1. Use gix to get changed files scoped to project prefixes (no lock)
 /// 2. Briefly lock tree to resolve file paths to instance Refs and class names
 /// 3. Direct object/index lookups to get blob hashes (no lock)
 pub fn compute_git_metadata(
     tree_handle: &Arc<Mutex<RojoTree>>,
     repo_root: &Path,
     initial_head: Option<&str>,
+    project_prefixes: &[String],
 ) -> GitMetadata {
     let total_t = Instant::now();
 
@@ -812,27 +547,13 @@ pub fn compute_git_metadata(
         t.elapsed().as_millis()
     );
 
-    let t = Instant::now();
-    let relevant_prefixes: HashSet<PathBuf> = {
-        let tree = tree_handle.lock().unwrap();
-        let mut dirs = HashSet::new();
-        for abs_path in tree.known_paths() {
-            if let Ok(rel) = abs_path.strip_prefix(repo_root) {
-                if let Some(parent) = rel.parent() {
-                    dirs.insert(parent.to_path_buf());
-                }
-            }
-        }
-        dirs
-    };
     log::debug!(
-        "[TIMING] compute_git_metadata: extract_relevant_prefixes {}ms ({} dirs)",
-        t.elapsed().as_millis(),
-        relevant_prefixes.len()
+        "[TIMING] compute_git_metadata: using {} project prefixes",
+        project_prefixes.len()
     );
 
     let t = Instant::now();
-    let changed_files = match git_changed_files_impl(&repo, initial_head, &relevant_prefixes) {
+    let changed_files = match git_changed_files_impl(&repo, initial_head, project_prefixes) {
         Some(files) => files,
         None => {
             log::debug!(
@@ -1191,7 +912,7 @@ mod tests {
         git_commit_all(dir.path(), "init");
 
         let repo = open_repo(dir.path()).unwrap();
-        let changed = git_changed_files_impl(&repo, None, &HashSet::new());
+        let changed = git_changed_files_impl(&repo, None, &[]);
         assert!(changed.is_some());
         assert!(changed.unwrap().is_empty());
     }
@@ -1205,7 +926,7 @@ mod tests {
         fs::write(dir.path().join("script.luau"), "modified").unwrap();
 
         let repo = open_repo(dir.path()).unwrap();
-        let changed = git_changed_files_impl(&repo, None, &HashSet::new()).unwrap();
+        let changed = git_changed_files_impl(&repo, None, &[]).unwrap();
         assert!(changed.tracked.contains(&PathBuf::from("script.luau")));
         assert!(changed.untracked.is_empty());
     }
@@ -1220,7 +941,7 @@ mod tests {
         git_stage(dir.path(), "script.luau");
 
         let repo = open_repo(dir.path()).unwrap();
-        let changed = git_changed_files_impl(&repo, None, &HashSet::new()).unwrap();
+        let changed = git_changed_files_impl(&repo, None, &[]).unwrap();
         assert!(changed.tracked.contains(&PathBuf::from("script.luau")));
     }
 
@@ -1233,7 +954,7 @@ mod tests {
         fs::write(dir.path().join("new_file.luau"), "new").unwrap();
 
         let repo = open_repo(dir.path()).unwrap();
-        let changed = git_changed_files_impl(&repo, None, &HashSet::new()).unwrap();
+        let changed = git_changed_files_impl(&repo, None, &[]).unwrap();
         assert!(changed.untracked.contains(&PathBuf::from("new_file.luau")));
         assert!(!changed.tracked.contains(&PathBuf::from("new_file.luau")));
     }
@@ -1247,7 +968,7 @@ mod tests {
         fs::remove_file(dir.path().join("to_delete.luau")).unwrap();
 
         let repo = open_repo(dir.path()).unwrap();
-        let changed = git_changed_files_impl(&repo, None, &HashSet::new()).unwrap();
+        let changed = git_changed_files_impl(&repo, None, &[]).unwrap();
         assert!(changed.tracked.contains(&PathBuf::from("to_delete.luau")));
     }
 
@@ -1263,7 +984,7 @@ mod tests {
         fs::write(dir.path().join("untracked.luau"), "brand new").unwrap();
 
         let repo = open_repo(dir.path()).unwrap();
-        let changed = git_changed_files_impl(&repo, None, &HashSet::new()).unwrap();
+        let changed = git_changed_files_impl(&repo, None, &[]).unwrap();
         let all = changed.all();
         assert!(all.contains(&PathBuf::from("will_modify.luau")));
         assert!(all.contains(&PathBuf::from("untracked.luau")));
@@ -1279,7 +1000,7 @@ mod tests {
         fs::write(dir.path().join("new.luau"), "content").unwrap();
 
         let repo = open_repo(dir.path()).unwrap();
-        let changed = git_changed_files_impl(&repo, None, &HashSet::new());
+        let changed = git_changed_files_impl(&repo, None, &[]);
         assert!(changed.is_some());
         assert!(changed
             .unwrap()
@@ -1297,7 +1018,7 @@ mod tests {
         fs::write(dir.path().join("src/module.luau"), "modified").unwrap();
 
         let repo = open_repo(dir.path()).unwrap();
-        let changed = git_changed_files_impl(&repo, None, &HashSet::new()).unwrap();
+        let changed = git_changed_files_impl(&repo, None, &[]).unwrap();
         assert!(changed.tracked.contains(&PathBuf::from("src/module.luau")));
     }
 
@@ -1315,13 +1036,13 @@ mod tests {
 
         let repo = open_repo(dir.path()).unwrap();
 
-        let without = git_changed_files_impl(&repo, None, &HashSet::new()).unwrap();
+        let without = git_changed_files_impl(&repo, None, &[]).unwrap();
         assert!(
             !without.all().contains(&PathBuf::from("script.luau")),
             "without initial_head, committed file should NOT appear"
         );
 
-        let with = git_changed_files_impl(&repo, Some(&initial_head), &HashSet::new()).unwrap();
+        let with = git_changed_files_impl(&repo, Some(&initial_head), &[]).unwrap();
         assert!(
             with.tracked.contains(&PathBuf::from("script.luau")),
             "with initial_head, committed file should appear"

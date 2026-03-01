@@ -264,7 +264,7 @@ fn prefetch_project_files(project: &Project) -> io::Result<PrefetchCache> {
 }
 
 /// Recursively collect all `$path` directories from the project tree.
-fn collect_path_roots(node: &crate::project::ProjectNode, base: &Path, out: &mut Vec<PathBuf>) {
+pub fn collect_path_roots(node: &crate::project::ProjectNode, base: &Path, out: &mut Vec<PathBuf>) {
     if let Some(path_node) = &node.path {
         let resolved = base.join(path_node.path());
         out.push(resolved);
