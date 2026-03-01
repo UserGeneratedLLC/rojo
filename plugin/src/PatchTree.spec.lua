@@ -755,7 +755,7 @@ return function()
 			table.insert(patch.updated, {
 				id = id1,
 				changedName = nil,
-				changedProperties = { Source = "-- changed" },
+				changedProperties = { Source = { String = "-- changed" } },
 			})
 
 			local gitMetadata = {
@@ -862,7 +862,7 @@ return function()
 
 			table.insert(patch.updated, {
 				id = childId,
-				changedProperties = { Source = "return {}" },
+				changedProperties = { Source = { String = "return {}" } },
 			})
 
 			local tree = PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" })
@@ -898,6 +898,9 @@ return function()
 
 			-- Use a service-level instance (direct child of DataModel)
 			local repStorage = game:GetService("ReplicatedStorage")
+			local repStorageId = HttpService:GenerateGUID(false)
+			instanceMap:insert(repStorageId, repStorage)
+
 			local testObj = Instance.new("Folder")
 			testObj.Name = "TopLevel"
 			testObj.Parent = repStorage

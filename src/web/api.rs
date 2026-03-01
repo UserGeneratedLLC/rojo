@@ -7,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use bytes::Bytes;
@@ -392,6 +393,8 @@ impl ApiService {
 
     /// Get a summary of information about the server
     async fn handle_api_rojo(&self) -> Response<Full<Bytes>> {
+        let handler_start = Instant::now();
+
         let root_instance_id = self.serve_session.tree().get_root_id();
 
         let ignore_hidden_services = self.serve_session.ignore_hidden_services();
@@ -408,14 +411,25 @@ impl ApiService {
                 .serve_session
                 .initial_head_commit()
                 .map(|s| s.to_owned());
-            tokio::task::spawn_blocking(move || {
+            let t = Instant::now();
+            let result = tokio::task::spawn_blocking(move || {
                 crate::git::compute_git_metadata(&tree_handle, &repo_root, initial_head.as_deref())
             })
             .await
-            .ok()
+            .ok();
+            log::trace!(
+                "[TIMING] handle_api_rojo: compute_git_metadata {}ms",
+                t.elapsed().as_millis()
+            );
+            result
         } else {
             None
         };
+
+        log::trace!(
+            "[TIMING] handle_api_rojo: total {}ms",
+            handler_start.elapsed().as_millis()
+        );
 
         msgpack_ok(&ServerInfoResponse {
             server_version: SERVER_VERSION.to_owned(),

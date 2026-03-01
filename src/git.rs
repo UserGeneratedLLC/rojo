@@ -190,17 +190,14 @@ fn collect_tree_index_changes(
         Err(_) => return,
     };
 
+    let mut tree_entries: HashMap<String, gix::ObjectId> = HashMap::new();
+    flatten_tree(repo, &tree, "", &mut tree_entries);
+
     for entry in index.entries() {
         let path_bstr = entry.path(index);
         let path_str = path_bstr.to_str_lossy();
 
-        let tree_entry_id = tree
-            .lookup_entry_by_path(path_str.as_ref())
-            .ok()
-            .flatten()
-            .map(|e| e.object_id());
-
-        match tree_entry_id {
+        match tree_entries.remove(path_str.as_ref()) {
             Some(tid) if tid == entry.id => {}
             _ => {
                 tracked.insert(PathBuf::from(path_str.as_ref()));
@@ -208,15 +205,16 @@ fn collect_tree_index_changes(
         }
     }
 
-    collect_tree_only_paths(repo, &tree, "", index, tracked);
+    for path in tree_entries.into_keys() {
+        tracked.insert(PathBuf::from(path));
+    }
 }
 
-fn collect_tree_only_paths(
+fn flatten_tree(
     repo: &gix::Repository,
     tree: &gix::Tree<'_>,
     prefix: &str,
-    index: &gix::index::File,
-    tracked: &mut HashSet<PathBuf>,
+    out: &mut HashMap<String, gix::ObjectId>,
 ) {
     for entry in tree.iter() {
         let entry = match entry {
@@ -233,14 +231,11 @@ fn collect_tree_only_paths(
         if entry.mode().is_tree() {
             if let Ok(sub_obj) = entry.id().object() {
                 if let Ok(sub_tree) = sub_obj.peel_to_tree() {
-                    collect_tree_only_paths(repo, &sub_tree, &full_path, index, tracked);
+                    flatten_tree(repo, &sub_tree, &full_path, out);
                 }
             }
         } else if entry.mode().is_blob() || entry.mode().is_executable() {
-            let path_as_bstr: &gix::bstr::BStr = full_path.as_bytes().as_bstr();
-            if index.entry_by_path(path_as_bstr).is_none() {
-                tracked.insert(PathBuf::from(&full_path));
-            }
+            out.insert(full_path, entry.id().detach());
         }
     }
 }
