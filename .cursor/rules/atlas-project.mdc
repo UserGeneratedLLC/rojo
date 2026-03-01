@@ -27,6 +27,7 @@ alwaysApply: true
 | `syncbackRules` | SyncbackRules | No | Syncback configuration |
 | `syncScriptsOnly` | bool | No | Only sync script instances (default: false) |
 | `ignoreHiddenServices` | bool | No | Ignore internal services (default: true) |
+| `fileLogLevel` | string | No | File logging level: "trace" (default), "debug", "info", "warn", "error", "none" |
 
 ```json5
 {
@@ -43,7 +44,8 @@ alwaysApply: true
   "syncRules": [/* SyncRule */],
   "syncbackRules": { /* SyncbackRules */ },
   "syncScriptsOnly": false,
-  "ignoreHiddenServices": true
+  "ignoreHiddenServices": true,
+  "fileLogLevel": "trace"
 }
 ```
 

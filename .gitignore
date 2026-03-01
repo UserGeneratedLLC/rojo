@@ -29,3 +29,6 @@
 
 # Environment secrets
 .env
+
+# Atlas log directory
+/.atlas/

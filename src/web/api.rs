@@ -3878,7 +3878,15 @@ async fn handle_mcp_stream_connection(
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         if let Ok(mut result_value) = serde_json::from_str::<serde_json::Value>(&text) {
-                            // Enrich based on the command type that produced this result.
+                            if result_value.get("type").and_then(|t| t.as_str()) == Some("roblox_log") {
+                                if let Some(message) = result_value.get("message").and_then(|m| m.as_str()) {
+                                    let message_type = result_value.get("level").and_then(|l| l.as_u64()).unwrap_or(0);
+                                    let (level, formatted) = crate::logging::parse_roblox_log(message, message_type);
+                                    log::log!(target: "roblox", level, "{}", formatted);
+                                }
+                                continue;
+                            }
+
                             if let Some(ctx) = pending_get_script_context.take() {
                                 enrich_get_script_result(&mut result_value, &ctx);
                             } else if let Some(changes) = result_value.get_mut("changes") {

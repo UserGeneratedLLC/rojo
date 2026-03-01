@@ -3,3 +3,6 @@
 /{project_name}.rbxm
 
 sourcemap.json
+
+# atlas
+/.atlas/

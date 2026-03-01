@@ -33,7 +33,7 @@ use crate::rojo_test::io_util::{
 /// The passed in callback is where the actual test body should go. Setup and
 /// cleanup happens automatically.
 pub fn run_serve_test(test_name: &str, callback: impl FnOnce(TestServeSession, RedactionMap)) {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let mut redactions = RedactionMap::default();
 

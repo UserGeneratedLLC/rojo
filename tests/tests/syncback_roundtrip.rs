@@ -37,7 +37,7 @@ macro_rules! roundtrip_tests {
 }
 
 fn run_roundtrip_test(build_test_name: &str) {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let project_path = Path::new(BUILD_TESTS_PATH).join(build_test_name);
 
@@ -360,7 +360,7 @@ fn rbxmx_ref() {
 /// This validates that syncback output is stable and self-consistent.
 #[test]
 fn syncback_idempotency() {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     // Use dedup_suffix_with_meta as it exercises slugified names + meta
     let project_path = Path::new(BUILD_TESTS_PATH).join("dedup_suffix_with_meta");

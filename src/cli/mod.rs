@@ -14,7 +14,12 @@ mod studio;
 mod syncback;
 mod upload;
 
-use std::{borrow::Cow, env, path::Path, str::FromStr};
+use std::{
+    borrow::Cow,
+    env,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use clap::Parser;
 use thiserror::Error;
@@ -110,16 +115,6 @@ impl From<ColorChoice> for termcolor::ColorChoice {
     }
 }
 
-impl From<ColorChoice> for env_logger::WriteStyle {
-    fn from(value: ColorChoice) -> Self {
-        match value {
-            ColorChoice::Auto => env_logger::WriteStyle::Auto,
-            ColorChoice::Always => env_logger::WriteStyle::Always,
-            ColorChoice::Never => env_logger::WriteStyle::Never,
-        }
-    }
-}
-
 #[derive(Debug, Error)]
 #[error("Invalid color choice '{attempted}'. Valid values are: auto, always, never")]
 pub struct ColorChoiceParseError {
@@ -146,10 +141,62 @@ pub enum Subcommand {
     Pull(SyncbackCommand),
 }
 
-pub(super) fn resolve_path(path: &Path) -> Cow<'_, Path> {
+impl Subcommand {
+    pub fn project_path(&self) -> Option<&Path> {
+        match self {
+            Subcommand::Clone(cmd) => cmd.path.as_deref(),
+            Subcommand::Serve(cmd) => Some(&cmd.project),
+            Subcommand::Build(cmd) => Some(&cmd.project),
+            Subcommand::Upload(cmd) => Some(&cmd.project),
+            Subcommand::Sourcemap(cmd) => Some(&cmd.project),
+            Subcommand::FmtProject(cmd) => Some(&cmd.project),
+            Subcommand::Studio(cmd) => Some(&cmd.project),
+            Subcommand::Syncback(cmd) | Subcommand::Pull(cmd) => Some(&cmd.project),
+            _ => None,
+        }
+    }
+
+    pub fn command_name(&self) -> &'static str {
+        match self {
+            Subcommand::Clone(_) => "clone",
+            Subcommand::Completions(_) => "completions",
+            Subcommand::Init(_) => "init",
+            Subcommand::Serve(_) => "serve",
+            Subcommand::Build(_) => "build",
+            Subcommand::Upload(_) => "upload",
+            Subcommand::Sourcemap(_) => "sourcemap",
+            Subcommand::FmtProject(_) => "fmt-project",
+            Subcommand::Cursor(_) => "cursor",
+            Subcommand::Doc(_) => "doc",
+            Subcommand::Plugin(_) => "plugin",
+            Subcommand::Studio(_) => "studio",
+            Subcommand::Syncback(_) => "syncback",
+            Subcommand::Pull(_) => "pull",
+        }
+    }
+}
+
+pub fn resolve_path(path: &Path) -> Cow<'_, Path> {
     if path.is_absolute() {
         Cow::Borrowed(path)
     } else {
         Cow::Owned(env::current_dir().unwrap().join(path))
+    }
+}
+
+/// Resolves a project path (which may point to a file) to its parent directory.
+pub fn resolve_project_dir(project_path: &Path) -> PathBuf {
+    let resolved = resolve_path(project_path);
+    let resolved = resolved.as_ref();
+
+    if resolved.is_file() {
+        resolved
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| resolved.to_path_buf())
+    } else if resolved.as_os_str().is_empty() {
+        env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    } else {
+        resolved.to_path_buf()
     }
 }

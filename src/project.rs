@@ -142,6 +142,12 @@ pub struct Project {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ignore_hidden_services: Option<bool>,
 
+    /// Controls the log level for file-based logging to `.atlas/logs/`.
+    /// Values: "trace" (default), "debug", "info", "warn", "error", "none".
+    /// When "none", file logging is disabled entirely.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_log_level: Option<String>,
+
     /// The path to the file that this project came from. Relative paths in the
     /// project should be considered relative to the parent of this field, also
     /// given by `Project::folder_location`.

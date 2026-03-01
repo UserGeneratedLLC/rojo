@@ -11,6 +11,7 @@ mod change_processor;
 pub mod git;
 mod glob;
 mod json;
+pub mod logging;
 mod lua_ast;
 mod message_queue;
 mod multimap;

@@ -49,7 +49,7 @@ fn run_syncback(project_path: &Path, input_path: &Path, incremental: bool) -> bo
 /// that get replaced with standard extensions (.luau, .txt) in clean mode.
 #[test]
 fn clean_mode_removes_orphaned_files() {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     // Use the sync_rules test case - it has files with custom extensions
     // that become orphaned when replaced with standard extensions
@@ -105,7 +105,7 @@ fn clean_mode_removes_orphaned_files() {
 /// Test that clean mode doesn't remove files that are being written to
 #[test]
 fn clean_mode_preserves_written_files() {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     // Use the child_but_not test case
     let source_path = Path::new(SYNCBACK_TESTS_PATH)
@@ -156,7 +156,7 @@ fn clean_mode_preserves_written_files() {
 /// Test that incremental mode preserves existing file structure
 #[test]
 fn incremental_mode_preserves_structure() {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     // Use the sync_rules test case - it has custom extensions
     let source_path = Path::new(SYNCBACK_TESTS_PATH)
@@ -201,7 +201,7 @@ fn incremental_mode_preserves_structure() {
 /// Test that clean mode uses fresh file extensions (not preserving old ones)
 #[test]
 fn clean_mode_uses_fresh_extensions() {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     // Use the sync_rules test case - it has custom extensions
     let source_path = Path::new(SYNCBACK_TESTS_PATH)
@@ -250,7 +250,7 @@ fn clean_mode_uses_fresh_extensions() {
 /// Test that clean mode doesn't remove the project file
 #[test]
 fn clean_mode_preserves_project_file() {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let source_path = Path::new(SYNCBACK_TESTS_PATH)
         .join("ignore_trees_adding")
@@ -287,7 +287,7 @@ fn clean_mode_preserves_project_file() {
 /// Test that running clean mode twice produces identical results
 #[test]
 fn clean_mode_is_idempotent() {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let source_path = Path::new(SYNCBACK_TESTS_PATH)
         .join("child_but_not")
@@ -334,7 +334,7 @@ fn clean_mode_is_idempotent() {
 /// .cursor/ should be left untouched by the orphan scanner.
 #[test]
 fn clean_mode_preserves_hidden_directories() {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let source_path = Path::new(SYNCBACK_TESTS_PATH)
         .join("sync_rules")

@@ -17,3 +17,4 @@
 
 # atlas
 /atlas.exe
+/.atlas/

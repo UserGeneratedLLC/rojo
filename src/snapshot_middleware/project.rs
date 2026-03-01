@@ -985,7 +985,7 @@ mod test {
     #[ignore = "Functionality moved to root snapshot middleware"]
     #[test]
     fn project_from_folder() {
-        let _ = env_logger::try_init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let mut imfs = InMemoryFs::new();
         imfs.load_snapshot(
@@ -1022,7 +1022,7 @@ mod test {
 
     #[test]
     fn project_from_direct_file() {
-        let _ = env_logger::try_init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let mut imfs = InMemoryFs::new();
         imfs.load_snapshot(
@@ -1059,7 +1059,7 @@ mod test {
 
     #[test]
     fn project_with_resolved_properties() {
-        let _ = env_logger::try_init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let mut imfs = InMemoryFs::new();
         imfs.load_snapshot(
@@ -1098,7 +1098,7 @@ mod test {
 
     #[test]
     fn project_with_unresolved_properties() {
-        let _ = env_logger::try_init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let mut imfs = InMemoryFs::new();
         imfs.load_snapshot(
@@ -1135,7 +1135,7 @@ mod test {
 
     #[test]
     fn project_with_children() {
-        let _ = env_logger::try_init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let mut imfs = InMemoryFs::new();
         imfs.load_snapshot(
@@ -1173,7 +1173,7 @@ mod test {
 
     #[test]
     fn project_with_path_to_txt() {
-        let _ = env_logger::try_init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let mut imfs = InMemoryFs::new();
         imfs.load_snapshot(
@@ -1213,7 +1213,7 @@ mod test {
 
     #[test]
     fn project_with_path_to_project() {
-        let _ = env_logger::try_init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let mut imfs = InMemoryFs::new();
         imfs.load_snapshot(
@@ -1265,7 +1265,7 @@ mod test {
 
     #[test]
     fn project_with_path_to_project_with_children() {
-        let _ = env_logger::try_init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let mut imfs = InMemoryFs::new();
         imfs.load_snapshot(
@@ -1324,7 +1324,7 @@ mod test {
     /// precedence.
     #[test]
     fn project_path_property_overrides() {
-        let _ = env_logger::try_init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let mut imfs = InMemoryFs::new();
         imfs.load_snapshot(
@@ -1382,7 +1382,7 @@ mod test {
 
     #[test]
     fn no_name_project() {
-        let _ = env_logger::try_init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let mut imfs = InMemoryFs::new();
         imfs.load_snapshot(

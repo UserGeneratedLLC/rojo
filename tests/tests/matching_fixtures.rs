@@ -164,7 +164,7 @@ fn face_distribution(dom: &WeakDom, refs: &[Ref]) -> HashMap<Option<u32>, usize>
 
 #[test]
 fn syncback_matching_ufowave_textures() {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let input_dom = load_input_rbxm();
     let expected_dom = load_expected_dom();
@@ -245,7 +245,7 @@ fn syncback_matching_ufowave_textures() {
 
 #[test]
 fn forward_matching_ufowave_textures() {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     // For forward sync: snapshots come from filesystem (sparse),
     // tree comes from Studio (full properties, simulated by rbxm).
@@ -531,7 +531,7 @@ fn parity_forward_vs_syncback() {
 
 #[test]
 fn round_trip_matching_identity() {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     // Load the input rbxm (simulates Studio with full properties)
     let input_dom = load_input_rbxm();

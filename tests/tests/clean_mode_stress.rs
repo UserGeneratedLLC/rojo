@@ -27,7 +27,7 @@ use crate::rojo_test::roundtrip_util::{
 /// 5. Syncback to DIR_B (completely fresh)
 /// 6. Assert DIR_A == DIR_B
 fn clean_equals_fresh(test_name: &str, mutations: &[Mutation]) {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let project_path = Path::new(BUILD_TESTS_PATH).join(test_name);
 

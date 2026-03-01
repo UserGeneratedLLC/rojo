@@ -11,7 +11,7 @@ macro_rules! gen_build_tests {
             paste::item! {
                 #[test]
                 fn [<build_ $test_name>]() {
-                    let _ = env_logger::try_init();
+                    let _ = tracing_subscriber::fmt::try_init();
 
                     run_build_test(stringify!($test_name));
                 }
@@ -132,7 +132,7 @@ fn snapshot_debug(snap: &librojo::InstanceSnapshot) -> String {
 fn parallel_snapshot_determinism() {
     use crate::rojo_test::io_util::SERVE_TESTS_PATH;
 
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let fixture_path = Path::new(SERVE_TESTS_PATH).join("connected_scripts");
     let vfs = memofs::Vfs::new_default();
@@ -158,7 +158,7 @@ fn parallel_snapshot_determinism() {
 
 #[test]
 fn parallel_snapshot_determinism_stress() {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let dir = tempdir().expect("couldn't create temp dir");
     let root = dir.path();
@@ -206,7 +206,7 @@ fn parallel_snapshot_determinism_stress() {
 
 #[test]
 fn parallel_snapshot_with_prefetch_cache() {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let dir = tempdir().expect("couldn't create temp dir");
     let root = dir.path();
@@ -274,7 +274,7 @@ fn parallel_snapshot_with_prefetch_cache() {
 
 #[test]
 fn parallel_snapshot_error_propagation() {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let dir = tempdir().expect("couldn't create temp dir");
     let root = dir.path();
@@ -305,7 +305,7 @@ fn parallel_snapshot_error_propagation() {
 
 #[test]
 fn overlapping_path_roots_no_duplicate_children() {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let dir = tempdir().expect("couldn't create temp dir");
     let root = dir.path();

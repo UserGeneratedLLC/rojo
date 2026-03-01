@@ -3,3 +3,6 @@
 /*.rbxl.lock
 
 sourcemap.json
+
+# atlas
+/.atlas/

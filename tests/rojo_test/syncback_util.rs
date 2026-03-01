@@ -32,7 +32,7 @@ pub fn run_syncback_test_incremental(name: &str, callback: impl FnOnce(&Path)) {
 }
 
 fn run_syncback_test_impl(name: &str, incremental: bool, callback: impl FnOnce(&Path)) {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     // let working_dir = get_working_dir_path();
 

@@ -6,6 +6,7 @@ local Packages = Rojo.Packages
 local Log = require(Packages.Log)
 
 local Config = require(script.Parent.Config)
+local ConsoleOutput = require(script.Parent.McpTools.Utils.ConsoleOutput)
 local strict = require(script.Parent.strict)
 
 local RECONNECT_INTERVAL = 5
@@ -62,6 +63,7 @@ function McpStream:stop()
 end
 
 function McpStream:_disconnect()
+	ConsoleOutput.onLogMessage = nil
 	if self._wsClient then
 		pcall(function()
 			self._wsClient:Destroy()
@@ -94,6 +96,19 @@ function McpStream:_tryConnect()
 	pcall(function()
 		wsClient:Send(greeting)
 	end)
+
+	ConsoleOutput.onLogMessage = function(message: string, messageType: Enum.MessageType)
+		if not self._wsClient then
+			return
+		end
+		pcall(function()
+			self._wsClient:Send(HttpService:JSONEncode({
+				type = "roblox_log",
+				message = message,
+				level = messageType.Value,
+			}))
+		end)
+	end
 
 	local done = false
 	local closed, errored, received
@@ -195,6 +210,7 @@ function McpStream:_tryConnect()
 
 	closed = wsClient.Closed:Connect(function()
 		done = true
+		ConsoleOutput.onLogMessage = nil
 		closed:Disconnect()
 		errored:Disconnect()
 		received:Disconnect()
@@ -203,6 +219,7 @@ function McpStream:_tryConnect()
 
 	errored = wsClient.Error:Connect(function(_code, _msg)
 		done = true
+		ConsoleOutput.onLogMessage = nil
 		closed:Disconnect()
 		errored:Disconnect()
 		received:Disconnect()

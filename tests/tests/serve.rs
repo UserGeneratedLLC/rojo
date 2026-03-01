@@ -976,7 +976,7 @@ fn ref_path_nonexistent_target_no_crash() {
 /// unrelated directories with potentially malformed files).
 #[test]
 fn non_default_project_file_tree_validation() {
-    let _ = env_logger::try_init();
+    let _ = tracing_subscriber::fmt::try_init();
 
     let mut session =
         TestServeSession::new_with_project_file("non_default_project", "named.project.json5");

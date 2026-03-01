@@ -383,7 +383,7 @@ mod test {
 
     #[test]
     fn add_from_empty() {
-        let _ = env_logger::try_init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let mut tree = RojoTree::new(InstanceSnapshot::new());
 
@@ -421,7 +421,7 @@ mod test {
 
     #[test]
     fn update_existing() {
-        let _ = env_logger::try_init();
+        let _ = tracing_subscriber::fmt::try_init();
 
         let mut tree = RojoTree::new(
             InstanceSnapshot::new()
