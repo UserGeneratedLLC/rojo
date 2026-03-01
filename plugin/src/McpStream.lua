@@ -9,7 +9,7 @@ local Config = require(script.Parent.Config)
 local ConsoleOutput = require(script.Parent.McpTools.Utils.ConsoleOutput)
 local strict = require(script.Parent.strict)
 
-local RECONNECT_INTERVAL = 5
+local RECONNECT_INTERVAL = 3
 
 local PASSTHROUGH_TOOLS = {
 	run_code = true,
