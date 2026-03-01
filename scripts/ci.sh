@@ -11,7 +11,12 @@ for arg in "$@"; do
     esac
 done
 
-THREADS=$(nproc 2>/dev/null || sysctl -n hw.logicalcpu 2>/dev/null || echo 4)
+BUILD_THREADS=$(nproc 2>/dev/null || sysctl -n hw.logicalcpu 2>/dev/null || echo 4)
+# Cap test threads: two_way_sync tests spawn child processes (atlas serve)
+# with file watchers, HTTP servers, and temp dirs. Running too many in
+# parallel (e.g. 32) exhausts OS resources and causes spurious failures.
+_cpu_count=$(nproc 2>/dev/null || sysctl -n hw.logicalcpu 2>/dev/null || echo 4)
+TEST_THREADS=$(( _cpu_count < 8 ? _cpu_count : 8 ))
 
 failures=()
 
@@ -57,9 +62,9 @@ selene_exit=$?
 record "Selene" $selene_exit
 
 step 6 "Rust Linting (Clippy) - Auto-fix"
-cargo clippy -j $THREADS --fix --allow-dirty --allow-staged >/dev/null 2>&1
+cargo clippy -j $BUILD_THREADS --fix --allow-dirty --allow-staged >/dev/null 2>&1
 echo "Verifying..."
-cargo clippy -j $THREADS --all-targets --all-features 2>&1
+cargo clippy -j $BUILD_THREADS --all-targets --all-features 2>&1
 clippy_exit=$?
 record "Clippy" $clippy_exit
 
@@ -69,7 +74,7 @@ build_exit=$?
 record "Build" $build_exit
 
 step 8 "Run ALL Rust Tests"
-cargo test --locked --all-features -- --test-threads=$THREADS 2>&1
+cargo test --locked --all-features -- --test-threads=$TEST_THREADS 2>&1
 rust_tests=$?
 record "Rust Tests" $rust_tests
 
@@ -103,9 +108,9 @@ if [ "$RBX_DOM" = true ]; then
     record "Selene (rbx_dom_lua)" $selene_rbxdom
 
     step 13 "Rust Linting (Clippy) for rbx-dom - Auto-fix"
-    (cd rbx-dom && cargo clippy -j $THREADS --fix --allow-dirty --allow-staged >/dev/null 2>&1)
+    (cd rbx-dom && cargo clippy -j $BUILD_THREADS --fix --allow-dirty --allow-staged >/dev/null 2>&1)
     echo "Verifying..."
-    (cd rbx-dom && cargo clippy -j $THREADS --all-targets --all-features -- -D warnings 2>&1)
+    (cd rbx-dom && cargo clippy -j $BUILD_THREADS --all-targets --all-features -- -D warnings 2>&1)
     clippy_rbxdom=$?
     record "Clippy (rbx-dom)" $clippy_rbxdom
 
@@ -118,9 +123,9 @@ if [ "$RBX_DOM" = true ]; then
     record "Build (rbx-dom all-features)" $build_rbxdom_all
 
     step 15 "Run ALL rbx-dom Rust Tests"
-    (cd rbx-dom && cargo test --verbose -- --test-threads=$THREADS)
+    (cd rbx-dom && cargo test --verbose -- --test-threads=$TEST_THREADS)
     tests_rbxdom=$?
-    (cd rbx-dom && cargo test --all-features --verbose -- --test-threads=$THREADS)
+    (cd rbx-dom && cargo test --all-features --verbose -- --test-threads=$TEST_THREADS)
     tests_rbxdom_all=$?
     record "Tests (rbx-dom)" $tests_rbxdom
     record "Tests (rbx-dom all-features)" $tests_rbxdom_all

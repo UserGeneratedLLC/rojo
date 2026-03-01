@@ -6,7 +6,11 @@ param(
 )
 
 $RbxDom = -not $NoRbxDom
-$Threads = [Environment]::ProcessorCount
+$BuildThreads = [Environment]::ProcessorCount
+# Cap test threads: two_way_sync tests spawn child processes (atlas serve)
+# with file watchers, HTTP servers, and temp dirs. Running too many in
+# parallel (e.g. 32) exhausts OS resources and causes spurious failures.
+$TestThreads = [Math]::Min([Environment]::ProcessorCount, 8)
 
 $ErrorActionPreference = "Continue"
 $failures = @()
@@ -57,9 +61,9 @@ $selene = $LASTEXITCODE
 Record-Result "Selene" $selene
 
 Write-Step 6 "Rust Linting (Clippy) - Auto-fix"
-cargo clippy -j $Threads --fix --allow-dirty --allow-staged 2>&1 | Out-Null
+cargo clippy -j $BuildThreads --fix --allow-dirty --allow-staged 2>&1 | Out-Null
 Write-Host "Verifying..." -ForegroundColor Yellow
-cargo clippy -j $Threads --all-targets --all-features 2>&1
+cargo clippy -j $BuildThreads --all-targets --all-features 2>&1
 $clippy = $LASTEXITCODE
 Record-Result "Clippy" $clippy
 
@@ -69,7 +73,7 @@ $build = $LASTEXITCODE
 Record-Result "Build" $build
 
 Write-Step 8 "Run ALL Rust Tests"
-$testOutput = cargo test --locked --all-features -- --test-threads=$Threads 2>&1
+$testOutput = cargo test --locked --all-features -- --test-threads=$TestThreads 2>&1
 $rustTests = $LASTEXITCODE
 $testOutput | Write-Host
 Record-Result "Rust Tests" $rustTests
@@ -107,9 +111,9 @@ if ($RbxDom) {
 
     Write-Step 13 "Rust Linting (Clippy) for rbx-dom - Auto-fix"
     Push-Location rbx-dom
-    cargo clippy -j $Threads --fix --allow-dirty --allow-staged 2>&1 | Out-Null
+    cargo clippy -j $BuildThreads --fix --allow-dirty --allow-staged 2>&1 | Out-Null
     Write-Host "Verifying..." -ForegroundColor Yellow
-    cargo clippy -j $Threads --all-targets --all-features -- -D warnings 2>&1
+    cargo clippy -j $BuildThreads --all-targets --all-features -- -D warnings 2>&1
     $clippyRbxDom = $LASTEXITCODE
     Pop-Location
     Record-Result "Clippy (rbx-dom)" $clippyRbxDom
@@ -126,9 +130,9 @@ if ($RbxDom) {
 
     Write-Step 15 "Run ALL rbx-dom Rust Tests"
     Push-Location rbx-dom
-    cargo test --verbose -- --test-threads=$Threads
+    cargo test --verbose -- --test-threads=$TestThreads
     $testsRbxDom = $LASTEXITCODE
-    cargo test --all-features --verbose -- --test-threads=$Threads
+    cargo test --all-features --verbose -- --test-threads=$TestThreads
     $testsRbxDomAll = $LASTEXITCODE
     Pop-Location
     Record-Result "Tests (rbx-dom)" $testsRbxDom
