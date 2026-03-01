@@ -370,6 +370,7 @@ can we allow the terminal to stay so i can like run some git commands myself wit
  - Listen to MessageOut to get the log info we are wanting.
  - Is this actually the one we want? I might be confused, check the docs, this looks new.
 * The goal with these trace logging is so that when others are using this tool, we can actually debug real issues by having them send me their logs.
+* It might be worth actually having a log entry per-sync?
 
 [sync]
 right now sync is running REALLY slow

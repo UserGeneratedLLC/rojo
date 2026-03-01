@@ -6,6 +6,7 @@ use std::sync::{
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::{body::Incoming, header::CONTENT_TYPE, Method, Request, Response, StatusCode};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -26,7 +27,7 @@ pub struct PluginConfig {
 }
 
 /// Agent-specified auto-accept directive for a single instance change.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncOverride {
     pub id: String,
@@ -92,6 +93,101 @@ pub struct PluginToolResult {
     pub status: String,
     #[serde(default)]
     pub response: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// Tool argument schemas (schemars-derived, used only for inputSchema generation)
+// ---------------------------------------------------------------------------
+
+#[allow(dead_code)]
+#[derive(JsonSchema)]
+struct AtlasSyncArgs {
+    /// Sync mode. 'standard' (default): auto-accept if all changes are
+    /// git-resolved, otherwise show Studio UI. 'manual': always show
+    /// Studio UI. 'fastfail': fail immediately if any changes are
+    /// unresolved. 'dryrun': return what would change without applying.
+    mode: Option<SyncMode>,
+    /// Auto-accept directives for specific instance changes, matched
+    /// by id from a previous sync response.
+    overrides: Option<Vec<SyncOverride>>,
+}
+
+#[allow(dead_code)]
+#[derive(JsonSchema)]
+#[schemars(rename_all = "snake_case")]
+enum SyncMode {
+    Standard,
+    Manual,
+    Fastfail,
+    Dryrun,
+}
+
+#[allow(dead_code)]
+#[derive(JsonSchema)]
+#[schemars(rename_all = "camelCase")]
+struct GetScriptArgs {
+    /// Server Ref (32-char hex) from a previous atlas_sync response.
+    /// Preferred over fsPath.
+    id: Option<String>,
+    /// Atlas filesystem path relative to project root
+    /// (e.g. 'src/server/MyScript.server.luau'). Resolved server-side
+    /// to an instance id.
+    fs_path: Option<String>,
+    /// If true, read unsaved editor content instead of the saved Source
+    /// property. Default: false.
+    from_draft: Option<bool>,
+}
+
+#[allow(dead_code)]
+#[derive(JsonSchema)]
+struct RunCodeArgs {
+    /// Luau code to execute in Roblox Studio.
+    command: String,
+}
+
+#[allow(dead_code)]
+#[derive(JsonSchema)]
+struct InsertModelArgs {
+    /// Search query for the model on the Roblox Creator Store.
+    query: String,
+}
+
+#[derive(JsonSchema)]
+struct NoArgs {}
+
+#[allow(dead_code)]
+#[derive(JsonSchema)]
+#[schemars(rename_all = "snake_case")]
+enum StartStopPlayMode {
+    StartPlay,
+    RunServer,
+    Stop,
+}
+
+#[allow(dead_code)]
+#[derive(JsonSchema)]
+struct StartStopPlayArgs {
+    /// Play mode action.
+    mode: StartStopPlayMode,
+}
+
+#[allow(dead_code)]
+#[derive(JsonSchema)]
+#[schemars(rename_all = "snake_case")]
+enum PlayTestMode {
+    StartPlay,
+    RunServer,
+}
+
+#[allow(dead_code)]
+#[derive(JsonSchema)]
+struct RunScriptInPlayModeArgs {
+    /// Luau code to run inside a play session.
+    code: String,
+    /// Timeout in seconds. Defaults to 100.
+    timeout: Option<u32>,
+    /// Play mode to start.
+    mode: PlayTestMode,
 }
 
 /// Result for get_script, deserialized from the plugin's Value response.
@@ -294,155 +390,50 @@ fn handle_initialize(id: Option<Value>) -> Response<Full<Bytes>> {
     json_response(&resp, StatusCode::OK)
 }
 
-fn handle_tools_list(id: Option<Value>) -> Response<Full<Bytes>> {
-    let result = serde_json::json!({
-        "tools": [
-            {
-                "name": "atlas_sync",
-                "description": include_str!("mcp_docs/atlas_sync.md"),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "mode": {
-                            "type": "string",
-                            "enum": ["standard", "manual", "fastfail", "dryrun"],
-                            "description": "Sync mode. 'standard' (default): auto-accept if all changes are git-resolved, otherwise show Studio UI. 'manual': always show Studio UI. 'fastfail': fail immediately if any changes are unresolved. 'dryrun': return what would change without applying."
-                        },
-                        "overrides": {
-                            "type": "array",
-                            "description": "Auto-accept directives for specific instance changes, matched by id from a previous sync response.",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "id": {
-                                        "type": "string",
-                                        "description": "Server Ref (32-char hex) from a previous sync response."
-                                    },
-                                    "direction": {
-                                        "type": "string",
-                                        "enum": ["push", "pull"],
-                                        "description": "Direction to accept: 'push' (Atlas to Studio) or 'pull' (Studio to Atlas)."
-                                    },
-                                    "studioHash": {
-                                        "type": "string",
-                                        "description": "For scripts: SHA1 of git blob of current Studio Source. Override is rejected if hash doesn't match (concurrent edit detected)."
-                                    },
-                                    "expectedProperties": {
-                                        "type": "object",
-                                        "description": "Map of property name to expected current Studio value (RbxDom encoded). Override is rejected if any value doesn't match."
-                                    }
-                                },
-                                "required": ["id", "direction"]
-                            }
-                        }
-                    }
-                }
-            },
-            {
-                "name": "get_script",
-                "description": include_str!("mcp_docs/get_script.md"),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "id": {
-                            "type": "string",
-                            "description": "Server Ref (32-char hex) from a previous atlas_sync response. Preferred over fsPath."
-                        },
-                        "fsPath": {
-                            "type": "string",
-                            "description": "Atlas filesystem path relative to project root (e.g. 'src/server/MyScript.server.luau'). Resolved server-side to an instance id."
-                        },
-                        "fromDraft": {
-                            "type": "boolean",
-                            "description": "If true, read unsaved editor content instead of the saved Source property. Default: false."
-                        }
-                    }
-                }
-            },
-            {
-                "name": "run_code",
-                "description": include_str!("mcp_docs/run_code.md"),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "command": {
-                            "type": "string",
-                            "description": "Luau code to execute in Roblox Studio."
-                        }
-                    },
-                    "required": ["command"]
-                }
-            },
-            {
-                "name": "insert_model",
-                "description": include_str!("mcp_docs/insert_model.md"),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "query": {
-                            "type": "string",
-                            "description": "Search query for the model on the Roblox Creator Store."
-                        }
-                    },
-                    "required": ["query"]
-                }
-            },
-            {
-                "name": "get_console_output",
-                "description": include_str!("mcp_docs/get_console_output.md"),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {}
-                }
-            },
-            {
-                "name": "get_studio_mode",
-                "description": include_str!("mcp_docs/get_studio_mode.md"),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {}
-                }
-            },
-            {
-                "name": "start_stop_play",
-                "description": include_str!("mcp_docs/start_stop_play.md"),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "mode": {
-                            "type": "string",
-                            "enum": ["start_play", "run_server", "stop"],
-                            "description": "Play mode action."
-                        }
-                    },
-                    "required": ["mode"]
-                }
-            },
-            {
-                "name": "run_script_in_play_mode",
-                "description": include_str!("mcp_docs/run_script_in_play_mode.md"),
-                "inputSchema": {
-                    "type": "object",
-                    "properties": {
-                        "code": {
-                            "type": "string",
-                            "description": "Luau code to run inside a play session."
-                        },
-                        "timeout": {
-                            "type": "integer",
-                            "description": "Timeout in seconds. Defaults to 100."
-                        },
-                        "mode": {
-                            "type": "string",
-                            "enum": ["start_play", "run_server"],
-                            "description": "Play mode to start."
-                        }
-                    },
-                    "required": ["code", "mode"]
-                }
-            }
-        ]
+fn tool_def<T: JsonSchema>(name: &str, description: &str) -> Value {
+    let settings = schemars::generate::SchemaSettings::draft07().with(|s| {
+        s.meta_schema = None;
+        s.inline_subschemas = true;
     });
+    let schema = settings.into_generator().into_root_schema_for::<T>();
+    let mut schema_value = serde_json::to_value(schema).unwrap_or_default();
+    if let Some(obj) = schema_value.as_object_mut() {
+        obj.remove("$schema");
+        obj.remove("title");
+        obj.remove("definitions");
+    }
+    serde_json::json!({
+        "name": name,
+        "description": description,
+        "inputSchema": schema_value,
+    })
+}
+
+fn handle_tools_list(id: Option<Value>) -> Response<Full<Bytes>> {
+    let tools = vec![
+        tool_def::<AtlasSyncArgs>("atlas_sync", include_str!("mcp_docs/atlas_sync.md")),
+        tool_def::<GetScriptArgs>("get_script", include_str!("mcp_docs/get_script.md")),
+        tool_def::<RunCodeArgs>("run_code", include_str!("mcp_docs/run_code.md")),
+        tool_def::<InsertModelArgs>("insert_model", include_str!("mcp_docs/insert_model.md")),
+        tool_def::<NoArgs>(
+            "get_console_output",
+            include_str!("mcp_docs/get_console_output.md"),
+        ),
+        tool_def::<NoArgs>(
+            "get_studio_mode",
+            include_str!("mcp_docs/get_studio_mode.md"),
+        ),
+        tool_def::<StartStopPlayArgs>(
+            "start_stop_play",
+            include_str!("mcp_docs/start_stop_play.md"),
+        ),
+        tool_def::<RunScriptInPlayModeArgs>(
+            "run_script_in_play_mode",
+            include_str!("mcp_docs/run_script_in_play_mode.md"),
+        ),
+    ];
+
+    let result = serde_json::json!({ "tools": tools });
     let resp = JsonRpcResponse::success(id, result);
     json_response(&resp, StatusCode::OK)
 }
@@ -2398,7 +2389,12 @@ mod tests {
                 .unwrap();
             let values: Vec<&str> = mode_enum.iter().map(|v| v.as_str().unwrap()).collect();
             assert_eq!(values, vec!["start_play", "run_server"]);
-            assert!(tool["inputSchema"]["properties"]["timeout"]["type"] == "integer");
+            let timeout = &tool["inputSchema"]["properties"]["timeout"];
+            let has_integer = timeout["type"] == "integer"
+                || timeout["type"]
+                    .as_array()
+                    .map_or(false, |arr| arr.iter().any(|v| v == "integer"));
+            assert!(has_integer, "timeout should accept integer: {timeout}");
         }
     }
 }
