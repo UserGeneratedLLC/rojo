@@ -329,16 +329,15 @@ Worst case - we reconcile only on connect, but do so in mega-parallel
 Also, we need to explore how VSCode deals with this. They seem to have ZERO issues.
 Maybe we can have a mode to tie into the vscode file watcher ourselves? luau-lsp does this.
 
-[auto select issue]
-when you commit changes on git, it's considered unchanged. we need send prior git hash too, like prior to head.
-right now i believe we are calculating the hashes manually, we CAN use the git hash since our hash schema matches it 1:1.
-this would be a nice optimization, too.
-
 [syncback]
 detect when the output file hash is the same, and dont write to it.
+we can utilize the git hashes we also use for auto select, too. we use the same format for hashes as git, too - so maybe we could do something optimized here if git is being used.
 because have already loaded it, we can detect this.
 this is an optimization to avoid writing 100,000 files or something on larger projects when file bytes match perfectly, or directories verifiably already exist.
 make sure this is applied to plugin-based syncback, too.
+
+[git]
+I notice we actually use the git cli in a lot of places. is there a git library we can use instead?
 
 [auto select studio/atlas]
 when things get added AFTER the fact because we send the git history hashes on connect rather than continiously, it auto-selects Studio for things that are being edited in real-time in the sync dialog

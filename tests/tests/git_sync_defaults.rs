@@ -965,3 +965,107 @@ fn stage_ids_stages_new_path_after_rename() {
         "New file (RenamedModule.luau) should be staged after rename + stage_ids"
     );
 }
+
+// ===========================================================================
+// initial_head: committed changes still visible after git commit
+// ===========================================================================
+
+#[test]
+fn committed_changes_still_in_changed_ids_via_initial_head() {
+    let mut session = TestServeSession::new_with_git("git_sync_defaults", |path| {
+        git_commit_all(path, "initial commit");
+    });
+    let info1 = session.wait_to_come_online();
+    let meta1 = info1.git_metadata.unwrap();
+    assert!(meta1.changed_ids.is_empty(), "No changes initially");
+
+    fs::write(
+        session.path().join("src/ModuleA.luau"),
+        "-- committed after session start",
+    )
+    .unwrap();
+    git_commit_all(session.path(), "edit after serve");
+
+    let info2 = session.get_api_rojo().unwrap();
+    let meta2 = info2.git_metadata.unwrap();
+    assert!(
+        !meta2.changed_ids.is_empty(),
+        "Committed changes should still appear in changedIds via initial_head diff"
+    );
+}
+
+#[test]
+fn committed_script_gets_initial_head_hash() {
+    let original_content = "local ModuleA = {}\nreturn ModuleA\n";
+    let modified_content = "-- committed v2\nreturn {}";
+
+    let mut session = TestServeSession::new_with_git("git_sync_defaults", |path| {
+        git_commit_all(path, "initial commit");
+    });
+    session.wait_to_come_online();
+
+    fs::write(session.path().join("src/ModuleA.luau"), modified_content).unwrap();
+    git_commit_all(session.path(), "edit after serve");
+
+    let info2 = session.get_api_rojo().unwrap();
+    let meta2 = info2.git_metadata.unwrap();
+    let read = session.get_api_read(info2.root_instance_id).unwrap();
+
+    if let Some((module_id, _)) = find_instance_by_name(&read.instances, "ModuleA") {
+        assert!(
+            meta2.changed_ids.contains(&module_id),
+            "Committed script should be in changedIds"
+        );
+
+        let hashes = meta2
+            .script_committed_hashes
+            .get(&module_id)
+            .expect("Committed script should have hashes");
+
+        let initial_hash = compute_blob_sha1(original_content);
+        assert!(
+            hashes.contains(&initial_hash),
+            "Hashes should include the initial_head version ({initial_hash}), got {hashes:?}"
+        );
+    }
+}
+
+#[test]
+fn multiple_commits_after_session_start_all_tracked() {
+    let mut session = TestServeSession::new_with_git("git_sync_defaults", |path| {
+        git_commit_all(path, "initial commit");
+    });
+    session.wait_to_come_online();
+
+    fs::write(
+        session.path().join("src/ModuleA.luau"),
+        "-- commit 1 change",
+    )
+    .unwrap();
+    git_commit_all(session.path(), "commit 1");
+
+    fs::write(
+        session.path().join("src/ServerScript.server.luau"),
+        "-- commit 2 change",
+    )
+    .unwrap();
+    git_commit_all(session.path(), "commit 2");
+
+    let info2 = session.get_api_rojo().unwrap();
+    let meta2 = info2.git_metadata.unwrap();
+    let read = session.get_api_read(info2.root_instance_id).unwrap();
+
+    if let Some((module_id, _)) = find_instance_by_name(&read.instances, "ModuleA") {
+        assert!(
+            meta2.changed_ids.contains(&module_id),
+            "ModuleA (committed in first commit) should be in changedIds"
+        );
+    }
+
+    if let Some((server_id, _)) = find_instance_by_name(&read.instances, "ServerScript") {
+        assert!(
+            meta2.changed_ids.contains(&server_id),
+            "ServerScript (committed in second commit) should be in changedIds"
+        );
+    }
+}

@@ -379,7 +379,11 @@ impl ApiService {
         };
 
         let git_metadata = self.serve_session.git_repo_root().map(|repo_root| {
-            crate::git::compute_git_metadata(&self.serve_session.tree_handle(), repo_root)
+            crate::git::compute_git_metadata(
+                &self.serve_session.tree_handle(),
+                repo_root,
+                self.serve_session.initial_head_commit(),
+            )
         });
 
         msgpack_ok(&ServerInfoResponse {

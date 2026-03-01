@@ -122,6 +122,11 @@ pub struct ServeSession {
     /// Root of the git repository, if the project is inside one.
     /// Computed once at session start for use by auto-staging.
     git_repo_root: Option<std::path::PathBuf>,
+
+    /// HEAD commit SHA at the time this serve session started.
+    /// Used as diff baseline so that files committed after session start
+    /// still appear in `changedIds` for auto-select defaults.
+    initial_head_commit: Option<String>,
 }
 
 /// Collect all filesystem paths reachable from the project tree's `$path`
@@ -351,6 +356,9 @@ impl ServeSession {
         };
 
         let git_repo_root = crate::git::git_repo_root(root_project.folder_location());
+        let initial_head_commit = git_repo_root
+            .as_deref()
+            .and_then(crate::git::git_head_commit);
 
         log::trace!("Starting ChangeProcessor");
         let change_processor = ChangeProcessor::start(
@@ -378,6 +386,7 @@ impl ServeSession {
             suppressed_paths: Some(suppressed_paths),
             ref_path_index: Some(ref_path_index),
             git_repo_root,
+            initial_head_commit,
         })
     }
 
@@ -404,6 +413,7 @@ impl ServeSession {
             suppressed_paths: None,
             ref_path_index: None,
             git_repo_root: None,
+            initial_head_commit: None,
         })
     }
 
@@ -490,6 +500,10 @@ impl ServeSession {
 
     pub fn git_repo_root(&self) -> Option<&Path> {
         self.git_repo_root.as_deref()
+    }
+
+    pub fn initial_head_commit(&self) -> Option<&str> {
+        self.initial_head_commit.as_deref()
     }
 
     pub fn root_project(&self) -> &Project {

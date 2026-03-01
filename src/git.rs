@@ -39,15 +39,36 @@ pub fn git_repo_root(project_root: &Path) -> Option<PathBuf> {
     Some(PathBuf::from(path_str))
 }
 
-fn git_changed_files(repo_root: &Path) -> Option<HashSet<PathBuf>> {
+/// Returns the current HEAD commit SHA, or `None` if there are no commits
+/// or the project is not in a git repo.
+pub fn git_head_commit(repo_root: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .args(["-C", &repo_root.to_string_lossy(), "rev-parse", "HEAD"])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Some(sha)
+    } else {
+        None
+    }
+}
+
+fn git_changed_files(repo_root: &Path, initial_head: Option<&str>) -> Option<HashSet<PathBuf>> {
     let mut changed = HashSet::new();
 
+    let diff_base = initial_head.unwrap_or("HEAD");
     let diff_output = Command::new("git")
         .args([
             "-C",
             &repo_root.to_string_lossy(),
             "diff",
-            "HEAD",
+            diff_base,
             "--name-only",
         ])
         .output()
@@ -61,7 +82,10 @@ fn git_changed_files(repo_root: &Path) -> Option<HashSet<PathBuf>> {
             }
         }
     } else {
-        log::debug!("git diff HEAD failed (possibly no commits yet), skipping diff");
+        log::debug!(
+            "git diff {} failed (possibly no commits yet), skipping diff",
+            diff_base
+        );
     }
 
     let untracked_output = Command::new("git")
@@ -243,8 +267,12 @@ struct ResolvedInstance {
 /// 1. Run git commands to get changed files (no lock)
 /// 2. Briefly lock tree to resolve file paths to instance Refs and class names
 /// 3. Single `git cat-file --batch-check` call to get blob hashes (no lock)
-pub fn compute_git_metadata(tree_handle: &Arc<Mutex<RojoTree>>, repo_root: &Path) -> GitMetadata {
-    let changed_files = match git_changed_files(repo_root) {
+pub fn compute_git_metadata(
+    tree_handle: &Arc<Mutex<RojoTree>>,
+    repo_root: &Path,
+    initial_head: Option<&str>,
+) -> GitMetadata {
+    let changed_files = match git_changed_files(repo_root, initial_head) {
         Some(files) => files,
         None => {
             return GitMetadata {
@@ -296,9 +324,16 @@ pub fn compute_git_metadata(tree_handle: &Arc<Mutex<RojoTree>>, repo_root: &Path
     let changed_ids: Vec<Ref> = resolved.iter().map(|ri| ri.id).collect();
     let mut script_committed_hashes: HashMap<Ref, Vec<String>> = HashMap::new();
 
+    #[derive(Clone, Copy)]
+    enum RefKind {
+        Head,
+        Staged,
+        InitialHead,
+    }
+
     struct ScriptRef {
         resolved_idx: usize,
-        is_staged: bool,
+        kind: RefKind,
     }
 
     let mut object_refs = Vec::new();
@@ -313,14 +348,22 @@ pub fn compute_git_metadata(tree_handle: &Arc<Mutex<RojoTree>>, repo_root: &Path
         object_refs.push(format!("HEAD:{}", path_str));
         script_refs.push(ScriptRef {
             resolved_idx: idx,
-            is_staged: false,
+            kind: RefKind::Head,
         });
 
         object_refs.push(format!(":0:{}", path_str));
         script_refs.push(ScriptRef {
             resolved_idx: idx,
-            is_staged: true,
+            kind: RefKind::Staged,
         });
+
+        if let Some(ih) = initial_head {
+            object_refs.push(format!("{}:{}", ih, path_str));
+            script_refs.push(ScriptRef {
+                resolved_idx: idx,
+                kind: RefKind::InitialHead,
+            });
+        }
     }
 
     let batch_hashes = git_batch_check_hashes(repo_root, &object_refs);
@@ -333,14 +376,17 @@ pub fn compute_git_metadata(tree_handle: &Arc<Mutex<RojoTree>>, repo_root: &Path
         let ri = &resolved[info.resolved_idx];
         let hashes = script_committed_hashes
             .entry(ri.id)
-            .or_insert_with(|| Vec::with_capacity(2));
+            .or_insert_with(|| Vec::with_capacity(3));
 
-        if info.is_staged {
-            if hashes.is_empty() || hashes[0] != *sha1 {
+        match info.kind {
+            RefKind::Head => {
                 hashes.push(sha1.clone());
             }
-        } else {
-            hashes.push(sha1.clone());
+            RefKind::Staged | RefKind::InitialHead => {
+                if !hashes.contains(sha1) {
+                    hashes.push(sha1.clone());
+                }
+            }
         }
     }
 
@@ -545,7 +591,7 @@ mod tests {
         fs::write(dir.path().join("file.luau"), "content").unwrap();
         git_commit_all(dir.path(), "init");
 
-        let changed = git_changed_files(dir.path());
+        let changed = git_changed_files(dir.path(), None);
         assert!(changed.is_some());
         assert!(changed.unwrap().is_empty());
     }
@@ -558,7 +604,7 @@ mod tests {
         git_commit_all(dir.path(), "init");
         fs::write(dir.path().join("script.luau"), "modified").unwrap();
 
-        let changed = git_changed_files(dir.path()).unwrap();
+        let changed = git_changed_files(dir.path(), None).unwrap();
         assert!(changed.contains(&PathBuf::from("script.luau")));
     }
 
@@ -571,7 +617,7 @@ mod tests {
         fs::write(dir.path().join("script.luau"), "staged version").unwrap();
         git_stage(dir.path(), "script.luau");
 
-        let changed = git_changed_files(dir.path()).unwrap();
+        let changed = git_changed_files(dir.path(), None).unwrap();
         assert!(changed.contains(&PathBuf::from("script.luau")));
     }
 
@@ -583,7 +629,7 @@ mod tests {
         git_commit_all(dir.path(), "init");
         fs::write(dir.path().join("new_file.luau"), "new").unwrap();
 
-        let changed = git_changed_files(dir.path()).unwrap();
+        let changed = git_changed_files(dir.path(), None).unwrap();
         assert!(changed.contains(&PathBuf::from("new_file.luau")));
     }
 
@@ -595,7 +641,7 @@ mod tests {
         git_commit_all(dir.path(), "init");
         fs::remove_file(dir.path().join("to_delete.luau")).unwrap();
 
-        let changed = git_changed_files(dir.path()).unwrap();
+        let changed = git_changed_files(dir.path(), None).unwrap();
         assert!(changed.contains(&PathBuf::from("to_delete.luau")));
     }
 
@@ -610,7 +656,7 @@ mod tests {
         fs::write(dir.path().join("will_modify.luau"), "new").unwrap();
         fs::write(dir.path().join("untracked.luau"), "brand new").unwrap();
 
-        let changed = git_changed_files(dir.path()).unwrap();
+        let changed = git_changed_files(dir.path(), None).unwrap();
         assert!(changed.contains(&PathBuf::from("will_modify.luau")));
         assert!(changed.contains(&PathBuf::from("untracked.luau")));
         assert!(!changed.contains(&PathBuf::from("committed.luau")));
@@ -620,11 +666,9 @@ mod tests {
     fn changed_files_no_head_returns_none() {
         let dir = tempdir().unwrap();
         git_init(dir.path());
-        // No commits at all, but a file exists
         fs::write(dir.path().join("new.luau"), "content").unwrap();
 
-        let changed = git_changed_files(dir.path());
-        // Should still return Some with the untracked file
+        let changed = git_changed_files(dir.path(), None);
         assert!(changed.is_some());
         assert!(changed.unwrap().contains(&PathBuf::from("new.luau")));
     }
@@ -638,8 +682,33 @@ mod tests {
         git_commit_all(dir.path(), "init");
         fs::write(dir.path().join("src/module.luau"), "modified").unwrap();
 
-        let changed = git_changed_files(dir.path()).unwrap();
+        let changed = git_changed_files(dir.path(), None).unwrap();
         assert!(changed.contains(&PathBuf::from("src/module.luau")));
+    }
+
+    #[test]
+    fn changed_files_with_initial_head_finds_committed() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("script.luau"), "original").unwrap();
+        git_commit_all(dir.path(), "init");
+
+        let initial_head = git_head_commit(dir.path()).unwrap();
+
+        fs::write(dir.path().join("script.luau"), "modified").unwrap();
+        git_commit_all(dir.path(), "edit");
+
+        let without = git_changed_files(dir.path(), None).unwrap();
+        assert!(
+            !without.contains(&PathBuf::from("script.luau")),
+            "without initial_head, committed file should NOT appear"
+        );
+
+        let with = git_changed_files(dir.path(), Some(&initial_head)).unwrap();
+        assert!(
+            with.contains(&PathBuf::from("script.luau")),
+            "with initial_head, committed file should appear"
+        );
     }
 
     // -----------------------------------------------------------------------
