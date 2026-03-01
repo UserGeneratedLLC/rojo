@@ -326,17 +326,18 @@ We need to investigate Tree reconciliation, make sure it's parallel, etc.
 I'd really like to just reconcile specific paths that were modified - but i'm not sure if that just defeats the purpose.. need to explore this topic later.
 Worst case - we reconcile only on connect, but do so in mega-parallel
 
-[auto select issue]
-when you commit changes on git, it's considered unchanged. we should send like the last git hash too, like prior to head, too.
+Also, we need to explore how VSCode deals with this. They seem to have ZERO issues.
+Maybe we can have a mode to tie into the vscode file watcher ourselves? luau-lsp does this.
 
-[yielding after sync]
-there is some process that is making disconnecting after a one-shot sync completes take FOREVER if the server is yielding (usually from the reconciler)
- - once the one-shot sync completes, it should not be waiting for additional things to come from the server. it just needs to kill the connection immediately. and go back to the main page.
+[auto select issue]
+when you commit changes on git, it's considered unchanged. we need send prior git hash too, like prior to head.
+right now i believe we are calculating the hashes manually, we CAN use the git hash since our hash schema matches it 1:1.
+this would be a nice optimization, too.
 
 [one shot mode change]
-new changes that come in / out during the review menu on the plugin is really disorienting.
-we should just make it stop accepting new changes once it has the full patch ready and displayed to the user
-any further changes should have to be done NEXT one-shot sync
+new changes that come in / out during the pathc visualizer menu on the plugin is really disorienting.
+if a new change comes in mid-visualizer syncing, we need to unselect the change completely - not even permitting auto selections or whatever the user had selected (ONLY if that specific file was changed, of course)
+this applies to all sync mode which that GUI is being used
 
 [syncback]
 detect when the output file hash is the same, and dont write to it.

@@ -125,6 +125,7 @@ function ServeSession.new(options)
 		__confirmingPatch = nil,
 		__isConfirming = false, -- Explicit confirmation state flag for defense-in-depth
 		__applyingPatch = false, -- Set during reconciler patch application to suppress DescendantAdded
+		__oneShotSyncDone = false,
 		__connections = connections,
 		__precommitCallbacks = {},
 		__postcommitCallbacks = {},
@@ -219,6 +220,10 @@ end
 
 function ServeSession:__onWebSocketMessage(messagesPacket)
 	if self.__status == Status.Disconnected then
+		return
+	end
+
+	if self.__oneShotSyncDone then
 		return
 	end
 
@@ -877,6 +882,10 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 				#pushPatch.updated
 			)
 			self:__applyPatch(pushPatch)
+		end
+
+		if Settings:get("oneShotSync") then
+			self.__oneShotSyncDone = true
 		end
 
 		-- Send pull items + stage requests to Rojo server
