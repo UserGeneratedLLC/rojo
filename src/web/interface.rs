@@ -214,6 +214,11 @@ pub struct GitMetadata {
     /// SHA1 hashes of prior versions (git blob format) for changed script instances.
     /// Contains 1-2 hashes per script: HEAD version and staged version (if different).
     pub script_committed_hashes: HashMap<Ref, Vec<String>>,
+    /// Instance IDs whose backing files are untracked in git (truly new files,
+    /// never committed). Used by the plugin to default new-file additions to
+    /// "push" (Atlas) since they can't be "something Studio deleted."
+    #[serde(default)]
+    pub new_file_ids: Vec<Ref>,
 }
 
 /// Response body from /api/rojo

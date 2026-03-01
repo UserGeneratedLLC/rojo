@@ -160,6 +160,7 @@ pub async fn call(
             handle_api_syncback(request, &service, syncback_signal).await
         }
         (&Method::GET, "/api/validate-tree") => service.handle_api_validate_tree().await,
+        (&Method::GET, "/api/git-metadata") => service.handle_api_git_metadata().await,
 
         (_method, path) => msgpack(
             ErrorResponse::not_found(format!("Route not found: {}", path)),
@@ -403,6 +404,18 @@ impl ApiService {
             visible_services,
             git_metadata,
         })
+    }
+
+    async fn handle_api_git_metadata(&self) -> Response<Full<Bytes>> {
+        let git_metadata = self.serve_session.git_repo_root().map(|repo_root| {
+            crate::git::compute_git_metadata(
+                &self.serve_session.tree_handle(),
+                repo_root,
+                self.serve_session.initial_head_commit(),
+            )
+        });
+
+        msgpack_ok(&git_metadata)
     }
 
     /// Read-only tree freshness check for test infrastructure.

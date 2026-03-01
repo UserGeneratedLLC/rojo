@@ -1000,6 +1000,9 @@ function App:startSession()
 		return result
 	end)
 
+	local pendingGitRefreshThread = nil
+	local GIT_METADATA_DEBOUNCE = 0.5
+
 	serveSession:setPatchUpdateCallback(function(instanceMap, patch, changedIds)
 		-- If all changes have been reverted, auto-accept the empty patch
 		if PatchSet.isEmpty(patch) then
@@ -1009,14 +1012,40 @@ function App:startSession()
 			return
 		end
 
-		-- Update the patchTree when new changes arrive during confirmation
-		-- The changedIds parameter contains IDs of items that were modified
-		-- so their selections can be reset (user must re-review)
+		-- Immediately rebuild with stale metadata so the UI reflects new items
 		local gitMetadata = cachedServerInfo and cachedServerInfo.gitMetadata
 		self:setState({
 			patchTree = PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" }, gitMetadata),
-			changedIds = changedIds, -- Pass to UI so it can unselect changed items
+			changedIds = changedIds,
 		})
+
+		-- Debounce: schedule a fresh git metadata fetch after rapid patches settle
+		if pendingGitRefreshThread then
+			task.cancel(pendingGitRefreshThread)
+		end
+		pendingGitRefreshThread = task.delay(GIT_METADATA_DEBOUNCE, function()
+			pendingGitRefreshThread = nil
+			apiContext
+				:getGitMetadata()
+				:andThen(function(freshMetadata)
+					if cachedServerInfo then
+						cachedServerInfo.gitMetadata = freshMetadata
+					end
+					if self.state.appStatus == AppStatus.Confirming then
+						self:setState({
+							patchTree = PatchTree.build(
+								patch,
+								instanceMap,
+								{ "Property", "Current", "Incoming" },
+								freshMetadata
+							),
+						})
+					end
+				end)
+				:catch(function(err)
+					Log.warn("Failed to refresh git metadata: {}", tostring(err))
+				end)
+		end)
 	end)
 
 	-- One-shot sync: disconnect after initial sync is fully complete (including any writes)

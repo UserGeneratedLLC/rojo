@@ -271,6 +271,12 @@ function ApiContext:write(patch, stageIds)
 		end)
 end
 
+function ApiContext:getGitMetadata()
+	local url = ("%s/api/git-metadata"):format(self.__baseUrl)
+
+	return Http.get(url):andThen(rejectFailedRequests):andThen(Http.Response.msgpack)
+end
+
 function ApiContext:connectWebSocket(packetHandlers)
 	local url = ("%s/api/socket/%s"):format(self.__baseUrl, self.__messageCursor)
 	-- Convert HTTP/HTTPS URL to WS/WSS

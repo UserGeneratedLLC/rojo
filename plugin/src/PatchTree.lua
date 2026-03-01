@@ -250,7 +250,7 @@ local PatchTree = {}
 
 -- Builds a new tree from a patch and instanceMap
 -- uses changeListHeaders in node.changeList
--- gitMetadata is optional: { changedIds: {string}, scriptCommittedHashes: {[string]: {string}} }
+-- gitMetadata is optional: { changedIds: {string}, scriptCommittedHashes: {[string]: {string}}, newFileIds: {string}? }
 function PatchTree.build(patch, instanceMap, changeListHeaders, gitMetadata)
 	Timer.start("PatchTree.build")
 	local clock = os.clock()
@@ -264,6 +264,14 @@ function PatchTree.build(patch, instanceMap, changeListHeaders, gitMetadata)
 		changedIdSet = {}
 		for _, id in gitMetadata.changedIds do
 			changedIdSet[id] = true
+		end
+	end
+
+	local newFileIdSet = nil
+	if gitMetadata and gitMetadata.newFileIds then
+		newFileIdSet = {}
+		for _, id in gitMetadata.newFileIds do
+			newFileIdSet[id] = true
 		end
 	end
 
@@ -518,8 +526,14 @@ function PatchTree.build(patch, instanceMap, changeListHeaders, gitMetadata)
 			table.insert(changeList, 1, changeListHeaders)
 		end
 
-		-- Add this node to tree
-		-- Default to nil (unselected) - user must explicitly choose Push/Pull/Skip
+		-- Truly new files (untracked in git) default to "push" (Atlas).
+		-- Tracked files appearing as additions are ambiguous (Studio may have
+		-- deleted them), so they remain nil for user review.
+		local defaultSelection = nil
+		if newFileIdSet and newFileIdSet[id] then
+			defaultSelection = "push"
+		end
+
 		tree:addNode(change.Parent, {
 			id = change.Id,
 			patchType = "Add",
@@ -528,7 +542,7 @@ function PatchTree.build(patch, instanceMap, changeListHeaders, gitMetadata)
 			changeInfo = changeInfo,
 			changeList = changeList,
 			instance = instanceMap.fromIds[id],
-			defaultSelection = nil,
+			defaultSelection = defaultSelection,
 		})
 	end
 	Timer.stop()

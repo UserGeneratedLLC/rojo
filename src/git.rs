@@ -59,8 +59,23 @@ pub fn git_head_commit(repo_root: &Path) -> Option<String> {
     }
 }
 
-fn git_changed_files(repo_root: &Path, initial_head: Option<&str>) -> Option<HashSet<PathBuf>> {
-    let mut changed = HashSet::new();
+struct ChangedFiles {
+    tracked: HashSet<PathBuf>,
+    untracked: HashSet<PathBuf>,
+}
+
+impl ChangedFiles {
+    fn all(&self) -> HashSet<PathBuf> {
+        self.tracked.union(&self.untracked).cloned().collect()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.tracked.is_empty() && self.untracked.is_empty()
+    }
+}
+
+fn git_changed_files(repo_root: &Path, initial_head: Option<&str>) -> Option<ChangedFiles> {
+    let mut tracked = HashSet::new();
 
     let diff_base = initial_head.unwrap_or("HEAD");
     let diff_output = Command::new("git")
@@ -78,7 +93,7 @@ fn git_changed_files(repo_root: &Path, initial_head: Option<&str>) -> Option<Has
         for line in String::from_utf8_lossy(&diff_output.stdout).lines() {
             let trimmed = line.trim();
             if !trimmed.is_empty() {
-                changed.insert(PathBuf::from(trimmed));
+                tracked.insert(PathBuf::from(trimmed));
             }
         }
     } else {
@@ -88,6 +103,7 @@ fn git_changed_files(repo_root: &Path, initial_head: Option<&str>) -> Option<Has
         );
     }
 
+    let mut untracked = HashSet::new();
     let untracked_output = Command::new("git")
         .args([
             "-C",
@@ -103,16 +119,16 @@ fn git_changed_files(repo_root: &Path, initial_head: Option<&str>) -> Option<Has
         for line in String::from_utf8_lossy(&untracked_output.stdout).lines() {
             let trimmed = line.trim();
             if !trimmed.is_empty() {
-                changed.insert(PathBuf::from(trimmed));
+                untracked.insert(PathBuf::from(trimmed));
             }
         }
     }
 
-    if changed.is_empty() && !diff_output.status.success() {
+    if tracked.is_empty() && untracked.is_empty() && !diff_output.status.success() {
         return None;
     }
 
-    Some(changed)
+    Some(ChangedFiles { tracked, untracked })
 }
 
 #[cfg(test)]
@@ -278,6 +294,7 @@ pub fn compute_git_metadata(
             return GitMetadata {
                 changed_ids: Vec::new(),
                 script_committed_hashes: HashMap::new(),
+                new_file_ids: Vec::new(),
             };
         }
     };
@@ -286,15 +303,19 @@ pub fn compute_git_metadata(
         return GitMetadata {
             changed_ids: Vec::new(),
             script_committed_hashes: HashMap::new(),
+            new_file_ids: Vec::new(),
         };
     }
+
+    let untracked_set = &changed_files.untracked;
+    let all_changed = changed_files.all();
 
     // Brief lock: resolve changed file paths to instance Refs and class names
     let resolved: Vec<ResolvedInstance> = {
         let tree = tree_handle.lock().unwrap();
         let mut result = Vec::new();
 
-        for rel_path in &changed_files {
+        for rel_path in &all_changed {
             let abs_path = repo_root.join(rel_path);
             let canonical_path = std::fs::canonicalize(&abs_path).ok();
 
@@ -322,6 +343,11 @@ pub fn compute_git_metadata(
     }; // Lock released
 
     let changed_ids: Vec<Ref> = resolved.iter().map(|ri| ri.id).collect();
+    let new_file_ids: Vec<Ref> = resolved
+        .iter()
+        .filter(|ri| untracked_set.contains(&ri.rel_path))
+        .map(|ri| ri.id)
+        .collect();
     let mut script_committed_hashes: HashMap<Ref, Vec<String>> = HashMap::new();
 
     #[derive(Clone, Copy)]
@@ -393,6 +419,7 @@ pub fn compute_git_metadata(
     GitMetadata {
         changed_ids,
         script_committed_hashes,
+        new_file_ids,
     }
 }
 
@@ -605,7 +632,8 @@ mod tests {
         fs::write(dir.path().join("script.luau"), "modified").unwrap();
 
         let changed = git_changed_files(dir.path(), None).unwrap();
-        assert!(changed.contains(&PathBuf::from("script.luau")));
+        assert!(changed.tracked.contains(&PathBuf::from("script.luau")));
+        assert!(changed.untracked.is_empty());
     }
 
     #[test]
@@ -618,7 +646,7 @@ mod tests {
         git_stage(dir.path(), "script.luau");
 
         let changed = git_changed_files(dir.path(), None).unwrap();
-        assert!(changed.contains(&PathBuf::from("script.luau")));
+        assert!(changed.tracked.contains(&PathBuf::from("script.luau")));
     }
 
     #[test]
@@ -630,7 +658,8 @@ mod tests {
         fs::write(dir.path().join("new_file.luau"), "new").unwrap();
 
         let changed = git_changed_files(dir.path(), None).unwrap();
-        assert!(changed.contains(&PathBuf::from("new_file.luau")));
+        assert!(changed.untracked.contains(&PathBuf::from("new_file.luau")));
+        assert!(!changed.tracked.contains(&PathBuf::from("new_file.luau")));
     }
 
     #[test]
@@ -642,7 +671,7 @@ mod tests {
         fs::remove_file(dir.path().join("to_delete.luau")).unwrap();
 
         let changed = git_changed_files(dir.path(), None).unwrap();
-        assert!(changed.contains(&PathBuf::from("to_delete.luau")));
+        assert!(changed.tracked.contains(&PathBuf::from("to_delete.luau")));
     }
 
     #[test]
@@ -657,9 +686,12 @@ mod tests {
         fs::write(dir.path().join("untracked.luau"), "brand new").unwrap();
 
         let changed = git_changed_files(dir.path(), None).unwrap();
-        assert!(changed.contains(&PathBuf::from("will_modify.luau")));
-        assert!(changed.contains(&PathBuf::from("untracked.luau")));
-        assert!(!changed.contains(&PathBuf::from("committed.luau")));
+        let all = changed.all();
+        assert!(all.contains(&PathBuf::from("will_modify.luau")));
+        assert!(all.contains(&PathBuf::from("untracked.luau")));
+        assert!(!all.contains(&PathBuf::from("committed.luau")));
+        assert!(changed.tracked.contains(&PathBuf::from("will_modify.luau")));
+        assert!(changed.untracked.contains(&PathBuf::from("untracked.luau")));
     }
 
     #[test]
@@ -670,7 +702,10 @@ mod tests {
 
         let changed = git_changed_files(dir.path(), None);
         assert!(changed.is_some());
-        assert!(changed.unwrap().contains(&PathBuf::from("new.luau")));
+        assert!(changed
+            .unwrap()
+            .untracked
+            .contains(&PathBuf::from("new.luau")));
     }
 
     #[test]
@@ -683,7 +718,7 @@ mod tests {
         fs::write(dir.path().join("src/module.luau"), "modified").unwrap();
 
         let changed = git_changed_files(dir.path(), None).unwrap();
-        assert!(changed.contains(&PathBuf::from("src/module.luau")));
+        assert!(changed.tracked.contains(&PathBuf::from("src/module.luau")));
     }
 
     #[test]
@@ -700,13 +735,13 @@ mod tests {
 
         let without = git_changed_files(dir.path(), None).unwrap();
         assert!(
-            !without.contains(&PathBuf::from("script.luau")),
+            !without.all().contains(&PathBuf::from("script.luau")),
             "without initial_head, committed file should NOT appear"
         );
 
         let with = git_changed_files(dir.path(), Some(&initial_head)).unwrap();
         assert!(
-            with.contains(&PathBuf::from("script.luau")),
+            with.tracked.contains(&PathBuf::from("script.luau")),
             "with initial_head, committed file should appear"
         );
     }
