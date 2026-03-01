@@ -38,6 +38,7 @@ local Dictionary = require(Plugin.Dictionary)
 local ServeSession = require(Plugin.ServeSession)
 local ApiContext = require(Plugin.ApiContext)
 local McpStream = require(Plugin.McpStream)
+local McpTools = require(Plugin.McpTools)
 local PatchSet = require(Plugin.PatchSet)
 local PatchTree = require(Plugin.PatchTree)
 local preloadAssets = require(Plugin.preloadAssets)
@@ -213,6 +214,24 @@ function App:init()
 			end,
 			onGetScriptCommand = function(requestId, data)
 				return self:handleMcpGetScript(requestId, data)
+			end,
+			onToolCommand = function(requestId, toolType, args)
+				return Promise.new(function(resolve)
+					local ok, result = pcall(McpTools.dispatch, toolType, args)
+					if ok then
+						resolve({
+							requestId = requestId,
+							status = "success",
+							response = result or "",
+						})
+					else
+						resolve({
+							requestId = requestId,
+							status = "error",
+							response = tostring(result),
+						})
+					end
+				end)
 			end,
 			getPluginConfig = function(key)
 				return Settings:get(key)

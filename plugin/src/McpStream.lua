@@ -10,6 +10,15 @@ local strict = require(script.Parent.strict)
 
 local RECONNECT_INTERVAL = 5
 
+local PASSTHROUGH_TOOLS = {
+	run_code = true,
+	insert_model = true,
+	get_console_output = true,
+	get_studio_mode = true,
+	start_stop_play = true,
+	run_script_in_play_mode = true,
+}
+
 local McpStream = {}
 McpStream.__index = McpStream
 
@@ -18,6 +27,7 @@ function McpStream.new(options)
 
 	self._onSyncCommand = options.onSyncCommand
 	self._onGetScriptCommand = options.onGetScriptCommand
+	self._onToolCommand = options.onToolCommand
 	self._getPluginConfig = options.getPluginConfig
 	self._wsClient = nil
 	self._running = false
@@ -147,6 +157,33 @@ function McpStream:_tryConnect()
 							requestId = data.requestId,
 							status = "error",
 							message = tostring(err),
+						})
+						pcall(function()
+							self._wsClient:Send(errorResult)
+						end)
+					end
+				end)
+		elseif data.type and data.requestId and PASSTHROUGH_TOOLS[data.type] then
+			Log.info("MCP stream: received {} command (requestId={})", data.type, data.requestId)
+
+			local resultPromise = self._onToolCommand(data.requestId, data.type, data.args or {})
+
+			resultPromise
+				:andThen(function(result)
+					if self._wsClient then
+						local json = HttpService:JSONEncode(result)
+						pcall(function()
+							self._wsClient:Send(json)
+						end)
+					end
+				end)
+				:catch(function(err)
+					Log.warn("MCP stream: {} command failed: {}", data.type, tostring(err))
+					if self._wsClient then
+						local errorResult = HttpService:JSONEncode({
+							requestId = data.requestId,
+							status = "error",
+							response = tostring(err),
 						})
 						pcall(function()
 							self._wsClient:Send(errorResult)

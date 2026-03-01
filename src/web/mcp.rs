@@ -84,6 +84,16 @@ pub struct McpSyncResult {
     pub message: Option<String>,
 }
 
+/// Result for passthrough plugin tools (run_code, insert_model, etc.).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginToolResult {
+    pub request_id: String,
+    pub status: String,
+    #[serde(default)]
+    pub response: Option<String>,
+}
+
 /// Result for get_script, deserialized from the plugin's Value response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -234,7 +244,10 @@ pub async fn call(
     };
 
     match rpc_request.method.as_str() {
-        "initialize" => handle_initialize(rpc_request.id),
+        "initialize" => {
+            log::info!("MCP agent connected");
+            handle_initialize(rpc_request.id)
+        }
         "notifications/initialized" => Response::builder()
             .status(StatusCode::ACCEPTED)
             .body(Full::new(Bytes::new()))
@@ -286,7 +299,7 @@ fn handle_tools_list(id: Option<Value>) -> Response<Full<Bytes>> {
         "tools": [
             {
                 "name": "atlas_sync",
-                "description": "Sync filesystem changes to Roblox Studio. Supports modes: 'standard' (default, auto-accepts if all git-resolved, else shows UI), 'manual' (always shows UI), 'fastfail' (fails immediately if unresolved changes exist), 'dryrun' (returns what would change without applying). Supports overrides to auto-accept specific changes by instance id with hash/property verification.",
+                "description": include_str!("mcp_docs/atlas_sync.md"),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -327,7 +340,7 @@ fn handle_tools_list(id: Option<Value>) -> Response<Full<Bytes>> {
             },
             {
                 "name": "get_script",
-                "description": "Read a script's source code from Roblox Studio. The id and fsPath parameters come from a previous atlas_sync response's change entries.\n\nIf you haven't run atlas_sync yet, call atlas_sync(mode: \"dryrun\") first -- this establishes the instance mapping without applying any changes, then you can call get_script with the id or fsPath from that response.\n\nConflict resolution workflow:\n1. atlas_sync(mode: \"fastfail\") -- get changes with studioHash, fail if unresolved\n2. get_script(id: \"...\") -- read the Studio version of a conflicting script\n3. Merge the Studio source with your local changes, write to filesystem\n4. atlas_sync(overrides: [{id, direction: \"push\", studioHash: \"...from get_script response...\"}])\n\nThe studioHash in the response is the SHA1 of the git blob format of the script's Source property. Pass it as the studioHash in sync overrides to verify the script hasn't changed between your get_script call and the retry sync.",
+                "description": include_str!("mcp_docs/get_script.md"),
                 "inputSchema": {
                     "type": "object",
                     "properties": {
@@ -344,6 +357,88 @@ fn handle_tools_list(id: Option<Value>) -> Response<Full<Bytes>> {
                             "description": "If true, read unsaved editor content instead of the saved Source property. Default: false."
                         }
                     }
+                }
+            },
+            {
+                "name": "run_code",
+                "description": include_str!("mcp_docs/run_code.md"),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "command": {
+                            "type": "string",
+                            "description": "Luau code to execute in Roblox Studio."
+                        }
+                    },
+                    "required": ["command"]
+                }
+            },
+            {
+                "name": "insert_model",
+                "description": include_str!("mcp_docs/insert_model.md"),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "Search query for the model on the Roblox Creator Store."
+                        }
+                    },
+                    "required": ["query"]
+                }
+            },
+            {
+                "name": "get_console_output",
+                "description": include_str!("mcp_docs/get_console_output.md"),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "get_studio_mode",
+                "description": include_str!("mcp_docs/get_studio_mode.md"),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {}
+                }
+            },
+            {
+                "name": "start_stop_play",
+                "description": include_str!("mcp_docs/start_stop_play.md"),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "mode": {
+                            "type": "string",
+                            "enum": ["start_play", "run_server", "stop"],
+                            "description": "Play mode action."
+                        }
+                    },
+                    "required": ["mode"]
+                }
+            },
+            {
+                "name": "run_script_in_play_mode",
+                "description": include_str!("mcp_docs/run_script_in_play_mode.md"),
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "code": {
+                            "type": "string",
+                            "description": "Luau code to run inside a play session."
+                        },
+                        "timeout": {
+                            "type": "integer",
+                            "description": "Timeout in seconds. Defaults to 100."
+                        },
+                        "mode": {
+                            "type": "string",
+                            "enum": ["start_play", "run_server"],
+                            "description": "Play mode to start."
+                        }
+                    },
+                    "required": ["code", "mode"]
                 }
             }
         ]
@@ -370,9 +465,23 @@ async fn handle_tools_call(
         .cloned()
         .unwrap_or(Value::Object(Default::default()));
 
+    log::info!(
+        "MCP call: {} {}",
+        tool_name,
+        serde_json::to_string(&arguments).unwrap_or_default()
+    );
+
     match tool_name {
         "atlas_sync" => handle_atlas_sync(id, arguments, mcp_state, active_api_connections).await,
         "get_script" => handle_get_script(id, arguments, mcp_state).await,
+        "run_code"
+        | "insert_model"
+        | "get_console_output"
+        | "get_studio_mode"
+        | "start_stop_play"
+        | "run_script_in_play_mode" => {
+            dispatch_to_plugin(id, tool_name, arguments, mcp_state).await
+        }
         _ => {
             let resp = JsonRpcResponse::error(id, -32602, format!("Unknown tool: {tool_name}"));
             json_response(&resp, StatusCode::OK)
@@ -494,6 +603,12 @@ async fn handle_atlas_sync(
     mcp_state.command_in_progress.store(false, Ordering::SeqCst);
 
     let _ = mcp_state.command_tx.send(None);
+
+    log::info!(
+        "MCP result: atlas_sync status={} changes={}",
+        result.status,
+        result.changes.len()
+    );
 
     let is_error = !matches!(result.status.as_str(), "success" | "empty" | "dryrun");
 
@@ -649,6 +764,12 @@ async fn handle_get_script(
 
     let is_error = result.status != "success";
 
+    log::info!(
+        "MCP result: get_script status={} class={}",
+        result.status,
+        result.class_name.as_deref().unwrap_or("?")
+    );
+
     if is_error {
         let msg = result.message.as_deref().unwrap_or("Unknown error");
         return tool_response(id, true, msg);
@@ -668,6 +789,96 @@ async fn handle_get_script(
     ));
 
     tool_response(id, false, &text)
+}
+
+async fn dispatch_to_plugin(
+    id: Option<Value>,
+    tool_name: &str,
+    arguments: Value,
+    mcp_state: Arc<McpState>,
+) -> Response<Full<Bytes>> {
+    if mcp_state
+        .command_in_progress
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return tool_response(
+            id,
+            true,
+            "An MCP command is already in progress. Please wait for it to complete.",
+        );
+    }
+
+    if !mcp_state.plugin_stream_connected.load(Ordering::Relaxed) {
+        mcp_state.command_in_progress.store(false, Ordering::SeqCst);
+        return tool_response(
+            id,
+            true,
+            "No Roblox Studio plugin is connected to the MCP stream. \
+             Make sure Studio is open with the Atlas plugin installed.",
+        );
+    }
+
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+    {
+        let mut slot = mcp_state
+            .result_tx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *slot = Some(result_tx);
+    }
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let command = serde_json::json!({
+        "type": tool_name,
+        "requestId": request_id,
+        "args": arguments,
+    });
+
+    if mcp_state.command_tx.send(Some(command)).is_err() {
+        mcp_state.command_in_progress.store(false, Ordering::SeqCst);
+        return tool_response(
+            id,
+            true,
+            &format!("Failed to send {tool_name} command to the plugin."),
+        );
+    }
+
+    let result_value = match result_rx.await {
+        Ok(v) => v,
+        Err(_) => {
+            mcp_state.command_in_progress.store(false, Ordering::SeqCst);
+            return tool_response(
+                id,
+                true,
+                &format!("Plugin disconnected before completing the {tool_name} operation."),
+            );
+        }
+    };
+
+    mcp_state.command_in_progress.store(false, Ordering::SeqCst);
+    let _ = mcp_state.command_tx.send(None);
+
+    let result: PluginToolResult = match serde_json::from_value(result_value) {
+        Ok(r) => r,
+        Err(e) => {
+            return tool_response(
+                id,
+                true,
+                &format!("Failed to parse {tool_name} result from plugin: {e}"),
+            );
+        }
+    };
+
+    let is_error = result.status != "success";
+    let text = result
+        .response
+        .as_deref()
+        .unwrap_or(if is_error { "Unknown error" } else { "" });
+
+    log::info!("MCP result: {} {}", tool_name, &text[..text.len().min(200)]);
+
+    tool_response(id, is_error, text)
 }
 
 fn tool_response(id: Option<Value>, is_error: bool, text: &str) -> Response<Full<Bytes>> {
@@ -790,6 +1001,43 @@ mod tests {
             assert_eq!(json["oneShotSync"], false);
             assert_eq!(json["confirmationBehavior"], "Always");
         }
+
+        #[test]
+        fn plugin_tool_result_deserializes() {
+            let json = serde_json::json!({
+                "requestId": "r1",
+                "status": "success",
+                "response": "hello world"
+            });
+            let result: PluginToolResult = serde_json::from_value(json).unwrap();
+            assert_eq!(result.request_id, "r1");
+            assert_eq!(result.status, "success");
+            assert_eq!(result.response.as_deref(), Some("hello world"));
+        }
+
+        #[test]
+        fn plugin_tool_result_defaults_for_missing_response() {
+            let json = serde_json::json!({
+                "requestId": "r2",
+                "status": "error"
+            });
+            let result: PluginToolResult = serde_json::from_value(json).unwrap();
+            assert_eq!(result.status, "error");
+            assert!(result.response.is_none());
+        }
+
+        #[test]
+        fn plugin_tool_result_serializes_camel_case() {
+            let result = PluginToolResult {
+                request_id: "r3".to_string(),
+                status: "success".to_string(),
+                response: Some("output".to_string()),
+            };
+            let json = serde_json::to_value(&result).unwrap();
+            assert_eq!(json["requestId"], "r3");
+            assert_eq!(json["status"], "success");
+            assert_eq!(json["response"], "output");
+        }
     }
 
     // -- McpState tests -------------------------------------------------------
@@ -890,17 +1138,32 @@ mod tests {
         }
 
         #[test]
-        fn tools_list_returns_atlas_sync() {
+        fn tools_list_returns_all_tools() {
             let resp = handle_tools_list(Some(Value::from(2)));
             assert_eq!(resp.status(), StatusCode::OK);
             let rt = tokio::runtime::Runtime::new().unwrap();
             let bytes = rt.block_on(async { resp.into_body().collect().await.unwrap().to_bytes() });
             let json: Value = serde_json::from_slice(&bytes).unwrap();
             let tools = json["result"]["tools"].as_array().unwrap();
-            assert_eq!(tools.len(), 2);
-            assert_eq!(tools[0]["name"], "atlas_sync");
-            assert!(tools[0]["inputSchema"].is_object());
-            assert_eq!(tools[1]["name"], "get_script");
+            assert_eq!(tools.len(), 8);
+            let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+            assert_eq!(
+                names,
+                vec![
+                    "atlas_sync",
+                    "get_script",
+                    "run_code",
+                    "insert_model",
+                    "get_console_output",
+                    "get_studio_mode",
+                    "start_stop_play",
+                    "run_script_in_play_mode",
+                ]
+            );
+            for tool in tools {
+                assert!(tool["inputSchema"].is_object());
+                assert!(tool["description"].as_str().unwrap().len() > 10);
+            }
         }
 
         #[test]
@@ -1620,7 +1883,7 @@ mod tests {
             let bytes = rt.block_on(async { resp.into_body().collect().await.unwrap().to_bytes() });
             let json: Value = serde_json::from_slice(&bytes).unwrap();
             let tools = json["result"]["tools"].as_array().unwrap();
-            assert_eq!(tools.len(), 2);
+            assert_eq!(tools.len(), 8);
 
             let get_script = tools.iter().find(|t| t["name"] == "get_script").unwrap();
             assert!(get_script["description"]
@@ -1753,6 +2016,389 @@ mod tests {
             assert_eq!(json["result"]["isError"], true);
             let text = json["result"]["content"][0]["text"].as_str().unwrap();
             assert!(text.contains("Instance not found by id"));
+        }
+    }
+
+    // -- dispatch_to_plugin guard tests ----------------------------------------
+
+    mod dispatch_guards {
+        use super::*;
+
+        #[tokio::test]
+        async fn rejects_when_command_in_progress() {
+            let state = Arc::new(McpState::new());
+            state.command_in_progress.store(true, Ordering::SeqCst);
+
+            let resp = dispatch_to_plugin(
+                Some(Value::from(1)),
+                "run_code",
+                serde_json::json!({"command": "print(1)"}),
+                state,
+            )
+            .await;
+            let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+            let json: Value = serde_json::from_slice(&bytes).unwrap();
+
+            assert_eq!(json["result"]["isError"], true);
+            let text = json["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("already in progress"));
+        }
+
+        #[tokio::test]
+        async fn rejects_when_no_plugin_connected() {
+            let state = Arc::new(McpState::new());
+            state.plugin_stream_connected.store(false, Ordering::SeqCst);
+
+            let resp = dispatch_to_plugin(
+                Some(Value::from(1)),
+                "get_studio_mode",
+                serde_json::json!({}),
+                state.clone(),
+            )
+            .await;
+            let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+            let json: Value = serde_json::from_slice(&bytes).unwrap();
+
+            assert_eq!(json["result"]["isError"], true);
+            let text = json["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("No Roblox Studio plugin"));
+            assert!(!state.command_in_progress.load(Ordering::Relaxed));
+        }
+
+        #[tokio::test]
+        async fn sends_command_and_returns_success() {
+            let state = Arc::new(McpState::new());
+            state.plugin_stream_connected.store(true, Ordering::SeqCst);
+
+            let state2 = Arc::clone(&state);
+            tokio::spawn(async move {
+                let mut rx = state2.command_rx.clone();
+                rx.changed().await.unwrap();
+                let cmd = rx.borrow().clone().unwrap();
+                let req_id = cmd["requestId"].as_str().unwrap_or("");
+                assert_eq!(cmd["type"], "run_code");
+                assert_eq!(cmd["args"]["command"], "print(42)");
+
+                let result = serde_json::json!({
+                    "requestId": req_id,
+                    "status": "success",
+                    "response": "[OUTPUT] 42\n",
+                });
+
+                let tx = state2.result_tx.lock().unwrap().take().unwrap();
+                tx.send(result).unwrap();
+            });
+
+            let resp = dispatch_to_plugin(
+                Some(Value::from(1)),
+                "run_code",
+                serde_json::json!({"command": "print(42)"}),
+                state.clone(),
+            )
+            .await;
+            let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+            let json: Value = serde_json::from_slice(&bytes).unwrap();
+
+            assert_eq!(json["result"]["isError"], false);
+            let text = json["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("[OUTPUT] 42"));
+            assert!(!state.command_in_progress.load(Ordering::Relaxed));
+        }
+
+        #[tokio::test]
+        async fn returns_error_status_from_plugin() {
+            let state = Arc::new(McpState::new());
+            state.plugin_stream_connected.store(true, Ordering::SeqCst);
+
+            let state2 = Arc::clone(&state);
+            tokio::spawn(async move {
+                let mut rx = state2.command_rx.clone();
+                rx.changed().await.unwrap();
+                let cmd = rx.borrow().clone().unwrap();
+                let req_id = cmd["requestId"].as_str().unwrap_or("");
+
+                let result = serde_json::json!({
+                    "requestId": req_id,
+                    "status": "error",
+                    "response": "Missing command in run_code",
+                });
+
+                let tx = state2.result_tx.lock().unwrap().take().unwrap();
+                tx.send(result).unwrap();
+            });
+
+            let resp = dispatch_to_plugin(
+                Some(Value::from(1)),
+                "run_code",
+                serde_json::json!({}),
+                state,
+            )
+            .await;
+            let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+            let json: Value = serde_json::from_slice(&bytes).unwrap();
+
+            assert_eq!(json["result"]["isError"], true);
+            let text = json["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("Missing command"));
+        }
+
+        #[tokio::test]
+        async fn handles_plugin_disconnect() {
+            let state = Arc::new(McpState::new());
+            state.plugin_stream_connected.store(true, Ordering::SeqCst);
+
+            let state2 = Arc::clone(&state);
+            tokio::spawn(async move {
+                let mut rx = state2.command_rx.clone();
+                rx.changed().await.unwrap();
+                // Drop the result_tx without sending to simulate disconnect.
+                let _ = state2.result_tx.lock().unwrap().take();
+            });
+
+            let resp = dispatch_to_plugin(
+                Some(Value::from(1)),
+                "get_console_output",
+                serde_json::json!({}),
+                state.clone(),
+            )
+            .await;
+            let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+            let json: Value = serde_json::from_slice(&bytes).unwrap();
+
+            assert_eq!(json["result"]["isError"], true);
+            let text = json["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("disconnected"));
+            assert!(!state.command_in_progress.load(Ordering::Relaxed));
+        }
+
+        #[tokio::test]
+        async fn empty_response_returns_empty_text() {
+            let state = Arc::new(McpState::new());
+            state.plugin_stream_connected.store(true, Ordering::SeqCst);
+
+            let state2 = Arc::clone(&state);
+            tokio::spawn(async move {
+                let mut rx = state2.command_rx.clone();
+                rx.changed().await.unwrap();
+                let cmd = rx.borrow().clone().unwrap();
+                let req_id = cmd["requestId"].as_str().unwrap_or("");
+
+                let result = serde_json::json!({
+                    "requestId": req_id,
+                    "status": "success",
+                });
+
+                let tx = state2.result_tx.lock().unwrap().take().unwrap();
+                tx.send(result).unwrap();
+            });
+
+            let resp = dispatch_to_plugin(
+                Some(Value::from(1)),
+                "get_console_output",
+                serde_json::json!({}),
+                state,
+            )
+            .await;
+            let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+            let json: Value = serde_json::from_slice(&bytes).unwrap();
+
+            assert_eq!(json["result"]["isError"], false);
+            let text = json["result"]["content"][0]["text"].as_str().unwrap();
+            assert_eq!(text, "");
+        }
+
+        #[tokio::test]
+        async fn malformed_result_returns_parse_error() {
+            let state = Arc::new(McpState::new());
+            state.plugin_stream_connected.store(true, Ordering::SeqCst);
+
+            let state2 = Arc::clone(&state);
+            tokio::spawn(async move {
+                let mut rx = state2.command_rx.clone();
+                rx.changed().await.unwrap();
+
+                let result = serde_json::json!("just a string, not an object");
+
+                let tx = state2.result_tx.lock().unwrap().take().unwrap();
+                tx.send(result).unwrap();
+            });
+
+            let resp = dispatch_to_plugin(
+                Some(Value::from(1)),
+                "run_code",
+                serde_json::json!({"command": "x"}),
+                state.clone(),
+            )
+            .await;
+            let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+            let json: Value = serde_json::from_slice(&bytes).unwrap();
+
+            assert_eq!(json["result"]["isError"], true);
+            let text = json["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("Failed to parse"));
+            assert!(text.contains("run_code"));
+            assert!(!state.command_in_progress.load(Ordering::Relaxed));
+        }
+
+        #[tokio::test]
+        async fn command_channel_cleared_after_completion() {
+            let state = Arc::new(McpState::new());
+            state.plugin_stream_connected.store(true, Ordering::SeqCst);
+
+            let state2 = Arc::clone(&state);
+            tokio::spawn(async move {
+                let mut rx = state2.command_rx.clone();
+                rx.changed().await.unwrap();
+                let cmd = rx.borrow().clone().unwrap();
+                let req_id = cmd["requestId"].as_str().unwrap_or("");
+
+                let result = serde_json::json!({
+                    "requestId": req_id,
+                    "status": "success",
+                    "response": "ok",
+                });
+
+                let tx = state2.result_tx.lock().unwrap().take().unwrap();
+                tx.send(result).unwrap();
+            });
+
+            let _ = dispatch_to_plugin(
+                Some(Value::from(1)),
+                "get_studio_mode",
+                serde_json::json!({}),
+                state.clone(),
+            )
+            .await;
+
+            assert!(
+                state.command_rx.borrow().is_none(),
+                "command_tx should be reset to None after dispatch"
+            );
+        }
+
+        #[tokio::test]
+        async fn tool_type_forwarded_in_command() {
+            for tool_name in &[
+                "insert_model",
+                "get_console_output",
+                "get_studio_mode",
+                "start_stop_play",
+                "run_script_in_play_mode",
+            ] {
+                let state = Arc::new(McpState::new());
+                state.plugin_stream_connected.store(true, Ordering::SeqCst);
+
+                let expected_type = tool_name.to_string();
+                let state2 = Arc::clone(&state);
+                tokio::spawn(async move {
+                    let mut rx = state2.command_rx.clone();
+                    rx.changed().await.unwrap();
+                    let cmd = rx.borrow().clone().unwrap();
+                    assert_eq!(
+                        cmd["type"].as_str().unwrap(),
+                        expected_type,
+                        "type field should match tool_name for {expected_type}"
+                    );
+                    let req_id = cmd["requestId"].as_str().unwrap_or("");
+
+                    let result = serde_json::json!({
+                        "requestId": req_id,
+                        "status": "success",
+                        "response": "ok",
+                    });
+
+                    let tx = state2.result_tx.lock().unwrap().take().unwrap();
+                    tx.send(result).unwrap();
+                });
+
+                let _ = dispatch_to_plugin(
+                    Some(Value::from(1)),
+                    tool_name,
+                    serde_json::json!({}),
+                    state,
+                )
+                .await;
+            }
+        }
+    }
+
+    // -- Tool schema validation ------------------------------------------------
+
+    mod tool_schema_tests {
+        use super::*;
+
+        fn get_tools() -> Vec<Value> {
+            let resp = handle_tools_list(Some(Value::from(1)));
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let bytes = rt.block_on(async { resp.into_body().collect().await.unwrap().to_bytes() });
+            let json: Value = serde_json::from_slice(&bytes).unwrap();
+            json["result"]["tools"].as_array().unwrap().clone()
+        }
+
+        fn find_tool<'a>(tools: &'a [Value], name: &str) -> &'a Value {
+            tools.iter().find(|t| t["name"] == name).unwrap()
+        }
+
+        #[test]
+        fn run_code_requires_command() {
+            let tools = get_tools();
+            let tool = find_tool(&tools, "run_code");
+            let required = tool["inputSchema"]["required"].as_array().unwrap();
+            assert!(required.iter().any(|v| v == "command"));
+            assert!(tool["inputSchema"]["properties"]["command"]["type"] == "string");
+        }
+
+        #[test]
+        fn insert_model_requires_query() {
+            let tools = get_tools();
+            let tool = find_tool(&tools, "insert_model");
+            let required = tool["inputSchema"]["required"].as_array().unwrap();
+            assert!(required.iter().any(|v| v == "query"));
+            assert!(tool["inputSchema"]["properties"]["query"]["type"] == "string");
+        }
+
+        #[test]
+        fn get_console_output_has_no_required() {
+            let tools = get_tools();
+            let tool = find_tool(&tools, "get_console_output");
+            assert!(tool["inputSchema"]["required"].is_null());
+        }
+
+        #[test]
+        fn get_studio_mode_has_no_required() {
+            let tools = get_tools();
+            let tool = find_tool(&tools, "get_studio_mode");
+            assert!(tool["inputSchema"]["required"].is_null());
+        }
+
+        #[test]
+        fn start_stop_play_requires_mode_with_enum() {
+            let tools = get_tools();
+            let tool = find_tool(&tools, "start_stop_play");
+            let required = tool["inputSchema"]["required"].as_array().unwrap();
+            assert!(required.iter().any(|v| v == "mode"));
+            let mode_enum = tool["inputSchema"]["properties"]["mode"]["enum"]
+                .as_array()
+                .unwrap();
+            let values: Vec<&str> = mode_enum.iter().map(|v| v.as_str().unwrap()).collect();
+            assert_eq!(values, vec!["start_play", "run_server", "stop"]);
+        }
+
+        #[test]
+        fn run_script_in_play_mode_requires_code_and_mode() {
+            let tools = get_tools();
+            let tool = find_tool(&tools, "run_script_in_play_mode");
+            let required = tool["inputSchema"]["required"].as_array().unwrap();
+            let req_strs: Vec<&str> = required.iter().map(|v| v.as_str().unwrap()).collect();
+            assert!(req_strs.contains(&"code"));
+            assert!(req_strs.contains(&"mode"));
+            assert!(!req_strs.contains(&"timeout"));
+            let mode_enum = tool["inputSchema"]["properties"]["mode"]["enum"]
+                .as_array()
+                .unwrap();
+            let values: Vec<&str> = mode_enum.iter().map(|v| v.as_str().unwrap()).collect();
+            assert_eq!(values, vec!["start_play", "run_server"]);
+            assert!(tool["inputSchema"]["properties"]["timeout"]["type"] == "integer");
         }
     }
 }

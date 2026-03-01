@@ -345,15 +345,31 @@ can we allow the terminal to stay so i can like run some git commands myself wit
  - integrate them into how we've done our mcp in atlas
  - make sure to handle the placeid filtering like we already do when establishing the connection
  - we've done some actual fixes over at D:\UserGenerated\studio-rust-mcp-server on these, we should probably pull those fixed versions! we don't need that whole studio selection system from over there, though.
-* syncback
- - invokes plugin based syncback
- - ensure this doesn't interrupt the connection of the mcp, since i think we shutdown the api? we should just not shutdown the api or something
+  - we don't need to restructure ours to be like this, but i like the .md doc setup.
 * add logging for all agent connect/disconnects in the terminal
  - also add logging for commands (including the json) it runs and the resulting json. try to keep this on one line please, json compact.
 * ensure all mcp route documentation is well formed and gives the agent knowledge on how to use this system to the fullest.
  - I did .md based docs over with my D:\UserGenerated\studio-rust-mcp-server codebase, we should probably switch to this as it's cleaner
  - Instruct on good sync flow, with get_script merging.
   - If user requests get_script and we havn't sync'd yet, just do a dryrun sync to get the instance id map going.
+* syncback
+ - invokes plugin based syncback
+ - ensure this doesn't interrupt the connection of the mcp, since i think we shutdown the api? we should just not shutdown the api or something
+
+[logging]
+* I want to add verbose logging .atlas in the repository
+* We should do rolling logs, and it should compress them automatically
+* Will the existing logging infra take care of this?
+* I want to have it include trace logging
+* I also want to forward the roblox logs continously via the mcp connection and log them to the serve output, such they will end up in the rolling logs
+ - Make sure to retain the log-level (print, warn, error, etc)
+ - I'm open to having these actually divert and not send in the rust logging system and go to it's own file, and maybe a separate rust logger so we don't need to create our own infrastructure
+ - We could also just save logging output WHILST we are synced to the serve (would even work for one-shot) so as to not have a bunch of useless log info, though I think the mcp one is stronger.
+* See: https://create.roblox.com/docs/reference/engine/classes/LogService
+ - We should adapt the rojo logger to route through this, as it offers better level info
+ - Listen to MessageOut to get the log info we are wanting.
+ - Is this actually the one we want? I might be confused, check the docs, this looks new.
+* The goal with these trace logging is so that when others are using this tool, we can actually debug real issues by having them send me their logs.
 
 [sync]
 right now sync is running REALLY slow
