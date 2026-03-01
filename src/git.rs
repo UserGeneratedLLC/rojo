@@ -264,6 +264,15 @@ fn collect_index_worktree_changes(
     };
 
     let stat_options: gix::index::entry::stat::Options = Default::default();
+    let index_mtime_secs = std::fs::metadata(repo.index_path())
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .map(|t| {
+            t.duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as u32
+        })
+        .unwrap_or(u32::MAX);
 
     for entry in index.entries() {
         let path_bstr = entry.path(index);
@@ -273,7 +282,12 @@ fn collect_index_worktree_changes(
         match gix::index::fs::Metadata::from_path_no_follow(&full_path) {
             Ok(fs_meta) => {
                 if let Ok(fs_stat) = gix::index::entry::Stat::from_fs(&fs_meta) {
-                    if entry.stat.matches(&fs_stat, stat_options) {
+                    if fs_stat.size != entry.stat.size {
+                        tracked.insert(PathBuf::from(path_str.as_ref()));
+                        continue;
+                    }
+                    let not_racy = entry.stat.mtime.secs < index_mtime_secs;
+                    if not_racy && entry.stat.matches(&fs_stat, stat_options) {
                         continue;
                     }
                 }
@@ -1008,17 +1022,11 @@ mod tests {
     use tempfile::tempdir;
 
     fn git_init(dir: &Path) {
-        let mut repo = gix::init(dir).expect("gix init failed");
-        {
-            let mut config = repo.config_snapshot_mut();
-            config
-                .set_raw_value(&gix::config::tree::User::NAME, "Test")
-                .unwrap();
-            config
-                .set_raw_value(&gix::config::tree::User::EMAIL, "test@test.com")
-                .unwrap();
-            let _ = config.commit_auto_rollback().unwrap();
-        }
+        gix::init(dir).expect("gix init failed");
+        let config_path = dir.join(".git/config");
+        let mut content = fs::read_to_string(&config_path).unwrap_or_default();
+        content.push_str("[user]\n\tname = Test\n\temail = test@test.com\n");
+        fs::write(&config_path, content).unwrap();
     }
 
     fn git_commit_all(dir: &Path, msg: &str) {
