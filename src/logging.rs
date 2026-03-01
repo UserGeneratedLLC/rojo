@@ -23,8 +23,6 @@ pub fn init_logging(
     file_log_level: Option<tracing::level_filters::LevelFilter>,
     command_name: &str,
 ) -> LogGuard {
-    tracing_log::LogTracer::init().expect("Failed to set log tracer");
-
     let console_filter = match verbosity {
         0 => "info",
         1 => "info,librojo=debug",
