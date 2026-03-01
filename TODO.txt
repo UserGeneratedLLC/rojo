@@ -310,6 +310,21 @@ Worst case - we reconcile only on connect, but do so in mega-parallel
 Also, we need to explore how VSCode deals with this. They seem to have ZERO issues.
 Maybe we can have a mode to tie into the vscode file watcher ourselves? luau-lsp does this.
 
+[logging]
+console logging is now:
+ INFO Input file 'd:\UserGenerated\steal-a-brainrot\.\Project.rbxl' not found, downloading place 120148879522453...
+ INFO Loaded cookie from Windows Credentials (user_id: 2882755487).
+ INFO Downloaded in 0.77s
+ WARN Performing lossy string conversion on property StringValue.Value because it did not contain UTF-8.
+This may cause unexpected or broken behavior in your final results if you rely on this property being non UTF-8.
+when it used to be this format:
+[INFO  librojo::change_processor] compute_and_apply_changes: checking path d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau for instance Ref(Some(162268450181648175032536457080084761373))
+[INFO  librojo::change_processor] compute_and_apply_changes: path EXISTS via VFS, re-snapshotting d:\UserGenerated\escape-tsunami\src\ReplicatedStorage\Client\Controllers\UI\CurrenciesUI.luau
+[INFO  librojo::change_processor] VFS event applied: no changes
+[INFO  librojo::change_processor] Tree reconciliation: corrected 4 added, 4 removed (12.3s)
+
+please fix this regression.
+
 [fix dedup]
 dedup is broken due to relying on sort order
 recreate broken state by forcing random order in all matching dedup systems of the incoming children list

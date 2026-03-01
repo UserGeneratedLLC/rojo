@@ -2393,7 +2393,7 @@ mod tests {
             let has_integer = timeout["type"] == "integer"
                 || timeout["type"]
                     .as_array()
-                    .map_or(false, |arr| arr.iter().any(|v| v == "integer"));
+                    .is_some_and(|arr| arr.iter().any(|v| v == "integer"));
             assert!(has_integer, "timeout should accept integer: {timeout}");
         }
     }

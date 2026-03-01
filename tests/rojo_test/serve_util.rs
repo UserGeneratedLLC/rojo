@@ -16,8 +16,8 @@ use serde::Deserialize;
 use tempfile::{tempdir, TempDir};
 
 use librojo::web_api::{
-    ReadResponse, SerializeResponse, ServerInfoResponse, SocketPacket, SocketPacketBody,
-    SocketPacketType,
+    GitMetadata, ReadResponse, SerializeResponse, ServerInfoResponse, SocketPacket,
+    SocketPacketBody, SocketPacketType,
 };
 use rojo_insta_ext::RedactionMap;
 
@@ -335,6 +335,13 @@ impl TestServeSession {
 
     pub fn get_api_rojo(&self) -> Result<ServerInfoResponse, reqwest::Error> {
         let url = format!("http://localhost:{}/api/rojo", self.port);
+        let body = reqwest::blocking::get(url)?.bytes()?;
+
+        Ok(deserialize_msgpack(&body).expect("Server returned malformed response"))
+    }
+
+    pub fn get_api_git_metadata(&self) -> Result<Option<GitMetadata>, reqwest::Error> {
+        let url = format!("http://localhost:{}/api/git-metadata", self.port);
         let body = reqwest::blocking::get(url)?.bytes()?;
 
         Ok(deserialize_msgpack(&body).expect("Server returned malformed response"))

@@ -1,6 +1,6 @@
 //! Integration tests for git-based sync direction defaults.
 //!
-//! Tests the full pipeline: git metadata computation, ServerInfoResponse,
+//! Tests the full pipeline: git metadata computation via /api/git-metadata,
 //! stage_ids in WriteRequest, and auto-staging behavior.
 //!
 //! These tests create real git repos in temp directories to verify:
@@ -13,7 +13,6 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 use std::{fs, thread};
 
@@ -70,9 +69,10 @@ fn git_metadata_present_when_in_git_repo() {
     let mut session = TestServeSession::new_with_git("git_sync_defaults", |path| {
         git_commit_all(path, "initial commit");
     });
-    let info = session.wait_to_come_online();
+    let _info = session.wait_to_come_online();
+    let git_meta = session.get_api_git_metadata().unwrap();
     assert!(
-        info.git_metadata.is_some(),
+        git_meta.is_some(),
         "gitMetadata should be present when project is in a git repo"
     );
 }
@@ -80,9 +80,10 @@ fn git_metadata_present_when_in_git_repo() {
 #[test]
 fn git_metadata_absent_when_not_in_git_repo() {
     let mut session = TestServeSession::new("git_sync_defaults");
-    let info = session.wait_to_come_online();
+    let _info = session.wait_to_come_online();
+    let git_meta = session.get_api_git_metadata().unwrap();
     assert!(
-        info.git_metadata.is_none(),
+        git_meta.is_none(),
         "gitMetadata should be None when project is not in a git repo"
     );
 }
@@ -97,8 +98,8 @@ fn no_changes_yields_empty_changed_ids() {
         git_commit_all(path, "initial commit");
         // No modifications after commit
     });
-    let info = session.wait_to_come_online();
-    let meta = info.git_metadata.unwrap();
+    let _info = session.wait_to_come_online();
+    let meta = session.get_api_git_metadata().unwrap().unwrap();
     assert!(
         meta.changed_ids.is_empty(),
         "changedIds should be empty when no files changed"
@@ -112,8 +113,8 @@ fn unstaged_script_modification_appears_in_changed_ids() {
         git_commit_all(path, "initial commit");
         fs::write(path.join("src/ModuleA.luau"), "-- modified\nreturn {}").unwrap();
     });
-    let info = session.wait_to_come_online();
-    let meta = info.git_metadata.unwrap();
+    let _info = session.wait_to_come_online();
+    let meta = session.get_api_git_metadata().unwrap().unwrap();
 
     assert!(
         !meta.changed_ids.is_empty(),
@@ -128,8 +129,8 @@ fn staged_script_modification_appears_in_changed_ids() {
         fs::write(path.join("src/ModuleA.luau"), "-- staged mod\nreturn {}").unwrap();
         git_stage(path, "src/ModuleA.luau");
     });
-    let info = session.wait_to_come_online();
-    let meta = info.git_metadata.unwrap();
+    let _info = session.wait_to_come_online();
+    let meta = session.get_api_git_metadata().unwrap().unwrap();
 
     assert!(!meta.changed_ids.is_empty());
 }
@@ -140,8 +141,8 @@ fn untracked_file_appears_in_changed_ids() {
         git_commit_all(path, "initial commit");
         fs::write(path.join("src/NewScript.luau"), "return 'new'").unwrap();
     });
-    let info = session.wait_to_come_online();
-    let meta = info.git_metadata.unwrap();
+    let _info = session.wait_to_come_online();
+    let meta = session.get_api_git_metadata().unwrap().unwrap();
 
     assert!(
         !meta.changed_ids.is_empty(),
@@ -157,7 +158,7 @@ fn unchanged_files_not_in_changed_ids() {
         fs::write(path.join("src/ModuleA.luau"), "-- changed").unwrap();
     });
     let info = session.wait_to_come_online();
-    let meta = info.git_metadata.unwrap();
+    let meta = session.get_api_git_metadata().unwrap().unwrap();
 
     let read = session.get_api_read(info.root_instance_id).unwrap();
 
@@ -182,7 +183,7 @@ fn non_script_change_in_changed_ids_but_no_hash() {
         .unwrap();
     });
     let info = session.wait_to_come_online();
-    let meta = info.git_metadata.unwrap();
+    let meta = session.get_api_git_metadata().unwrap().unwrap();
     let read = session.get_api_read(info.root_instance_id).unwrap();
 
     if let Some((model_id, _)) = find_instance_by_name(&read.instances, "SimpleModel") {
@@ -211,7 +212,7 @@ fn committed_hash_matches_head_content() {
         fs::write(path.join("src/ModuleA.luau"), "-- v2\nreturn {}").unwrap();
     });
     let info = session.wait_to_come_online();
-    let meta = info.git_metadata.unwrap();
+    let meta = session.get_api_git_metadata().unwrap().unwrap();
     let read = session.get_api_read(info.root_instance_id).unwrap();
 
     if let Some((module_id, _)) = find_instance_by_name(&read.instances, "ModuleA") {
@@ -240,7 +241,7 @@ fn staged_hash_included_when_different_from_head() {
         fs::write(path.join("src/ModuleA.luau"), "-- working tree version").unwrap();
     });
     let info = session.wait_to_come_online();
-    let meta = info.git_metadata.unwrap();
+    let meta = session.get_api_git_metadata().unwrap().unwrap();
     let read = session.get_api_read(info.root_instance_id).unwrap();
 
     if let Some((module_id, _)) = find_instance_by_name(&read.instances, "ModuleA") {
@@ -278,7 +279,7 @@ fn staged_hash_deduplicated_when_same_as_head() {
         // Reset the stage to match HEAD content
     });
     let info = session.wait_to_come_online();
-    let meta = info.git_metadata.unwrap();
+    let meta = session.get_api_git_metadata().unwrap().unwrap();
     let read = session.get_api_read(info.root_instance_id).unwrap();
 
     if let Some((module_id, _)) = find_instance_by_name(&read.instances, "ModuleA") {
@@ -297,7 +298,7 @@ fn new_untracked_script_has_no_committed_hash() {
         fs::write(path.join("src/BrandNew.luau"), "return 'brand new'").unwrap();
     });
     let info = session.wait_to_come_online();
-    let meta = info.git_metadata.unwrap();
+    let meta = session.get_api_git_metadata().unwrap().unwrap();
     let read = session.get_api_read(info.root_instance_id).unwrap();
 
     if let Some((new_id, _)) = find_instance_by_name(&read.instances, "BrandNew") {
@@ -322,8 +323,8 @@ fn init_style_script_appears_in_changed_ids() {
         git_commit_all(path, "initial commit");
         fs::write(path.join("src/DirModule/init.luau"), "-- modified init").unwrap();
     });
-    let info = session.wait_to_come_online();
-    let meta = info.git_metadata.unwrap();
+    let _info = session.wait_to_come_online();
+    let meta = session.get_api_git_metadata().unwrap().unwrap();
 
     assert!(
         !meta.changed_ids.is_empty(),
@@ -340,7 +341,7 @@ fn init_style_script_has_committed_hash() {
         fs::write(path.join("src/DirModule/init.luau"), "-- v2").unwrap();
     });
     let info = session.wait_to_come_online();
-    let meta = info.git_metadata.unwrap();
+    let meta = session.get_api_git_metadata().unwrap().unwrap();
     let read = session.get_api_read(info.root_instance_id).unwrap();
 
     if let Some((dir_id, _)) = find_instance_by_name(&read.instances, "DirModule") {
@@ -373,7 +374,7 @@ fn all_script_types_get_hashes() {
         fs::write(path.join("src/ClientScript.client.luau"), "-- mod").unwrap();
     });
     let info = session.wait_to_come_online();
-    let meta = info.git_metadata.unwrap();
+    let meta = session.get_api_git_metadata().unwrap().unwrap();
     let read = session.get_api_read(info.root_instance_id).unwrap();
 
     for name in &["ModuleA", "ServerScript", "ClientScript"] {
@@ -593,8 +594,8 @@ fn reconnect_gets_fresh_git_metadata() {
     let mut session = TestServeSession::new_with_git("git_sync_defaults", |path| {
         git_commit_all(path, "initial commit");
     });
-    let info1 = session.wait_to_come_online();
-    let meta1 = info1.git_metadata.unwrap();
+    let _info = session.wait_to_come_online();
+    let meta1 = session.get_api_git_metadata().unwrap().unwrap();
     assert!(meta1.changed_ids.is_empty(), "No changes initially");
 
     // Now modify a file on disk
@@ -604,9 +605,8 @@ fn reconnect_gets_fresh_git_metadata() {
     )
     .unwrap();
 
-    // Re-query the API (simulates reconnect)
-    let info2 = session.get_api_rojo().unwrap();
-    let meta2 = info2.git_metadata.unwrap();
+    // Re-query the git metadata (simulates reconnect)
+    let meta2 = session.get_api_git_metadata().unwrap().unwrap();
     assert!(
         !meta2.changed_ids.is_empty(),
         "Fresh connect should reflect new git changes"
@@ -622,11 +622,11 @@ fn empty_repo_no_commits_returns_metadata() {
     let mut session = TestServeSession::new_with_git("git_sync_defaults", |_path| {
         // Don't commit anything -- repo has no HEAD
     });
-    let info = session.wait_to_come_online();
+    let _info = session.wait_to_come_online();
     // Should still get metadata (untracked files)
     // or None if git_changed_files returns None for no-HEAD repos
     // Either way, should not panic
-    let _ = info.git_metadata;
+    let _ = session.get_api_git_metadata();
 }
 
 #[test]
@@ -637,8 +637,8 @@ fn multiple_files_changed_all_tracked() {
         fs::write(path.join("src/ServerScript.server.luau"), "-- mod server").unwrap();
         fs::write(path.join("src/ClientScript.client.luau"), "-- mod client").unwrap();
     });
-    let info = session.wait_to_come_online();
-    let meta = info.git_metadata.unwrap();
+    let _info = session.wait_to_come_online();
+    let meta = session.get_api_git_metadata().unwrap().unwrap();
 
     assert!(
         meta.changed_ids.len() >= 3,
@@ -963,8 +963,8 @@ fn committed_changes_still_in_changed_ids_via_initial_head() {
     let mut session = TestServeSession::new_with_git("git_sync_defaults", |path| {
         git_commit_all(path, "initial commit");
     });
-    let info1 = session.wait_to_come_online();
-    let meta1 = info1.git_metadata.unwrap();
+    let _info = session.wait_to_come_online();
+    let meta1 = session.get_api_git_metadata().unwrap().unwrap();
     assert!(meta1.changed_ids.is_empty(), "No changes initially");
 
     fs::write(
@@ -974,8 +974,7 @@ fn committed_changes_still_in_changed_ids_via_initial_head() {
     .unwrap();
     git_commit_all(session.path(), "edit after serve");
 
-    let info2 = session.get_api_rojo().unwrap();
-    let meta2 = info2.git_metadata.unwrap();
+    let meta2 = session.get_api_git_metadata().unwrap().unwrap();
     assert!(
         !meta2.changed_ids.is_empty(),
         "Committed changes should still appear in changedIds via initial_head diff"
@@ -995,8 +994,8 @@ fn committed_script_gets_initial_head_hash() {
     fs::write(session.path().join("src/ModuleA.luau"), modified_content).unwrap();
     git_commit_all(session.path(), "edit after serve");
 
+    let meta2 = session.get_api_git_metadata().unwrap().unwrap();
     let info2 = session.get_api_rojo().unwrap();
-    let meta2 = info2.git_metadata.unwrap();
     let read = session.get_api_read(info2.root_instance_id).unwrap();
 
     if let Some((module_id, _)) = find_instance_by_name(&read.instances, "ModuleA") {
@@ -1039,8 +1038,8 @@ fn multiple_commits_after_session_start_all_tracked() {
     .unwrap();
     git_commit_all(session.path(), "commit 2");
 
+    let meta2 = session.get_api_git_metadata().unwrap().unwrap();
     let info2 = session.get_api_rojo().unwrap();
-    let meta2 = info2.git_metadata.unwrap();
     let read = session.get_api_read(info2.root_instance_id).unwrap();
 
     if let Some((module_id, _)) = find_instance_by_name(&read.instances, "ModuleA") {
