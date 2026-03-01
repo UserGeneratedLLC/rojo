@@ -404,28 +404,6 @@ impl ApiService {
             Vec::new()
         };
 
-        let git_metadata = if let Some(repo_root) = self.serve_session.git_repo_root() {
-            let tree_handle = self.serve_session.tree_handle();
-            let repo_root = repo_root.to_owned();
-            let initial_head = self
-                .serve_session
-                .initial_head_commit()
-                .map(|s| s.to_owned());
-            let t = Instant::now();
-            let result = tokio::task::spawn_blocking(move || {
-                crate::git::compute_git_metadata(&tree_handle, &repo_root, initial_head.as_deref())
-            })
-            .await
-            .ok();
-            log::debug!(
-                "[TIMING] handle_api_rojo: compute_git_metadata {}ms",
-                t.elapsed().as_millis()
-            );
-            result
-        } else {
-            None
-        };
-
         log::debug!(
             "[TIMING] handle_api_rojo: total {}ms",
             handler_start.elapsed().as_millis()
@@ -446,7 +424,7 @@ impl ApiService {
             sync_scripts_only: self.serve_session.sync_scripts_only(),
             ignore_hidden_services,
             visible_services,
-            git_metadata,
+            git_metadata: None,
         })
     }
 

@@ -350,48 +350,57 @@ function ServeSession:start()
 
 			self.__serverInfo = serverInfo
 
-			local computePatchClock = os.clock()
-			Log.debug("[TIMING] __computeInitialPatch() starting")
-			return self:__computeInitialPatch(serverInfo):andThen(function(catchUpPatch)
-				Log.debug(
-					"[TIMING] __computeInitialPatch() completed ({} ms)",
-					string.format("%.1f", (os.clock() - computePatchClock) * 1000)
-				)
-				self:setLoadingText("Starting sync loop...")
-
-				local wsClock = os.clock()
-				Log.debug("[TIMING] connectWebSocket() starting")
-				-- Connect WebSocket BEFORE showing confirmation so changes
-				-- during confirmation can be merged into the patch
-				-- Note: connectWebSocket returns a Promise that only resolves when
-				-- the connection closes, so we don't chain .andThen() on it
-				self.__apiContext
-					:connectWebSocket({
-						["messages"] = function(messagesPacket)
-							self:__onWebSocketMessage(messagesPacket)
-						end,
-					})
-					:catch(function(err)
-						if self.__status ~= Status.Disconnected then
-							self:__stopInternal(err)
-						end
-					end)
-				Log.debug(
-					"[TIMING] connectWebSocket() initiated ({} ms)",
-					string.format("%.1f", (os.clock() - wsClock) * 1000)
-				)
-
-				local confirmClock = os.clock()
-				Log.debug("[TIMING] __confirmAndApplyInitialPatch() starting")
-				-- Now show confirmation and wait for user decision
-				return self:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo):andThen(function(...)
-					Log.debug(
-						"[TIMING] __confirmAndApplyInitialPatch() completed ({} ms)",
-						string.format("%.1f", (os.clock() - confirmClock) * 1000)
-					)
-					return ...
+			self:setLoadingText("Fetching git metadata...")
+			return self.__apiContext
+				:getGitMetadata()
+				:andThen(function(gitMeta)
+					serverInfo.gitMetadata = gitMeta
 				end)
-			end)
+				:catch(function() end)
+				:andThen(function()
+					local computePatchClock = os.clock()
+					Log.debug("[TIMING] __computeInitialPatch() starting")
+					return self:__computeInitialPatch(serverInfo):andThen(function(catchUpPatch)
+						Log.debug(
+							"[TIMING] __computeInitialPatch() completed ({} ms)",
+							string.format("%.1f", (os.clock() - computePatchClock) * 1000)
+						)
+						self:setLoadingText("Starting sync loop...")
+
+						local wsClock = os.clock()
+						Log.debug("[TIMING] connectWebSocket() starting")
+						-- Connect WebSocket BEFORE showing confirmation so changes
+						-- during confirmation can be merged into the patch
+						-- Note: connectWebSocket returns a Promise that only resolves when
+						-- the connection closes, so we don't chain .andThen() on it
+						self.__apiContext
+							:connectWebSocket({
+								["messages"] = function(messagesPacket)
+									self:__onWebSocketMessage(messagesPacket)
+								end,
+							})
+							:catch(function(err)
+								if self.__status ~= Status.Disconnected then
+									self:__stopInternal(err)
+								end
+							end)
+						Log.debug(
+							"[TIMING] connectWebSocket() initiated ({} ms)",
+							string.format("%.1f", (os.clock() - wsClock) * 1000)
+						)
+
+						local confirmClock = os.clock()
+						Log.debug("[TIMING] __confirmAndApplyInitialPatch() starting")
+						-- Now show confirmation and wait for user decision
+						return self:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo):andThen(function(...)
+							Log.debug(
+								"[TIMING] __confirmAndApplyInitialPatch() completed ({} ms)",
+								string.format("%.1f", (os.clock() - confirmClock) * 1000)
+							)
+							return ...
+						end)
+					end)
+				end)
 		end)
 		:andThen(function()
 			Log.debug(

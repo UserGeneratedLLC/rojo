@@ -542,6 +542,10 @@ function App:checkSyncReminder()
 end
 
 function App:startSyncReminderPolling()
+	-- Feature disabled: polling GET /api/rojo every 30s is expensive and
+	-- the setting was hidden behind showNotifications anyway.
+	do return end
+
 	if
 		self.syncReminderPollingThread ~= nil
 		or Settings:get("syncReminderMode") == "None"
