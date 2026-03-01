@@ -12,7 +12,6 @@ use memofs::Vfs;
 use rbx_dom_weak::{types::Ref, types::Variant, InstanceBuilder, WeakDom};
 
 use crate::{
-    project::Project,
     serve_session::ServeSession,
     syncback::syncback_loop,
     web::{
@@ -47,16 +46,19 @@ impl ServeCommand {
     pub fn run(self) -> anyhow::Result<()> {
         let project_path = resolve_path(&self.project);
 
-        let (ip, port) = {
-            let vfs = Vfs::new_oneshot();
-            let project = Project::load_initial_project(&vfs, &project_path)?;
-            let ip = self
-                .address
-                .or(project.serve_address)
-                .unwrap_or(DEFAULT_BIND_ADDRESS.into());
-            let port = self.port.or(project.serve_port).unwrap_or(DEFAULT_PORT);
-            (ip, port)
-        };
+        let (first_vfs, first_errors) = Vfs::new_default_with_errors();
+        let first_session = Arc::new(ServeSession::new(
+            first_vfs,
+            project_path.clone(),
+            Some(first_errors),
+        )?);
+
+        let project = first_session.root_project();
+        let ip = self
+            .address
+            .or(project.serve_address)
+            .unwrap_or(DEFAULT_BIND_ADDRESS.into());
+        let port = self.port.or(project.serve_port).unwrap_or(DEFAULT_PORT);
 
         let addr: SocketAddr = (ip, port).into();
         let host = if ip.is_loopback() {
@@ -65,13 +67,8 @@ impl ServeCommand {
             ip.to_string()
         };
 
+        let mut session = first_session;
         loop {
-            let (vfs, critical_errors) = Vfs::new_default_with_errors();
-            let session = Arc::new(ServeSession::new(
-                vfs,
-                project_path.clone(),
-                Some(critical_errors),
-            )?);
             let server = LiveServer::new(session);
 
             log::info!("Listening: http://{}:{}", host, port);
@@ -85,6 +82,12 @@ impl ServeCommand {
                             log::error!("Live syncback failed: {err:#}. Restarting serve...")
                         }
                     }
+                    let (vfs, critical_errors) = Vfs::new_default_with_errors();
+                    session = Arc::new(ServeSession::new(
+                        vfs,
+                        project_path.clone(),
+                        Some(critical_errors),
+                    )?);
                     continue;
                 }
             }
