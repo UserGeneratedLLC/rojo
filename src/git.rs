@@ -354,9 +354,10 @@ fn collect_untracked_files(repo: &gix::Repository, untracked: &mut HashSet<PathB
 
             if let Ok(meta) = entry.metadata() {
                 if meta.is_dir() {
-                    if tracked_dirs.contains(rel_str.as_ref() as &str) {
-                        walk_dir(base, &path, index, tracked_dirs, untracked);
+                    if name.starts_with('.') && !tracked_dirs.contains(rel_str.as_ref() as &str) {
+                        continue;
                     }
+                    walk_dir(base, &path, index, tracked_dirs, untracked);
                 } else if meta.is_file() {
                     let path_as_bstr: &gix::bstr::BStr = rel_str.as_bytes().as_bstr();
                     let is_tracked = index.entry_by_path(path_as_bstr).is_some();
