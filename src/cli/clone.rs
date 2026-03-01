@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context};
 use clap::Parser;
@@ -95,25 +94,8 @@ impl CloneCommand {
 
         syncback.run(global)?;
 
-        // Commit syncback result
         if !skip_git {
-            log::info!("Staging syncback changes...");
-            let _ = Command::new("git")
-                .args(["add", "."])
-                .current_dir(&path)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-
-            log::info!("Committing syncback changes...");
-            let _ = Command::new("git")
-                .args(["commit", "--no-verify", "-m", "syncback"])
-                .current_dir(&path)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
+            crate::git::git_add_all_and_commit(&path, "syncback");
         }
 
         if !self.skip_cd {

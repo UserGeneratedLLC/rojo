@@ -5,6 +5,7 @@ expression: normalized_stdout
 Writing default.project.json5
 Writing src/adjacent.luau
 Writing src/adjacent.meta.json5
-Writing src/init/init.meta.json5
+Writing src/init_/init.meta.json5
 Writing src/model.model.json5
-Writing src/init
+Writing src/init_
+Removing src/init

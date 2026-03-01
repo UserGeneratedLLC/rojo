@@ -12,7 +12,7 @@
 //! - Non-script changes are in changedIds but not in scriptCommittedHashes
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 use std::{fs, thread};
@@ -24,27 +24,15 @@ use rbx_dom_weak::{ustr, UstrMap};
 use crate::rojo_test::serve_util::TestServeSession;
 
 fn git_commit_all(dir: &Path, msg: &str) {
-    Command::new("git")
-        .args(["add", "-A"])
-        .current_dir(dir)
-        .output()
-        .expect("git add failed");
-    Command::new("git")
-        .args(["commit", "-m", msg])
-        .current_dir(dir)
-        .output()
-        .expect("git commit failed");
+    librojo::git::git_add_all_and_commit(dir, msg);
 }
 
 fn git_stage(dir: &Path, file: &str) {
-    Command::new("git")
-        .args(["add", file])
-        .current_dir(dir)
-        .output()
-        .expect("git stage failed");
+    librojo::git_add(dir, &[PathBuf::from(file)]);
 }
 
 fn git_is_staged(dir: &Path, file: &str) -> bool {
+    use std::process::Command;
     let output = Command::new("git")
         .args(["diff", "--cached", "--name-only"])
         .current_dir(dir)

@@ -5,15 +5,6 @@ get the schemas for everything into cursor somehow
 setup nightly build
 suffix version for beta
 
-[mcp]
-* atlas_sync
- - Basically equiv to git fast-forward merge
- - Invokes Atlas sync from Roblox
- - If there are NO unselected items in the tree (e.g. all were automatically selected), it just automatically hits accept
- - Does nothing if we are running in connected-mode (already syncing)
- - Agent should await the completion of this sync before proceeding
-  - If we are in connected-mode we will need to figure out a way to await syncing to finish to ensure state is good
-
 [merging]
 we should make the property diffs have arrows next to eachother so you can like "undo" certain things
 need proper merging support in this UI.
@@ -336,10 +327,24 @@ because have already loaded it, we can detect this.
 this is an optimization to avoid writing 100,000 files or something on larger projects when file bytes match perfectly, or directories verifiably already exist.
 make sure this is applied to plugin-based syncback, too.
 
-[git]
-I notice we actually use the git cli in a lot of places. is there a git library we can use instead?
+[mcp]
+* atlas_sync
+ - Basically equiv to git fast-forward merge
+ - Atlas plugin automatically connects (tries every 5s if nothing there, do not spam errors) via https://create.roblox.com/docs/reference/engine/classes/HttpService#CreateWebStreamClient
+ - Atlas serve automatically hosts a http based mcp server (NOT stdio based!)
+ - Decide whether it's easier to make a separate server from the api.rs file, or integrate it - integrating would be cleaner, but im not sure if it would support without a massive amount of changes
+ - When an agent invokes atlas_sync, it invokes Atlas sync from Roblox in the plugin as if the user clicked the sync button
+ - Must be on a mutex, so multiple agents cannot invoke it at the same time. Just refuses if it's currently happening
+  - Also it needs to refuse it if we're actively connected on the regular api layer too, not just the mcp based command.
+  - If we are connected already, respond to the agent with a proper notice. Make sure if we are in connected-mode where all things are syncing automatically all the time, we tell the agent. We need to tell the agent the configuration of the lua plugin probably?
+    - If we are in connected-mode we will need to figure out a way to await syncing to finish to ensure state is good?
+ - Upon the plugin connecting, if there are NO changes (Always/Initial) it should just immediately accept
+ - If all changes are pre-selected, e.g. from our git pre selection system, then we "fast-forward" by clicking accept immediately.
+ - If there are actually changes, the agent should hang while waiting for the user to either accept/deny them
+ - The output of the mcp request needs to conclude that it was a success and what changes were synced AND if it was rejected + what changes were presented to the user to sync.
+  - Let's just give a list of file paths on the actual disk (relative to project so like ReplicatedStorage/SomeFile.luau or ReplicatedStorage/SomeModel.json5 etc) ?
+  - Needs to include the DIRECTION, too.
+  - I'm not sure what is the most value on this, but we absolutely need to give the agent a response on what was actually synced, ideally what the content was(?), and the directions of sync.
+ - Does nothing if we are running in connected-mode (already syncing)
+ - Agent should await the completion of this sync before proceeding, this mcp command needs to yield and give the response as described above.
 
-[cli]
-make console tabbing support work
-when i say console tabbing, like i can type "git c" and it will recommend "git checkout"
-is there a rust crate to accomplish this? can we enable it on our current argument parser library being used?

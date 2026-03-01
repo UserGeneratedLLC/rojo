@@ -93,7 +93,7 @@ syncback_tests! {
     // do not leave any trace of themselves (new files get .json5)
     ref_properties_pruned => ["src/Pointer1.model.json5", "src/Pointer2.model.json5", "src/Pointer3.model.json5"],
     // Ensures that the `$schema` field roundtrips with syncback
-    schema_roundtrip => ["default.project.json5", "src/model.model.json5", "src/init/init.meta.json5", "src/adjacent.meta.json5"],
+    schema_roundtrip => ["default.project.json5", "src/model.model.json5", "src/init_/init.meta.json5", "src/adjacent.meta.json5"],
     // Ensures that StringValues inside project files are written to the
     // project file, but only if they don't have `$path` set
     string_value_project => ["default.project.json5"],

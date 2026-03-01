@@ -1,12 +1,10 @@
 use std::{
     collections::{HashMap, HashSet},
-    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::{Arc, Mutex},
-    thread,
 };
 
+use gix::bstr::ByteSlice;
 use rbx_dom_weak::types::Ref;
 use sha1::{Digest, Sha1};
 
@@ -15,45 +13,38 @@ use crate::{
     web::interface::GitMetadata,
 };
 
+fn open_repo(path: &Path) -> Option<gix::Repository> {
+    gix::discover(path).ok()
+}
+
+#[cfg(windows)]
+fn strip_unc_prefix(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(stripped) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(stripped)
+    } else {
+        path.to_owned()
+    }
+}
+
+#[cfg(not(windows))]
+fn strip_unc_prefix(path: &Path) -> PathBuf {
+    path.to_owned()
+}
+
 pub fn git_repo_root(project_root: &Path) -> Option<PathBuf> {
-    let output = Command::new("git")
-        .args([
-            "-C",
-            &project_root.to_string_lossy(),
-            "rev-parse",
-            "--show-toplevel",
-        ])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let path_str = stdout.trim();
-    if path_str.is_empty() {
-        return None;
-    }
-
-    Some(PathBuf::from(path_str))
+    let repo = open_repo(project_root)?;
+    repo.workdir().map(|p| p.to_owned())
 }
 
 /// Returns the current HEAD commit SHA, or `None` if there are no commits
 /// or the project is not in a git repo.
 pub fn git_head_commit(repo_root: &Path) -> Option<String> {
-    let output = Command::new("git")
-        .args(["-C", &repo_root.to_string_lossy(), "rev-parse", "HEAD"])
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()) {
-        Some(sha)
+    let repo = open_repo(repo_root)?;
+    let head_id = repo.head_id().ok()?;
+    let hex = head_id.to_hex().to_string();
+    if hex.len() == 40 && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        Some(hex)
     } else {
         None
     }
@@ -74,75 +65,302 @@ impl ChangedFiles {
     }
 }
 
-fn git_changed_files(repo_root: &Path, initial_head: Option<&str>) -> Option<ChangedFiles> {
+fn resolve_tree_id(repo: &gix::Repository, rev: &str) -> Option<gix::ObjectId> {
+    let id = repo.rev_parse_single(rev.as_bytes()).ok()?;
+    let tree = id.object().ok()?.peel_to_tree().ok()?;
+    Some(tree.id().detach())
+}
+
+fn git_changed_files_impl(
+    repo: &gix::Repository,
+    initial_head: Option<&str>,
+) -> Option<ChangedFiles> {
     let mut tracked = HashSet::new();
+    let mut untracked = HashSet::new();
 
     let diff_base = initial_head.unwrap_or("HEAD");
-    let diff_output = Command::new("git")
-        .args([
-            "-C",
-            &repo_root.to_string_lossy(),
-            "diff",
-            diff_base,
-            "--name-only",
-        ])
-        .output()
-        .ok()?;
+    let base_tree_id = resolve_tree_id(repo, diff_base);
+    let head_tree_id = resolve_tree_id(repo, "HEAD");
 
-    if diff_output.status.success() {
-        for line in String::from_utf8_lossy(&diff_output.stdout).lines() {
-            let trimmed = line.trim();
-            if !trimmed.is_empty() {
-                tracked.insert(PathBuf::from(trimmed));
-            }
-        }
-    } else {
-        log::debug!(
-            "git diff {} failed (possibly no commits yet), skipping diff",
-            diff_base
-        );
-    }
+    let diff_failed = base_tree_id.is_none();
 
-    let mut untracked = HashSet::new();
-    let untracked_output = Command::new("git")
-        .args([
-            "-C",
-            &repo_root.to_string_lossy(),
-            "ls-files",
-            "--others",
-            "--exclude-standard",
-        ])
-        .output()
-        .ok()?;
-
-    if untracked_output.status.success() {
-        for line in String::from_utf8_lossy(&untracked_output.stdout).lines() {
-            let trimmed = line.trim();
-            if !trimmed.is_empty() {
-                untracked.insert(PathBuf::from(trimmed));
+    // If initial_head differs from HEAD, diff those trees for committed-since-start changes
+    if let (Some(base_id), Some(head_id)) = (base_tree_id, head_tree_id) {
+        if base_id != head_id {
+            if let (Ok(base_obj), Ok(head_obj)) =
+                (repo.find_object(base_id), repo.find_object(head_id))
+            {
+                if let (Ok(base_tree), Ok(head_tree)) =
+                    (base_obj.peel_to_tree(), head_obj.peel_to_tree())
+                {
+                    collect_tree_diff_paths(repo, &base_tree, &head_tree, &mut tracked);
+                }
             }
         }
     }
 
-    if tracked.is_empty() && untracked.is_empty() && !diff_output.status.success() {
+    // Compare base tree vs index for staged changes, and index vs worktree for unstaged
+    if let Some(base_id) = base_tree_id.or(head_tree_id) {
+        if let Ok(index) = repo.open_index() {
+            collect_tree_index_changes(repo, base_id, &index, &mut tracked);
+            collect_index_worktree_changes(repo, &index, &mut tracked);
+        }
+    } else if let Ok(index) = repo.open_index() {
+        for entry in index.entries() {
+            tracked.insert(PathBuf::from(entry.path(&index).to_str_lossy().as_ref()));
+        }
+        collect_index_worktree_changes(repo, &index, &mut tracked);
+    }
+
+    collect_untracked_files(repo, &mut untracked);
+
+    if tracked.is_empty() && untracked.is_empty() && diff_failed {
         return None;
     }
 
     Some(ChangedFiles { tracked, untracked })
 }
 
-#[cfg(test)]
-fn git_show(repo_root: &Path, object_ref: &str) -> Option<String> {
-    let output = Command::new("git")
-        .args(["-C", &repo_root.to_string_lossy(), "show", object_ref])
-        .output()
-        .ok()?;
+fn collect_tree_diff_paths(
+    repo: &gix::Repository,
+    old_tree: &gix::Tree<'_>,
+    new_tree: &gix::Tree<'_>,
+    tracked: &mut HashSet<PathBuf>,
+) {
+    if let Ok(changes) = repo.diff_tree_to_tree(old_tree, Some(new_tree), None) {
+        for change in changes {
+            let path_str = change.location().to_str_lossy();
+            tracked.insert(PathBuf::from(path_str.as_ref()));
+        }
+    }
+}
 
-    if !output.status.success() {
-        return None;
+fn collect_tree_index_changes(
+    repo: &gix::Repository,
+    tree_id: gix::ObjectId,
+    index: &gix::index::File,
+    tracked: &mut HashSet<PathBuf>,
+) {
+    let tree_obj = match repo.find_object(tree_id) {
+        Ok(o) => o,
+        Err(_) => return,
+    };
+    let tree = match tree_obj.peel_to_tree() {
+        Ok(t) => t,
+        Err(_) => return,
+    };
+
+    for entry in index.entries() {
+        let path_bstr = entry.path(index);
+        let path_str = path_bstr.to_str_lossy();
+
+        let tree_entry_id = tree
+            .lookup_entry_by_path(path_str.as_ref())
+            .ok()
+            .flatten()
+            .map(|e| e.object_id());
+
+        match tree_entry_id {
+            Some(tid) if tid == entry.id => {}
+            _ => {
+                tracked.insert(PathBuf::from(path_str.as_ref()));
+            }
+        }
     }
 
-    String::from_utf8(output.stdout).ok()
+    collect_tree_only_paths(repo, &tree, "", index, tracked);
+}
+
+fn collect_tree_only_paths(
+    repo: &gix::Repository,
+    tree: &gix::Tree<'_>,
+    prefix: &str,
+    index: &gix::index::File,
+    tracked: &mut HashSet<PathBuf>,
+) {
+    for entry in tree.iter() {
+        let entry = match entry {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let name = entry.filename().to_str_lossy();
+        let full_path = if prefix.is_empty() {
+            name.to_string()
+        } else {
+            format!("{}/{}", prefix, name)
+        };
+
+        if entry.mode().is_tree() {
+            if let Ok(sub_obj) = entry.id().object() {
+                if let Ok(sub_tree) = sub_obj.peel_to_tree() {
+                    collect_tree_only_paths(repo, &sub_tree, &full_path, index, tracked);
+                }
+            }
+        } else if entry.mode().is_blob() || entry.mode().is_executable() {
+            let path_as_bstr: &gix::bstr::BStr = full_path.as_bytes().as_bstr();
+            if index.entry_by_path(path_as_bstr).is_none() {
+                tracked.insert(PathBuf::from(&full_path));
+            }
+        }
+    }
+}
+
+fn collect_index_worktree_changes(
+    repo: &gix::Repository,
+    index: &gix::index::File,
+    tracked: &mut HashSet<PathBuf>,
+) {
+    let work_dir = match repo.workdir() {
+        Some(d) => d.to_owned(),
+        None => return,
+    };
+
+    for entry in index.entries() {
+        let path_bstr = entry.path(index);
+        let path_str = path_bstr.to_str_lossy();
+        let full_path = work_dir.join(path_str.as_ref());
+
+        match std::fs::metadata(&full_path) {
+            Ok(meta) => {
+                let size_changed = entry.stat.size as u64 != meta.len();
+                if size_changed {
+                    tracked.insert(PathBuf::from(path_str.as_ref()));
+                } else {
+                    let content = match std::fs::read(&full_path) {
+                        Ok(c) => c,
+                        Err(_) => {
+                            tracked.insert(PathBuf::from(path_str.as_ref()));
+                            continue;
+                        }
+                    };
+                    let worktree_hash = match repo.write_blob_stream(std::io::Cursor::new(&content))
+                    {
+                        Ok(id) => id.detach(),
+                        Err(_) => {
+                            tracked.insert(PathBuf::from(path_str.as_ref()));
+                            continue;
+                        }
+                    };
+                    if worktree_hash != entry.id {
+                        tracked.insert(PathBuf::from(path_str.as_ref()));
+                    }
+                }
+            }
+            Err(_) => {
+                tracked.insert(PathBuf::from(path_str.as_ref()));
+            }
+        }
+    }
+}
+
+fn collect_untracked_files(repo: &gix::Repository, untracked: &mut HashSet<PathBuf>) {
+    let work_dir = match repo.workdir() {
+        Some(d) => d.to_owned(),
+        None => return,
+    };
+    let index = repo.open_index().unwrap_or_else(|_| {
+        gix::index::File::from_state(
+            gix::index::State::new(repo.object_hash()),
+            repo.index_path(),
+        )
+    });
+
+    fn walk_dir(
+        base: &Path,
+        dir: &Path,
+        index: &gix::index::File,
+        untracked: &mut HashSet<PathBuf>,
+    ) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n,
+                None => continue,
+            };
+
+            if name == ".git" {
+                continue;
+            }
+
+            let rel = match path.strip_prefix(base) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let rel_str = rel.to_string_lossy().replace('\\', "/");
+
+            if let Ok(meta) = entry.metadata() {
+                if meta.is_dir() {
+                    walk_dir(base, &path, index, untracked);
+                } else if meta.is_file() {
+                    let path_as_bstr: &gix::bstr::BStr = rel_str.as_bytes().as_bstr();
+                    let is_tracked = index.entry_by_path(path_as_bstr).is_some();
+                    if !is_tracked {
+                        untracked.insert(PathBuf::from(&rel_str));
+                    }
+                }
+            }
+        }
+    }
+
+    walk_dir(&work_dir, &work_dir, &index, untracked);
+}
+
+fn resolve_object_ref(repo: &gix::Repository, object_ref: &str) -> Option<String> {
+    if let Some(path) = object_ref.strip_prefix(":0:") {
+        let index = repo.open_index().ok()?;
+        let bstr_path: &gix::bstr::BStr = path.as_bytes().as_bstr();
+        let entry = index.entry_by_path(bstr_path)?;
+        Some(entry.id.to_hex().to_string())
+    } else if let Some((rev, path)) = object_ref.split_once(':') {
+        let id = repo.rev_parse_single(rev.as_bytes()).ok()?;
+        let tree = id.object().ok()?.peel_to_tree().ok()?;
+        let entry = tree.lookup_entry_by_path(path).ok()??;
+        Some(entry.object_id().to_hex().to_string())
+    } else {
+        None
+    }
+}
+
+fn git_batch_check_hashes_impl(
+    repo: &gix::Repository,
+    object_refs: &[String],
+) -> Vec<Option<String>> {
+    object_refs
+        .iter()
+        .map(|r| resolve_object_ref(repo, r))
+        .collect()
+}
+
+#[cfg(test)]
+fn git_show(repo_root: &Path, object_ref: &str) -> Option<String> {
+    let repo = open_repo(repo_root)?;
+    if let Some(path) = object_ref.strip_prefix(":0:") {
+        let index = repo.open_index().ok()?;
+        let bstr_path: &gix::bstr::BStr = path.as_bytes().as_bstr();
+        let entry = index.entry_by_path(bstr_path)?;
+        let obj = repo.find_object(entry.id).ok()?;
+        String::from_utf8(obj.data.to_vec()).ok()
+    } else if object_ref.contains(':') {
+        let (rev, path) = object_ref.split_once(':')?;
+        let id = repo.rev_parse_single(rev.as_bytes()).ok()?;
+        let tree = id.object().ok()?.peel_to_tree().ok()?;
+        let entry = tree.lookup_entry_by_path(path).ok()??;
+        let obj = entry.id().object().ok()?;
+        String::from_utf8(obj.data.to_vec()).ok()
+    } else {
+        let id = repo.rev_parse_single(object_ref.as_bytes()).ok()?;
+        let obj = id.object().ok()?;
+        String::from_utf8(obj.data.to_vec()).ok()
+    }
 }
 
 #[cfg(test)]
@@ -155,85 +373,6 @@ fn git_show_head(repo_root: &Path, rel_path: &Path) -> Option<String> {
 fn git_show_staged(repo_root: &Path, rel_path: &Path) -> Option<String> {
     let object_ref = format!(":0:{}", rel_path.to_string_lossy().replace('\\', "/"));
     git_show(repo_root, &object_ref)
-}
-
-/// Retrieves git blob hashes for multiple object refs in a single subprocess.
-/// Returns a Vec with the same length as `object_refs`, where each element is
-/// `Some(sha1_hex)` if the object exists, or `None` if missing.
-///
-/// Uses `git cat-file --batch-check` which outputs the stored blob hash
-/// directly, avoiding the need to download and re-hash file contents.
-fn git_batch_check_hashes(repo_root: &Path, object_refs: &[String]) -> Vec<Option<String>> {
-    if object_refs.is_empty() {
-        return Vec::new();
-    }
-
-    let mut child = match Command::new("git")
-        .args([
-            "-C",
-            &repo_root.to_string_lossy(),
-            "cat-file",
-            "--batch-check",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    {
-        Ok(child) => child,
-        Err(err) => {
-            log::warn!("Failed to spawn git cat-file --batch-check: {}", err);
-            return vec![None; object_refs.len()];
-        }
-    };
-
-    let stdin = child.stdin.take().unwrap();
-    let refs_for_writer: Vec<String> = object_refs.to_vec();
-    let writer_thread = thread::spawn(move || {
-        let mut stdin = stdin;
-        for object_ref in &refs_for_writer {
-            if writeln!(stdin, "{}", object_ref).is_err() {
-                break;
-            }
-        }
-    });
-
-    let expected = object_refs.len();
-    let mut results = Vec::with_capacity(expected);
-
-    if let Some(stdout) = child.stdout.take() {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines() {
-            let line = match line {
-                Ok(l) => l,
-                Err(_) => break,
-            };
-
-            if line.ends_with(" missing") {
-                results.push(None);
-            } else if let Some(sha1) = line.split(' ').next() {
-                if sha1.len() == 40 && sha1.bytes().all(|b| b.is_ascii_hexdigit()) {
-                    results.push(Some(sha1.to_string()));
-                } else {
-                    results.push(None);
-                }
-            } else {
-                results.push(None);
-            }
-
-            if results.len() >= expected {
-                break;
-            }
-        }
-    }
-
-    while results.len() < expected {
-        results.push(None);
-    }
-
-    let _ = writer_thread.join();
-    let _ = child.wait();
-    results
 }
 
 pub fn compute_blob_sha1(content: &str) -> String {
@@ -249,22 +388,237 @@ pub fn git_add(repo_root: &Path, paths: &[PathBuf]) {
         return;
     }
 
-    let mut cmd = Command::new("git");
-    cmd.args(["-C", &repo_root.to_string_lossy(), "add", "--"]);
+    let repo = match open_repo(repo_root) {
+        Some(r) => r,
+        None => return,
+    };
+    let mut index = match repo.open_index() {
+        Ok(i) => i,
+        Err(_) => return,
+    };
+
+    let work_dir = match repo.workdir() {
+        Some(d) => d.to_owned(),
+        None => return,
+    };
+
     for path in paths {
-        cmd.arg(path);
+        let abs_path = if path.is_absolute() {
+            path.to_owned()
+        } else {
+            work_dir.join(path)
+        };
+        let norm_abs = strip_unc_prefix(&abs_path);
+        let norm_work = strip_unc_prefix(&work_dir);
+        let rel_path = match norm_abs.strip_prefix(&norm_work) {
+            Ok(r) => r.to_owned(),
+            Err(_) => path.to_owned(),
+        };
+        let content = match std::fs::read(&abs_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let blob_id = match repo.write_blob(&content) {
+            Ok(id) => id.detach(),
+            Err(_) => continue,
+        };
+
+        let rel_str = rel_path.to_string_lossy().replace('\\', "/");
+        let bstr_path: gix::bstr::BString = rel_str.into();
+
+        let gix_meta = match gix::index::fs::Metadata::from_path_no_follow(&abs_path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        let stat = match gix::index::entry::Stat::from_fs(&gix_meta) {
+            Ok(s) => s,
+            Err(_) => gix::index::entry::Stat::default(),
+        };
+
+        if let Some(existing) = index
+            .entry_mut_by_path_and_stage(bstr_path.as_ref(), gix::index::entry::Stage::Unconflicted)
+        {
+            existing.id = blob_id;
+            existing.stat = stat;
+        } else {
+            index.dangerously_push_entry(
+                stat,
+                blob_id,
+                gix::index::entry::Flags::empty(),
+                gix::index::entry::Mode::FILE,
+                bstr_path.as_ref(),
+            );
+        }
     }
 
-    match cmd.output() {
-        Ok(output) => {
-            if !output.status.success() {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                log::warn!("git add failed: {}", stderr.trim());
+    index.sort_entries();
+    if let Err(e) = index.write(gix::index::write::Options::default()) {
+        log::warn!("Failed to write git index: {}", e);
+    }
+}
+
+/// Build a tree object from sorted index entries and write it to the ODB.
+pub fn write_index_tree(repo: &gix::Repository, index: &gix::index::File) -> Option<gix::ObjectId> {
+    use gix::objs::tree;
+    use std::collections::BTreeMap;
+
+    enum TreeNode {
+        Blob(gix::ObjectId, tree::EntryKind),
+        Tree(BTreeMap<String, TreeNode>),
+    }
+
+    let mut root: BTreeMap<String, TreeNode> = BTreeMap::new();
+
+    for entry in index.entries() {
+        let path = entry.path(index).to_str_lossy();
+        let parts: Vec<&str> = path.split('/').collect();
+
+        let mut current = &mut root;
+        for (i, part) in parts.iter().enumerate() {
+            if i == parts.len() - 1 {
+                let kind = if entry.mode == gix::index::entry::Mode::FILE_EXECUTABLE {
+                    tree::EntryKind::BlobExecutable
+                } else {
+                    tree::EntryKind::Blob
+                };
+                current.insert(part.to_string(), TreeNode::Blob(entry.id, kind));
+            } else {
+                current = match current
+                    .entry(part.to_string())
+                    .or_insert_with(|| TreeNode::Tree(BTreeMap::new()))
+                {
+                    TreeNode::Tree(ref mut map) => map,
+                    _ => return None,
+                };
             }
         }
-        Err(err) => {
-            log::warn!("Failed to run git add: {}", err);
+    }
+
+    fn write_recursive(
+        repo: &gix::Repository,
+        nodes: &BTreeMap<String, TreeNode>,
+    ) -> Option<gix::ObjectId> {
+        let mut tree = gix::objs::Tree::empty();
+        for (name, node) in nodes {
+            match node {
+                TreeNode::Blob(id, kind) => {
+                    tree.entries.push(tree::Entry {
+                        mode: (*kind).into(),
+                        filename: name.as_str().into(),
+                        oid: *id,
+                    });
+                }
+                TreeNode::Tree(children) => {
+                    let subtree_id = write_recursive(repo, children)?;
+                    tree.entries.push(tree::Entry {
+                        mode: tree::EntryKind::Tree.into(),
+                        filename: name.as_str().into(),
+                        oid: subtree_id,
+                    });
+                }
+            }
         }
+        repo.write_object(&tree).ok().map(|id| id.detach())
+    }
+
+    write_recursive(repo, &root)
+}
+
+/// Stage all worktree files and create a commit.
+pub fn git_add_all_and_commit(dir: &Path, message: &str) {
+    let repo = match open_repo(dir) {
+        Some(r) => r,
+        None => return,
+    };
+    let work_dir = match repo.workdir() {
+        Some(d) => d.to_owned(),
+        None => return,
+    };
+
+    log::info!("Staging all files...");
+    let mut index = gix::index::File::from_state(
+        gix::index::State::new(repo.object_hash()),
+        repo.index_path(),
+    );
+
+    fn add_dir(repo: &gix::Repository, base: &Path, dir: &Path, index: &mut gix::index::File) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let path = entry.path();
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n,
+                None => continue,
+            };
+            if name == ".git" {
+                continue;
+            }
+            if let Ok(ft) = entry.file_type() {
+                if ft.is_dir() {
+                    add_dir(repo, base, &path, index);
+                } else if ft.is_file() {
+                    let rel = match path.strip_prefix(base) {
+                        Ok(r) => r,
+                        Err(_) => continue,
+                    };
+                    let rel_str = rel.to_string_lossy().replace('\\', "/");
+                    let content = match std::fs::read(&path) {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    };
+                    let blob_id = match repo.write_blob(&content) {
+                        Ok(id) => id.detach(),
+                        Err(_) => continue,
+                    };
+                    let gix_meta = match gix::index::fs::Metadata::from_path_no_follow(&path) {
+                        Ok(m) => m,
+                        Err(_) => continue,
+                    };
+                    let stat = gix::index::entry::Stat::from_fs(&gix_meta).unwrap_or_default();
+                    let bstr_path: &gix::bstr::BStr = rel_str.as_bytes().as_bstr();
+                    index.dangerously_push_entry(
+                        stat,
+                        blob_id,
+                        gix::index::entry::Flags::empty(),
+                        gix::index::entry::Mode::FILE,
+                        bstr_path,
+                    );
+                }
+            }
+        }
+    }
+
+    add_dir(&repo, &work_dir, &work_dir, &mut index);
+    index.sort_entries();
+    if index.write(gix::index::write::Options::default()).is_err() {
+        log::warn!("Failed to write git index");
+        return;
+    }
+
+    log::info!("Committing: {}", message);
+    let tree_id = match write_index_tree(&repo, &index) {
+        Some(id) => id,
+        None => {
+            log::warn!("Failed to write tree from index");
+            return;
+        }
+    };
+
+    let parents: Vec<gix::ObjectId> = repo
+        .head_id()
+        .ok()
+        .map(|id| id.detach())
+        .into_iter()
+        .collect();
+    if let Err(e) = repo.commit("HEAD", message, tree_id, parents.iter().copied()) {
+        log::warn!("Failed to commit: {}", e);
     }
 }
 
@@ -280,15 +634,26 @@ struct ResolvedInstance {
 /// cached at session start by `ServeSession`.
 ///
 /// Uses a three-phase approach to avoid holding the tree lock during I/O:
-/// 1. Run git commands to get changed files (no lock)
+/// 1. Use gix to get changed files (no lock)
 /// 2. Briefly lock tree to resolve file paths to instance Refs and class names
-/// 3. Single `git cat-file --batch-check` call to get blob hashes (no lock)
+/// 3. Direct object/index lookups to get blob hashes (no lock)
 pub fn compute_git_metadata(
     tree_handle: &Arc<Mutex<RojoTree>>,
     repo_root: &Path,
     initial_head: Option<&str>,
 ) -> GitMetadata {
-    let changed_files = match git_changed_files(repo_root, initial_head) {
+    let repo = match open_repo(repo_root) {
+        Some(r) => r,
+        None => {
+            return GitMetadata {
+                changed_ids: Vec::new(),
+                script_committed_hashes: HashMap::new(),
+                new_file_ids: Vec::new(),
+            };
+        }
+    };
+
+    let changed_files = match git_changed_files_impl(&repo, initial_head) {
         Some(files) => files,
         None => {
             return GitMetadata {
@@ -310,7 +675,6 @@ pub fn compute_git_metadata(
     let untracked_set = &changed_files.untracked;
     let all_changed = changed_files.all();
 
-    // Brief lock: resolve changed file paths to instance Refs and class names
     let resolved: Vec<ResolvedInstance> = {
         let tree = tree_handle.lock().unwrap();
         let mut result = Vec::new();
@@ -340,7 +704,7 @@ pub fn compute_git_metadata(
         }
 
         result
-    }; // Lock released
+    };
 
     let changed_ids: Vec<Ref> = resolved.iter().map(|ri| ri.id).collect();
     let new_file_ids: Vec<Ref> = resolved
@@ -392,7 +756,7 @@ pub fn compute_git_metadata(
         }
     }
 
-    let batch_hashes = git_batch_check_hashes(repo_root, &object_refs);
+    let batch_hashes = git_batch_check_hashes_impl(&repo, &object_refs);
 
     for (i, info) in script_refs.iter().enumerate() {
         let sha1 = match batch_hashes.get(i).and_then(|h| h.as_ref()) {
@@ -428,31 +792,50 @@ pub fn compute_git_metadata(
 /// This is useful because syncback may rewrite files with identical content,
 /// which can cause git to report them as modified due to timestamp changes.
 pub fn refresh_git_index(project_dir: &Path) {
-    let mut check_dir = Some(project_dir);
-    let mut is_git_repo = false;
-    while let Some(dir) = check_dir {
-        if dir.join(".git").exists() {
-            is_git_repo = true;
-            break;
+    let repo = match open_repo(project_dir) {
+        Some(r) => r,
+        None => {
+            log::debug!("Not a git repository, skipping index refresh.");
+            return;
         }
-        check_dir = dir.parent();
-    }
+    };
 
-    if is_git_repo {
-        log::info!("Refreshing git index...");
-        match Command::new("git")
-            .args(["update-index", "--refresh", "-q"])
-            .current_dir(project_dir)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-        {
-            Ok(_) => log::info!("Git index refreshed."),
-            Err(e) => log::warn!("Failed to run git update-index --refresh: {}", e),
+    log::info!("Refreshing git index...");
+    match repo.open_index() {
+        Ok(mut index) => {
+            let work_dir = match repo.workdir() {
+                Some(d) => d.to_owned(),
+                None => return,
+            };
+
+            let paths_and_stats: Vec<_> = index
+                .entries()
+                .iter()
+                .filter_map(|entry| {
+                    let path_str = entry.path(&index).to_str_lossy();
+                    let full_path = work_dir.join(path_str.as_ref());
+                    let gix_meta =
+                        gix::index::fs::Metadata::from_path_no_follow(&full_path).ok()?;
+                    let stat = gix::index::entry::Stat::from_fs(&gix_meta).ok()?;
+                    Some((path_str.to_string(), stat))
+                })
+                .collect();
+
+            for (path_str, stat) in paths_and_stats {
+                let bstr_path: &gix::bstr::BStr = path_str.as_bytes().as_bstr();
+                if let Some(entry) = index
+                    .entry_mut_by_path_and_stage(bstr_path, gix::index::entry::Stage::Unconflicted)
+                {
+                    entry.stat = stat;
+                }
+            }
+
+            match index.write(gix::index::write::Options::default()) {
+                Ok(_) => log::info!("Git index refreshed."),
+                Err(e) => log::warn!("Failed to write refreshed git index: {}", e),
+            }
         }
-    } else {
-        log::debug!("Not a git repository, skipping index refresh.");
+        Err(e) => log::warn!("Failed to open git index for refresh: {}", e),
     }
 }
 
@@ -463,57 +846,51 @@ mod tests {
     use tempfile::tempdir;
 
     fn git_init(dir: &Path) {
-        Command::new("git")
-            .args(["-C", &dir.to_string_lossy(), "init"])
-            .output()
-            .expect("git init failed");
-        Command::new("git")
-            .args([
-                "-C",
-                &dir.to_string_lossy(),
-                "config",
-                "user.email",
-                "test@test.com",
-            ])
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["-C", &dir.to_string_lossy(), "config", "user.name", "Test"])
-            .output()
-            .unwrap();
+        let mut repo = gix::init(dir).expect("gix init failed");
+        {
+            let mut config = repo.config_snapshot_mut();
+            config
+                .set_raw_value(&gix::config::tree::User::NAME, "Test")
+                .unwrap();
+            config
+                .set_raw_value(&gix::config::tree::User::EMAIL, "test@test.com")
+                .unwrap();
+            let _ = config.commit_auto_rollback().unwrap();
+        }
     }
 
     fn git_commit_all(dir: &Path, msg: &str) {
-        Command::new("git")
-            .args(["-C", &dir.to_string_lossy(), "add", "-A"])
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["-C", &dir.to_string_lossy(), "commit", "-m", msg])
-            .output()
-            .unwrap();
+        git_add_all_and_commit(dir, msg);
     }
 
     fn git_stage(dir: &Path, file: &str) {
-        Command::new("git")
-            .args(["-C", &dir.to_string_lossy(), "add", file])
-            .output()
-            .unwrap();
+        let repo = open_repo(dir).expect("repo not found");
+        git_add(repo.workdir().unwrap_or(dir), &[PathBuf::from(file)]);
     }
 
     fn git_is_staged(dir: &Path, file: &str) -> bool {
-        let output = Command::new("git")
-            .args([
-                "-C",
-                &dir.to_string_lossy(),
-                "diff",
-                "--cached",
-                "--name-only",
-            ])
-            .output()
-            .unwrap();
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        stdout.lines().any(|l| l.trim() == file)
+        let repo = open_repo(dir).expect("repo not found");
+        let index = match repo.open_index() {
+            Ok(i) => i,
+            Err(_) => return false,
+        };
+        let bstr_path: &gix::bstr::BStr = file.as_bytes().as_bstr();
+        let index_entry = match index.entry_by_path(bstr_path) {
+            Some(e) => e,
+            None => return false,
+        };
+
+        let head_blob_id = repo
+            .head_commit()
+            .ok()
+            .and_then(|c| c.tree().ok())
+            .and_then(|t| t.lookup_entry_by_path(file).ok().flatten())
+            .map(|e| e.object_id());
+
+        match head_blob_id {
+            Some(head_id) => index_entry.id != head_id,
+            None => true,
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -523,15 +900,11 @@ mod tests {
     #[test]
     fn blob_sha1_empty_content() {
         let hash = compute_blob_sha1("");
-        // git hash-object -t blob --stdin <<< '' produces the hash for empty blob
-        // "blob 0\0" -> SHA1 = e69de29bb2d1d6434b8b29ae775ad8c2e48c5391
         assert_eq!(hash, "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391");
     }
 
     #[test]
     fn blob_sha1_hello_world() {
-        // Verify against `echo -n "hello world" | git hash-object --stdin`
-        // "blob 11\0hello world" -> SHA1 = 95d09f2b10159347eece71399a7e2e907ea3df4f
         let hash = compute_blob_sha1("hello world");
         assert_eq!(hash, "95d09f2b10159347eece71399a7e2e907ea3df4f");
     }
@@ -541,7 +914,6 @@ mod tests {
         let content = "local foo = 1\nlocal bar = 2\nreturn foo + bar\n";
         let hash = compute_blob_sha1(content);
         assert_eq!(hash.len(), 40);
-        // Same content must produce same hash
         assert_eq!(hash, compute_blob_sha1(content));
     }
 
@@ -553,26 +925,19 @@ mod tests {
     }
 
     #[test]
-    fn blob_sha1_matches_git_hash_object() {
+    fn blob_sha1_matches_gix_hash_object() {
         let dir = tempdir().unwrap();
         git_init(dir.path());
 
         let content = "print('test script')\n";
         fs::write(dir.path().join("test.luau"), content).unwrap();
 
-        let output = Command::new("git")
-            .args([
-                "-C",
-                &dir.path().to_string_lossy(),
-                "hash-object",
-                "test.luau",
-            ])
-            .output()
-            .unwrap();
-        let git_hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let repo = open_repo(dir.path()).unwrap();
+        let blob_id = repo.write_blob(content.as_bytes()).unwrap();
+        let gix_hash = blob_id.to_hex().to_string();
 
         let our_hash = compute_blob_sha1(content);
-        assert_eq!(our_hash, git_hash);
+        assert_eq!(our_hash, gix_hash);
     }
 
     // -----------------------------------------------------------------------
@@ -600,7 +965,6 @@ mod tests {
         let sub = dir.path().join("sub").join("deep");
         fs::create_dir_all(&sub).unwrap();
         let root = git_repo_root(&sub).unwrap();
-        // Subdirectory should resolve to the same repo root
         assert_eq!(
             root.canonicalize().unwrap(),
             git_repo_root(dir.path()).unwrap().canonicalize().unwrap()
@@ -618,7 +982,8 @@ mod tests {
         fs::write(dir.path().join("file.luau"), "content").unwrap();
         git_commit_all(dir.path(), "init");
 
-        let changed = git_changed_files(dir.path(), None);
+        let repo = open_repo(dir.path()).unwrap();
+        let changed = git_changed_files_impl(&repo, None);
         assert!(changed.is_some());
         assert!(changed.unwrap().is_empty());
     }
@@ -631,7 +996,8 @@ mod tests {
         git_commit_all(dir.path(), "init");
         fs::write(dir.path().join("script.luau"), "modified").unwrap();
 
-        let changed = git_changed_files(dir.path(), None).unwrap();
+        let repo = open_repo(dir.path()).unwrap();
+        let changed = git_changed_files_impl(&repo, None).unwrap();
         assert!(changed.tracked.contains(&PathBuf::from("script.luau")));
         assert!(changed.untracked.is_empty());
     }
@@ -645,7 +1011,8 @@ mod tests {
         fs::write(dir.path().join("script.luau"), "staged version").unwrap();
         git_stage(dir.path(), "script.luau");
 
-        let changed = git_changed_files(dir.path(), None).unwrap();
+        let repo = open_repo(dir.path()).unwrap();
+        let changed = git_changed_files_impl(&repo, None).unwrap();
         assert!(changed.tracked.contains(&PathBuf::from("script.luau")));
     }
 
@@ -657,7 +1024,8 @@ mod tests {
         git_commit_all(dir.path(), "init");
         fs::write(dir.path().join("new_file.luau"), "new").unwrap();
 
-        let changed = git_changed_files(dir.path(), None).unwrap();
+        let repo = open_repo(dir.path()).unwrap();
+        let changed = git_changed_files_impl(&repo, None).unwrap();
         assert!(changed.untracked.contains(&PathBuf::from("new_file.luau")));
         assert!(!changed.tracked.contains(&PathBuf::from("new_file.luau")));
     }
@@ -670,7 +1038,8 @@ mod tests {
         git_commit_all(dir.path(), "init");
         fs::remove_file(dir.path().join("to_delete.luau")).unwrap();
 
-        let changed = git_changed_files(dir.path(), None).unwrap();
+        let repo = open_repo(dir.path()).unwrap();
+        let changed = git_changed_files_impl(&repo, None).unwrap();
         assert!(changed.tracked.contains(&PathBuf::from("to_delete.luau")));
     }
 
@@ -685,7 +1054,8 @@ mod tests {
         fs::write(dir.path().join("will_modify.luau"), "new").unwrap();
         fs::write(dir.path().join("untracked.luau"), "brand new").unwrap();
 
-        let changed = git_changed_files(dir.path(), None).unwrap();
+        let repo = open_repo(dir.path()).unwrap();
+        let changed = git_changed_files_impl(&repo, None).unwrap();
         let all = changed.all();
         assert!(all.contains(&PathBuf::from("will_modify.luau")));
         assert!(all.contains(&PathBuf::from("untracked.luau")));
@@ -700,7 +1070,8 @@ mod tests {
         git_init(dir.path());
         fs::write(dir.path().join("new.luau"), "content").unwrap();
 
-        let changed = git_changed_files(dir.path(), None);
+        let repo = open_repo(dir.path()).unwrap();
+        let changed = git_changed_files_impl(&repo, None);
         assert!(changed.is_some());
         assert!(changed
             .unwrap()
@@ -717,7 +1088,8 @@ mod tests {
         git_commit_all(dir.path(), "init");
         fs::write(dir.path().join("src/module.luau"), "modified").unwrap();
 
-        let changed = git_changed_files(dir.path(), None).unwrap();
+        let repo = open_repo(dir.path()).unwrap();
+        let changed = git_changed_files_impl(&repo, None).unwrap();
         assert!(changed.tracked.contains(&PathBuf::from("src/module.luau")));
     }
 
@@ -733,13 +1105,15 @@ mod tests {
         fs::write(dir.path().join("script.luau"), "modified").unwrap();
         git_commit_all(dir.path(), "edit");
 
-        let without = git_changed_files(dir.path(), None).unwrap();
+        let repo = open_repo(dir.path()).unwrap();
+
+        let without = git_changed_files_impl(&repo, None).unwrap();
         assert!(
             !without.all().contains(&PathBuf::from("script.luau")),
             "without initial_head, committed file should NOT appear"
         );
 
-        let with = git_changed_files(dir.path(), Some(&initial_head)).unwrap();
+        let with = git_changed_files_impl(&repo, Some(&initial_head)).unwrap();
         assert!(
             with.tracked.contains(&PathBuf::from("script.luau")),
             "with initial_head, committed file should appear"
@@ -804,7 +1178,6 @@ mod tests {
         fs::write(dir.path().join("script.luau"), "v1").unwrap();
         git_commit_all(dir.path(), "init");
 
-        // File not staged, show :0: should return committed version (same as HEAD)
         let staged = git_show_staged(dir.path(), Path::new("script.luau"));
         let head = git_show_head(dir.path(), Path::new("script.luau"));
         assert_eq!(staged, head);
@@ -839,14 +1212,15 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // git_batch_check_hashes
+    // git_batch_check_hashes (via resolve_object_ref)
     // -----------------------------------------------------------------------
 
     #[test]
     fn batch_check_empty_refs() {
         let dir = tempdir().unwrap();
         git_init(dir.path());
-        let results = git_batch_check_hashes(dir.path(), &[]);
+        let repo = open_repo(dir.path()).unwrap();
+        let results = git_batch_check_hashes_impl(&repo, &[]);
         assert!(results.is_empty());
     }
 
@@ -857,8 +1231,9 @@ mod tests {
         fs::write(dir.path().join("script.luau"), "local x = 42\nreturn x").unwrap();
         git_commit_all(dir.path(), "init");
 
+        let repo = open_repo(dir.path()).unwrap();
         let refs = vec!["HEAD:script.luau".to_string()];
-        let results = git_batch_check_hashes(dir.path(), &refs);
+        let results = git_batch_check_hashes_impl(&repo, &refs);
         assert_eq!(results.len(), 1);
 
         let batch_hash = results[0].as_ref().unwrap();
@@ -874,8 +1249,9 @@ mod tests {
         fs::write(dir.path().join("dummy.luau"), "x").unwrap();
         git_commit_all(dir.path(), "init");
 
+        let repo = open_repo(dir.path()).unwrap();
         let refs = vec!["HEAD:nonexistent.luau".to_string()];
-        let results = git_batch_check_hashes(dir.path(), &refs);
+        let results = git_batch_check_hashes_impl(&repo, &refs);
         assert_eq!(results.len(), 1);
         assert!(results[0].is_none());
     }
@@ -887,8 +1263,9 @@ mod tests {
         fs::write(dir.path().join("a.luau"), "content a").unwrap();
         git_commit_all(dir.path(), "init");
 
+        let repo = open_repo(dir.path()).unwrap();
         let refs = vec!["HEAD:a.luau".to_string(), ":0:a.luau".to_string()];
-        let results = git_batch_check_hashes(dir.path(), &refs);
+        let results = git_batch_check_hashes_impl(&repo, &refs);
         assert_eq!(results.len(), 2);
         assert!(results[0].is_some());
         assert_eq!(results[0], results[1]);
@@ -907,8 +1284,9 @@ mod tests {
         fs::write(dir.path().join("b.luau"), "staged version").unwrap();
         git_stage(dir.path(), "b.luau");
 
+        let repo = open_repo(dir.path()).unwrap();
         let refs = vec!["HEAD:b.luau".to_string(), ":0:b.luau".to_string()];
-        let results = git_batch_check_hashes(dir.path(), &refs);
+        let results = git_batch_check_hashes_impl(&repo, &refs);
         assert_eq!(results.len(), 2);
         assert!(results[0].is_some());
         assert!(results[1].is_some());
@@ -930,6 +1308,7 @@ mod tests {
         fs::write(dir.path().join("b.luau"), "content b modified").unwrap();
         git_stage(dir.path(), "b.luau");
 
+        let repo = open_repo(dir.path()).unwrap();
         let refs = vec![
             "HEAD:a.luau".to_string(),
             ":0:a.luau".to_string(),
@@ -937,7 +1316,7 @@ mod tests {
             ":0:b.luau".to_string(),
             "HEAD:nonexistent.luau".to_string(),
         ];
-        let results = git_batch_check_hashes(dir.path(), &refs);
+        let results = git_batch_check_hashes_impl(&repo, &refs);
         assert_eq!(results.len(), 5);
 
         assert_eq!(results[0], results[1]); // a: HEAD == staged
@@ -966,8 +1345,9 @@ mod tests {
         fs::write(dir.path().join("src/init.luau"), "init content").unwrap();
         git_commit_all(dir.path(), "init");
 
+        let repo = open_repo(dir.path()).unwrap();
         let refs = vec!["HEAD:src/init.luau".to_string()];
-        let results = git_batch_check_hashes(dir.path(), &refs);
+        let results = git_batch_check_hashes_impl(&repo, &refs);
         assert_eq!(results.len(), 1);
         assert_eq!(
             results[0].as_ref().unwrap(),
@@ -1014,7 +1394,6 @@ mod tests {
     fn git_add_empty_paths_is_noop() {
         let dir = tempdir().unwrap();
         git_init(dir.path());
-        // Should not panic or error
         git_add(dir.path(), &[]);
     }
 
@@ -1046,26 +1425,17 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Hash consistency: our SHA1 matches git hash-object for various content
+    // Hash consistency: our SHA1 matches gix blob hashing
     // -----------------------------------------------------------------------
 
     #[test]
     fn hash_consistency_empty_file() {
         let dir = tempdir().unwrap();
         git_init(dir.path());
-        fs::write(dir.path().join("empty.luau"), "").unwrap();
 
-        let output = Command::new("git")
-            .args([
-                "-C",
-                &dir.path().to_string_lossy(),
-                "hash-object",
-                "empty.luau",
-            ])
-            .output()
-            .unwrap();
-        let git_hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        assert_eq!(compute_blob_sha1(""), git_hash);
+        let repo = open_repo(dir.path()).unwrap();
+        let gix_hash = repo.write_blob(b"").unwrap().to_hex().to_string();
+        assert_eq!(compute_blob_sha1(""), gix_hash);
     }
 
     #[test]
@@ -1073,19 +1443,14 @@ mod tests {
         let content = "-- Unicode: 日本語テスト\nlocal x = '🎮'\n";
         let dir = tempdir().unwrap();
         git_init(dir.path());
-        fs::write(dir.path().join("unicode.luau"), content).unwrap();
 
-        let output = Command::new("git")
-            .args([
-                "-C",
-                &dir.path().to_string_lossy(),
-                "hash-object",
-                "unicode.luau",
-            ])
-            .output()
-            .unwrap();
-        let git_hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        assert_eq!(compute_blob_sha1(content), git_hash);
+        let repo = open_repo(dir.path()).unwrap();
+        let gix_hash = repo
+            .write_blob(content.as_bytes())
+            .unwrap()
+            .to_hex()
+            .to_string();
+        assert_eq!(compute_blob_sha1(content), gix_hash);
     }
 
     #[test]
@@ -1095,18 +1460,13 @@ mod tests {
             .collect();
         let dir = tempdir().unwrap();
         git_init(dir.path());
-        fs::write(dir.path().join("large.luau"), &content).unwrap();
 
-        let output = Command::new("git")
-            .args([
-                "-C",
-                &dir.path().to_string_lossy(),
-                "hash-object",
-                "large.luau",
-            ])
-            .output()
-            .unwrap();
-        let git_hash = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        assert_eq!(compute_blob_sha1(&content), git_hash);
+        let repo = open_repo(dir.path()).unwrap();
+        let gix_hash = repo
+            .write_blob(content.as_bytes())
+            .unwrap()
+            .to_hex()
+            .to_string();
+        assert_eq!(compute_blob_sha1(&content), gix_hash);
     }
 }

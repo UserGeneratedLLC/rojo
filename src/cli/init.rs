@@ -1,5 +1,6 @@
-use std::process::{Command, Stdio};
+use std::num::NonZero;
 use std::str::FromStr;
+use std::sync::atomic::AtomicBool;
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
@@ -24,7 +25,7 @@ static TEMPLATE_BINCODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/templ
 /// Initializes a new Rojo project.
 ///
 /// By default, this will attempt to initialize a 'git' repository in the
-/// project directory if `git` is installed. To avoid this, pass `--skip-git`.
+/// project directory. To avoid this, pass `--skip-git`.
 #[derive(Debug, Parser)]
 pub struct InitCommand {
     /// Path to the place to create the project. Defaults to the current directory.
@@ -57,7 +58,6 @@ impl InitCommand {
 
         let base_path = resolve_path(&self.path);
 
-        // Check if directory exists and is non-empty
         if base_path.exists() {
             let is_empty = base_path.read_dir()?.next().is_none();
             if !is_empty {
@@ -122,31 +122,14 @@ impl InitCommand {
         let did_git_init = if !self.skip_git && should_git_init(&base_path) {
             log::debug!("Initializing Git repository...");
 
-            let status = Command::new("git")
-                .arg("init")
-                .current_dir(&base_path)
-                .status()?;
+            let mut repo = gix::init(&base_path).context("Failed to initialize git repository")?;
 
-            if !status.success() {
-                bail!("git init failed: status code {:?}", status.code());
-            }
-
-            for (key, value) in [
-                ("core.autocrlf", "false"),
-                ("core.eol", "lf"),
-                ("core.safecrlf", "false"),
-                // ("core.splitIndex", "true"),
-                // ("core.fsmonitor", "true"),
-                // ("core.untrackedcache", "true"),
-                // ("feature.manyFiles", "true"),
-            ] {
-                let _ = Command::new("git")
-                    .args(["config", "--local", key, value])
-                    .current_dir(&base_path)
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .status();
+            {
+                let mut config = repo.config_snapshot_mut();
+                let _ = config.set_raw_value(&gix::config::tree::Core::AUTO_CRLF, "false");
+                let _ = config.set_raw_value(&gix::config::tree::Core::EOL, "lf");
+                let _ = config.set_raw_value(&gix::config::tree::Core::SAFE_CRLF, "false");
+                let _ = config.commit_auto_rollback();
             }
 
             true
@@ -158,54 +141,37 @@ impl InitCommand {
             log::debug!("Cloning cursor rules...");
 
             let cursor_dir = base_path.join(".cursor");
-            let result = Command::new("git")
-                .args([
-                    "clone",
-                    "--depth",
-                    "1",
+            let result = (|| -> anyhow::Result<()> {
+                let prep = gix::prepare_clone(
                     "https://github.com/jrmelsha/cursor-rules.git",
-                    ".cursor",
-                ])
-                .current_dir(&base_path)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .env("GIT_TERMINAL_PROMPT", "0")
-                .status();
+                    &cursor_dir,
+                )?;
+                let mut prep = prep.with_shallow(gix::remote::fetch::Shallow::DepthAtRemote(
+                    NonZero::new(1).unwrap(),
+                ));
+                let (mut checkout, _) =
+                    prep.fetch_then_checkout(gix::progress::Discard, &AtomicBool::new(false))?;
+                let (_repo, _) =
+                    checkout.main_worktree(gix::progress::Discard, &AtomicBool::new(false))?;
+                Ok(())
+            })();
 
             match result {
-                Ok(status) if status.success() => {
-                    // Remove .git so it's just files, not a submodule
+                Ok(()) => {
                     let git_dir = cursor_dir.join(".git");
                     if git_dir.exists() {
                         let _ = fs::remove_dir_all(&git_dir);
                     }
                     println!("Cloned cursor rules successfully.");
                 }
-                _ => {
+                Err(_) => {
                     log::debug!("Failed to clone cursor rules, skipping.");
                 }
             }
         }
 
         if did_git_init {
-            log::info!("Staging initial project...");
-            let _ = Command::new("git")
-                .args(["add", "."])
-                .current_dir(&base_path)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
-
-            log::info!("Committing initial project...");
-            let _ = Command::new("git")
-                .args(["commit", "--no-verify", "-m", "Initial commit"])
-                .current_dir(&base_path)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status();
+            crate::git::git_add_all_and_commit(&base_path, "Initial commit");
         }
 
         println!("Created project successfully.");
@@ -217,6 +183,13 @@ impl InitCommand {
 
         Ok(())
     }
+}
+
+/// Tells whether we should initialize a Git repository inside the given path.
+///
+/// Returns true if the path is not already inside a Git repository.
+fn should_git_init(path: &Path) -> bool {
+    gix::discover(path).is_err()
 }
 
 /// The templates we support for initializing a Rojo project.
@@ -275,14 +248,12 @@ impl FromStr for InitKind {
     }
 }
 
-/// Contains parameters used in templates to create a project.
 struct ProjectParams {
     name: String,
     place_id: Option<u64>,
 }
 
 impl ProjectParams {
-    /// Render a template by replacing variables with project parameters.
     fn render_template(&self, template: &str) -> String {
         let place_id_str = self
             .place_id
@@ -293,28 +264,6 @@ impl ProjectParams {
             .replace("{project_name}", &self.name)
             .replace("{rojo_version}", env!("CARGO_PKG_VERSION"))
             .replace("{place_id}", &place_id_str)
-    }
-}
-
-/// Tells whether we should initialize a Git repository inside the given path.
-///
-/// Will return false if the user doesn't have Git installed or if the path is
-/// already inside a Git repository.
-fn should_git_init(path: &Path) -> bool {
-    let result = Command::new("git")
-        .args(["rev-parse", "--is-inside-work-tree"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .current_dir(path)
-        .status();
-
-    match result {
-        // If the command ran, but returned a non-zero exit code, we are not in
-        // a Git repo and we should initialize one.
-        Ok(status) => !status.success(),
-
-        // If the command failed to run, we probably don't have Git installed.
-        Err(_) => false,
     }
 }
 

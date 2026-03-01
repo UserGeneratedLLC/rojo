@@ -203,21 +203,17 @@ impl TestServeSession {
             .expect("Couldn't copy project to temporary directory");
 
         // Initialize git repo and run setup callback
-        Command::new("git")
-            .args(["init"])
-            .current_dir(&project_path)
-            .output()
-            .expect("git init failed");
-        Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(&project_path)
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(&project_path)
-            .output()
-            .unwrap();
+        let mut repo = gix::init(&project_path).expect("gix init failed");
+        {
+            let mut config = repo.config_snapshot_mut();
+            config
+                .set_raw_value(&gix::config::tree::User::NAME, "Test")
+                .unwrap();
+            config
+                .set_raw_value(&gix::config::tree::User::EMAIL, "test@test.com")
+                .unwrap();
+            let _ = config.commit_auto_rollback().unwrap();
+        }
 
         setup(&project_path);
 
