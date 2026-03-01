@@ -333,20 +333,16 @@ when you commit changes on git, it's considered unchanged. we should send like t
 there is some process that is making disconnecting after a one-shot sync completes take FOREVER if the server is yielding (usually from the reconciler)
  - once the one-shot sync completes, it should not be waiting for additional things to come from the server. it just needs to kill the connection immediately. and go back to the main page.
 
-[init scripts]
-scripts actually named init or probably even Init cause the sync engine to completely break. it will syncback, but then i cannot even serve the project.
-this needs to be slugified when the name exactly matches init, ignoring case [for anything, not just scripts!]
-
 [one shot mode change]
 new changes that come in / out during the review menu on the plugin is really disorienting.
 we should just make it stop accepting new changes once it has the full patch ready and displayed to the user
 any further changes should have to be done NEXT one-shot sync
 
 [syncback]
-detect when the output file hash is the same, and dont write to it
-
-[sync]
-for the automated git staging we do on sync, manually selection Studio should NOT automatically stage changes!
+detect when the output file hash is the same, and dont write to it.
+because have already loaded it, we can detect this.
+this is an optimization to avoid writing 100,000 files or something on larger projects when file bytes match perfectly, or directories verifiably already exist.
+make sure this is applied to plugin-based syncback, too.
 
 [auto select studio/atlas]
 when things get added AFTER the fact because we send the git history hashes on connect rather than continiously, it auto-selects Studio for things that are being edited in real-time in the sync dialog

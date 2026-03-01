@@ -1153,7 +1153,11 @@ function App:render()
 							local autoSelectedIds = {}
 							if self.state.patchTree then
 								self.state.patchTree:forEach(function(node)
-									if node.patchType and node.defaultSelection ~= nil then
+									if
+										node.patchType
+										and node.defaultSelection ~= nil
+										and selections[node.id] == node.defaultSelection
+									then
 										autoSelectedIds[node.id] = true
 									end
 								end)
