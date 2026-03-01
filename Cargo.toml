@@ -109,6 +109,7 @@ clap_complete = "4"
 profiling = "1.0.17"
 yaml-rust2 = "0.11.0"
 data-encoding = "2.10.0"
+dirs = "6"
 pathdiff = "0.2.3"
 
 blake3 = "1.8.3"

@@ -142,7 +142,7 @@ pub struct Project {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ignore_hidden_services: Option<bool>,
 
-    /// Controls the log level for file-based logging to `.atlas/logs/`.
+    /// Controls the log level for file-based logging to `~/.atlas/logs/`.
     /// Values: "trace" (default), "debug", "info", "warn", "error", "none".
     /// When "none", file logging is disabled entirely.
     #[serde(skip_serializing_if = "Option::is_none")]

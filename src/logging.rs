@@ -32,6 +32,27 @@ fn session_log_filename(command_name: &str) -> String {
     )
 }
 
+fn write_log_header(file: &mut std::fs::File, command_name: &str, project_dir: Option<&Path>) {
+    let now = time::OffsetDateTime::now_utc();
+    let version = env!("CARGO_PKG_VERSION");
+    let project = project_dir
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "none".into());
+    let cwd = std::env::current_dir()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|_| "unknown".into());
+
+    let _ = writeln!(
+        file,
+        "=== Atlas v{version} ===\n\
+         Command: {command_name}\n\
+         Project: {project}\n\
+         Working dir: {cwd}\n\
+         Started: {now}\n\
+         ==="
+    );
+}
+
 pub fn init_logging(
     verbosity: u8,
     color: ColorChoice,
@@ -66,8 +87,8 @@ pub fn init_logging(
 
     let mut file_guard: Option<tracing_appender::non_blocking::WorkerGuard> = None;
 
-    let file_layer = if let (Some(dir), Some(level)) = (project_dir, file_log_level) {
-        let log_dir = dir.join(".atlas").join("logs");
+    let file_layer = if let (Some(level), Some(home)) = (file_log_level, dirs::home_dir()) {
+        let log_dir = home.join(".atlas").join("logs");
 
         match std::fs::create_dir_all(&log_dir) {
             Ok(()) => {
@@ -81,7 +102,9 @@ pub fn init_logging(
                     .append(true)
                     .open(&log_path)
                 {
-                    Ok(file) => {
+                    Ok(mut file) => {
+                        write_log_header(&mut file, command_name, project_dir);
+
                         let (non_blocking, guard) = tracing_appender::non_blocking(file);
                         file_guard = Some(guard);
 
