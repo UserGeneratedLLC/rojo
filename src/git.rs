@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
+    time::Instant,
 };
 
 use gix::bstr::ByteSlice;
@@ -78,15 +79,21 @@ fn git_changed_files_impl(
     let mut tracked = HashSet::new();
     let mut untracked = HashSet::new();
 
+    let t = Instant::now();
     let diff_base = initial_head.unwrap_or("HEAD");
     let base_tree_id = resolve_tree_id(repo, diff_base);
     let head_tree_id = resolve_tree_id(repo, "HEAD");
+    log::trace!(
+        "[TIMING] compute_git_metadata: resolve_tree_id {}ms",
+        t.elapsed().as_millis()
+    );
 
     let diff_failed = base_tree_id.is_none();
 
     // If initial_head differs from HEAD, diff those trees for committed-since-start changes
     if let (Some(base_id), Some(head_id)) = (base_tree_id, head_tree_id) {
         if base_id != head_id {
+            let t = Instant::now();
             if let (Ok(base_obj), Ok(head_obj)) =
                 (repo.find_object(base_id), repo.find_object(head_id))
             {
@@ -96,23 +103,56 @@ fn git_changed_files_impl(
                     collect_tree_diff_paths(repo, &base_tree, &head_tree, &mut tracked);
                 }
             }
+            log::trace!(
+                "[TIMING] compute_git_metadata: collect_tree_diff_paths {}ms ({} found)",
+                t.elapsed().as_millis(),
+                tracked.len()
+            );
         }
     }
 
     // Compare base tree vs index for staged changes, and index vs worktree for unstaged
     if let Some(base_id) = base_tree_id.or(head_tree_id) {
         if let Ok(index) = repo.open_index() {
+            let t = Instant::now();
             collect_tree_index_changes(repo, base_id, &index, &mut tracked);
+            log::trace!(
+                "[TIMING] compute_git_metadata: collect_tree_index_changes {}ms",
+                t.elapsed().as_millis()
+            );
+
+            let t = Instant::now();
+            let before = tracked.len();
             collect_index_worktree_changes(repo, &index, &mut tracked);
+            log::trace!(
+                "[TIMING] compute_git_metadata: collect_index_worktree_changes {}ms ({} entries, {} worktree-dirty)",
+                t.elapsed().as_millis(),
+                index.entries().len(),
+                tracked.len() - before
+            );
         }
     } else if let Ok(index) = repo.open_index() {
         for entry in index.entries() {
             tracked.insert(PathBuf::from(entry.path(&index).to_str_lossy().as_ref()));
         }
+        let t = Instant::now();
+        let before = tracked.len();
         collect_index_worktree_changes(repo, &index, &mut tracked);
+        log::trace!(
+            "[TIMING] compute_git_metadata: collect_index_worktree_changes (no tree) {}ms ({} entries, {} worktree-dirty)",
+            t.elapsed().as_millis(),
+            index.entries().len(),
+            tracked.len() - before
+        );
     }
 
+    let t = Instant::now();
     collect_untracked_files(repo, &mut untracked);
+    log::trace!(
+        "[TIMING] compute_git_metadata: collect_untracked_files {}ms ({} found)",
+        t.elapsed().as_millis(),
+        untracked.len()
+    );
 
     if tracked.is_empty() && untracked.is_empty() && diff_failed {
         return None;
@@ -205,6 +245,14 @@ fn collect_tree_only_paths(
     }
 }
 
+fn compute_blob_object_id(content: &[u8]) -> gix::ObjectId {
+    let header = format!("blob {}\0", content.len());
+    let mut hasher = Sha1::new();
+    hasher.update(header.as_bytes());
+    hasher.update(content);
+    gix::ObjectId::from_bytes_or_panic(&hasher.finalize())
+}
+
 fn collect_index_worktree_changes(
     repo: &gix::Repository,
     index: &gix::index::File,
@@ -215,35 +263,29 @@ fn collect_index_worktree_changes(
         None => return,
     };
 
+    let stat_options: gix::index::entry::stat::Options = Default::default();
+
     for entry in index.entries() {
         let path_bstr = entry.path(index);
         let path_str = path_bstr.to_str_lossy();
         let full_path = work_dir.join(path_str.as_ref());
 
-        match std::fs::metadata(&full_path) {
-            Ok(meta) => {
-                let size_changed = entry.stat.size as u64 != meta.len();
-                if size_changed {
-                    tracked.insert(PathBuf::from(path_str.as_ref()));
-                } else {
-                    let content = match std::fs::read(&full_path) {
-                        Ok(c) => c,
-                        Err(_) => {
-                            tracked.insert(PathBuf::from(path_str.as_ref()));
-                            continue;
-                        }
-                    };
-                    let worktree_hash = match repo.write_blob_stream(std::io::Cursor::new(&content))
-                    {
-                        Ok(id) => id.detach(),
-                        Err(_) => {
-                            tracked.insert(PathBuf::from(path_str.as_ref()));
-                            continue;
-                        }
-                    };
-                    if worktree_hash != entry.id {
-                        tracked.insert(PathBuf::from(path_str.as_ref()));
+        match gix::index::fs::Metadata::from_path_no_follow(&full_path) {
+            Ok(fs_meta) => {
+                if let Ok(fs_stat) = gix::index::entry::Stat::from_fs(&fs_meta) {
+                    if entry.stat.matches(&fs_stat, stat_options) {
+                        continue;
                     }
+                }
+                let content = match std::fs::read(&full_path) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        tracked.insert(PathBuf::from(path_str.as_ref()));
+                        continue;
+                    }
+                };
+                if compute_blob_object_id(&content) != entry.id {
+                    tracked.insert(PathBuf::from(path_str.as_ref()));
                 }
             }
             Err(_) => {
@@ -265,10 +307,23 @@ fn collect_untracked_files(repo: &gix::Repository, untracked: &mut HashSet<PathB
         )
     });
 
+    let mut tracked_dirs: HashSet<String> = HashSet::new();
+    tracked_dirs.insert(String::new());
+    for entry in index.entries() {
+        let path_str = entry.path(&index).to_str_lossy();
+        let mut pos = 0;
+        while let Some(slash) = path_str[pos..].find('/') {
+            let prefix = &path_str[..pos + slash];
+            tracked_dirs.insert(prefix.to_string());
+            pos += slash + 1;
+        }
+    }
+
     fn walk_dir(
         base: &Path,
         dir: &Path,
         index: &gix::index::File,
+        tracked_dirs: &HashSet<String>,
         untracked: &mut HashSet<PathBuf>,
     ) {
         let entries = match std::fs::read_dir(dir) {
@@ -299,7 +354,9 @@ fn collect_untracked_files(repo: &gix::Repository, untracked: &mut HashSet<PathB
 
             if let Ok(meta) = entry.metadata() {
                 if meta.is_dir() {
-                    walk_dir(base, &path, index, untracked);
+                    if tracked_dirs.contains(rel_str.as_ref() as &str) {
+                        walk_dir(base, &path, index, tracked_dirs, untracked);
+                    }
                 } else if meta.is_file() {
                     let path_as_bstr: &gix::bstr::BStr = rel_str.as_bytes().as_bstr();
                     let is_tracked = index.entry_by_path(path_as_bstr).is_some();
@@ -311,7 +368,7 @@ fn collect_untracked_files(repo: &gix::Repository, untracked: &mut HashSet<PathB
         }
     }
 
-    walk_dir(&work_dir, &work_dir, &index, untracked);
+    walk_dir(&work_dir, &work_dir, &index, &tracked_dirs, untracked);
 }
 
 fn resolve_object_ref(repo: &gix::Repository, object_ref: &str) -> Option<String> {
@@ -703,6 +760,9 @@ pub fn compute_git_metadata(
     repo_root: &Path,
     initial_head: Option<&str>,
 ) -> GitMetadata {
+    let total_t = Instant::now();
+
+    let t = Instant::now();
     let repo = match open_repo(repo_root) {
         Some(r) => r,
         None => {
@@ -713,10 +773,19 @@ pub fn compute_git_metadata(
             };
         }
     };
+    log::trace!(
+        "[TIMING] compute_git_metadata: open_repo {}ms",
+        t.elapsed().as_millis()
+    );
 
+    let t = Instant::now();
     let changed_files = match git_changed_files_impl(&repo, initial_head) {
         Some(files) => files,
         None => {
+            log::trace!(
+                "[TIMING] compute_git_metadata: total {}ms (no changed files)",
+                total_t.elapsed().as_millis()
+            );
             return GitMetadata {
                 changed_ids: Vec::new(),
                 script_committed_hashes: HashMap::new(),
@@ -724,8 +793,18 @@ pub fn compute_git_metadata(
             };
         }
     };
+    log::trace!(
+        "[TIMING] compute_git_metadata: git_changed_files_impl {}ms ({} tracked, {} untracked)",
+        t.elapsed().as_millis(),
+        changed_files.tracked.len(),
+        changed_files.untracked.len()
+    );
 
     if changed_files.is_empty() {
+        log::trace!(
+            "[TIMING] compute_git_metadata: total {}ms (empty changeset)",
+            total_t.elapsed().as_millis()
+        );
         return GitMetadata {
             changed_ids: Vec::new(),
             script_committed_hashes: HashMap::new(),
@@ -736,6 +815,7 @@ pub fn compute_git_metadata(
     let untracked_set = &changed_files.untracked;
     let all_changed = changed_files.all();
 
+    let t = Instant::now();
     let resolved: Vec<ResolvedInstance> = {
         let tree = tree_handle.lock().unwrap();
         let mut result = Vec::new();
@@ -766,6 +846,12 @@ pub fn compute_git_metadata(
 
         result
     };
+    log::trace!(
+        "[TIMING] compute_git_metadata: tree resolution {}ms ({} changed -> {} resolved)",
+        t.elapsed().as_millis(),
+        all_changed.len(),
+        resolved.len()
+    );
 
     let changed_ids: Vec<Ref> = resolved.iter().map(|ri| ri.id).collect();
     let new_file_ids: Vec<Ref> = resolved
@@ -817,7 +903,13 @@ pub fn compute_git_metadata(
         }
     }
 
+    let t = Instant::now();
     let batch_hashes = git_batch_check_hashes_impl(&repo, &object_refs);
+    log::trace!(
+        "[TIMING] compute_git_metadata: batch_check_hashes {}ms ({} refs)",
+        t.elapsed().as_millis(),
+        object_refs.len()
+    );
 
     for (i, info) in script_refs.iter().enumerate() {
         let sha1 = match batch_hashes.get(i).and_then(|h| h.as_ref()) {
@@ -840,6 +932,14 @@ pub fn compute_git_metadata(
             }
         }
     }
+
+    log::trace!(
+        "[TIMING] compute_git_metadata: total {}ms ({} changed_ids, {} script_hashes, {} new_file_ids)",
+        total_t.elapsed().as_millis(),
+        changed_ids.len(),
+        script_committed_hashes.len(),
+        new_file_ids.len()
+    );
 
     GitMetadata {
         changed_ids,

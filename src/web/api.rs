@@ -401,13 +401,21 @@ impl ApiService {
             Vec::new()
         };
 
-        let git_metadata = self.serve_session.git_repo_root().map(|repo_root| {
-            crate::git::compute_git_metadata(
-                &self.serve_session.tree_handle(),
-                repo_root,
-                self.serve_session.initial_head_commit(),
-            )
-        });
+        let git_metadata = if let Some(repo_root) = self.serve_session.git_repo_root() {
+            let tree_handle = self.serve_session.tree_handle();
+            let repo_root = repo_root.to_owned();
+            let initial_head = self
+                .serve_session
+                .initial_head_commit()
+                .map(|s| s.to_owned());
+            tokio::task::spawn_blocking(move || {
+                crate::git::compute_git_metadata(&tree_handle, &repo_root, initial_head.as_deref())
+            })
+            .await
+            .ok()
+        } else {
+            None
+        };
 
         msgpack_ok(&ServerInfoResponse {
             server_version: SERVER_VERSION.to_owned(),
@@ -429,13 +437,21 @@ impl ApiService {
     }
 
     async fn handle_api_git_metadata(&self) -> Response<Full<Bytes>> {
-        let git_metadata = self.serve_session.git_repo_root().map(|repo_root| {
-            crate::git::compute_git_metadata(
-                &self.serve_session.tree_handle(),
-                repo_root,
-                self.serve_session.initial_head_commit(),
-            )
-        });
+        let git_metadata = if let Some(repo_root) = self.serve_session.git_repo_root() {
+            let tree_handle = self.serve_session.tree_handle();
+            let repo_root = repo_root.to_owned();
+            let initial_head = self
+                .serve_session
+                .initial_head_commit()
+                .map(|s| s.to_owned());
+            tokio::task::spawn_blocking(move || {
+                crate::git::compute_git_metadata(&tree_handle, &repo_root, initial_head.as_deref())
+            })
+            .await
+            .ok()
+        } else {
+            None
+        };
 
         msgpack_ok(&git_metadata)
     }
