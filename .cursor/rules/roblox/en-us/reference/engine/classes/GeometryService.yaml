@@ -196,6 +196,29 @@ methods:
     thread_safety: Unsafe
     capabilities:
       - CSG
+  - name: GeometryService:GenerateFragmentSites
+    summary: |
+      This API has not been released.
+    description: ''
+    code_samples: []
+    parameters:
+      - name: part
+        type: BasePart
+        default:
+        summary: ''
+      - name: options
+        type: Dictionary
+        default: nil
+        summary: ''
+    returns:
+      - type: Array
+        summary: ''
+    tags: []
+    deprecation_message: ''
+    security: None
+    thread_safety: Unsafe
+    capabilities:
+      - CSG
   - name: GeometryService:IntersectAsync
     summary: |
       Creates one or more `Class.PartOperation|PartOperations` from the

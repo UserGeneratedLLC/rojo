@@ -59,3 +59,165 @@ Standalone files in `roblox/en-us/`:
 Use glob and grep to search `.cursor/rules/roblox/` for Roblox-specific documentation files.
 
 **Tip:** Check `roblox/common/navigation/` for YAML files that organize documentation by category (analytics, avatar, cloud, engine, monetization, etc.). These navigation files help locate relevant docs quickly.
+
+## Roblox Full API Dump
+
+The file `.cursor/rules/roblox-api/Full-API-Dump.json` is the authoritative source for every Roblox API class, member, and enum. It is pulled directly from the [RobloxAPI/build-archive](https://github.com/RobloxAPI/build-archive) on each sync and reflects the current production build.
+
+**File facts:**
+- ~206,000 lines, ~7.5 MB
+- `"Classes"` section: lines 1–189,995 (863 classes, 7,690 members)
+- `"Enums"` section: starts at line 189,996 (552 enums)
+
+### Field order in the file
+
+The JSON fields within each object appear in alphabetical order on disk. This is critical for understanding grep results:
+
+```
+Class object (fields in file order):
+  "Members": [...]           ← member array comes FIRST
+  "MemoryCategory": "Instances"
+  "Name": "ClassName"        ← ALWAYS immediately after MemoryCategory
+  "Superclass": "ParentClass" ← ALWAYS immediately after Name
+  "Tags": [...]
+
+Property member (fields in file order):
+  "Category": "Part"
+  "Default": "value"
+  "MemberType": "Property"
+  "Name": "MemberName"       ← ALWAYS immediately after MemberType
+  "Security": "None" | { "Read": "...", "Write": "..." }
+  "Serialization": { "CanLoad": bool, "CanSave": bool }
+  "ThreadSafety": "ReadSafe"
+  "ValueType": { "Category": "Primitive|DataType|Enum|Class", "Name": "typeName" }
+  "Tags": [...]  (optional)
+
+Function / Event / Callback member (fields in file order):
+  "MemberType": "Function"   (or "Event" or "Callback")
+  "Name": "MethodName"       ← ALWAYS immediately after MemberType
+  "Parameters": [ { "Name": "param", "Type": { "Category": "...", "Name": "..." } } ]
+  "ReturnType": { "Category": "...", "Name": "..." }  (Function/Callback only)
+  "Security": "None"
+  "ThreadSafety": "..."
+
+Enum object (fields in file order):
+  "Items": [ { "Name": "ItemName", "Value": N }, ... ]  ← items come FIRST
+  "Name": "EnumName"         ← enum name comes LAST, after all items
+```
+
+### Disambiguating "Name" entries
+
+The line directly **before** a `"Name":` entry tells you what kind of entry it is:
+
+- `"MemoryCategory": "...",` before `"Name":` → **class definition**
+- `"MemberType": "...",` before `"Name":` → **member definition** (Property/Function/Event/Callback)
+- `"Value": N` after `"Name":` → **enum item**
+- Everything else → a type reference inside `"Type":`, `"ValueType":`, or `"ReturnType":` — not a top-level entity
+
+### Grep patterns
+
+**1. Look up a class definition**
+
+```
+rg -n '"Name": "BasePart"' .cursor/rules/roblox-api/Full-API-Dump.json
+```
+
+Find the result where the line above contains `"MemoryCategory":`. Read forward 6 lines to get `Superclass` and `Tags`. Note: the class's `Members` array begins thousands of lines above that line — large classes like `BasePart` span 2,500+ lines of members.
+
+**2. Look up a specific member by name**
+
+```
+rg -n '"Name": "Anchored"' .cursor/rules/roblox-api/Full-API-Dump.json
+```
+
+Find results where the line 1–3 lines above contains `"MemberType":` — those are member definitions. Use Read at that line ±15 lines to capture the full member object (Security, ThreadSafety, ValueType or Parameters/ReturnType, and Tags).
+
+**3. Identify which class owns a member**
+
+From the member's line number N, search backward through the file for the nearest `"MemoryCategory":` line. The `"Name":` on the very next line is the owning class name. Many common members (like `Anchored`) appear in multiple classes — check the owning class to confirm you have the right one.
+
+**4. Check whether a member is defined on a class vs inherited**
+
+Grep for the class Name to get its definition line number L (where `"MemoryCategory":` is on the line above). Then grep for the member Name and find the match whose line number is closest to and **below** L — that is the member as defined directly on that class.
+
+**5. List all Functions available on a class**
+
+```
+rg -n '"MemberType": "Function"' .cursor/rules/roblox-api/Full-API-Dump.json -A 1
+```
+
+Each `-A 1` line is the function name. To scope to a specific class, find the class's definition line L from pattern 1, then find the previous class's definition line P. Members for the target class fall between lines P and L. Filter the `rg` output to that line range. Alternatively, use Read on the class's member block directly.
+
+**6. List all Events available on a class**
+
+```
+rg -n '"MemberType": "Event"' .cursor/rules/roblox-api/Full-API-Dump.json -A 1
+```
+
+Same scoping approach as functions above.
+
+**7. List all Properties available on a class**
+
+```
+rg -n '"MemberType": "Property"' .cursor/rules/roblox-api/Full-API-Dump.json -A 1
+```
+
+Same scoping approach. The `-A 1` line is always the property name since `"MemberType"` is always the line directly before `"Name"` in a member object.
+
+**8. Look up an enum and all its values**
+
+Enum names appear **after** their items in the file, so use `-B` to read upward:
+
+```
+rg -n -B 150 '"Name": "Material"' .cursor/rules/roblox-api/Full-API-Dump.json
+```
+
+Use the result in the Enums section (line 189,996+). Increase to `-B 300` for large enums.
+
+**9. Find all direct subclasses of a class**
+
+```
+rg -n '"Superclass": "BasePart"' .cursor/rules/roblox-api/Full-API-Dump.json -A 1
+```
+
+The `-A 1` line after each match is the subclass `Name`.
+
+### Cross-referencing the dump with the docs
+
+The dump and the docs in `.cursor/rules/roblox/` are complementary — use either as the entry point:
+
+- **Dump → Docs:** You confirmed a class or member exists in the dump (name, types, security level). Now search the docs to understand correct usage patterns, recommended approaches, and gotchas the API signature alone does not convey.
+- **Docs → Dump:** The docs mention a class, function, or concept. Look it up in the dump to get the exact parameter types, return type, thread safety, security level, and deprecation status — detail the docs often omit or leave vague.
+
+To find relevant docs after identifying a class or member:
+- `Glob` into the relevant subdirectory: e.g. `roblox/en-us/physics/**` for physics, `roblox/en-us/scripting/**` for scripting patterns
+- `Grep` across all docs: e.g. `rg "TweenService" .cursor/rules/roblox/` to find every file that discusses a class
+- `roblox/en-us/reference/` contains YAML-format API reference files with additional context
+- `roblox/common/navigation/` YAML files map topics to doc files — a fast way to find which doc covers a given system
+
+The docs explain intent and usage; the dump is the ground truth for the API contract. Consult both before writing code against an unfamiliar API.
+
+### Security levels
+
+| Value | Accessible from |
+|---|---|
+| `"None"` | Any script |
+| `"LocalUserSecurity"` | LocalScript only |
+| `"PluginSecurity"` | Plugin scripts only |
+| `"RobloxScriptSecurity"` | CoreScript / internal — **not accessible** from user scripts |
+
+Security can be split per operation: `{ "Read": "None", "Write": "RobloxScriptSecurity" }` means readable but not writable from user scripts.
+
+### Tags to check before using a member
+
+| Tag | Meaning |
+|---|---|
+| `"Deprecated"` | Avoid — check for `"PreferredDescriptorName"` in the same Tags array for the replacement |
+| `"NotCreatable"` | Cannot use `Instance.new()` — must obtain from the DataModel |
+| `"Service"` | Obtain via `game:GetService("ServiceName")` |
+| `"ReadOnly"` | Property cannot be set |
+| `"NotReplicated"` | Changes do not sync across the client/server boundary |
+
+### Large class warning
+
+Classes like `BasePart`, `Instance`, and `Humanoid` have 500–2,500 lines of members. Never attempt to read an entire class block. Always grep for the specific member, function, or event you need.

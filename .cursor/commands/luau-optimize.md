@@ -30,14 +30,14 @@ Route all output there: `--stats-file=$LUAU_TMP\stats.json`, write benchmark fil
 Check in this order:
 
 1. **Filename suffix** (highest priority):
-   - `*.server.luau` / `*.server.lua` -> **server** (`--!native` is high-value)
-   - `*.client.luau` / `*.client.lua` -> **client** (`--!native` less beneficial due to device diversity)
+   - `*.server.luau` / `*.server.lua` -> **server** (native codegen budget is server-side; benefit depends on code content)
+   - `*.client.luau` / `*.client.lua` -> **client** (native codegen less effective due to device architecture diversity)
    - `*.legacy.luau` / `*.legacy.lua` -> **ambiguous** (could be cloned/moved at runtime). Ask the user.
    - `*.luau` / `*.lua` (no suffix) -> ModuleScript, fall through to path check.
 2. **Path-based inference** (for ModuleScripts and ambiguous cases):
    - `ServerScriptService`/`ServerStorage` in path -> server-side module
    - `StarterPlayer`/`StarterGui`/`StarterCharacterScripts`/`ReplicatedFirst` in path -> client-side module
-   - `ReplicatedStorage`/`shared` in path -> shared module (conservative `--!native`)
+   - `ReplicatedStorage`/`shared` in path -> shared module
    - Ambiguous or outside Roblox project -> ask the user
 
 ### Quiz the user
@@ -45,7 +45,7 @@ Check in this order:
 Use the AskQuestion tool with these three questions:
 
 **Question 1: "Compilation optimization intensity"**
-- `minimal` -- Headers (`--!strict`/`--!native`/`--!optimize 2`), type annotations on all function signatures, deprecated pattern replacements only
+- `minimal` -- Headers (`--!strict`/`--!optimize 2`), type annotations on all function signatures, deprecated pattern replacements, native codegen analysis
 - `moderate` -- + function restructuring for inlining, import hoisting, compound operators, fastcall enablement, allocation reduction
 - `insane` -- + every micro-optimization from the pattern catalog, full bytecode analysis, register pressure optimization, closure caching analysis
 
@@ -70,7 +70,7 @@ Use the AskQuestion tool with these three questions:
 | Function restructuring | No | Yes (Priority 3) | Aggressive splitting |
 | Bytecode verification | After all changes | After each priority | After each change |
 | Algorithmic changes | Per algo quiz | Per algo quiz | Per algo quiz |
-| `@native` vs `--!native` | `--!native` unless big file | Selective `@native` on hot functions | Full per-function analysis |
+| Native codegen strategy | Per-function analysis; `@native` on beneficial functions; `--!native` only if most are native-worthy | Selective `@native` on hot computational functions | Full per-function cost/benefit with budget tracking |
 
 **Restructuring scope** scales with compilation intensity:
 - **minimal**: No restructuring. Only additive changes (headers, annotations, pattern swaps).
@@ -236,10 +236,11 @@ Using both the source (already read in Phase 1) and tool output from Phase 2, id
 
 Apply changes in priority order. Re-run `luau-compile --remarks -O2 --vector-lib=Vector3 --vector-ctor=new --vector-type=Vector3 <file>` after structural changes to verify the compiler benefits.
 
-### Priority 1 -- Headers and type safety (always apply)
+### Priority 1 -- Headers, type safety, and native codegen (always apply)
 
 **Add headers:**
-- `--!strict` / `--!native` / `--!optimize 2`. (`--!optimize 2` is default in live but not Studio testing.)
+- `--!strict` / `--!optimize 2`. (`--!optimize 2` is default in live but not Studio testing.)
+- **Do NOT blindly add `--!native`.** Native codegen is analyzed separately (see "Native codegen strategy" below).
 
 **Remove deoptimizers:**
 - Replace `getfenv`/`setfenv` -- disables builtins, imports, and optimizations globally.
@@ -259,6 +260,27 @@ Getting the file to pass `--!strict` cleanly is the single most impactful compil
 - For OOP patterns: use `typeof(setmetatable(...))` with explicit `self: ClassName` on methods (old typechecker compatible).
 - For generic code: use proper generics (`<T>`) instead of `any`. If the function truly accepts anything, use `unknown` and narrow explicitly.
 - Track type coverage: count `any` in `--annotate` output. The goal is zero (or as close as practical).
+
+**Native codegen strategy -- `--!native` vs `@native` vs neither:**
+
+Native codegen has two limits: a 1M instruction cap per module and a per-experience memory ceiling shared across all native scripts. Applying `--!native` indiscriminately wastes both budgets on functions that don't benefit, crowding out functions that would.
+
+1. **Classify every function** in the file by its dominant work:
+   - **Native-worthy**: Tight computational loops, math-heavy logic (`Vector3`/`CFrame` arithmetic, `buffer` ops, `bit32` ops, numerical algorithms, physics calculations). These get genuine speedups from JIT compilation.
+   - **Not native-worthy**: Roblox API calls (`Instance:Clone()`, `:FindFirstChild()`, `:GetChildren()`, event connections), table construction without computation (allocation-bound), heavy Luau library calls (`string.format`, pattern matching -- C implementations native codegen can't speed up), one-shot initialization, coroutine/task scheduling. The dominant cost is the API/library call or GC, not Luau instruction dispatch.
+
+2. **Decision matrix**:
+   - **All/most functions are native-worthy** (math utility modules, physics solvers, buffer serializers): Use `--!native` on the whole file.
+   - **Some functions are native-worthy** (mixed scripts with hot computational loops alongside API-heavy code): Use `@native` on individual functions that benefit. **This is the common case for real game scripts.**
+   - **No functions are native-worthy** (typical game scripts: event handlers, UI logic, Roblox API orchestration): Skip native codegen entirely. Don't waste the budget.
+
+3. **`@native` placement rules**:
+   - Place `@native` directly above the function declaration.
+   - Inner/nested functions do NOT inherit `@native` -- annotate them individually if needed.
+   - Top-level module code runs once at `require()` time; `@native` has no meaningful benefit there.
+   - Prioritize functions identified as hot paths in Phase 1 (RunService handlers, loop bodies, recursive functions) -- but only if their work is computational, not API-bound.
+
+4. **Budget awareness**: Check native codegen stats from `--record-stats`. If the module's native instruction count is high, be more selective with `@native` to leave budget for other scripts in the experience.
 
 ### Priority 2 -- Low-hanging structural wins
 
@@ -392,6 +414,7 @@ These principles govern every optimization decision:
 - **Local functions for inlining** -- even at the cost of duplicating imported behavior in high-traffic code.
 - **Quantify everything** -- before/after metrics for every optimization pass. No "I think this is faster" -- prove it.
 - **Type annotations drive native codegen quality** -- every `any` type is a missed specialization opportunity. The JIT uses annotations directly with no runtime analysis.
+- **Native codegen is a budget, not a checkbox** -- `--!native` on every file wastes the per-experience native code memory limit on functions that don't benefit. Apply `@native` selectively to computational hot functions; reserve `--!native` for genuinely math-heavy modules.
 - **Event-driven over polling** -- avoid per-frame calculations when events suffice.
 
 ---
@@ -484,15 +507,37 @@ The compiler narrows types after certain checks, improving both type safety and 
 
 ## Reference: Native Codegen
 
-**`@native` vs `--!native`:**
-- `--!native`: entire script. Good for math-heavy utility modules.
-- `@native`: per-function. Better for selective hot functions or near the 1M instruction limit.
-- Inner functions do NOT inherit `@native`.
-- Top-level code runs once; `@native` has minimal benefit there.
+**`--!native` (whole-file) -- use sparingly:**
+- Compiles every function in the file to native code, consuming the per-module 1M instruction limit and the per-experience memory budget.
+- Only appropriate for files where most/all functions are computational: math utilities, physics solvers, buffer serializers, numerical algorithms.
+- Wasteful on typical game scripts where most functions are Roblox API calls, table construction, or string operations -- these don't benefit from native codegen but still eat the budget.
+
+**`@native` (per-function) -- preferred for most files:**
+- Annotate only functions that perform computational work benefiting from JIT: tight loops, `Vector3`/`CFrame` arithmetic, `buffer` ops, `bit32` ops, numerical math.
+- Place directly above the function declaration. Inner functions do NOT inherit it.
+- Top-level code runs once at `require()` time; `@native` provides no meaningful benefit there.
+- This is the correct default strategy for mixed scripts with both hot computational code and API-heavy orchestration.
+
+**Functions that do NOT benefit from `@native`:**
+- Roblox API calls (`Instance:Clone()`, `:FindFirstChild()`, `:GetChildren()`, `:WaitForChild()`, event connections) -- execution time is in C++/engine, not Luau bytecode
+- Table construction without computation (allocation-bound; the allocator is C code native codegen can't speed up)
+- Heavy Luau library calls (`string.format`, `string.match`, `string.gmatch` -- C implementations that native codegen can't accelerate)
+- One-shot initialization code
+- Event handler registration and wiring
+- `require()` calls and module setup
+- Coroutine/task scheduling (`task.spawn`, `task.defer`, `task.wait`)
+
+**Functions that benefit from `@native`:**
+- Tight numerical loops (physics, interpolation, noise generation)
+- Mathematical operations on table data (reading values, computing, writing back -- the Roblox docs explicitly cite this)
+- `Vector3`/`CFrame` arithmetic (native generates specialized vector code with proper type annotations)
+- `buffer` read/write operations (efficient native lowering)
+- `bit32` operations (maps to CPU instructions)
+- Hot paths called every frame (RunService handlers with computational work, not API orchestration)
 
 **Hurts native:** `getfenv`/`setfenv`, wrong types to typed functions, non-numeric math args, breakpoints, size limits (64K instructions/block, 32K blocks/function, 1M/module).
 
-**Helps native:** Type annotations (especially `Vector3`), small functions, consistent table shapes, `buffer` ops, `bit32` ops.
+**Budget management:** The 1M instruction limit is per-module; the memory budget for native code is per-experience, shared across ALL native scripts. Use `--record-stats=function` to check each function's native instruction count and `debug.dumpcodesize()` in Studio to see per-experience usage. A few well-chosen `@native` functions outperform blanket `--!native` across many files.
 
 ## Reference: CLI Tools
 
