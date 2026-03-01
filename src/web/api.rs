@@ -417,7 +417,7 @@ impl ApiService {
             })
             .await
             .ok();
-            log::trace!(
+            log::debug!(
                 "[TIMING] handle_api_rojo: compute_git_metadata {}ms",
                 t.elapsed().as_millis()
             );
@@ -426,7 +426,7 @@ impl ApiService {
             None
         };
 
-        log::trace!(
+        log::debug!(
             "[TIMING] handle_api_rojo: total {}ms",
             handler_start.elapsed().as_millis()
         );

@@ -330,12 +330,12 @@ function ServeSession:start()
 	self:setLoadingText("Connecting to server...")
 
 	local sessionStartClock = os.clock()
-	Log.trace("[TIMING] ServeSession:start() begun")
+	Log.debug("[TIMING] ServeSession:start() begun")
 
 	self.__apiContext
 		:connect()
 		:andThen(function(serverInfo)
-			Log.trace(
+			Log.debug(
 				"[TIMING] ApiContext:connect() completed ({} ms)",
 				string.format("%.1f", (os.clock() - sessionStartClock) * 1000)
 			)
@@ -351,16 +351,16 @@ function ServeSession:start()
 			self.__serverInfo = serverInfo
 
 			local computePatchClock = os.clock()
-			Log.trace("[TIMING] __computeInitialPatch() starting")
+			Log.debug("[TIMING] __computeInitialPatch() starting")
 			return self:__computeInitialPatch(serverInfo):andThen(function(catchUpPatch)
-				Log.trace(
+				Log.debug(
 					"[TIMING] __computeInitialPatch() completed ({} ms)",
 					string.format("%.1f", (os.clock() - computePatchClock) * 1000)
 				)
 				self:setLoadingText("Starting sync loop...")
 
 				local wsClock = os.clock()
-				Log.trace("[TIMING] connectWebSocket() starting")
+				Log.debug("[TIMING] connectWebSocket() starting")
 				-- Connect WebSocket BEFORE showing confirmation so changes
 				-- during confirmation can be merged into the patch
 				-- Note: connectWebSocket returns a Promise that only resolves when
@@ -376,16 +376,16 @@ function ServeSession:start()
 							self:__stopInternal(err)
 						end
 					end)
-				Log.trace(
+				Log.debug(
 					"[TIMING] connectWebSocket() initiated ({} ms)",
 					string.format("%.1f", (os.clock() - wsClock) * 1000)
 				)
 
 				local confirmClock = os.clock()
-				Log.trace("[TIMING] __confirmAndApplyInitialPatch() starting")
+				Log.debug("[TIMING] __confirmAndApplyInitialPatch() starting")
 				-- Now show confirmation and wait for user decision
 				return self:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo):andThen(function(...)
-					Log.trace(
+					Log.debug(
 						"[TIMING] __confirmAndApplyInitialPatch() completed ({} ms)",
 						string.format("%.1f", (os.clock() - confirmClock) * 1000)
 					)
@@ -394,7 +394,7 @@ function ServeSession:start()
 			end)
 		end)
 		:andThen(function()
-			Log.trace(
+			Log.debug(
 				"[TIMING] ServeSession:start() total elapsed ({} ms)",
 				string.format("%.1f", (os.clock() - sessionStartClock) * 1000)
 			)
@@ -601,9 +601,9 @@ function ServeSession:__applyPatch(patch)
 
 	self.__applyingPatch = true
 	local reconcilerClock = os.clock()
-	Log.trace("[TIMING] reconciler:applyPatch() starting")
+	Log.debug("[TIMING] reconciler:applyPatch() starting")
 	local patchApplySuccess, unappliedPatch = pcall(self.__reconciler.applyPatch, self.__reconciler, patch)
-	Log.trace(
+	Log.debug(
 		"[TIMING] reconciler:applyPatch() completed ({} ms, success={})",
 		string.format("%.1f", (os.clock() - reconcilerClock) * 1000),
 		patchApplySuccess
@@ -621,7 +621,7 @@ function ServeSession:__applyPatch(patch)
 	local fallbackClock = os.clock()
 	local fallbackOk, fallbackErr = pcall(function()
 		if Settings:get("enableSyncFallback") and not PatchSet.isEmpty(unappliedPatch) then
-			Log.trace("[TIMING] Sync fallback starting (unapplied patch is non-empty)")
+			Log.debug("[TIMING] Sync fallback starting (unapplied patch is non-empty)")
 			-- Some changes did not apply, let's try replacing them instead
 			local addedIdList = PatchSet.addedIdList(unappliedPatch)
 			local updatedIdList = PatchSet.updatedIdList(unappliedPatch)
@@ -648,7 +648,7 @@ function ServeSession:__applyPatch(patch)
 		end
 	end)
 	self.__applyingPatch = false
-	Log.trace(
+	Log.debug(
 		"[TIMING] Sync fallback phase completed ({} ms)",
 		string.format("%.1f", (os.clock() - fallbackClock) * 1000)
 	)
@@ -684,9 +684,9 @@ end
 
 function ServeSession:__computeInitialPatch(serverInfo)
 	local readClock = os.clock()
-	Log.trace("[TIMING] ApiContext:read() starting")
+	Log.debug("[TIMING] ApiContext:read() starting")
 	return self.__apiContext:read({ serverInfo.rootInstanceId }):andThen(function(readResponseBody)
-		Log.trace(
+		Log.debug(
 			"[TIMING] ApiContext:read() completed ({} ms)",
 			string.format("%.1f", (os.clock() - readClock) * 1000)
 		)
@@ -695,7 +695,7 @@ function ServeSession:__computeInitialPatch(serverInfo)
 		for _ in pairs(readResponseBody.instances) do
 			instanceCount += 1
 		end
-		Log.trace("[TIMING] Read response contains {} instances", instanceCount)
+		Log.debug("[TIMING] Read response contains {} instances", instanceCount)
 
 		-- Tell the API Context that we're up-to-date with the version of
 		-- the tree defined in this response.
@@ -706,10 +706,10 @@ function ServeSession:__computeInitialPatch(serverInfo)
 		Log.trace("Matching existing Roblox instances to Rojo IDs")
 		self:setLoadingText("Hydrating instance map...")
 		local hydrateClock = os.clock()
-		Log.trace("[TIMING] reconciler:hydrate() starting ({} virtual instances)", instanceCount)
+		Log.debug("[TIMING] reconciler:hydrate() starting ({} virtual instances)", instanceCount)
 		local matchingSession = Matching.newSession()
 		self.__reconciler:hydrate(readResponseBody.instances, serverInfo.rootInstanceId, game, matchingSession)
-		Log.trace(
+		Log.debug(
 			"[TIMING] reconciler:hydrate() completed ({} ms)",
 			string.format("%.1f", (os.clock() - hydrateClock) * 1000)
 		)
@@ -718,17 +718,17 @@ function ServeSession:__computeInitialPatch(serverInfo)
 		for _ in pairs(self.__instanceMap.fromIds) do
 			hydratedCount += 1
 		end
-		Log.trace("[TIMING] InstanceMap contains {} entries after hydration", hydratedCount)
+		Log.debug("[TIMING] InstanceMap contains {} entries after hydration", hydratedCount)
 
 		-- Calculate the initial patch to apply to the DataModel to catch us
 		-- up to what Rojo thinks the place should look like.
 		Log.trace("Computing changes that plugin needs to make to catch up to server...")
 		self:setLoadingText("Finding differences between server and Studio...")
 		local diffClock = os.clock()
-		Log.trace("[TIMING] reconciler:diff() starting")
+		Log.debug("[TIMING] reconciler:diff() starting")
 		local success, catchUpPatch =
 			self.__reconciler:diff(readResponseBody.instances, serverInfo.rootInstanceId, serverInfo)
-		Log.trace(
+		Log.debug(
 			"[TIMING] reconciler:diff() completed ({} ms)",
 			string.format("%.1f", (os.clock() - diffClock) * 1000)
 		)
@@ -741,7 +741,7 @@ function ServeSession:__computeInitialPatch(serverInfo)
 		for _ in pairs(catchUpPatch.added) do
 			addedCount += 1
 		end
-		Log.trace(
+		Log.debug(
 			"[TIMING] Diff result: {} removals, {} additions, {} updates",
 			#catchUpPatch.removed,
 			addedCount,
@@ -778,9 +778,9 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 		self.__confirmingPatch = catchUpPatch
 
 		local confirmWaitClock = os.clock()
-		Log.trace("[TIMING] Waiting for user confirmation...")
+		Log.debug("[TIMING] Waiting for user confirmation...")
 		userDecision = self.__userConfirmCallback(self.__instanceMap, catchUpPatch, serverInfo)
-		Log.trace(
+		Log.debug(
 			"[TIMING] User confirmation received: {} ({} ms wait)",
 			tostring(userDecision),
 			string.format("%.1f", (os.clock() - confirmWaitClock) * 1000)
@@ -808,9 +808,9 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 		self:__setStatus(Status.Connected, serverInfo.projectName)
 		self:__applyGameAndPlaceId(serverInfo)
 		local applyPatchClock = os.clock()
-		Log.trace("[TIMING] __applyPatch() starting (Accept path)")
+		Log.debug("[TIMING] __applyPatch() starting (Accept path)")
 		self:__applyPatch(catchUpPatch)
-		Log.trace(
+		Log.debug(
 			"[TIMING] __applyPatch() completed ({} ms)",
 			string.format("%.1f", (os.clock() - applyPatchClock) * 1000)
 		)
@@ -982,9 +982,9 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 				#pushPatch.updated
 			)
 			local pushClock = os.clock()
-			Log.trace("[TIMING] __applyPatch() starting (Confirm push path)")
+			Log.debug("[TIMING] __applyPatch() starting (Confirm push path)")
 			self:__applyPatch(pushPatch)
-			Log.trace(
+			Log.debug(
 				"[TIMING] __applyPatch() completed ({} ms)",
 				string.format("%.1f", (os.clock() - pushClock) * 1000)
 			)
@@ -1015,9 +1015,9 @@ function ServeSession:__confirmAndApplyInitialPatch(catchUpPatch, serverInfo)
 				Log.info("Requesting git stage for {} files", #stageIds)
 			end
 			local writeClock = os.clock()
-			Log.trace("[TIMING] ApiContext:write() starting (pull patch)")
+			Log.debug("[TIMING] ApiContext:write() starting (pull patch)")
 			return self.__apiContext:write(pullPatch, stageIds):andThen(function(...)
-				Log.trace(
+				Log.debug(
 					"[TIMING] ApiContext:write() completed ({} ms)",
 					string.format("%.1f", (os.clock() - writeClock) * 1000)
 				)

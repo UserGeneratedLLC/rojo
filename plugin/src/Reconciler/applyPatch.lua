@@ -42,7 +42,7 @@ local function applyPatch(instanceMap, patch)
 		)
 	end
 
-	Log.trace(
+	Log.debug(
 		"[TIMING] applyPatch() starting: {} removals, {} additions, {} updates",
 		#patch.removed,
 		addCount,
@@ -77,7 +77,7 @@ local function applyPatch(instanceMap, patch)
 		end
 	end
 
-	Log.trace(
+	Log.debug(
 		"[TIMING] applyPatch() removals completed ({} ms)",
 		string.format("%.1f", (os.clock() - removalClock) * 1000)
 	)
@@ -116,7 +116,7 @@ local function applyPatch(instanceMap, patch)
 	end
 
 	local additionClock = os.clock()
-	Log.trace("[TIMING] applyPatch() additions starting")
+	Log.debug("[TIMING] applyPatch() additions starting")
 	for id, virtualInstance in pairs(patch.added) do
 		if instanceMap.fromIds[id] ~= nil then
 			-- This instance already exists. We might've already added it in a
@@ -163,13 +163,13 @@ local function applyPatch(instanceMap, patch)
 		end
 	end
 
-	Log.trace(
+	Log.debug(
 		"[TIMING] applyPatch() additions completed ({} ms)",
 		string.format("%.1f", (os.clock() - additionClock) * 1000)
 	)
 
 	local updateClock = os.clock()
-	Log.trace("[TIMING] applyPatch() updates starting ({} updates)", #patch.updated)
+	Log.debug("[TIMING] applyPatch() updates starting ({} updates)", #patch.updated)
 	for _, update in ipairs(patch.updated) do
 		local instance = instanceMap.fromIds[update.id]
 
@@ -338,20 +338,20 @@ local function applyPatch(instanceMap, patch)
 		end
 	end
 
-	Log.trace(
+	Log.debug(
 		"[TIMING] applyPatch() updates completed ({} ms)",
 		string.format("%.1f", (os.clock() - updateClock) * 1000)
 	)
 
 	local refsClock = os.clock()
-	Log.trace("[TIMING] applyPatch() deferred refs starting ({} refs)", #deferredRefs)
+	Log.debug("[TIMING] applyPatch() deferred refs starting ({} refs)", #deferredRefs)
 	applyDeferredRefs(instanceMap, deferredRefs, unappliedPatch)
-	Log.trace(
+	Log.debug(
 		"[TIMING] applyPatch() deferred refs completed ({} ms)",
 		string.format("%.1f", (os.clock() - refsClock) * 1000)
 	)
 
-	Log.trace(
+	Log.debug(
 		"[TIMING] applyPatch() total completed ({} ms)",
 		string.format("%.1f", (os.clock() - applyPatchClock) * 1000)
 	)

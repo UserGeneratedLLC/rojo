@@ -1003,10 +1003,10 @@ function App:startSession()
 			connectingText = "Computing diff view...",
 		})
 		local patchTreeClock = os.clock()
-		Log.trace("[TIMING] PatchTree.build() starting")
+		Log.debug("[TIMING] PatchTree.build() starting")
 		local patchTree =
 			PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" }, serverInfo.gitMetadata)
-		Log.trace(
+		Log.debug(
 			"[TIMING] PatchTree.build() completed ({} ms)",
 			string.format("%.1f", (os.clock() - patchTreeClock) * 1000)
 		)
@@ -1024,7 +1024,7 @@ function App:startSession()
 			timeout = 7,
 		})
 
-		Log.trace("[TIMING] Waiting for user to confirm/reject patch...")
+		Log.debug("[TIMING] Waiting for user to confirm/reject patch...")
 		local result = self.confirmationEvent:Wait()
 
 		-- One-shot sync: Don't transition to Connected UI

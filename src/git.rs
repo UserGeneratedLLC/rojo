@@ -84,7 +84,7 @@ fn git_changed_files_impl(
     let diff_base = initial_head.unwrap_or("HEAD");
     let base_tree_id = resolve_tree_id(repo, diff_base);
     let head_tree_id = resolve_tree_id(repo, "HEAD");
-    log::trace!(
+    log::debug!(
         "[TIMING] compute_git_metadata: resolve_tree_id {}ms",
         t.elapsed().as_millis()
     );
@@ -104,7 +104,7 @@ fn git_changed_files_impl(
                     collect_tree_diff_paths(repo, &base_tree, &head_tree, &mut tracked);
                 }
             }
-            log::trace!(
+            log::debug!(
                 "[TIMING] compute_git_metadata: collect_tree_diff_paths {}ms ({} found)",
                 t.elapsed().as_millis(),
                 tracked.len()
@@ -117,7 +117,7 @@ fn git_changed_files_impl(
         if let Ok(index) = repo.open_index() {
             let t = Instant::now();
             collect_tree_index_changes(repo, base_id, &index, &mut tracked);
-            log::trace!(
+            log::debug!(
                 "[TIMING] compute_git_metadata: collect_tree_index_changes {}ms",
                 t.elapsed().as_millis()
             );
@@ -125,7 +125,7 @@ fn git_changed_files_impl(
             let t = Instant::now();
             let before = tracked.len();
             collect_index_worktree_changes(repo, &index, &mut tracked, relevant_prefixes);
-            log::trace!(
+            log::debug!(
                 "[TIMING] compute_git_metadata: collect_index_worktree_changes {}ms ({} entries, {} worktree-dirty)",
                 t.elapsed().as_millis(),
                 index.entries().len(),
@@ -139,7 +139,7 @@ fn git_changed_files_impl(
         let t = Instant::now();
         let before = tracked.len();
         collect_index_worktree_changes(repo, &index, &mut tracked, relevant_prefixes);
-        log::trace!(
+        log::debug!(
             "[TIMING] compute_git_metadata: collect_index_worktree_changes (no tree) {}ms ({} entries, {} worktree-dirty)",
             t.elapsed().as_millis(),
             index.entries().len(),
@@ -149,7 +149,7 @@ fn git_changed_files_impl(
 
     let t = Instant::now();
     collect_untracked_files(repo, &mut untracked, relevant_prefixes);
-    log::trace!(
+    log::debug!(
         "[TIMING] compute_git_metadata: collect_untracked_files {}ms ({} found)",
         t.elapsed().as_millis(),
         untracked.len()
@@ -807,7 +807,7 @@ pub fn compute_git_metadata(
             };
         }
     };
-    log::trace!(
+    log::debug!(
         "[TIMING] compute_git_metadata: open_repo {}ms",
         t.elapsed().as_millis()
     );
@@ -825,7 +825,7 @@ pub fn compute_git_metadata(
         }
         dirs
     };
-    log::trace!(
+    log::debug!(
         "[TIMING] compute_git_metadata: extract_relevant_prefixes {}ms ({} dirs)",
         t.elapsed().as_millis(),
         relevant_prefixes.len()
@@ -835,7 +835,7 @@ pub fn compute_git_metadata(
     let changed_files = match git_changed_files_impl(&repo, initial_head, &relevant_prefixes) {
         Some(files) => files,
         None => {
-            log::trace!(
+            log::debug!(
                 "[TIMING] compute_git_metadata: total {}ms (no changed files)",
                 total_t.elapsed().as_millis()
             );
@@ -846,7 +846,7 @@ pub fn compute_git_metadata(
             };
         }
     };
-    log::trace!(
+    log::debug!(
         "[TIMING] compute_git_metadata: git_changed_files_impl {}ms ({} tracked, {} untracked)",
         t.elapsed().as_millis(),
         changed_files.tracked.len(),
@@ -854,7 +854,7 @@ pub fn compute_git_metadata(
     );
 
     if changed_files.is_empty() {
-        log::trace!(
+        log::debug!(
             "[TIMING] compute_git_metadata: total {}ms (empty changeset)",
             total_t.elapsed().as_millis()
         );
@@ -899,7 +899,7 @@ pub fn compute_git_metadata(
 
         result
     };
-    log::trace!(
+    log::debug!(
         "[TIMING] compute_git_metadata: tree resolution {}ms ({} changed -> {} resolved)",
         t.elapsed().as_millis(),
         all_changed.len(),
@@ -958,7 +958,7 @@ pub fn compute_git_metadata(
 
     let t = Instant::now();
     let batch_hashes = git_batch_check_hashes_impl(&repo, &object_refs);
-    log::trace!(
+    log::debug!(
         "[TIMING] compute_git_metadata: batch_check_hashes {}ms ({} refs)",
         t.elapsed().as_millis(),
         object_refs.len()
@@ -986,7 +986,7 @@ pub fn compute_git_metadata(
         }
     }
 
-    log::trace!(
+    log::debug!(
         "[TIMING] compute_git_metadata: total {}ms ({} changed_ids, {} script_hashes, {} new_file_ids)",
         total_t.elapsed().as_millis(),
         changed_ids.len(),

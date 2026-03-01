@@ -72,7 +72,7 @@ function StringDiffVisualizer:updateDiffs()
 		StringDiff.findDiffs((string.gsub(currentString, "\t", "    ")), (string.gsub(incomingString, "\t", "    ")))
 	local stopClock = os.clock()
 
-	Log.trace(
+	Log.debug(
 		"Diffing {} byte and {} byte strings took {} microseconds and found {} diff sections",
 		#currentString,
 		#incomingString,

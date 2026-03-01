@@ -38,7 +38,7 @@ local function hydrate(instanceMap, virtualInstances, rootId, rootInstance, sess
 	end
 
 	if isRoot then
-		Log.trace("[TIMING] hydrate() starting at root '{}' ({})", virtualInstance.Name, rootInstance:GetFullName())
+		Log.debug("[TIMING] hydrate() starting at root '{}' ({})", virtualInstance.Name, rootInstance:GetFullName())
 	end
 
 	instanceMap:insert(rootId, rootInstance)
@@ -67,7 +67,7 @@ local function hydrate(instanceMap, virtualInstances, rootId, rootInstance, sess
 	local matchElapsed = (os.clock() - matchClock) * 1000
 
 	if matchElapsed > 10 then
-		Log.trace(
+		Log.debug(
 			"[TIMING] matchChildren for '{}' took {} ms ({} virtual, {} studio, {} matched)",
 			virtualInstance.Name,
 			string.format("%.1f", matchElapsed),
@@ -97,7 +97,7 @@ local function hydrate(instanceMap, virtualInstances, rootId, rootInstance, sess
 	end
 
 	if isRoot then
-		Log.trace(
+		Log.debug(
 			"[TIMING] hydrate() completed: {} instances processed, {} matched ({} ms total)",
 			session.hydrateCount,
 			#result.matched,
