@@ -342,6 +342,3 @@ I notice we actually use the git cli in a lot of places. is there a git library 
 [auto select studio/atlas]
 when things get added AFTER the fact because we send the git history hashes on connect rather than continiously, it auto-selects Studio for things that are being edited in real-time in the sync dialog
 how should we handle new files? because it could have been that someone just deleted it in studio. we can actually check if its a truly new file in Studio, like A but not staged!
-
-[merge visualizer]
-we should make the outline green or something to show when everything is ready to go. maybe the accept button

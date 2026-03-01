@@ -366,7 +366,7 @@ function ConfirmingPage:render()
 
 				Accept = e(TextButton, {
 					text = if hasChanges then "Accept" else "OK",
-					style = "Primary",
+					style = if allSelected then "Primary" else "Neutral",
 					transparency = self.props.transparency,
 					layoutOrder = 2,
 					onClick = function()
