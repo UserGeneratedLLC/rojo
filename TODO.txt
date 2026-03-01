@@ -7,6 +7,7 @@ suffix version for beta
 
 [mcp]
 * atlas_sync
+ - Basically equiv to git fast-forward merge
  - Invokes Atlas sync from Roblox
  - If there are NO unselected items in the tree (e.g. all were automatically selected), it just automatically hits accept
  - Does nothing if we are running in connected-mode (already syncing)
@@ -86,8 +87,7 @@ ensure that live-syncback respects the syncback configuration fully
 if descriptor.dataType == "Ref" then return end
 I thought we were supposed to generate a uid and then send that table to the server so it can resolve those based on like a client uid?
 
-[cli]
-make console tabbing support work
+[cli inspection]
 we should make commands for inspecting .rbxl and .rbxm files for ai agents
 even inspecting ones from the website directly
 could we find an endpoint for downloading the "client side" of any game on the platform for context?
@@ -338,3 +338,8 @@ make sure this is applied to plugin-based syncback, too.
 
 [git]
 I notice we actually use the git cli in a lot of places. is there a git library we can use instead?
+
+[cli]
+make console tabbing support work
+when i say console tabbing, like i can type "git c" and it will recommend "git checkout"
+is there a rust crate to accomplish this? can we enable it on our current argument parser library being used?

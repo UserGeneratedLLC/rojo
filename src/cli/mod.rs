@@ -2,6 +2,7 @@
 
 mod build;
 mod clone;
+mod completions;
 mod cursor;
 mod doc;
 mod fmt_project;
@@ -20,6 +21,7 @@ use thiserror::Error;
 
 pub use self::build::BuildCommand;
 pub use self::clone::CloneCommand;
+pub use self::completions::CompletionsCommand;
 pub use self::cursor::CursorCommand;
 pub use self::doc::DocCommand;
 pub use self::fmt_project::FmtProjectCommand;
@@ -47,6 +49,7 @@ impl Options {
     pub fn run(self) -> anyhow::Result<()> {
         match self.subcommand {
             Subcommand::Clone(subcommand) => subcommand.run(self.global),
+            Subcommand::Completions(subcommand) => subcommand.run(),
             Subcommand::Init(subcommand) => subcommand.run(),
             Subcommand::Serve(subcommand) => subcommand.run(),
             Subcommand::Build(subcommand) => subcommand.run(),
@@ -126,6 +129,7 @@ pub struct ColorChoiceParseError {
 #[derive(Debug, Parser)]
 pub enum Subcommand {
     Clone(CloneCommand),
+    Completions(CompletionsCommand),
     Init(InitCommand),
     Serve(ServeCommand),
     Build(BuildCommand),
