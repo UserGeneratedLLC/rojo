@@ -16,6 +16,22 @@ pub struct LogGuard {
     _file_guard: Option<tracing_appender::non_blocking::WorkerGuard>,
 }
 
+/// Generates a session log filename like `atlas-serve.2026-03-01_14-32-05.log`.
+/// Uses UTC time, hyphens and underscores only (safe on all OSes).
+fn session_log_filename(command_name: &str) -> String {
+    let now = time::OffsetDateTime::now_utc();
+    format!(
+        "{}.{:04}-{:02}-{:02}_{:02}-{:02}-{:02}.log",
+        command_name,
+        now.year(),
+        now.month() as u8,
+        now.day(),
+        now.hour(),
+        now.minute(),
+        now.second(),
+    )
+}
+
 pub fn init_logging(
     verbosity: u8,
     color: ColorChoice,
@@ -55,30 +71,41 @@ pub fn init_logging(
 
         match std::fs::create_dir_all(&log_dir) {
             Ok(()) => {
-                compress_old_logs(&log_dir, command_name);
+                compress_old_logs(&log_dir);
 
-                let file_appender = tracing_appender::rolling::Builder::new()
-                    .rotation(tracing_appender::rolling::Rotation::DAILY)
-                    .filename_prefix(command_name)
-                    .filename_suffix("log")
-                    .build(&log_dir)
-                    .expect("Failed to create rolling file appender");
+                let log_filename = session_log_filename(command_name);
+                let log_path = log_dir.join(&log_filename);
 
-                let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
-                file_guard = Some(guard);
+                match std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&log_path)
+                {
+                    Ok(file) => {
+                        let (non_blocking, guard) = tracing_appender::non_blocking(file);
+                        file_guard = Some(guard);
 
-                let file_filter = EnvFilter::new(level.to_string());
+                        let file_filter = EnvFilter::new(level.to_string());
 
-                let layer = fmt::layer()
-                    .with_writer(non_blocking)
-                    .with_ansi(false)
-                    .with_timer(UtcTime::rfc_3339())
-                    .with_target(true)
-                    .with_thread_names(true)
-                    .with_level(true)
-                    .with_filter(file_filter);
+                        let layer = fmt::layer()
+                            .with_writer(non_blocking)
+                            .with_ansi(false)
+                            .with_timer(UtcTime::rfc_3339())
+                            .with_target(true)
+                            .with_thread_names(true)
+                            .with_level(true)
+                            .with_filter(file_filter);
 
-                Some(layer)
+                        Some(layer)
+                    }
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: could not create log file {}: {e}",
+                            log_path.display()
+                        );
+                        None
+                    }
+                }
             }
             Err(e) => {
                 eprintln!(
@@ -102,15 +129,12 @@ pub fn init_logging(
     }
 }
 
-fn compress_old_logs(log_dir: &Path, command_name: &str) {
-    let today = {
-        let now = std::time::SystemTime::now();
-        let since_epoch = now
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default();
-        let days = since_epoch.as_secs() / 86400;
-        days
-    };
+fn compress_old_logs(log_dir: &Path) {
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let today = now_secs / 86400;
 
     let entries = match std::fs::read_dir(log_dir) {
         Ok(entries) => entries,
@@ -143,20 +167,10 @@ fn compress_old_logs(log_dir: &Path, command_name: &str) {
             continue;
         }
 
-        if !file_name.starts_with(command_name) {
+        // Try to open for exclusive write to check if another process holds it.
+        // On Windows this fails if another Atlas process has the file open.
+        if std::fs::OpenOptions::new().write(true).open(&path).is_err() {
             continue;
-        }
-
-        if let Ok(meta) = entry.metadata() {
-            if let Ok(modified) = meta.modified() {
-                let file_days = modified
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs() / 86400)
-                    .unwrap_or(today);
-                if file_days >= today {
-                    continue;
-                }
-            }
         }
 
         let gz_path = path.with_extension("log.gz");
@@ -458,62 +472,87 @@ mod tests {
     }
 
     #[test]
-    fn compress_old_logs_compresses_old_files() {
+    fn compress_old_logs_compresses_all_log_files() {
         let dir = tempfile::tempdir().unwrap();
         let log_dir = dir.path();
 
-        let old_file = log_dir.join("atlas-serve.2020-01-01.log");
-        std::fs::write(&old_file, "old log content").unwrap();
+        let serve_file = log_dir.join("atlas-serve.2020-01-01_10-00-00.log");
+        std::fs::write(&serve_file, "serve log content").unwrap();
 
-        let mtime =
-            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(86400 * 18262);
-        filetime::set_file_mtime(&old_file, filetime::FileTime::from_system_time(mtime))
-            .unwrap_or_default();
+        let build_file = log_dir.join("atlas-build.2020-01-01_11-00-00.log");
+        std::fs::write(&build_file, "build log content").unwrap();
 
-        compress_old_logs(log_dir, "atlas-serve");
+        compress_old_logs(log_dir);
 
-        assert!(!old_file.exists(), "original .log file should be deleted");
-        let gz_file = log_dir.join("atlas-serve.2020-01-01.log.gz");
-        assert!(gz_file.exists(), ".log.gz file should be created");
+        assert!(!serve_file.exists(), "serve .log should be deleted");
+        assert!(!build_file.exists(), "build .log should be deleted");
 
-        let gz_data = std::fs::read(&gz_file).unwrap();
+        let serve_gz = log_dir.join("atlas-serve.2020-01-01_10-00-00.log.gz");
+        assert!(serve_gz.exists(), "serve .log.gz should be created");
+
+        let build_gz = log_dir.join("atlas-build.2020-01-01_11-00-00.log.gz");
+        assert!(build_gz.exists(), "build .log.gz should be created");
+
+        let gz_data = std::fs::read(&serve_gz).unwrap();
         let mut decoder = flate2::read::GzDecoder::new(&gz_data[..]);
         let mut decompressed = String::new();
         decoder.read_to_string(&mut decompressed).unwrap();
-        assert_eq!(decompressed, "old log content");
+        assert_eq!(decompressed, "serve log content");
     }
 
     #[test]
-    fn compress_old_logs_skips_other_commands() {
+    fn compress_old_logs_skips_non_log_files() {
         let dir = tempfile::tempdir().unwrap();
         let log_dir = dir.path();
 
-        let other_file = log_dir.join("atlas-build.2020-01-01.log");
-        std::fs::write(&other_file, "build log").unwrap();
+        let txt_file = log_dir.join("notes.txt");
+        std::fs::write(&txt_file, "not a log").unwrap();
+
+        compress_old_logs(log_dir);
+
+        assert!(txt_file.exists(), "non-.log files should be left alone");
+    }
+
+    #[test]
+    fn compress_old_logs_prunes_old_gz() {
+        let dir = tempfile::tempdir().unwrap();
+        let log_dir = dir.path();
+
+        let old_gz = log_dir.join("atlas-serve.2020-01-01_10-00-00.log.gz");
+        std::fs::write(&old_gz, "old compressed").unwrap();
 
         let mtime =
             std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(86400 * 18262);
-        filetime::set_file_mtime(&other_file, filetime::FileTime::from_system_time(mtime))
+        filetime::set_file_mtime(&old_gz, filetime::FileTime::from_system_time(mtime))
             .unwrap_or_default();
 
-        compress_old_logs(log_dir, "atlas-serve");
+        compress_old_logs(log_dir);
 
-        assert!(
-            other_file.exists(),
-            "other command's log should NOT be compressed"
-        );
+        assert!(!old_gz.exists(), "old .log.gz (>7 days) should be pruned");
     }
 
     #[test]
-    fn compress_old_logs_skips_today() {
-        let dir = tempfile::tempdir().unwrap();
-        let log_dir = dir.path();
+    fn session_log_filename_format() {
+        let name = session_log_filename("atlas-serve");
+        assert!(
+            name.starts_with("atlas-serve."),
+            "should start with command prefix"
+        );
+        assert!(name.ends_with(".log"), "should end with .log");
+        assert!(!name.contains(':'), "no colons (Windows-safe)");
+        assert!(!name.contains('/'), "no slashes");
+        assert!(!name.contains('\\'), "no backslashes");
 
-        let today_file = log_dir.join("atlas-serve.today.log");
-        std::fs::write(&today_file, "today's log").unwrap();
-
-        compress_old_logs(log_dir, "atlas-serve");
-
-        assert!(today_file.exists(), "today's log should NOT be compressed");
+        let middle = &name["atlas-serve.".len()..name.len() - ".log".len()];
+        assert_eq!(
+            middle.len(),
+            19,
+            "timestamp should be YYYY-MM-DD_HH-MM-SS (19 chars)"
+        );
+        assert_eq!(&middle[4..5], "-");
+        assert_eq!(&middle[7..8], "-");
+        assert_eq!(&middle[10..11], "_");
+        assert_eq!(&middle[13..14], "-");
+        assert_eq!(&middle[16..17], "-");
     }
 }
