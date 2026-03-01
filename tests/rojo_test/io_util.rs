@@ -2,12 +2,18 @@ use std::{
     fs,
     io::{self, Read},
     path::{Path, PathBuf},
-    process::Child,
+    process::{Child, Command},
 };
 
 use walkdir::WalkDir;
 
 pub static ROJO_PATH: &str = env!("CARGO_BIN_EXE_atlas");
+
+pub fn atlas_command() -> Command {
+    let mut cmd = Command::new(ROJO_PATH);
+    cmd.env("ATLAS_NO_FILE_LOG", "1");
+    cmd
+}
 pub static BUILD_TESTS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/rojo-test/build-tests");
 pub static SERVE_TESTS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/rojo-test/serve-tests");
 pub static SYNCBACK_TESTS_PATH: &str =

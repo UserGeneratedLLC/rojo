@@ -7,11 +7,10 @@
 //! 4. Incremental mode preserves existing file structure
 
 use std::path::Path;
-use std::process::Command;
 
 use tempfile::tempdir;
 
-use crate::rojo_test::io_util::{copy_recursive, ROJO_PATH};
+use crate::rojo_test::io_util::{atlas_command, copy_recursive};
 
 const SYNCBACK_TESTS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/rojo-test/syncback-tests");
 
@@ -30,7 +29,7 @@ fn run_syncback(project_path: &Path, input_path: &Path, incremental: bool) -> bo
         args.push("--incremental");
     }
 
-    let output = Command::new(ROJO_PATH)
+    let output = atlas_command()
         .args(args)
         .output()
         .expect("Couldn't spawn syncback process");

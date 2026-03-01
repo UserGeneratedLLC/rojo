@@ -1,9 +1,9 @@
-use std::{fs, path::Path, process::Command};
+use std::{fs, path::Path};
 
 use insta::assert_snapshot;
 use tempfile::tempdir;
 
-use crate::rojo_test::io_util::{get_working_dir_path, BUILD_TESTS_PATH, ROJO_PATH};
+use crate::rojo_test::io_util::{atlas_command, get_working_dir_path, BUILD_TESTS_PATH};
 
 macro_rules! gen_build_tests {
     ( $($test_name: ident,)* ) => {
@@ -81,7 +81,7 @@ fn run_build_test(test_name: &str) {
     let output_dir = tempdir().expect("couldn't create temporary directory");
     let output_path = output_dir.path().join(format!("{}.rbxmx", test_name));
 
-    let output = Command::new(ROJO_PATH)
+    let output = atlas_command()
         .args([
             "build",
             input_path.to_str().unwrap(),

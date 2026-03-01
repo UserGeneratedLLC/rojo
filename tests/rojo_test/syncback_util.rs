@@ -1,4 +1,4 @@
-use std::{io::Write as _, path::Path, process::Command};
+use std::{io::Write as _, path::Path};
 
 use insta::{assert_snapshot, assert_yaml_snapshot};
 use regex::Regex;
@@ -6,7 +6,7 @@ use tempfile::tempdir;
 
 use crate::rojo_test::io_util::SYNCBACK_TESTS_PATH;
 
-use super::io_util::{copy_recursive, ROJO_PATH};
+use super::io_util::{atlas_command, copy_recursive};
 
 const INPUT_FILE_PROJECT: &str = "input-project";
 const INPUT_FILE_PLACE: &str = "input.rbxl";
@@ -82,7 +82,7 @@ fn run_syncback_test_impl(name: &str, incremental: bool, callback: impl FnOnce(&
         args.push("--incremental");
     }
 
-    let output = Command::new(ROJO_PATH)
+    let output = atlas_command()
         // I don't really understand why setting the working directory breaks this, but it does.
         // It's a bit concerning but I'm more interested in writing tests than debugging it right now.
         // TODO: Figure out why and fix it.

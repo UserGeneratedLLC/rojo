@@ -4,7 +4,7 @@ use std::{
     fs,
     io::Read as _,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::Stdio,
     thread,
     time::Duration,
 };
@@ -22,7 +22,7 @@ use librojo::web_api::{
 use rojo_insta_ext::RedactionMap;
 
 use crate::rojo_test::io_util::{
-    copy_recursive, get_working_dir_path, KillOnDrop, ROJO_PATH, SERVE_TESTS_PATH,
+    atlas_command, copy_recursive, get_working_dir_path, KillOnDrop, SERVE_TESTS_PATH,
 };
 
 /// Convenience method to run a `rojo serve` test.
@@ -110,7 +110,7 @@ impl TestServeSession {
         let port = get_port_number();
         let port_string = port.to_string();
 
-        let rojo_process = Command::new(ROJO_PATH)
+        let rojo_process = atlas_command()
             .args([
                 "serve",
                 project_path.to_str().unwrap(),
@@ -163,7 +163,7 @@ impl TestServeSession {
         let port = get_port_number();
         let port_string = port.to_string();
 
-        let rojo_process = Command::new(ROJO_PATH)
+        let rojo_process = atlas_command()
             .args([
                 "serve",
                 project_path.to_str().unwrap(),
@@ -223,7 +223,7 @@ impl TestServeSession {
         let port = get_port_number();
         let port_string = port.to_string();
 
-        let rojo_process = Command::new(ROJO_PATH)
+        let rojo_process = atlas_command()
             .args([
                 "serve",
                 project_path.to_str().unwrap(),
@@ -257,7 +257,7 @@ impl TestServeSession {
         let port_string = port.to_string();
         let working_dir = get_working_dir_path();
 
-        let rojo_process = Command::new(ROJO_PATH)
+        let rojo_process = atlas_command()
             .args([
                 "serve",
                 self.project_path.to_str().unwrap(),
@@ -777,7 +777,7 @@ pub fn run_cli_syncback_on_chunks(
     data: &[u8],
     chunks: &[librojo::web_api::ServiceChunk],
 ) -> (TempDir, PathBuf) {
-    use crate::rojo_test::io_util::{copy_recursive, ROJO_PATH, SERVE_TESTS_PATH};
+    use crate::rojo_test::io_util::{atlas_command, copy_recursive, SERVE_TESTS_PATH};
 
     let source_path = Path::new(SERVE_TESTS_PATH).join(fixture_name);
     let dir = tempdir().expect("Couldn't create temp dir for CLI syncback");
@@ -789,7 +789,7 @@ pub fn run_cli_syncback_on_chunks(
     let rbxl_path = dir.path().join("input.rbxl");
     fs::write(&rbxl_path, rbxl_data).expect("Failed to write rbxl");
 
-    let output = std::process::Command::new(ROJO_PATH)
+    let output = atlas_command()
         .args([
             "syncback",
             project_path.to_str().unwrap(),
@@ -984,7 +984,7 @@ pub fn fresh_rebuild_read(project_path: &Path) -> NormalizedInstance {
         let port = get_port_number();
         let port_string = port.to_string();
 
-        let process = Command::new(ROJO_PATH)
+        let process = atlas_command()
             .args([
                 "serve",
                 project_file.to_str().unwrap(),

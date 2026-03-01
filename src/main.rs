@@ -55,10 +55,14 @@ fn main() {
 
     let project_dir = options.subcommand.project_path().map(resolve_project_dir);
 
-    let file_log_level = project_dir
-        .as_deref()
-        .and_then(logging::quick_read_file_log_level)
-        .unwrap_or(Some(tracing::level_filters::LevelFilter::TRACE));
+    let file_log_level = if env::var("ATLAS_NO_FILE_LOG").is_ok() {
+        None
+    } else {
+        project_dir
+            .as_deref()
+            .and_then(logging::quick_read_file_log_level)
+            .unwrap_or(Some(tracing::level_filters::LevelFilter::TRACE))
+    };
 
     let command_name = format!("atlas-{}", options.subcommand.command_name());
 

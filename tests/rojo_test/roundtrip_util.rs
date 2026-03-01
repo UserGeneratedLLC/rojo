@@ -10,12 +10,11 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    process::Command,
 };
 
 use tempfile::TempDir;
 
-use super::io_util::ROJO_PATH;
+use super::io_util::atlas_command;
 
 /// Run `rojo build` on a project and return the output file path.
 ///
@@ -25,7 +24,7 @@ pub fn run_rojo_build(project_path: &Path, output_name: &str) -> (TempDir, PathB
     let output_dir = tempfile::tempdir().expect("Failed to create temp dir for build output");
     let output_path = output_dir.path().join(output_name);
 
-    let output = Command::new(ROJO_PATH)
+    let output = atlas_command()
         .args([
             "build",
             project_path.to_str().unwrap(),
@@ -57,7 +56,7 @@ pub fn run_rojo_syncback_clean(project_path: &Path, input_path: &Path) -> bool {
         return false;
     }
 
-    let output = Command::new(ROJO_PATH)
+    let output = atlas_command()
         .args([
             "syncback",
             project_path.to_str().unwrap(),
