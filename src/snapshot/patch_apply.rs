@@ -145,7 +145,7 @@ fn finalize_patch_application(context: PatchApplyContext, tree: &mut RojoTree) -
     for (id, map) in context.path_refs_to_rewrite {
         for (prop_name, path) in map {
             if let Some(target) = tree.resolve_ref_path(&path, id) {
-                log::debug!(
+                log::trace!(
                     "Resolved path reference {} -> {} (path: {})",
                     prop_name,
                     target,

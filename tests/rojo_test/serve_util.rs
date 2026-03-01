@@ -202,18 +202,16 @@ impl TestServeSession {
         copy_recursive(&source_path, &project_path)
             .expect("Couldn't copy project to temporary directory");
 
-        // Initialize git repo and run setup callback
-        let mut repo = gix::init(&project_path).expect("gix init failed");
-        {
-            let mut config = repo.config_snapshot_mut();
-            config
-                .set_raw_value(&gix::config::tree::User::NAME, "Test")
-                .unwrap();
-            config
-                .set_raw_value(&gix::config::tree::User::EMAIL, "test@test.com")
-                .unwrap();
-            let _ = config.commit_auto_rollback().unwrap();
-        }
+        // Initialize git repo and persist config to disk so that
+        // git_add_all_and_commit (which opens a fresh gix handle via
+        // gix::discover) can read user identity. The gix SnapshotMut
+        // API is in-memory only and never writes to .git/config.
+        gix::init(&project_path).expect("gix init failed");
+        fs::write(
+            project_path.join(".git/config"),
+            "[user]\n\tname = Test\n\temail = test@test.com\n[core]\n\tautocrlf = false\n",
+        )
+        .expect("Failed to write .git/config");
 
         setup(&project_path);
 

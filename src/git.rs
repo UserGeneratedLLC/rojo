@@ -212,7 +212,7 @@ fn collect_tree_index_changes(
 }
 
 fn flatten_tree(
-    _repo: &gix::Repository,
+    repo: &gix::Repository,
     tree: &gix::Tree<'_>,
     prefix: &str,
     out: &mut HashMap<String, gix::ObjectId>,

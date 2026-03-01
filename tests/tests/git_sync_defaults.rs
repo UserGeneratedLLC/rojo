@@ -20,7 +20,16 @@ use librojo::web_api::{InstanceUpdate, WriteRequest};
 use rbx_dom_weak::types::{Ref, Variant};
 use rbx_dom_weak::{ustr, UstrMap};
 
+use crate::rojo_test::io_util::SERVE_TESTS_PATH;
 use crate::rojo_test::serve_util::TestServeSession;
+
+fn fixture_content(rel_path: &str) -> String {
+    let path = Path::new(SERVE_TESTS_PATH)
+        .join("git_sync_defaults")
+        .join(rel_path);
+    fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("Failed to read fixture {}: {}", path.display(), e))
+}
 
 fn git_commit_all(dir: &Path, msg: &str) {
     librojo::git::git_add_all_and_commit(dir, msg);
@@ -204,7 +213,7 @@ fn non_script_change_in_changed_ids_but_no_hash() {
 
 #[test]
 fn committed_hash_matches_head_content() {
-    let original_content = "local ModuleA = {}\nreturn ModuleA\n";
+    let original_content = fixture_content("src/ModuleA.luau");
 
     let mut session = TestServeSession::new_with_git("git_sync_defaults", |path| {
         git_commit_all(path, "initial commit");
@@ -221,7 +230,7 @@ fn committed_hash_matches_head_content() {
             .get(&module_id)
             .expect("ModuleA should have committed hashes");
 
-        let expected_hash = compute_blob_sha1(original_content);
+        let expected_hash = compute_blob_sha1(&original_content);
         assert!(
             hashes.contains(&expected_hash),
             "Committed hash should match SHA1 of original content. Expected: {}, Got: {:?}",
@@ -256,7 +265,7 @@ fn staged_hash_included_when_different_from_head() {
             hashes.len()
         );
 
-        let head_hash = compute_blob_sha1("local ModuleA = {}\nreturn ModuleA\n");
+        let head_hash = compute_blob_sha1(&fixture_content("src/ModuleA.luau"));
         let staged_hash = compute_blob_sha1("-- staged version");
 
         assert!(hashes.contains(&head_hash), "Should contain HEAD hash");
@@ -334,7 +343,7 @@ fn init_style_script_appears_in_changed_ids() {
 
 #[test]
 fn init_style_script_has_committed_hash() {
-    let original = "local DirModule = {}\nreturn DirModule\n";
+    let original = fixture_content("src/DirModule/init.luau");
 
     let mut session = TestServeSession::new_with_git("git_sync_defaults", |path| {
         git_commit_all(path, "initial commit");
@@ -350,7 +359,7 @@ fn init_style_script_has_committed_hash() {
             .get(&dir_id)
             .expect("DirModule should have committed hashes");
 
-        let expected_hash = compute_blob_sha1(original);
+        let expected_hash = compute_blob_sha1(&original);
         assert!(
             hashes.contains(&expected_hash),
             "init.luau committed hash should match. Expected: {}, Got: {:?}",
@@ -983,7 +992,7 @@ fn committed_changes_still_in_changed_ids_via_initial_head() {
 
 #[test]
 fn committed_script_gets_initial_head_hash() {
-    let original_content = "local ModuleA = {}\nreturn ModuleA\n";
+    let original_content = fixture_content("src/ModuleA.luau");
     let modified_content = "-- committed v2\nreturn {}";
 
     let mut session = TestServeSession::new_with_git("git_sync_defaults", |path| {
@@ -1009,7 +1018,7 @@ fn committed_script_gets_initial_head_hash() {
             .get(&module_id)
             .expect("Committed script should have hashes");
 
-        let initial_hash = compute_blob_sha1(original_content);
+        let initial_hash = compute_blob_sha1(&original_content);
         assert!(
             hashes.contains(&initial_hash),
             "Hashes should include the initial_head version ({initial_hash}), got {hashes:?}"
