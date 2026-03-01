@@ -3518,6 +3518,42 @@ fn pick_script_path(instance: InstanceWithMeta<'_>) -> Option<PathBuf> {
         .map(|path| path.to_owned())
 }
 
+/// Enrich each SyncChange with `fs_path` by looking up the instance Ref in the
+/// RojoTree and reading its InstigatingSource path.
+fn enrich_sync_changes_with_fs_path(
+    changes: &mut [super::mcp::SyncChange],
+    serve_session: &ServeSession,
+) {
+    use crate::snapshot::InstigatingSource;
+    use std::str::FromStr;
+
+    let tree = serve_session.tree();
+    let project_path = serve_session.root_project().folder_location();
+
+    for change in changes.iter_mut() {
+        let ref_str = match &change.id {
+            Some(id) => id.as_str(),
+            None => continue,
+        };
+
+        let r = match rbx_dom_weak::types::Ref::from_str(ref_str) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        let meta = match tree.get_metadata(r) {
+            Some(m) => m,
+            None => continue,
+        };
+
+        if let Some(InstigatingSource::Path(path)) = &meta.instigating_source {
+            if let Ok(relative) = path.strip_prefix(project_path) {
+                change.fs_path = Some(relative.to_string_lossy().into_owned());
+            }
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // MCP stream WebSocket: plugin connects here to receive sync commands
 // ---------------------------------------------------------------------------
@@ -3701,7 +3737,11 @@ async fn handle_mcp_stream_connection(
             msg = websocket.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        if let Ok(result) = serde_json::from_str::<McpSyncResult>(&text) {
+                        if let Ok(mut result) = serde_json::from_str::<McpSyncResult>(&text) {
+                            enrich_sync_changes_with_fs_path(
+                                &mut result.changes,
+                                &serve_session,
+                            );
                             let mut slot = mcp_state
                                 .result_tx
                                 .lock()

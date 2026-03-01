@@ -94,9 +94,13 @@ function McpStream:_tryConnect()
 		end
 
 		if data.type == "sync" and data.requestId then
-			Log.info("MCP stream: received sync command (requestId={})", data.requestId)
+			Log.info(
+				"MCP stream: received sync command (requestId={}, mode={})",
+				data.requestId,
+				data.mode or "standard"
+			)
 
-			local resultPromise = self._onSyncCommand(data.requestId)
+			local resultPromise = self._onSyncCommand(data.requestId, data.mode or "standard", data.overrides or {})
 
 			resultPromise
 				:andThen(function(result)

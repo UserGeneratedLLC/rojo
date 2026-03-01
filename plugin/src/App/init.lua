@@ -49,6 +49,12 @@ local Theme = require(script.Theme)
 local Http = require(Packages.Http)
 
 local encodeService = require(Plugin.ChangeBatcher.encodeService)
+local encodeProperty = require(Plugin.ChangeBatcher.encodeProperty)
+local SHA1 = require(Plugin.SHA1)
+local RbxDom = require(Packages.RbxDom)
+local decodeValue = require(Plugin.Reconciler.decodeValue)
+local getProperty = require(Plugin.Reconciler.getProperty)
+local trueEquals = require(Plugin.Reconciler.trueEquals)
 
 local Page = require(script.Page)
 local Notifications = require(script.Components.Notifications)
@@ -202,8 +208,8 @@ function App:init()
 
 	if RunService:IsEdit() then
 		self.mcpStream = McpStream.new({
-			onSyncCommand = function(requestId)
-				return self:startMcpSync(requestId)
+			onSyncCommand = function(requestId, mode, overrides)
+				return self:startMcpSync(requestId, mode, overrides)
 			end,
 			getPluginConfig = function(key)
 				return Settings:get(key)
@@ -1117,7 +1123,10 @@ function App:endSession()
 	Log.trace("Session terminated by user")
 end
 
-function App:startMcpSync(requestId)
+function App:startMcpSync(requestId, mode, overrides)
+	mode = mode or "standard"
+	overrides = overrides or {}
+
 	return Promise.new(function(resolve, _reject)
 		if self.state.appStatus == AppStatus.Connected then
 			resolve({
@@ -1192,13 +1201,71 @@ function App:startMcpSync(requestId)
 			local patchTree = PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" }, gitMetadata)
 			mcpPatchTree = patchTree
 
-			local allPreSelected = true
+			-- Apply overrides: look up each override by id in the tree, verify, set selection
+			local overrideSelections = {}
+			for _, override in overrides do
+				local node = patchTree:getNode(override.id)
+				if not node or not node.patchType then
+					Log.trace("MCP sync: override id {} not found in patch tree, skipping", override.id)
+					continue
+				end
+
+				local verified = true
+
+				if override.studioHash and node.instance and node.instance:IsA("LuaSourceContainer") then
+					local source = node.instance.Source
+					local gitBlob = "blob " .. tostring(#source) .. "\0" .. source
+					local currentHash = SHA1(buffer.fromstring(gitBlob))
+					if currentHash ~= override.studioHash then
+						Log.info(
+							"MCP sync: override {} studioHash mismatch (expected={}, got={})",
+							override.id,
+							override.studioHash,
+							currentHash
+						)
+						verified = false
+					end
+				end
+
+				if verified and override.expectedProperties and node.instance then
+					for propName, expectedEncoded in override.expectedProperties do
+						local decodeOk, expectedValue = decodeValue(expectedEncoded, instanceMap)
+						if not decodeOk then
+							Log.info(
+								"MCP sync: override {} could not decode expected value for {}",
+								override.id,
+								propName
+							)
+							verified = false
+							break
+						end
+						local readOk, currentValue = getProperty(node.instance, propName)
+						if not readOk then
+							Log.info("MCP sync: override {} could not read property {}", override.id, propName)
+							verified = false
+							break
+						end
+						if not trueEquals(expectedValue, currentValue) then
+							Log.info("MCP sync: override {} property {} mismatch", override.id, propName)
+							verified = false
+							break
+						end
+					end
+				end
+
+				if verified then
+					overrideSelections[override.id] = override.direction
+				end
+			end
+
+			-- Compute resolution state: check defaults + overrides
+			local allResolved = true
 			local hasSelectableNodes = false
 			patchTree:forEach(function(node)
 				if node.patchType then
 					hasSelectableNodes = true
-					if node.defaultSelection == nil then
-						allPreSelected = false
+					if node.defaultSelection == nil and overrideSelections[node.id] == nil then
+						allResolved = false
 					end
 				end
 			end)
@@ -1212,14 +1279,55 @@ function App:startMcpSync(requestId)
 				return "Accept"
 			end
 
+			-- DRYRUN: return full change list without applying
+			if mode == "dryrun" then
+				Log.info("MCP sync: dryrun mode, returning changes without applying")
+				local changes = self:_buildMcpChangeList(patchTree, patch, instanceMap, nil, true)
+				resolveOnce({
+					status = "dryrun",
+					changes = changes,
+				})
+				return "Abort"
+			end
+
+			-- FASTFAIL: if unresolved changes remain, fail immediately
+			if mode == "fastfail" and not allResolved then
+				Log.info("MCP sync: fastfail mode, unresolved changes exist")
+				local changes = self:_buildMcpChangeList(patchTree, patch, instanceMap, nil, true)
+				resolveOnce({
+					status = "fastfail_unresolved",
+					changes = changes,
+					message = "Unresolved changes exist. Provide overrides or use standard mode for user review.",
+				})
+				return "Abort"
+			end
+
+			-- Merge overrides into default selections
+			local selections = PatchTree.buildInitialSelections(patchTree)
+			for nodeId, direction in overrideSelections do
+				selections[nodeId] = direction
+			end
+
+			-- Check if all nodes are now resolved (defaults + overrides)
+			local allPreSelected = true
+			patchTree:forEach(function(node)
+				if node.patchType and selections[node.id] == nil then
+					allPreSelected = false
+				end
+			end)
+
+			-- MANUAL: always show UI
+			if mode == "manual" then
+				allPreSelected = false
+			end
+
 			if allPreSelected then
-				Log.info("MCP sync: all changes pre-selected, fast-forwarding")
-				local selections = PatchTree.buildInitialSelections(patchTree)
-				local changes = self:_buildMcpChangeList(patchTree, selections)
+				Log.info("MCP sync: all changes resolved, fast-forwarding")
+				local changes = self:_buildMcpChangeList(patchTree, patch, instanceMap, selections, false)
 
 				local autoSelectedIds = {}
 				patchTree:forEach(function(node)
-					if node.patchType and node.defaultSelection and node.defaultSelection ~= "ignore" then
+					if node.patchType and selections[node.id] then
 						autoSelectedIds[node.id] = true
 					end
 				end)
@@ -1254,7 +1362,7 @@ function App:startMcpSync(requestId)
 			local result = self.confirmationEvent:Wait()
 
 			if result == "Abort" then
-				local changes = self:_buildMcpChangeList(patchTree, nil)
+				local changes = self:_buildMcpChangeList(patchTree, patch, instanceMap, nil, true)
 				resolveOnce({
 					status = "rejected",
 					changes = changes,
@@ -1264,7 +1372,7 @@ function App:startMcpSync(requestId)
 			end
 
 			if type(result) == "table" and result.type == "Confirm" then
-				local changes = self:_buildMcpChangeList(patchTree, result.selections)
+				local changes = self:_buildMcpChangeList(patchTree, patch, instanceMap, result.selections, false)
 				resolveOnce({
 					status = "success",
 					changes = changes,
@@ -1321,8 +1429,22 @@ function App:startMcpSync(requestId)
 	end)
 end
 
-function App:_buildMcpChangeList(patchTree, selections)
+local SCRIPT_CLASS_SET = {
+	Script = true,
+	LocalScript = true,
+	ModuleScript = true,
+}
+
+function App:_buildMcpChangeList(patchTree, patch, instanceMap, selections, includeAll)
 	local changes = {}
+
+	local patchUpdatedLookup = nil
+	if patch and patch.updated then
+		patchUpdatedLookup = {}
+		for _, change in patch.updated do
+			patchUpdatedLookup[change.id] = change
+		end
+	end
 
 	patchTree:forEach(function(node)
 		if not node.patchType then
@@ -1330,7 +1452,13 @@ function App:_buildMcpChangeList(patchTree, selections)
 		end
 
 		local direction = nil
-		if selections then
+		if includeAll then
+			if selections and selections[node.id] then
+				direction = selections[node.id]
+			elseif node.defaultSelection then
+				direction = node.defaultSelection
+			end
+		elseif selections then
 			local sel = selections[node.id]
 			if sel == "push" then
 				direction = "push"
@@ -1355,10 +1483,56 @@ function App:_buildMcpChangeList(patchTree, selections)
 		end
 
 		local path = table.concat(segments, "/")
-		table.insert(changes, {
+
+		local entry: any = {
 			path = path,
-			direction = direction,
-		})
+			direction = direction or "unresolved",
+			id = node.id,
+			className = node.className,
+			patchType = node.patchType,
+			defaultSelection = node.defaultSelection,
+		}
+
+		if node.instance and node.instance:IsA("LuaSourceContainer") then
+			local source = node.instance.Source
+			local gitBlob = "blob " .. tostring(#source) .. "\0" .. source
+			entry.studioHash = SHA1(buffer.fromstring(gitBlob))
+		end
+
+		if node.patchType == "Edit" and patchUpdatedLookup and node.instance then
+			local patchChange = patchUpdatedLookup[node.id]
+			if patchChange and patchChange.changedProperties then
+				local props = {}
+				local isScript = SCRIPT_CLASS_SET[node.className]
+
+				for propName, incomingEncoded in patchChange.changedProperties do
+					if isScript and propName == "Source" then
+						continue
+					end
+
+					local descriptor = RbxDom.findCanonicalPropertyDescriptor(node.className, propName)
+					if not descriptor then
+						continue
+					end
+
+					local currentOk, currentEncoded = encodeProperty(node.instance, propName, descriptor)
+					if not currentOk then
+						continue
+					end
+
+					props[propName] = {
+						current = currentEncoded,
+						incoming = incomingEncoded,
+					}
+				end
+
+				if next(props) then
+					entry.properties = props
+				end
+			end
+		end
+
+		table.insert(changes, entry)
 	end)
 
 	return changes
