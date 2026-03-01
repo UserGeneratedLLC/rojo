@@ -339,9 +339,6 @@ We need to investigate Tree reconciliation, make sure it's parallel, etc.
 I'd really like to just reconcile specific paths that were modified - but i'm not sure if that just defeats the purpose.. need to explore this topic later.
 Worst case - we reconcile only on connect, but do so in mega-parallel
 
-[change visualizer]
-we should support right-click to unselect the bubble (atlas/studio/skip)
-
 [auto select issue]
 when you commit changes on git, it's considered unchanged. we should send like the last git hash too, like prior to head, too.
 

@@ -243,6 +243,17 @@ function SelectionOption:render()
 					end
 				end
 			end,
+			[Roact.Event.MouseButton2Click] = function()
+				if isParentOnly or (isSelected and hasChildren) then
+					if props.onSubtreeRightClick then
+						props.onSubtreeRightClick()
+					end
+				else
+					if props.onRightClick then
+						props.onRightClick()
+					end
+				end
+			end,
 		}, {
 			Corner = e("UICorner", {
 				CornerRadius = UDim.new(0, 3),
@@ -295,6 +306,16 @@ local function SelectionRadio(props)
 					props.onSubtreeSelectionChange(props.nodeId, "pull")
 				end
 			end,
+			onRightClick = function()
+				if props.onSelectionChange then
+					props.onSelectionChange(props.nodeId, nil)
+				end
+			end,
+			onSubtreeRightClick = function()
+				if props.onSubtreeSelectionChange then
+					props.onSubtreeSelectionChange(props.nodeId, nil)
+				end
+			end,
 		}),
 		Skip = e(SelectionOption, {
 			text = "Skip",
@@ -316,6 +337,16 @@ local function SelectionRadio(props)
 					props.onSubtreeSelectionChange(props.nodeId, "ignore")
 				end
 			end,
+			onRightClick = function()
+				if props.onSelectionChange then
+					props.onSelectionChange(props.nodeId, nil)
+				end
+			end,
+			onSubtreeRightClick = function()
+				if props.onSubtreeSelectionChange then
+					props.onSubtreeSelectionChange(props.nodeId, nil)
+				end
+			end,
 		}),
 		Atlas = e(SelectionOption, {
 			text = "Atlas",
@@ -335,6 +366,16 @@ local function SelectionRadio(props)
 			onSubtreeClick = function()
 				if props.onSubtreeSelectionChange then
 					props.onSubtreeSelectionChange(props.nodeId, "push")
+				end
+			end,
+			onRightClick = function()
+				if props.onSelectionChange then
+					props.onSelectionChange(props.nodeId, nil)
+				end
+			end,
+			onSubtreeRightClick = function()
+				if props.onSubtreeSelectionChange then
+					props.onSubtreeSelectionChange(props.nodeId, nil)
 				end
 			end,
 		}),
