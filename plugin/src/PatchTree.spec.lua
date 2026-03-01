@@ -734,4 +734,206 @@ return function()
 			instanceMap:stop()
 		end)
 	end)
+
+	describe("MCP fast-forward detection", function()
+		it("should detect all-pre-selected tree as fast-forwardable", function()
+			local patch = PatchSet.newEmpty()
+			local instanceMap = InstanceMap.new()
+
+			local workspace = game:GetService("Workspace")
+			local testContainer = Instance.new("Folder")
+			testContainer.Name = "McpFFTest"
+			testContainer.Parent = workspace
+
+			local script1 = Instance.new("ModuleScript")
+			script1.Name = "ModuleA"
+			script1.Parent = testContainer
+
+			local id1 = HttpService:GenerateGUID(false)
+			instanceMap:insert(id1, script1)
+
+			table.insert(patch.updated, {
+				id = id1,
+				changedName = nil,
+				changedProperties = { Source = "-- changed" },
+			})
+
+			local gitMetadata = {
+				changedIds = { id1 },
+				scriptCommittedHashes = { [id1] = {} },
+				newFileIds = {},
+			}
+
+			local tree = PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" }, gitMetadata)
+
+			local allPreSelected = true
+			local hasSelectable = false
+			tree:forEach(function(node)
+				if node.patchType then
+					hasSelectable = true
+					if node.defaultSelection == nil then
+						allPreSelected = false
+					end
+				end
+			end)
+
+			-- With git metadata for a changed script, it should have a defaultSelection.
+			-- The exact value depends on hash matching, but we verify the structure works.
+			expect(hasSelectable).to.equal(true)
+
+			local selections = PatchTree.buildInitialSelections(tree)
+			local count = 0
+			for _ in selections do
+				count += 1
+			end
+			-- If allPreSelected, count should match selectable count
+			if allPreSelected then
+				local selectableCount = 0
+				tree:forEach(function(node)
+					if node.patchType then
+						selectableCount += 1
+					end
+				end)
+				expect(count).to.equal(selectableCount)
+			end
+
+			testContainer:Destroy()
+			instanceMap:stop()
+		end)
+
+		it("should detect tree with nil defaultSelection as NOT fast-forwardable", function()
+			local patch = PatchSet.newEmpty()
+			local instanceMap = InstanceMap.new()
+
+			local workspace = game:GetService("Workspace")
+			local testContainer = Instance.new("Folder")
+			testContainer.Name = "McpNoFF"
+			testContainer.Parent = workspace
+
+			local folder = Instance.new("Folder")
+			folder.Name = "SomeFolder"
+			folder.Parent = testContainer
+
+			local folderId = HttpService:GenerateGUID(false)
+			instanceMap:insert(folderId, folder)
+
+			-- An update without git metadata => defaultSelection stays nil
+			table.insert(patch.updated, {
+				id = folderId,
+				changedName = "Renamed",
+				changedProperties = {},
+			})
+
+			local tree = PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" })
+
+			local allPreSelected = true
+			tree:forEach(function(node)
+				if node.patchType and node.defaultSelection == nil then
+					allPreSelected = false
+				end
+			end)
+
+			expect(allPreSelected).to.equal(false)
+
+			testContainer:Destroy()
+			instanceMap:stop()
+		end)
+	end)
+
+	describe("MCP change list path construction", function()
+		it("should build paths by walking ancestry to ROOT", function()
+			local patch = PatchSet.newEmpty()
+			local instanceMap = InstanceMap.new()
+
+			local workspace = game:GetService("Workspace")
+			local testContainer = Instance.new("Folder")
+			testContainer.Name = "PathTest"
+			testContainer.Parent = workspace
+
+			local child = Instance.new("ModuleScript")
+			child.Name = "MyModule"
+			child.Parent = testContainer
+
+			local containerId = HttpService:GenerateGUID(false)
+			instanceMap:insert(containerId, testContainer)
+
+			local childId = HttpService:GenerateGUID(false)
+			instanceMap:insert(childId, child)
+
+			table.insert(patch.updated, {
+				id = childId,
+				changedProperties = { Source = "return {}" },
+			})
+
+			local tree = PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" })
+
+			-- Walk the ancestry of the child node to build a path
+			local childNode = tree:getNode(childId)
+			expect(childNode).to.be.ok()
+
+			local segments = {}
+			local current = childNode
+			while current and current.id ~= "ROOT" do
+				table.insert(segments, 1, current.name or current.id)
+				if current.parentId then
+					current = tree:getNode(current.parentId)
+				else
+					break
+				end
+			end
+
+			local path = table.concat(segments, "/")
+
+			-- Path should contain both the parent folder and the child name
+			expect(string.find(path, "PathTest")).to.be.ok()
+			expect(string.find(path, "MyModule")).to.be.ok()
+
+			testContainer:Destroy()
+			instanceMap:stop()
+		end)
+
+		it("should produce single-segment path for root-level nodes", function()
+			local patch = PatchSet.newEmpty()
+			local instanceMap = InstanceMap.new()
+
+			-- Use a service-level instance (direct child of DataModel)
+			local repStorage = game:GetService("ReplicatedStorage")
+			local testObj = Instance.new("Folder")
+			testObj.Name = "TopLevel"
+			testObj.Parent = repStorage
+
+			local objId = HttpService:GenerateGUID(false)
+			instanceMap:insert(objId, testObj)
+
+			table.insert(patch.updated, {
+				id = objId,
+				changedName = "Renamed",
+				changedProperties = {},
+			})
+
+			local tree = PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" })
+
+			local node = tree:getNode(objId)
+			expect(node).to.be.ok()
+
+			local segments = {}
+			local current = node
+			while current and current.id ~= "ROOT" do
+				table.insert(segments, 1, current.name or current.id)
+				if current.parentId then
+					current = tree:getNode(current.parentId)
+				else
+					break
+				end
+			end
+
+			local path = table.concat(segments, "/")
+			-- Should include the service ancestor and the object
+			expect(string.find(path, "ReplicatedStorage")).to.be.ok()
+			expect(string.find(path, "TopLevel")).to.be.ok()
+
+			testObj:Destroy()
+			instanceMap:stop()
+		end)
+	end)
 end

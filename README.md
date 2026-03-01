@@ -191,6 +191,67 @@ Atlas includes a sync lock to prevent conflicts when multiple people work on the
 
 **Recommended team workflow:** One designated person syncs in persistent mode (one-shot disabled). Everyone else uses one-shot mode for quick, conflict-free previews.
 
+## MCP Integration (AI Agents)
+
+`atlas serve` automatically hosts an MCP (Model Context Protocol) server on the same port as the API. This lets AI agents like Cursor and Claude Code trigger syncs to Roblox Studio programmatically.
+
+### Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `atlas_sync` | Sync filesystem changes to Studio. Auto-accepts if all changes are pre-selected by git. Blocks until the user accepts or rejects if there are unresolved changes. |
+
+### Adding to Cursor
+
+Create or edit `.cursor/mcp.json` in your project root:
+
+```json
+{
+  "mcpServers": {
+    "atlas": {
+      "url": "http://localhost:34873/mcp"
+    }
+  }
+}
+```
+
+If your project uses a custom port (via `servePort` in the project file), update the URL accordingly.
+
+### Adding to Claude Code
+
+```bash
+claude mcp add atlas --transport http http://localhost:34873/mcp
+```
+
+Or add it to your project-level config at `.claude/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "atlas": {
+      "type": "url",
+      "url": "http://localhost:34873/mcp"
+    }
+  }
+}
+```
+
+### How It Works
+
+1. Start `atlas serve` — the MCP server is available immediately
+2. The Studio plugin connects to the MCP stream in the background (retries every 5s)
+3. When an agent calls `atlas_sync`:
+   - If all changes are pre-selected by the git system, they are **auto-accepted** (fast-forward)
+   - If there are unresolved changes, the **Confirming page** appears in Studio for the user to review
+   - The agent blocks until the sync completes and receives a list of synced file paths with directions (`push`/`pull`)
+4. If the plugin is already connected in live sync mode, the tool returns immediately with a notice that sync is automatic
+
+### Requirements
+
+- `atlas serve` must be running
+- Roblox Studio must be open with the Atlas plugin installed
+- The plugin does **not** need to be manually connected — the MCP stream connects automatically
+
 ## File Formats
 
 ### Scripts

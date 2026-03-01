@@ -1,10 +1,6 @@
 [vscode extension]
 get the schemas for everything into cursor somehow
 
-[versioning]
-setup nightly build
-suffix version for beta
-
 [merging]
 we should make the property diffs have arrows next to eachother so you can like "undo" certain things
 need proper merging support in this UI.
@@ -12,13 +8,7 @@ make sure for fully deleted/added files we can use the merge UI as expected.
 
 [syncback]
 maybe make syncback automatically create a branch and merge it in, rather than overwriting your project files?
-
-[automated review of all changes done, similar to cursor agent review for the game]
-send in discord
-require people to green check it when done
-have the cursor style issue context copyable
-tag who last modified the file, too
-https://cursor.com/dashboard?tab=bugbot
+in order to do this, we must make dedup work flawlessly.
 
 [Move tests to dedicated location]
 Right now we have a severe amount of tests in the actual implementation files. I'd like to move those to a dedicated location because it's bloating the implementation files.
@@ -327,6 +317,12 @@ because have already loaded it, we can detect this.
 this is an optimization to avoid writing 100,000 files or something on larger projects when file bytes match perfectly, or directories verifiably already exist.
 make sure this is applied to plugin-based syncback, too.
 
+[fix dedup]
+dedup is broken due to relying on sort order
+recreate broken state by forcing random order in all matching dedup systems of the incoming children list
+if it cannot match correctly with randomization, then it is inherently broken
+in all 3 matchers, simply randomize the order of the children - this will break the tests.
+
 [mcp]
 * atlas_sync
  - Basically equiv to git fast-forward merge
@@ -348,3 +344,35 @@ make sure this is applied to plugin-based syncback, too.
  - Does nothing if we are running in connected-mode (already syncing)
  - Agent should await the completion of this sync before proceeding, this mcp command needs to yield and give the response as described above.
 
+[mcp]
+* syncback
+ - invokes plugin based syncback
+ - ensure this doesn't interrupt the connection of the mcp, since i think we shutdown the api? we should just not shutdown the api or something
+
+[automated review of all changes done, similar to cursor agent review for the game]
+it's a discord bot
+we send discord channels
+some way for users to check off the item in the channel as "fixed"
+have the cursor style issue context copyable
+this would work by requesting the rbxl from roblox like syncback already does
+tag who last modified the file, too if we can - we need to somehow request the version history for a given script file - this is kinda hard, but we should investigate how hard it would be to do via OpenCloud
+ideally for the .rbxl downloading, we use OpenCloud so we can use an API key rather than having my personal cookie
+inspo: Cursor's "Agent Review" feature
+additional inspo: https://cursor.com/dashboard?tab=bugbot
+- create an atlast clone of the project
+- every ~5 minutes, download and syncback.
+ - if there are changes, perform an audit on the diff
+ - copy the Agent Review prompt that cursor uses, somehow
+ - if there are any issues, send the exact same format that Cursor's Agent Review uses into the discord in a code block
+ - agent should also determine a severity (Low/Medium/High/Critical), and if it's Critical - it will @here
+- should be really easy to spin these up for other games
+ - possibly configurable automatically throgh discord commands?
+ - could allow for nice administration like resetting the project from scratch (rm -rf ing it and starting over)
+ - reports errors
+ - add games via the discord by PlaceId
+ - automatically remembers which discord channels to which placeid
+ - support multiple discords using the same placeid (runs under like DiscordServerId/PlaceId) or something
+ - only allow specific user ids to administer these commands: 176643682689089545 (me), 1010301288946339920 (Tony)
+  - alternatively, and this would be better: allow the user to specify their own OpenCloud api key (or cookie if we have to revert to that) to use (make sure providing this is very secure) and then we can let them have at it.
+  - need to ensure that only certain perm users can use the bot
+  - we need to make sure not just any public server with a bot link can just run this, because it will be using my system resources and could be insecure. this is a proprietary tool.

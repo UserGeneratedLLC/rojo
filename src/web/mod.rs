@@ -5,11 +5,13 @@
 mod api;
 mod assets;
 pub mod interface;
+pub mod mcp;
 mod ui;
 mod util;
 
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::sync::atomic::AtomicUsize;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -62,6 +64,8 @@ impl SyncbackSignal {
 pub struct LiveServer {
     serve_session: Arc<ServeSession>,
     syncback_signal: Arc<SyncbackSignal>,
+    mcp_state: Arc<mcp::McpSyncState>,
+    active_api_connections: Arc<AtomicUsize>,
 }
 
 impl LiveServer {
@@ -69,12 +73,16 @@ impl LiveServer {
         LiveServer {
             serve_session,
             syncback_signal: Arc::new(SyncbackSignal::new()),
+            mcp_state: Arc::new(mcp::McpSyncState::new()),
+            active_api_connections: Arc::new(AtomicUsize::new(0)),
         }
     }
 
     pub fn start(self, address: SocketAddr) -> ServerExitReason {
         let serve_session = Arc::clone(&self.serve_session);
         let syncback_signal = Arc::clone(&self.syncback_signal);
+        let mcp_state = Arc::clone(&self.mcp_state);
+        let active_api_connections = Arc::clone(&self.active_api_connections);
 
         let rt = Runtime::new().unwrap();
         let exit_reason = rt.block_on(async move {
@@ -117,16 +125,32 @@ impl LiveServer {
                         let io = TokioIo::new(stream);
                         let serve_session = Arc::clone(&serve_session);
                         let syncback_signal = Arc::clone(&syncback_signal);
+                        let mcp_state = Arc::clone(&mcp_state);
+                        let active_api_connections = Arc::clone(&active_api_connections);
 
                         tokio::spawn(async move {
                             let service = service_fn(move |req: Request<Incoming>| {
                                 let serve_session = Arc::clone(&serve_session);
                                 let syncback_signal = Arc::clone(&syncback_signal);
+                                let mcp_state = Arc::clone(&mcp_state);
+                                let active_api_connections = Arc::clone(&active_api_connections);
 
                                 async move {
-                                    if req.uri().path().starts_with("/api") {
+                                    if req.uri().path().starts_with("/mcp") {
                                         Ok::<_, Infallible>(
-                                            api::call(serve_session, req, syncback_signal).await,
+                                            mcp::call(req, mcp_state, active_api_connections)
+                                                .await,
+                                        )
+                                    } else if req.uri().path().starts_with("/api") {
+                                        Ok::<_, Infallible>(
+                                            api::call(
+                                                serve_session,
+                                                req,
+                                                syncback_signal,
+                                                mcp_state,
+                                                active_api_connections,
+                                            )
+                                            .await,
                                         )
                                     } else {
                                         Ok::<_, Infallible>(ui::call(serve_session, req).await)

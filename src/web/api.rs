@@ -125,6 +125,8 @@ pub async fn call(
     serve_session: Arc<ServeSession>,
     mut request: Request<Incoming>,
     syncback_signal: Arc<super::SyncbackSignal>,
+    mcp_state: Arc<super::mcp::McpSyncState>,
+    active_api_connections: Arc<std::sync::atomic::AtomicUsize>,
 ) -> Response<Full<Bytes>> {
     let service = ApiService::new(serve_session);
 
@@ -133,9 +135,23 @@ pub async fn call(
         (&Method::GET, path) if path.starts_with("/api/read/") => {
             service.handle_api_read(request).await
         }
+        (&Method::GET, "/api/mcp/stream") => {
+            if is_upgrade_request(&request) {
+                handle_mcp_stream_upgrade(&mut request, mcp_state, active_api_connections).await
+            } else {
+                msgpack(
+                    ErrorResponse::bad_request(
+                        "/api/mcp/stream must be called as a websocket upgrade request",
+                    ),
+                    StatusCode::BAD_REQUEST,
+                )
+            }
+        }
         (&Method::GET, path) if path.starts_with("/api/socket/") => {
             if is_upgrade_request(&request) {
-                service.handle_api_socket(&mut request).await
+                service
+                    .handle_api_socket(&mut request, Arc::clone(&active_api_connections))
+                    .await
             } else {
                 msgpack(
                     ErrorResponse::bad_request(
@@ -426,7 +442,11 @@ impl ApiService {
     }
 
     /// Handle WebSocket upgrade for real-time message streaming
-    async fn handle_api_socket(&self, request: &mut Request<Incoming>) -> Response<Full<Bytes>> {
+    async fn handle_api_socket(
+        &self,
+        request: &mut Request<Incoming>,
+        active_api_connections: Arc<std::sync::atomic::AtomicUsize>,
+    ) -> Response<Full<Bytes>> {
         let argument = &request.uri().path()["/api/socket/".len()..];
         let input_cursor: u32 = match argument.parse() {
             Ok(v) => v,
@@ -453,9 +473,11 @@ impl ApiService {
 
         // Spawn a task to handle the WebSocket connection
         tokio::spawn(async move {
-            if let Err(e) =
-                handle_websocket_subscription(serve_session, websocket, input_cursor).await
-            {
+            active_api_connections.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let result =
+                handle_websocket_subscription(serve_session, websocket, input_cursor).await;
+            active_api_connections.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            if let Err(e) = result {
                 log::error!("Error in websocket subscription: {}", e);
             }
         });
@@ -3488,6 +3510,191 @@ fn pick_script_path(instance: InstanceWithMeta<'_>) -> Option<PathBuf> {
                 .unwrap_or(false)
         })
         .map(|path| path.to_owned())
+}
+
+// ---------------------------------------------------------------------------
+// MCP stream WebSocket: plugin connects here to receive sync commands
+// ---------------------------------------------------------------------------
+
+async fn handle_mcp_stream_upgrade(
+    request: &mut Request<Incoming>,
+    mcp_state: Arc<super::mcp::McpSyncState>,
+    active_api_connections: Arc<std::sync::atomic::AtomicUsize>,
+) -> Response<Full<Bytes>> {
+    use std::sync::atomic::Ordering;
+
+    if mcp_state.plugin_stream_connected.load(Ordering::Relaxed) {
+        return msgpack(
+            ErrorResponse::bad_request("Another plugin is already connected to the MCP stream"),
+            StatusCode::CONFLICT,
+        );
+    }
+
+    let (response, websocket) = match upgrade(request, None) {
+        Ok(result) => result,
+        Err(err) => {
+            return msgpack(
+                ErrorResponse::internal_error(format!("WebSocket upgrade failed: {err}")),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            );
+        }
+    };
+
+    tokio::spawn(async move {
+        if let Err(e) =
+            handle_mcp_stream_connection(websocket, mcp_state, active_api_connections).await
+        {
+            log::error!("MCP stream WebSocket error: {e}");
+        }
+    });
+
+    response
+}
+
+async fn handle_mcp_stream_connection(
+    websocket: HyperWebsocket,
+    mcp_state: Arc<super::mcp::McpSyncState>,
+    active_api_connections: Arc<std::sync::atomic::AtomicUsize>,
+) -> anyhow::Result<()> {
+    use super::mcp::{McpSyncResult, PluginConfig};
+    use std::sync::atomic::Ordering;
+
+    let mut websocket = websocket.await?;
+
+    mcp_state
+        .plugin_stream_connected
+        .store(true, Ordering::SeqCst);
+    log::info!("Plugin MCP stream connected");
+
+    let mut command_rx = mcp_state.command_rx.clone();
+
+    // Wait for the plugin greeting first (plugin sends its config on connect).
+    // Give it a generous timeout -- the greeting should arrive immediately.
+    let greeting_timeout =
+        tokio::time::timeout(std::time::Duration::from_secs(10), websocket.next()).await;
+
+    if let Ok(Some(Ok(Message::Text(text)))) = greeting_timeout {
+        if let Ok(greeting) = serde_json::from_str::<serde_json::Value>(&text) {
+            if greeting.get("type").and_then(|t| t.as_str()) == Some("hello") {
+                if let Ok(config) = serde_json::from_value::<PluginConfig>(greeting.clone()) {
+                    let mut slot = mcp_state
+                        .plugin_config
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    *slot = Some(config);
+                    log::debug!("Received plugin config via MCP stream greeting");
+                }
+            }
+        }
+    }
+
+    loop {
+        tokio::select! {
+            // Watch for sync commands from the MCP handler.
+            result = command_rx.changed() => {
+                if result.is_err() {
+                    break;
+                }
+
+                let command = command_rx.borrow_and_update().clone();
+                let Some(cmd) = command else {
+                    continue;
+                };
+
+                // If we are in connected mode right now, immediately respond
+                // without forwarding to the plugin.
+                if active_api_connections.load(Ordering::Relaxed) > 0 {
+                    let result = McpSyncResult {
+                        request_id: cmd.request_id,
+                        status: "already_connected".to_string(),
+                        changes: vec![],
+                        message: Some(
+                            "Atlas is already connected in live sync mode.".to_string(),
+                        ),
+                    };
+                    let mut slot = mcp_state
+                        .result_tx
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner());
+                    if let Some(tx) = slot.take() {
+                        let _ = tx.send(result);
+                    }
+                    continue;
+                }
+
+                let json_cmd = serde_json::to_string(&cmd)?;
+                if websocket.send(Message::Text(json_cmd.into())).await.is_err() {
+                    log::debug!("MCP stream: plugin disconnected while sending command");
+                    break;
+                }
+            }
+
+            // Handle incoming messages from the plugin.
+            msg = websocket.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        if let Ok(result) = serde_json::from_str::<McpSyncResult>(&text) {
+                            let mut slot = mcp_state
+                                .result_tx
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
+                            if let Some(tx) = slot.take() {
+                                let _ = tx.send(result);
+                            }
+                        } else {
+                            log::debug!("MCP stream: ignoring non-result message from plugin");
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => {
+                        log::info!("Plugin MCP stream disconnected");
+                        break;
+                    }
+                    Some(Ok(Message::Ping(_))) | Some(Ok(Message::Pong(_))) => {}
+                    Some(Ok(Message::Binary(_))) => {
+                        log::debug!("MCP stream: ignoring binary message from plugin");
+                    }
+                    Some(Ok(Message::Frame(_))) => {
+                        unreachable!();
+                    }
+                    Some(Err(e)) => {
+                        log::error!("MCP stream WebSocket error: {e}");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Clean up: mark disconnected, cancel any pending sync.
+    mcp_state
+        .plugin_stream_connected
+        .store(false, Ordering::SeqCst);
+    {
+        let mut slot = mcp_state
+            .plugin_config
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *slot = None;
+    }
+
+    // If there's a pending sync request, send a disconnect error.
+    {
+        let mut slot = mcp_state
+            .result_tx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(tx) = slot.take() {
+            let _ = tx.send(McpSyncResult {
+                request_id: String::new(),
+                status: "error".to_string(),
+                changes: vec![],
+                message: Some("Plugin MCP stream disconnected.".to_string()),
+            });
+        }
+    }
+
+    log::info!("Plugin MCP stream handler exiting");
+    Ok(())
 }
 
 /// Handle WebSocket connection for streaming subscription messages

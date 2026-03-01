@@ -37,6 +37,7 @@ local strict = require(Plugin.strict)
 local Dictionary = require(Plugin.Dictionary)
 local ServeSession = require(Plugin.ServeSession)
 local ApiContext = require(Plugin.ApiContext)
+local McpStream = require(Plugin.McpStream)
 local PatchSet = require(Plugin.PatchSet)
 local PatchTree = require(Plugin.PatchTree)
 local preloadAssets = require(Plugin.preloadAssets)
@@ -198,6 +199,18 @@ function App:init()
 			self:clearRunningConnectionInfo()
 		end
 	end)
+
+	if RunService:IsEdit() then
+		self.mcpStream = McpStream.new({
+			onSyncCommand = function(requestId)
+				return self:startMcpSync(requestId)
+			end,
+			getPluginConfig = function(key)
+				return Settings:get(key)
+			end,
+		})
+		self.mcpStream:start()
+	end
 end
 
 function App:willUnmount()
@@ -216,6 +229,11 @@ function App:willUnmount()
 
 	self.autoConnectPlaytestServerListener()
 	self:clearRunningConnectionInfo()
+
+	if self.mcpStream then
+		self.mcpStream:stop()
+		self.mcpStream = nil
+	end
 end
 
 function App:addNotification(notif: {
@@ -1097,6 +1115,253 @@ function App:endSession()
 	end
 
 	Log.trace("Session terminated by user")
+end
+
+function App:startMcpSync(requestId)
+	return Promise.new(function(resolve, _reject)
+		if self.state.appStatus == AppStatus.Connected then
+			resolve({
+				requestId = requestId,
+				status = "already_connected",
+				changes = {},
+				message = "Atlas is already connected in live sync mode. All changes sync automatically.",
+			})
+			return
+		end
+
+		if self.state.appStatus == AppStatus.Connecting or self.state.appStatus == AppStatus.Confirming then
+			resolve({
+				requestId = requestId,
+				status = "sync_in_progress",
+				changes = {},
+				message = "A sync operation is already in progress.",
+			})
+			return
+		end
+
+		if self.serveSession ~= nil then
+			Log.trace("MCP sync: ending existing session before starting")
+			self:endSession()
+		end
+
+		local host = Config.defaultHost
+		local port = Config.defaultPort
+		local baseUrl = ("http://%s:%s"):format(host, port)
+		local apiContext = ApiContext.new(baseUrl)
+
+		local serveSession = ServeSession.new({
+			apiContext = apiContext,
+			twoWaySync = false,
+		})
+
+		local mcpPatchTree = nil
+		local mcpSyncResolved = false
+
+		local function resolveOnce(result)
+			if mcpSyncResolved then
+				return
+			end
+			mcpSyncResolved = true
+			result.requestId = requestId
+			resolve(result)
+		end
+
+		serveSession:setUpdateLoadingTextCallback(function(text: string)
+			self:setState({
+				connectingText = text,
+			})
+		end)
+
+		local cachedServerInfo = nil
+
+		serveSession:setConfirmCallback(function(instanceMap, patch, serverInfo)
+			cachedServerInfo = serverInfo
+
+			PatchSet.removeDataModelName(patch, instanceMap)
+
+			if PatchSet.isEmpty(patch) then
+				Log.info("MCP sync: no changes to sync")
+				resolveOnce({
+					status = "empty",
+					changes = {},
+				})
+				return "Accept"
+			end
+
+			local gitMetadata = serverInfo.gitMetadata
+			local patchTree = PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" }, gitMetadata)
+			mcpPatchTree = patchTree
+
+			local allPreSelected = true
+			local hasSelectableNodes = false
+			patchTree:forEach(function(node)
+				if node.patchType then
+					hasSelectableNodes = true
+					if node.defaultSelection == nil then
+						allPreSelected = false
+					end
+				end
+			end)
+
+			if not hasSelectableNodes then
+				Log.info("MCP sync: no selectable changes, auto-accepting")
+				resolveOnce({
+					status = "empty",
+					changes = {},
+				})
+				return "Accept"
+			end
+
+			if allPreSelected then
+				Log.info("MCP sync: all changes pre-selected, fast-forwarding")
+				local selections = PatchTree.buildInitialSelections(patchTree)
+				local changes = self:_buildMcpChangeList(patchTree, selections)
+
+				local autoSelectedIds = {}
+				patchTree:forEach(function(node)
+					if node.patchType and node.defaultSelection and node.defaultSelection ~= "ignore" then
+						autoSelectedIds[node.id] = true
+					end
+				end)
+
+				resolveOnce({
+					status = "success",
+					changes = changes,
+				})
+
+				return {
+					type = "Confirm",
+					selections = selections,
+					autoSelectedIds = autoSelectedIds,
+				}
+			end
+
+			Log.info("MCP sync: changes require user review, showing confirmation UI")
+			self:setState({
+				appStatus = AppStatus.Confirming,
+				patchTree = patchTree,
+				confirmData = {
+					serverInfo = serverInfo,
+				},
+				toolbarIcon = Assets.Images.PluginButton,
+			})
+
+			self:addNotification({
+				text = "An AI agent requested a sync. Please review and confirm the changes.",
+				timeout = 10,
+			})
+
+			local result = self.confirmationEvent:Wait()
+
+			if result == "Abort" then
+				local changes = self:_buildMcpChangeList(patchTree, nil)
+				resolveOnce({
+					status = "rejected",
+					changes = changes,
+					message = "User rejected the sync changes.",
+				})
+				return result
+			end
+
+			if type(result) == "table" and result.type == "Confirm" then
+				local changes = self:_buildMcpChangeList(patchTree, result.selections)
+				resolveOnce({
+					status = "success",
+					changes = changes,
+				})
+				return result
+			end
+
+			resolveOnce({
+				status = "success",
+				changes = {},
+			})
+			return result
+		end)
+
+		serveSession:onStatusChanged(function(status, details)
+			if status == ServeSession.Status.Connecting then
+				self:setState({
+					appStatus = AppStatus.Connecting,
+					toolbarIcon = Assets.Images.PluginButton,
+				})
+			elseif status == ServeSession.Status.Connected then
+				self:setState({
+					appStatus = AppStatus.Connecting,
+					connectingText = "Completing sync...",
+					toolbarIcon = Assets.Images.PluginButton,
+				})
+			elseif status == ServeSession.Status.Disconnected then
+				self.serveSession = nil
+				self:setState({
+					appStatus = AppStatus.NotConnected,
+					toolbarIcon = Assets.Images.PluginButton,
+					patchTree = nil,
+				})
+				if details ~= nil then
+					Log.warn("MCP sync disconnected with error: {}", details)
+					resolveOnce({
+						status = "error",
+						changes = {},
+						message = tostring(details),
+					})
+				end
+			end
+		end)
+
+		serveSession:setInitialSyncCompleteCallback(function()
+			Log.info("MCP sync: initial sync complete, disconnecting")
+			if self.serveSession and self.serveSession == serveSession then
+				self:endSession()
+			end
+		end)
+
+		serveSession:start()
+		self.serveSession = serveSession
+	end)
+end
+
+function App:_buildMcpChangeList(patchTree, selections)
+	local changes = {}
+
+	patchTree:forEach(function(node)
+		if not node.patchType then
+			return
+		end
+
+		local direction = nil
+		if selections then
+			local sel = selections[node.id]
+			if sel == "push" then
+				direction = "push"
+			elseif sel == "pull" then
+				direction = "pull"
+			else
+				return
+			end
+		else
+			direction = node.defaultSelection or "push"
+		end
+
+		local segments = {}
+		local current = node
+		while current and current.id ~= "ROOT" do
+			table.insert(segments, 1, current.name or current.id)
+			if current.parentId then
+				current = patchTree:getNode(current.parentId)
+			else
+				break
+			end
+		end
+
+		local path = table.concat(segments, "/")
+		table.insert(changes, {
+			path = path,
+			direction = direction,
+		})
+	end)
+
+	return changes
 end
 
 function App:render()
