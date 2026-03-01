@@ -564,10 +564,7 @@ pub fn git_add(repo_root: &Path, paths: &[PathBuf]) {
             Ok(m) => m,
             Err(_) => continue,
         };
-        let stat = match gix::index::entry::Stat::from_fs(&gix_meta) {
-            Ok(s) => s,
-            Err(_) => gix::index::entry::Stat::default(),
-        };
+        let stat = gix::index::entry::Stat::from_fs(&gix_meta).unwrap_or_default();
 
         if let Some(existing) = index
             .entry_mut_by_path_and_stage(bstr_path.as_ref(), gix::index::entry::Stage::Unconflicted)
