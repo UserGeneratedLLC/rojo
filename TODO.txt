@@ -310,14 +310,6 @@ Worst case - we reconcile only on connect, but do so in mega-parallel
 Also, we need to explore how VSCode deals with this. They seem to have ZERO issues.
 Maybe we can have a mode to tie into the vscode file watcher ourselves? luau-lsp does this.
 
-[syncback]
-detect when the output file hash is the same, and dont write to it.
-we can utilize the git hashes we also use for auto select, too. we use the same format for hashes as git, too - so maybe we could do something optimized here if git is being used.
-because have already loaded it, we can detect this.
-this is an optimization to avoid writing 100,000 files or something on larger projects when file bytes match perfectly, or directories verifiably already exist.
-make sure this is applied to plugin-based syncback, too.
-can we do hash based comparisons, too? it seems most effective for actual file changes.. but im not sure..
-
 [fix dedup]
 dedup is broken due to relying on sort order
 recreate broken state by forcing random order in all matching dedup systems of the incoming children list
@@ -362,6 +354,7 @@ can we allow the terminal to stay so i can like run some git commands myself wit
 
 [sync]
 right now sync is running REALLY slow
+we need to create an agent loop so it can benchmark the plugin + rust side automatically over and over to determine the root cause of this slowness
 
 [automated review of all changes done, similar to cursor agent review for the game]
 it's a discord bot
