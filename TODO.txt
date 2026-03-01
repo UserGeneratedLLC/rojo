@@ -334,11 +334,6 @@ when you commit changes on git, it's considered unchanged. we need send prior gi
 right now i believe we are calculating the hashes manually, we CAN use the git hash since our hash schema matches it 1:1.
 this would be a nice optimization, too.
 
-[one shot mode change]
-new changes that come in / out during the pathc visualizer menu on the plugin is really disorienting.
-if a new change comes in mid-visualizer syncing, we need to unselect the change completely - not even permitting auto selections or whatever the user had selected (ONLY if that specific file was changed, of course)
-this applies to all sync mode which that GUI is being used
-
 [syncback]
 detect when the output file hash is the same, and dont write to it.
 because have already loaded it, we can detect this.

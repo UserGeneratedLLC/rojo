@@ -211,7 +211,8 @@ function ConfirmingPage:didUpdate(prevProps)
 
 		-- Merge with any new default selections (new items get nil = unselected)
 		for id, selection in pairs(newSelections) do
-			if updatedSelections[id] == nil then
+			local wasChanged = self.props.changedIds and self.props.changedIds[id]
+			if updatedSelections[id] == nil and not wasChanged then
 				updatedSelections[id] = selection
 			end
 		end
