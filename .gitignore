@@ -30,5 +30,5 @@
 # Environment secrets
 .env
 
-# Atlas log directory
-/.atlas/
+# Atlas log/build artifacts
+**/.atlas/

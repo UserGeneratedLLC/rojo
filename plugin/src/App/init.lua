@@ -1190,7 +1190,7 @@ function App:startMcpSync(requestId, mode, overrides)
 			twoWaySync = false,
 		})
 
-		local mcpPatchTree = nil
+		local _mcpPatchTree = nil
 		local mcpSyncResolved = false
 
 		local function resolveOnce(result)
@@ -1208,15 +1208,12 @@ function App:startMcpSync(requestId, mode, overrides)
 			})
 		end)
 
-		local cachedServerInfo = nil
+		local _cachedServerInfo = nil
 
 		serveSession:setConfirmCallback(function(instanceMap, patch, serverInfo)
-			cachedServerInfo = serverInfo
+			_cachedServerInfo = serverInfo
 
-			local retainedFromIds = {}
-			for id, inst in instanceMap.fromIds do
-				retainedFromIds[id] = inst
-			end
+			local retainedFromIds = table.clone(instanceMap.fromIds)
 			self._lastMcpFromIds = retainedFromIds
 
 			PatchSet.removeDataModelName(patch, instanceMap)
@@ -1232,7 +1229,7 @@ function App:startMcpSync(requestId, mode, overrides)
 
 			local gitMetadata = serverInfo.gitMetadata
 			local patchTree = PatchTree.build(patch, instanceMap, { "Property", "Current", "Incoming" }, gitMetadata)
-			mcpPatchTree = patchTree
+			_mcpPatchTree = patchTree
 
 			-- Apply overrides: look up each override by id in the tree, verify, set selection
 			local overrideSelections = {}
@@ -1468,7 +1465,7 @@ local SCRIPT_CLASS_SET = {
 	ModuleScript = true,
 }
 
-function App:_buildMcpChangeList(patchTree, patch, instanceMap, selections, includeAll)
+function App:_buildMcpChangeList(patchTree, patch, _instanceMap, selections, includeAll)
 	local changes = {}
 
 	local patchUpdatedLookup = nil
