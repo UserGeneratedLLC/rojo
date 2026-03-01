@@ -211,6 +211,9 @@ function App:init()
 			onSyncCommand = function(requestId, mode, overrides)
 				return self:startMcpSync(requestId, mode, overrides)
 			end,
+			onGetScriptCommand = function(requestId, data)
+				return self:handleMcpGetScript(requestId, data)
+			end,
 			getPluginConfig = function(key)
 				return Settings:get(key)
 			end,
@@ -239,6 +242,7 @@ function App:willUnmount()
 	if self.mcpStream then
 		self.mcpStream:stop()
 		self.mcpStream = nil
+		self._lastMcpFromIds = nil
 	end
 end
 
@@ -1186,6 +1190,12 @@ function App:startMcpSync(requestId, mode, overrides)
 		serveSession:setConfirmCallback(function(instanceMap, patch, serverInfo)
 			cachedServerInfo = serverInfo
 
+			local retainedFromIds = {}
+			for id, inst in instanceMap.fromIds do
+				retainedFromIds[id] = inst
+			end
+			self._lastMcpFromIds = retainedFromIds
+
 			PatchSet.removeDataModelName(patch, instanceMap)
 
 			if PatchSet.isEmpty(patch) then
@@ -1536,6 +1546,85 @@ function App:_buildMcpChangeList(patchTree, patch, instanceMap, selections, incl
 	end)
 
 	return changes
+end
+
+function App:handleMcpGetScript(requestId, params)
+	local ScriptEditorService = game:GetService("ScriptEditorService")
+
+	return Promise.resolve():andThen(function()
+		local fromIds = self._lastMcpFromIds
+		if not fromIds then
+			return {
+				requestId = requestId,
+				status = "error",
+				message = 'No previous sync session. Run atlas_sync(mode: "dryrun") first to establish the instance mapping.',
+			}
+		end
+
+		local id = params.id
+		if not id then
+			return {
+				requestId = requestId,
+				status = "error",
+				message = "No id provided. The server should have resolved fsPath to an id.",
+			}
+		end
+
+		local instance = fromIds[id]
+		if not instance then
+			return {
+				requestId = requestId,
+				status = "error",
+				message = "Instance not found by id. The sync session may be stale, run atlas_sync again.",
+			}
+		end
+		if instance.Parent == nil then
+			return {
+				requestId = requestId,
+				status = "error",
+				message = "Instance was deleted since last sync. Run atlas_sync again.",
+			}
+		end
+
+		if not instance:IsA("LuaSourceContainer") then
+			return {
+				requestId = requestId,
+				status = "error",
+				message = `Instance is not a script (class: {instance.ClassName})`,
+			}
+		end
+
+		local source
+		local isDraft = params.fromDraft == true
+		if isDraft then
+			local ok, draft = pcall(ScriptEditorService.GetEditorSource, ScriptEditorService, instance)
+			if ok then
+				source = draft
+			else
+				source = instance.Source
+				isDraft = false
+			end
+		else
+			source = instance.Source
+		end
+
+		local gitBlob = "blob " .. tostring(#source) .. "\0" .. source
+		local studioHash = SHA1(buffer.fromstring(gitBlob))
+
+		local fullName = instance:GetFullName()
+		local instancePath = string.gsub(fullName, "^game%.", "")
+		instancePath = string.gsub(instancePath, "%.", "/")
+
+		return {
+			requestId = requestId,
+			status = "success",
+			source = source,
+			studioHash = studioHash,
+			className = instance.ClassName,
+			instancePath = instancePath,
+			isDraft = isDraft,
+		}
+	end)
 end
 
 function App:render()

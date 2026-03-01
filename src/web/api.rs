@@ -125,7 +125,7 @@ pub async fn call(
     serve_session: Arc<ServeSession>,
     mut request: Request<Incoming>,
     syncback_signal: Arc<super::SyncbackSignal>,
-    mcp_state: Arc<super::mcp::McpSyncState>,
+    mcp_state: Arc<super::mcp::McpState>,
     active_api_connections: Arc<std::sync::atomic::AtomicUsize>,
 ) -> Response<Full<Bytes>> {
     let service = ApiService::new(serve_session);
@@ -3555,13 +3555,122 @@ fn enrich_sync_changes_with_fs_path(
 }
 
 // ---------------------------------------------------------------------------
+// MCP get_script resolution helpers
+// ---------------------------------------------------------------------------
+
+struct GetScriptContext {
+    id: String,
+    fs_path: Option<String>,
+}
+
+fn resolve_get_script_command(
+    cmd: &serde_json::Value,
+    serve_session: &ServeSession,
+) -> Result<(serde_json::Value, GetScriptContext), serde_json::Value> {
+    use crate::snapshot::InstigatingSource;
+    use std::str::FromStr;
+
+    let request_id = cmd
+        .get("requestId")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    let from_draft = cmd
+        .get("fromDraft")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let id_param = cmd.get("id").and_then(|v| v.as_str());
+    let fs_path_param = cmd.get("fsPath").and_then(|v| v.as_str());
+
+    let tree = serve_session.tree();
+    let project_path = serve_session.root_project().folder_location();
+
+    let (resolved_ref, resolved_id, resolved_fs_path) = if let Some(id_str) = id_param {
+        let r = rbx_dom_weak::types::Ref::from_str(id_str).map_err(|_| {
+            serde_json::json!({
+                "requestId": request_id,
+                "status": "error",
+                "message": format!("Invalid id format: {id_str}"),
+            })
+        })?;
+
+        let fs_path = tree.get_metadata(r).and_then(|meta| {
+            if let Some(InstigatingSource::Path(path)) = &meta.instigating_source {
+                path.strip_prefix(project_path)
+                    .ok()
+                    .map(|rel| rel.to_string_lossy().into_owned())
+            } else {
+                None
+            }
+        });
+
+        (r, id_str.to_string(), fs_path)
+    } else if let Some(fs_path_str) = fs_path_param {
+        let abs_path = project_path.join(fs_path_str);
+        let ids = tree.get_ids_at_path(&abs_path);
+        if ids.is_empty() {
+            return Err(serde_json::json!({
+                "requestId": request_id,
+                "status": "error",
+                "message": format!("No instance found at fsPath: {fs_path_str}"),
+            }));
+        }
+        let r = ids[0];
+        (r, r.to_string(), Some(fs_path_str.to_string()))
+    } else {
+        return Err(serde_json::json!({
+            "requestId": request_id,
+            "status": "error",
+            "message": "Either id or fsPath must be provided.",
+        }));
+    };
+
+    if let Some(inst) = tree.get_instance(resolved_ref) {
+        let class = inst.class_name();
+        if !matches!(class.as_ref(), "Script" | "LocalScript" | "ModuleScript") {
+            return Err(serde_json::json!({
+                "requestId": request_id,
+                "status": "error",
+                "message": format!("Instance is not a script (class: {class})"),
+            }));
+        }
+    }
+
+    let forwarded = serde_json::json!({
+        "type": "getScript",
+        "requestId": request_id,
+        "id": resolved_id,
+        "fromDraft": from_draft,
+    });
+
+    let ctx = GetScriptContext {
+        id: resolved_id,
+        fs_path: resolved_fs_path,
+    };
+
+    Ok((forwarded, ctx))
+}
+
+fn enrich_get_script_result(result: &mut serde_json::Value, ctx: &GetScriptContext) {
+    if let Some(obj) = result.as_object_mut() {
+        obj.insert("id".to_string(), serde_json::Value::String(ctx.id.clone()));
+        if let Some(fs_path) = &ctx.fs_path {
+            obj.insert(
+                "fsPath".to_string(),
+                serde_json::Value::String(fs_path.clone()),
+            );
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // MCP stream WebSocket: plugin connects here to receive sync commands
 // ---------------------------------------------------------------------------
 
 async fn handle_mcp_stream_upgrade(
     request: &mut Request<Incoming>,
     serve_session: Arc<ServeSession>,
-    mcp_state: Arc<super::mcp::McpSyncState>,
+    mcp_state: Arc<super::mcp::McpState>,
     active_api_connections: Arc<std::sync::atomic::AtomicUsize>,
 ) -> Response<Full<Bytes>> {
     use std::sync::atomic::Ordering;
@@ -3602,10 +3711,10 @@ async fn handle_mcp_stream_upgrade(
 async fn handle_mcp_stream_connection(
     websocket: HyperWebsocket,
     serve_session: Arc<ServeSession>,
-    mcp_state: Arc<super::mcp::McpSyncState>,
+    mcp_state: Arc<super::mcp::McpState>,
     active_api_connections: Arc<std::sync::atomic::AtomicUsize>,
 ) -> anyhow::Result<()> {
-    use super::mcp::{McpSyncResult, PluginConfig};
+    use super::mcp::PluginConfig;
     use std::sync::atomic::Ordering;
 
     let mut websocket = websocket.await?;
@@ -3692,30 +3801,36 @@ async fn handle_mcp_stream_connection(
         }
     }
 
+    // Tracks context from the most recent outgoing command so we can enrich
+    // the plugin's response. For getScript: stores the resolved Ref + fsPath.
+    let mut pending_get_script_context: Option<GetScriptContext> = None;
+
     loop {
         tokio::select! {
-            // Watch for sync commands from the MCP handler.
             result = command_rx.changed() => {
                 if result.is_err() {
                     break;
                 }
 
                 let command = command_rx.borrow_and_update().clone();
-                let Some(cmd) = command else {
+                let Some(cmd_value) = command else {
                     continue;
                 };
 
-                // If we are in connected mode right now, immediately respond
-                // without forwarding to the plugin.
-                if active_api_connections.load(Ordering::Relaxed) > 0 {
-                    let result = McpSyncResult {
-                        request_id: cmd.request_id,
-                        status: "already_connected".to_string(),
-                        changes: vec![],
-                        message: Some(
-                            "Atlas is already connected in live sync mode.".to_string(),
-                        ),
-                    };
+                let cmd_type = cmd_value
+                    .get("type")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("");
+
+                // For sync commands, block if a live API connection is active.
+                // getScript is a read-only operation that can proceed regardless.
+                if cmd_type == "sync" && active_api_connections.load(Ordering::Relaxed) > 0 {
+                    let result = serde_json::json!({
+                        "requestId": cmd_value.get("requestId").and_then(|v| v.as_str()).unwrap_or(""),
+                        "status": "already_connected",
+                        "changes": [],
+                        "message": "Atlas is already connected in live sync mode.",
+                    });
                     let mut slot = mcp_state
                         .result_tx
                         .lock()
@@ -3726,31 +3841,70 @@ async fn handle_mcp_stream_connection(
                     continue;
                 }
 
-                let json_cmd = serde_json::to_string(&cmd)?;
+                // For getScript, resolve fsPath -> id via tree before forwarding.
+                if cmd_type == "getScript" {
+                    match resolve_get_script_command(&cmd_value, &serve_session) {
+                        Ok((forwarded, ctx)) => {
+                            pending_get_script_context = Some(ctx);
+                            let json_cmd = serde_json::to_string(&forwarded)
+                                .unwrap_or_else(|_| "{}".to_string());
+                            if websocket.send(Message::Text(json_cmd.into())).await.is_err() {
+                                log::debug!("MCP stream: plugin disconnected while sending getScript");
+                                break;
+                            }
+                            continue;
+                        }
+                        Err(error_result) => {
+                            let mut slot = mcp_state
+                                .result_tx
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner());
+                            if let Some(tx) = slot.take() {
+                                let _ = tx.send(error_result);
+                            }
+                            continue;
+                        }
+                    }
+                }
+
+                let json_cmd = serde_json::to_string(&cmd_value)?;
                 if websocket.send(Message::Text(json_cmd.into())).await.is_err() {
                     log::debug!("MCP stream: plugin disconnected while sending command");
                     break;
                 }
             }
 
-            // Handle incoming messages from the plugin.
             msg = websocket.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        if let Ok(mut result) = serde_json::from_str::<McpSyncResult>(&text) {
-                            enrich_sync_changes_with_fs_path(
-                                &mut result.changes,
-                                &serve_session,
-                            );
+                        if let Ok(mut result_value) = serde_json::from_str::<serde_json::Value>(&text) {
+                            // Enrich based on the command type that produced this result.
+                            if let Some(ctx) = pending_get_script_context.take() {
+                                enrich_get_script_result(&mut result_value, &ctx);
+                            } else if let Some(changes) = result_value.get_mut("changes") {
+                                if let Some(changes_arr) = changes.as_array_mut() {
+                                    let mut sync_changes: Vec<super::mcp::SyncChange> = changes_arr
+                                        .iter()
+                                        .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                                        .collect();
+                                    enrich_sync_changes_with_fs_path(
+                                        &mut sync_changes,
+                                        &serve_session,
+                                    );
+                                    *changes = serde_json::to_value(&sync_changes)
+                                        .unwrap_or(serde_json::Value::Array(vec![]));
+                                }
+                            }
+
                             let mut slot = mcp_state
                                 .result_tx
                                 .lock()
                                 .unwrap_or_else(|e| e.into_inner());
                             if let Some(tx) = slot.take() {
-                                let _ = tx.send(result);
+                                let _ = tx.send(result_value);
                             }
                         } else {
-                            log::debug!("MCP stream: ignoring non-result message from plugin");
+                            log::debug!("MCP stream: ignoring non-JSON message from plugin");
                         }
                     }
                     Some(Ok(Message::Close(_))) | None => {
@@ -3773,7 +3927,6 @@ async fn handle_mcp_stream_connection(
         }
     }
 
-    // Clean up: mark disconnected, cancel any pending sync.
     mcp_state
         .plugin_stream_connected
         .store(false, Ordering::SeqCst);
@@ -3785,19 +3938,18 @@ async fn handle_mcp_stream_connection(
         *slot = None;
     }
 
-    // If there's a pending sync request, send a disconnect error.
     {
         let mut slot = mcp_state
             .result_tx
             .lock()
             .unwrap_or_else(|e| e.into_inner());
         if let Some(tx) = slot.take() {
-            let _ = tx.send(McpSyncResult {
-                request_id: String::new(),
-                status: "error".to_string(),
-                changes: vec![],
-                message: Some("Plugin MCP stream disconnected.".to_string()),
-            });
+            let _ = tx.send(serde_json::json!({
+                "requestId": "",
+                "status": "error",
+                "changes": [],
+                "message": "Plugin MCP stream disconnected.",
+            }));
         }
     }
 

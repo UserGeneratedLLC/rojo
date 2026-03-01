@@ -64,7 +64,7 @@ impl SyncbackSignal {
 pub struct LiveServer {
     serve_session: Arc<ServeSession>,
     syncback_signal: Arc<SyncbackSignal>,
-    mcp_state: Arc<mcp::McpSyncState>,
+    mcp_state: Arc<mcp::McpState>,
     active_api_connections: Arc<AtomicUsize>,
 }
 
@@ -73,7 +73,7 @@ impl LiveServer {
         LiveServer {
             serve_session,
             syncback_signal: Arc::new(SyncbackSignal::new()),
-            mcp_state: Arc::new(mcp::McpSyncState::new()),
+            mcp_state: Arc::new(mcp::McpState::new()),
             active_api_connections: Arc::new(AtomicUsize::new(0)),
         }
     }

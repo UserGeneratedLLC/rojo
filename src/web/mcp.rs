@@ -84,22 +84,49 @@ pub struct McpSyncResult {
     pub message: Option<String>,
 }
 
-/// Shared state for MCP sync coordination between the agent-facing `/mcp`
+/// Result for get_script, deserialized from the plugin's Value response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GetScriptResult {
+    pub request_id: String,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub studio_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub instance_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fs_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub is_draft: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Shared state for MCP coordination between the agent-facing `/mcp`
 /// endpoint and the plugin-facing `/api/mcp/stream` WebSocket.
-pub struct McpSyncState {
-    pub sync_in_progress: AtomicBool,
-    pub command_tx: tokio::sync::watch::Sender<Option<McpSyncCommand>>,
-    pub command_rx: tokio::sync::watch::Receiver<Option<McpSyncCommand>>,
-    pub result_tx: Mutex<Option<tokio::sync::oneshot::Sender<McpSyncResult>>>,
+///
+/// Channels carry `serde_json::Value` so any command/result type can flow
+/// through (sync, getScript, future endpoints).
+pub struct McpState {
+    pub command_in_progress: AtomicBool,
+    pub command_tx: tokio::sync::watch::Sender<Option<Value>>,
+    pub command_rx: tokio::sync::watch::Receiver<Option<Value>>,
+    pub result_tx: Mutex<Option<tokio::sync::oneshot::Sender<Value>>>,
     pub plugin_stream_connected: AtomicBool,
     pub plugin_config: Mutex<Option<PluginConfig>>,
 }
 
-impl McpSyncState {
+impl McpState {
     pub fn new() -> Self {
         let (command_tx, command_rx) = tokio::sync::watch::channel(None);
         Self {
-            sync_in_progress: AtomicBool::new(false),
+            command_in_progress: AtomicBool::new(false),
             command_tx,
             command_rx,
             result_tx: Mutex::new(None),
@@ -181,7 +208,7 @@ fn json_response(body: &JsonRpcResponse, status: StatusCode) -> Response<Full<By
 
 pub async fn call(
     request: Request<Incoming>,
-    mcp_state: Arc<McpSyncState>,
+    mcp_state: Arc<McpState>,
     active_api_connections: Arc<std::sync::atomic::AtomicUsize>,
 ) -> Response<Full<Bytes>> {
     if request.method() != Method::POST {
@@ -297,6 +324,27 @@ fn handle_tools_list(id: Option<Value>) -> Response<Full<Bytes>> {
                         }
                     }
                 }
+            },
+            {
+                "name": "get_script",
+                "description": "Read a script's source code from Roblox Studio. The id and fsPath parameters come from a previous atlas_sync response's change entries.\n\nIf you haven't run atlas_sync yet, call atlas_sync(mode: \"dryrun\") first -- this establishes the instance mapping without applying any changes, then you can call get_script with the id or fsPath from that response.\n\nConflict resolution workflow:\n1. atlas_sync(mode: \"fastfail\") -- get changes with studioHash, fail if unresolved\n2. get_script(id: \"...\") -- read the Studio version of a conflicting script\n3. Merge the Studio source with your local changes, write to filesystem\n4. atlas_sync(overrides: [{id, direction: \"push\", studioHash: \"...from get_script response...\"}])\n\nThe studioHash in the response is the SHA1 of the git blob format of the script's Source property. Pass it as the studioHash in sync overrides to verify the script hasn't changed between your get_script call and the retry sync.",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "id": {
+                            "type": "string",
+                            "description": "Server Ref (32-char hex) from a previous atlas_sync response. Preferred over fsPath."
+                        },
+                        "fsPath": {
+                            "type": "string",
+                            "description": "Atlas filesystem path relative to project root (e.g. 'src/server/MyScript.server.luau'). Resolved server-side to an instance id."
+                        },
+                        "fromDraft": {
+                            "type": "boolean",
+                            "description": "If true, read unsaved editor content instead of the saved Source property. Default: false."
+                        }
+                    }
+                }
             }
         ]
     });
@@ -307,7 +355,7 @@ fn handle_tools_list(id: Option<Value>) -> Response<Full<Bytes>> {
 async fn handle_tools_call(
     id: Option<Value>,
     params: Option<Value>,
-    mcp_state: Arc<McpSyncState>,
+    mcp_state: Arc<McpState>,
     active_api_connections: Arc<std::sync::atomic::AtomicUsize>,
 ) -> Response<Full<Bytes>> {
     let tool_name = params
@@ -316,24 +364,26 @@ async fn handle_tools_call(
         .and_then(|n| n.as_str())
         .unwrap_or("");
 
-    if tool_name != "atlas_sync" {
-        let resp = JsonRpcResponse::error(id, -32602, format!("Unknown tool: {tool_name}"));
-        return json_response(&resp, StatusCode::OK);
-    }
-
     let arguments = params
         .as_ref()
         .and_then(|p| p.get("arguments"))
         .cloned()
         .unwrap_or(Value::Object(Default::default()));
 
-    handle_atlas_sync(id, arguments, mcp_state, active_api_connections).await
+    match tool_name {
+        "atlas_sync" => handle_atlas_sync(id, arguments, mcp_state, active_api_connections).await,
+        "get_script" => handle_get_script(id, arguments, mcp_state).await,
+        _ => {
+            let resp = JsonRpcResponse::error(id, -32602, format!("Unknown tool: {tool_name}"));
+            json_response(&resp, StatusCode::OK)
+        }
+    }
 }
 
 async fn handle_atlas_sync(
     id: Option<Value>,
     arguments: Value,
-    mcp_state: Arc<McpSyncState>,
+    mcp_state: Arc<McpState>,
     active_api_connections: Arc<std::sync::atomic::AtomicUsize>,
 ) -> Response<Full<Bytes>> {
     let mode = arguments
@@ -373,19 +423,19 @@ async fn handle_atlas_sync(
     }
 
     if mcp_state
-        .sync_in_progress
+        .command_in_progress
         .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
         .is_err()
     {
         return tool_response(
             id,
             true,
-            "An atlas_sync operation is already in progress. Please wait for it to complete.",
+            "An MCP command is already in progress. Please wait for it to complete.",
         );
     }
 
     if !mcp_state.plugin_stream_connected.load(Ordering::Relaxed) {
-        mcp_state.sync_in_progress.store(false, Ordering::SeqCst);
+        mcp_state.command_in_progress.store(false, Ordering::SeqCst);
         return tool_response(
             id,
             true,
@@ -411,15 +461,16 @@ async fn handle_atlas_sync(
         overrides,
     };
 
-    if mcp_state.command_tx.send(Some(command)).is_err() {
-        mcp_state.sync_in_progress.store(false, Ordering::SeqCst);
+    let command_value = serde_json::to_value(&command).unwrap_or(Value::Null);
+    if mcp_state.command_tx.send(Some(command_value)).is_err() {
+        mcp_state.command_in_progress.store(false, Ordering::SeqCst);
         return tool_response(id, true, "Failed to send sync command to the plugin.");
     }
 
-    let result = match result_rx.await {
-        Ok(result) => result,
+    let result_value = match result_rx.await {
+        Ok(v) => v,
         Err(_) => {
-            mcp_state.sync_in_progress.store(false, Ordering::SeqCst);
+            mcp_state.command_in_progress.store(false, Ordering::SeqCst);
             return tool_response(
                 id,
                 true,
@@ -428,7 +479,19 @@ async fn handle_atlas_sync(
         }
     };
 
-    mcp_state.sync_in_progress.store(false, Ordering::SeqCst);
+    let result: McpSyncResult = match serde_json::from_value(result_value) {
+        Ok(r) => r,
+        Err(e) => {
+            mcp_state.command_in_progress.store(false, Ordering::SeqCst);
+            return tool_response(
+                id,
+                true,
+                &format!("Failed to parse sync result from plugin: {e}"),
+            );
+        }
+    };
+
+    mcp_state.command_in_progress.store(false, Ordering::SeqCst);
 
     let _ = mcp_state.command_tx.send(None);
 
@@ -490,6 +553,121 @@ async fn handle_atlas_sync(
     }
 
     tool_response(id, is_error, &text)
+}
+
+async fn handle_get_script(
+    id: Option<Value>,
+    arguments: Value,
+    mcp_state: Arc<McpState>,
+) -> Response<Full<Bytes>> {
+    if mcp_state
+        .command_in_progress
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return tool_response(
+            id,
+            true,
+            "An MCP command is already in progress. Please wait for it to complete.",
+        );
+    }
+
+    if !mcp_state.plugin_stream_connected.load(Ordering::Relaxed) {
+        mcp_state.command_in_progress.store(false, Ordering::SeqCst);
+        return tool_response(
+            id,
+            true,
+            "No Roblox Studio plugin is connected to the MCP stream. \
+             Make sure Studio is open with the Atlas plugin installed.",
+        );
+    }
+
+    let has_id = arguments.get("id").and_then(|v| v.as_str()).is_some();
+    let has_fs_path = arguments.get("fsPath").and_then(|v| v.as_str()).is_some();
+    if !has_id && !has_fs_path {
+        mcp_state.command_in_progress.store(false, Ordering::SeqCst);
+        return tool_response(
+            id,
+            true,
+            "Either 'id' or 'fsPath' must be provided. Both come from a previous atlas_sync response.",
+        );
+    }
+
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+    {
+        let mut slot = mcp_state
+            .result_tx
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        *slot = Some(result_tx);
+    }
+
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let from_draft = arguments
+        .get("fromDraft")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    let command = serde_json::json!({
+        "type": "getScript",
+        "requestId": request_id,
+        "id": arguments.get("id"),
+        "fsPath": arguments.get("fsPath"),
+        "fromDraft": from_draft,
+    });
+
+    if mcp_state.command_tx.send(Some(command)).is_err() {
+        mcp_state.command_in_progress.store(false, Ordering::SeqCst);
+        return tool_response(id, true, "Failed to send get_script command to the plugin.");
+    }
+
+    let result_value = match result_rx.await {
+        Ok(v) => v,
+        Err(_) => {
+            mcp_state.command_in_progress.store(false, Ordering::SeqCst);
+            return tool_response(
+                id,
+                true,
+                "Plugin disconnected before completing the get_script operation.",
+            );
+        }
+    };
+
+    mcp_state.command_in_progress.store(false, Ordering::SeqCst);
+    let _ = mcp_state.command_tx.send(None);
+
+    let result: GetScriptResult = match serde_json::from_value(result_value) {
+        Ok(r) => r,
+        Err(e) => {
+            return tool_response(
+                id,
+                true,
+                &format!("Failed to parse get_script result from plugin: {e}"),
+            );
+        }
+    };
+
+    let is_error = result.status != "success";
+
+    if is_error {
+        let msg = result.message.as_deref().unwrap_or("Unknown error");
+        return tool_response(id, true, msg);
+    }
+
+    let class_name = result.class_name.as_deref().unwrap_or("Script");
+    let instance_path = result.instance_path.as_deref().unwrap_or("Unknown");
+    let studio_hash = result.studio_hash.as_deref().unwrap_or("");
+
+    let mut text =
+        format!("Script source for {instance_path} ({class_name}):\nHash: {studio_hash}");
+
+    let json_block = serde_json::to_value(&result).unwrap_or(Value::Null);
+    text.push_str(&format!(
+        "\n\n<json>\n{}\n</json>",
+        serde_json::to_string(&json_block).unwrap_or_default()
+    ));
+
+    tool_response(id, false, &text)
 }
 
 fn tool_response(id: Option<Value>, is_error: bool, text: &str) -> Response<Full<Bytes>> {
@@ -614,15 +792,15 @@ mod tests {
         }
     }
 
-    // -- McpSyncState tests ---------------------------------------------------
+    // -- McpState tests -------------------------------------------------------
 
     mod state_tests {
         use super::*;
 
         #[test]
         fn new_state_starts_clean() {
-            let state = McpSyncState::new();
-            assert!(!state.sync_in_progress.load(Ordering::Relaxed));
+            let state = McpState::new();
+            assert!(!state.command_in_progress.load(Ordering::Relaxed));
             assert!(!state.plugin_stream_connected.load(Ordering::Relaxed));
             assert!(state.plugin_config.lock().unwrap().is_none());
             assert!(state.result_tx.lock().unwrap().is_none());
@@ -630,16 +808,16 @@ mod tests {
         }
 
         #[test]
-        fn sync_mutex_prevents_double_acquire() {
-            let state = McpSyncState::new();
-            let first = state.sync_in_progress.compare_exchange(
+        fn command_mutex_prevents_double_acquire() {
+            let state = McpState::new();
+            let first = state.command_in_progress.compare_exchange(
                 false,
                 true,
                 Ordering::SeqCst,
                 Ordering::SeqCst,
             );
             assert!(first.is_ok());
-            let second = state.sync_in_progress.compare_exchange(
+            let second = state.command_in_progress.compare_exchange(
                 false,
                 true,
                 Ordering::SeqCst,
@@ -649,45 +827,35 @@ mod tests {
         }
 
         #[test]
-        fn command_channel_delivers() {
-            let state = McpSyncState::new();
+        fn command_channel_delivers_value() {
+            let state = McpState::new();
             let mut rx = state.command_rx.clone();
 
-            let cmd = McpSyncCommand {
-                command_type: "sync".to_string(),
-                request_id: "test-1".to_string(),
-                mode: "standard".to_string(),
-                overrides: vec![],
-            };
+            let cmd = serde_json::json!({"type": "sync", "requestId": "test-1"});
             state.command_tx.send(Some(cmd)).unwrap();
 
             assert!(rx.has_changed().unwrap());
             let received = rx.borrow_and_update().clone().unwrap();
-            assert_eq!(received.request_id, "test-1");
+            assert_eq!(received["requestId"], "test-1");
         }
 
         #[test]
-        fn result_oneshot_delivers() {
-            let state = McpSyncState::new();
+        fn result_oneshot_delivers_value() {
+            let state = McpState::new();
             let (tx, rx) = tokio::sync::oneshot::channel();
             *state.result_tx.lock().unwrap() = Some(tx);
 
-            let result = McpSyncResult {
-                request_id: "r1".to_string(),
-                status: "success".to_string(),
-                changes: vec![],
-                message: None,
-            };
+            let result = serde_json::json!({"status": "success", "requestId": "r1"});
             let sender = state.result_tx.lock().unwrap().take().unwrap();
             sender.send(result).unwrap();
 
             let received = rx.blocking_recv().unwrap();
-            assert_eq!(received.status, "success");
+            assert_eq!(received["status"], "success");
         }
 
         #[test]
         fn plugin_config_cache() {
-            let state = McpSyncState::new();
+            let state = McpState::new();
             let cfg = PluginConfig {
                 two_way_sync: true,
                 one_shot_sync: false,
@@ -729,9 +897,10 @@ mod tests {
             let bytes = rt.block_on(async { resp.into_body().collect().await.unwrap().to_bytes() });
             let json: Value = serde_json::from_slice(&bytes).unwrap();
             let tools = json["result"]["tools"].as_array().unwrap();
-            assert_eq!(tools.len(), 1);
+            assert_eq!(tools.len(), 2);
             assert_eq!(tools[0]["name"], "atlas_sync");
             assert!(tools[0]["inputSchema"].is_object());
+            assert_eq!(tools[1]["name"], "get_script");
         }
 
         #[test]
@@ -768,7 +937,7 @@ mod tests {
 
         #[tokio::test]
         async fn rejects_when_api_connected() {
-            let state = Arc::new(McpSyncState::new());
+            let state = Arc::new(McpState::new());
             let conns = Arc::new(AtomicUsize::new(1));
 
             let resp = handle_atlas_sync(Some(Value::from(1)), empty_args(), state, conns).await;
@@ -782,7 +951,7 @@ mod tests {
 
         #[tokio::test]
         async fn rejects_when_api_connected_includes_config() {
-            let state = Arc::new(McpSyncState::new());
+            let state = Arc::new(McpState::new());
             *state.plugin_config.lock().unwrap() = Some(PluginConfig {
                 two_way_sync: true,
                 one_shot_sync: false,
@@ -801,9 +970,9 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn rejects_when_sync_in_progress() {
-            let state = Arc::new(McpSyncState::new());
-            state.sync_in_progress.store(true, Ordering::SeqCst);
+        async fn rejects_when_command_in_progress() {
+            let state = Arc::new(McpState::new());
+            state.command_in_progress.store(true, Ordering::SeqCst);
             let conns = Arc::new(AtomicUsize::new(0));
 
             let resp = handle_atlas_sync(Some(Value::from(2)), empty_args(), state, conns).await;
@@ -817,7 +986,7 @@ mod tests {
 
         #[tokio::test]
         async fn rejects_when_no_plugin_connected() {
-            let state = Arc::new(McpSyncState::new());
+            let state = Arc::new(McpState::new());
             state.plugin_stream_connected.store(false, Ordering::SeqCst);
             let conns = Arc::new(AtomicUsize::new(0));
 
@@ -830,32 +999,27 @@ mod tests {
             let text = json["result"]["content"][0]["text"].as_str().unwrap();
             assert!(text.contains("No Roblox Studio plugin"));
             // Mutex should be released after rejection.
-            assert!(!state.sync_in_progress.load(Ordering::Relaxed));
+            assert!(!state.command_in_progress.load(Ordering::Relaxed));
         }
 
         #[tokio::test]
         async fn sends_command_and_returns_success_result() {
-            let state = Arc::new(McpSyncState::new());
+            let state = Arc::new(McpState::new());
             state.plugin_stream_connected.store(true, Ordering::SeqCst);
             let conns = Arc::new(AtomicUsize::new(0));
 
             let state2 = Arc::clone(&state);
-            // Spawn a task that simulates the plugin responding.
             tokio::spawn(async move {
                 let mut rx = state2.command_rx.clone();
                 rx.changed().await.unwrap();
                 let cmd = rx.borrow().clone().unwrap();
+                let req_id = cmd["requestId"].as_str().unwrap_or("");
 
-                let result = McpSyncResult {
-                    request_id: cmd.request_id,
-                    status: "success".to_string(),
-                    changes: vec![SyncChange {
-                        path: "ServerScriptService/Main.server.luau".to_string(),
-                        direction: "push".to_string(),
-                        ..Default::default()
-                    }],
-                    message: None,
-                };
+                let result = serde_json::json!({
+                    "requestId": req_id,
+                    "status": "success",
+                    "changes": [{"path": "ServerScriptService/Main.server.luau", "direction": "push"}],
+                });
 
                 let tx = state2.result_tx.lock().unwrap().take().unwrap();
                 tx.send(result).unwrap();
@@ -870,12 +1034,12 @@ mod tests {
             let text = json["result"]["content"][0]["text"].as_str().unwrap();
             assert!(text.contains("Sync completed successfully"));
             assert!(text.contains("[push] ServerScriptService/Main.server.luau"));
-            assert!(!state.sync_in_progress.load(Ordering::Relaxed));
+            assert!(!state.command_in_progress.load(Ordering::Relaxed));
         }
 
         #[tokio::test]
         async fn returns_rejection_with_presented_changes() {
-            let state = Arc::new(McpSyncState::new());
+            let state = Arc::new(McpState::new());
             state.plugin_stream_connected.store(true, Ordering::SeqCst);
             let conns = Arc::new(AtomicUsize::new(0));
 
@@ -884,24 +1048,17 @@ mod tests {
                 let mut rx = state2.command_rx.clone();
                 rx.changed().await.unwrap();
                 let cmd = rx.borrow().clone().unwrap();
+                let req_id = cmd["requestId"].as_str().unwrap_or("");
 
-                let result = McpSyncResult {
-                    request_id: cmd.request_id,
-                    status: "rejected".to_string(),
-                    changes: vec![
-                        SyncChange {
-                            path: "ReplicatedStorage/Foo.luau".to_string(),
-                            direction: "push".to_string(),
-                            ..Default::default()
-                        },
-                        SyncChange {
-                            path: "Workspace/Bar.model.json5".to_string(),
-                            direction: "pull".to_string(),
-                            ..Default::default()
-                        },
+                let result = serde_json::json!({
+                    "requestId": req_id,
+                    "status": "rejected",
+                    "changes": [
+                        {"path": "ReplicatedStorage/Foo.luau", "direction": "push"},
+                        {"path": "Workspace/Bar.model.json5", "direction": "pull"},
                     ],
-                    message: Some("User rejected the sync changes.".to_string()),
-                };
+                    "message": "User rejected the sync changes.",
+                });
 
                 let tx = state2.result_tx.lock().unwrap().take().unwrap();
                 tx.send(result).unwrap();
@@ -921,7 +1078,7 @@ mod tests {
 
         #[tokio::test]
         async fn handles_plugin_disconnect_during_sync() {
-            let state = Arc::new(McpSyncState::new());
+            let state = Arc::new(McpState::new());
             state.plugin_stream_connected.store(true, Ordering::SeqCst);
             let conns = Arc::new(AtomicUsize::new(0));
 
@@ -941,12 +1098,12 @@ mod tests {
             assert_eq!(json["result"]["isError"], true);
             let text = json["result"]["content"][0]["text"].as_str().unwrap();
             assert!(text.contains("disconnected"));
-            assert!(!state.sync_in_progress.load(Ordering::Relaxed));
+            assert!(!state.command_in_progress.load(Ordering::Relaxed));
         }
 
         #[tokio::test]
         async fn empty_status_is_not_an_error() {
-            let state = Arc::new(McpSyncState::new());
+            let state = Arc::new(McpState::new());
             state.plugin_stream_connected.store(true, Ordering::SeqCst);
             let conns = Arc::new(AtomicUsize::new(0));
 
@@ -955,15 +1112,16 @@ mod tests {
                 let mut rx = state2.command_rx.clone();
                 rx.changed().await.unwrap();
                 let cmd = rx.borrow().clone().unwrap();
+                let req_id = cmd["requestId"].as_str().unwrap_or("");
+
+                let result = serde_json::json!({
+                    "requestId": req_id,
+                    "status": "empty",
+                    "changes": [],
+                });
 
                 let tx = state2.result_tx.lock().unwrap().take().unwrap();
-                tx.send(McpSyncResult {
-                    request_id: cmd.request_id,
-                    status: "empty".to_string(),
-                    changes: vec![],
-                    message: None,
-                })
-                .unwrap();
+                tx.send(result).unwrap();
             });
 
             let resp = handle_atlas_sync(Some(Value::from(8)), empty_args(), state, conns).await;
@@ -977,7 +1135,7 @@ mod tests {
 
         #[tokio::test]
         async fn dryrun_status_is_not_an_error() {
-            let state = Arc::new(McpSyncState::new());
+            let state = Arc::new(McpState::new());
             state.plugin_stream_connected.store(true, Ordering::SeqCst);
             let conns = Arc::new(AtomicUsize::new(0));
 
@@ -986,22 +1144,22 @@ mod tests {
                 let mut rx = state2.command_rx.clone();
                 rx.changed().await.unwrap();
                 let cmd = rx.borrow().clone().unwrap();
+                let req_id = cmd["requestId"].as_str().unwrap_or("");
+
+                let result = serde_json::json!({
+                    "requestId": req_id,
+                    "status": "dryrun",
+                    "changes": [{
+                        "path": "Workspace/Part",
+                        "direction": "unresolved",
+                        "id": "aabb",
+                        "className": "Part",
+                        "patchType": "Edit",
+                    }],
+                });
 
                 let tx = state2.result_tx.lock().unwrap().take().unwrap();
-                tx.send(McpSyncResult {
-                    request_id: cmd.request_id,
-                    status: "dryrun".to_string(),
-                    changes: vec![SyncChange {
-                        path: "Workspace/Part".to_string(),
-                        direction: "unresolved".to_string(),
-                        id: Some("aabb".to_string()),
-                        class_name: Some("Part".to_string()),
-                        patch_type: Some("Edit".to_string()),
-                        ..Default::default()
-                    }],
-                    message: None,
-                })
-                .unwrap();
+                tx.send(result).unwrap();
             });
 
             let args = serde_json::json!({"mode": "dryrun"});
@@ -1017,7 +1175,7 @@ mod tests {
 
         #[tokio::test]
         async fn fastfail_unresolved_is_error() {
-            let state = Arc::new(McpSyncState::new());
+            let state = Arc::new(McpState::new());
             state.plugin_stream_connected.store(true, Ordering::SeqCst);
             let conns = Arc::new(AtomicUsize::new(0));
 
@@ -1026,19 +1184,20 @@ mod tests {
                 let mut rx = state2.command_rx.clone();
                 rx.changed().await.unwrap();
                 let cmd = rx.borrow().clone().unwrap();
+                let req_id = cmd["requestId"].as_str().unwrap_or("");
+
+                let result = serde_json::json!({
+                    "requestId": req_id,
+                    "status": "fastfail_unresolved",
+                    "changes": [{
+                        "path": "ServerScriptService/Script",
+                        "direction": "unresolved",
+                    }],
+                    "message": "Unresolved changes exist.",
+                });
 
                 let tx = state2.result_tx.lock().unwrap().take().unwrap();
-                tx.send(McpSyncResult {
-                    request_id: cmd.request_id,
-                    status: "fastfail_unresolved".to_string(),
-                    changes: vec![SyncChange {
-                        path: "ServerScriptService/Script".to_string(),
-                        direction: "unresolved".to_string(),
-                        ..Default::default()
-                    }],
-                    message: Some("Unresolved changes exist.".to_string()),
-                })
-                .unwrap();
+                tx.send(result).unwrap();
             });
 
             let args = serde_json::json!({"mode": "fastfail"});
@@ -1053,7 +1212,7 @@ mod tests {
 
         #[tokio::test]
         async fn mode_and_overrides_forwarded_to_command() {
-            let state = Arc::new(McpSyncState::new());
+            let state = Arc::new(McpState::new());
             state.plugin_stream_connected.store(true, Ordering::SeqCst);
             let conns = Arc::new(AtomicUsize::new(0));
 
@@ -1062,21 +1221,22 @@ mod tests {
                 let mut rx = state2.command_rx.clone();
                 rx.changed().await.unwrap();
                 let cmd = rx.borrow().clone().unwrap();
+                let req_id = cmd["requestId"].as_str().unwrap_or("");
 
-                assert_eq!(cmd.mode, "fastfail");
-                assert_eq!(cmd.overrides.len(), 1);
-                assert_eq!(cmd.overrides[0].id, "aabbccdd");
-                assert_eq!(cmd.overrides[0].direction, "push");
-                assert_eq!(cmd.overrides[0].studio_hash.as_deref(), Some("abc123"));
+                assert_eq!(cmd["mode"], "fastfail");
+                assert_eq!(cmd["overrides"].as_array().unwrap().len(), 1);
+                assert_eq!(cmd["overrides"][0]["id"], "aabbccdd");
+                assert_eq!(cmd["overrides"][0]["direction"], "push");
+                assert_eq!(cmd["overrides"][0]["studioHash"], "abc123");
+
+                let result = serde_json::json!({
+                    "requestId": req_id,
+                    "status": "success",
+                    "changes": [],
+                });
 
                 let tx = state2.result_tx.lock().unwrap().take().unwrap();
-                tx.send(McpSyncResult {
-                    request_id: cmd.request_id,
-                    status: "success".to_string(),
-                    changes: vec![],
-                    message: None,
-                })
-                .unwrap();
+                tx.send(result).unwrap();
             });
 
             let args = serde_json::json!({
@@ -1095,7 +1255,7 @@ mod tests {
 
         #[tokio::test]
         async fn mode_defaults_to_standard() {
-            let state = Arc::new(McpSyncState::new());
+            let state = Arc::new(McpState::new());
             state.plugin_stream_connected.store(true, Ordering::SeqCst);
             let conns = Arc::new(AtomicUsize::new(0));
 
@@ -1104,18 +1264,19 @@ mod tests {
                 let mut rx = state2.command_rx.clone();
                 rx.changed().await.unwrap();
                 let cmd = rx.borrow().clone().unwrap();
+                let req_id = cmd["requestId"].as_str().unwrap_or("");
 
-                assert_eq!(cmd.mode, "standard");
-                assert!(cmd.overrides.is_empty());
+                assert_eq!(cmd["mode"], "standard");
+                assert!(cmd["overrides"].as_array().unwrap().is_empty());
+
+                let result = serde_json::json!({
+                    "requestId": req_id,
+                    "status": "empty",
+                    "changes": [],
+                });
 
                 let tx = state2.result_tx.lock().unwrap().take().unwrap();
-                tx.send(McpSyncResult {
-                    request_id: cmd.request_id,
-                    status: "empty".to_string(),
-                    changes: vec![],
-                    message: None,
-                })
-                .unwrap();
+                tx.send(result).unwrap();
             });
 
             let resp = handle_atlas_sync(Some(Value::from(12)), empty_args(), state, conns).await;
@@ -1126,7 +1287,7 @@ mod tests {
 
         #[tokio::test]
         async fn enriched_changes_include_json_block() {
-            let state = Arc::new(McpSyncState::new());
+            let state = Arc::new(McpState::new());
             state.plugin_stream_connected.store(true, Ordering::SeqCst);
             let conns = Arc::new(AtomicUsize::new(0));
 
@@ -1135,30 +1296,30 @@ mod tests {
                 let mut rx = state2.command_rx.clone();
                 rx.changed().await.unwrap();
                 let cmd = rx.borrow().clone().unwrap();
+                let req_id = cmd["requestId"].as_str().unwrap_or("");
 
-                let tx = state2.result_tx.lock().unwrap().take().unwrap();
-                tx.send(McpSyncResult {
-                    request_id: cmd.request_id,
-                    status: "success".to_string(),
-                    changes: vec![SyncChange {
-                        path: "Workspace/Part".to_string(),
-                        direction: "push".to_string(),
-                        id: Some("00aabb".to_string()),
-                        class_name: Some("Part".to_string()),
-                        patch_type: Some("Edit".to_string()),
-                        default_selection: Some("push".to_string()),
-                        fs_path: Some("src/workspace/Part.model.json5".to_string()),
-                        studio_hash: None,
-                        properties: Some(serde_json::json!({
+                let result = serde_json::json!({
+                    "requestId": req_id,
+                    "status": "success",
+                    "changes": [{
+                        "path": "Workspace/Part",
+                        "direction": "push",
+                        "id": "00aabb",
+                        "className": "Part",
+                        "patchType": "Edit",
+                        "defaultSelection": "push",
+                        "fsPath": "src/workspace/Part.model.json5",
+                        "properties": {
                             "Anchored": {
                                 "current": false,
                                 "incoming": true
                             }
-                        })),
+                        }
                     }],
-                    message: None,
-                })
-                .unwrap();
+                });
+
+                let tx = state2.result_tx.lock().unwrap().take().unwrap();
+                tx.send(result).unwrap();
             });
 
             let resp = handle_atlas_sync(Some(Value::from(13)), empty_args(), state, conns).await;
@@ -1391,6 +1552,207 @@ mod tests {
                 .as_array()
                 .unwrap()
                 .contains(&Value::from("direction")));
+        }
+    }
+
+    // -- get_script tests -----------------------------------------------------
+
+    mod get_script_tests {
+        use super::*;
+
+        #[test]
+        fn get_script_result_serde_roundtrip() {
+            let result = GetScriptResult {
+                request_id: "r1".to_string(),
+                status: "success".to_string(),
+                source: Some("print('hi')".to_string()),
+                studio_hash: Some("abc123".to_string()),
+                class_name: Some("Script".to_string()),
+                instance_path: Some("ServerScriptService/Main".to_string()),
+                id: Some("00aabb".to_string()),
+                fs_path: Some("src/server/Main.server.luau".to_string()),
+                is_draft: Some(false),
+                message: None,
+            };
+            let json = serde_json::to_value(&result).unwrap();
+            assert_eq!(json["requestId"], "r1");
+            assert_eq!(json["source"], "print('hi')");
+            assert_eq!(json["studioHash"], "abc123");
+            assert_eq!(json["className"], "Script");
+            assert_eq!(json["instancePath"], "ServerScriptService/Main");
+            assert_eq!(json["isDraft"], false);
+            assert!(json.get("message").is_none());
+
+            let deserialized: GetScriptResult = serde_json::from_value(json).unwrap();
+            assert_eq!(deserialized.source.as_deref(), Some("print('hi')"));
+            assert_eq!(
+                deserialized.fs_path.as_deref(),
+                Some("src/server/Main.server.luau")
+            );
+        }
+
+        #[test]
+        fn get_script_result_omits_none_fields() {
+            let result = GetScriptResult {
+                request_id: "r1".to_string(),
+                status: "error".to_string(),
+                source: None,
+                studio_hash: None,
+                class_name: None,
+                instance_path: None,
+                id: None,
+                fs_path: None,
+                is_draft: None,
+                message: Some("Not found".to_string()),
+            };
+            let json = serde_json::to_value(&result).unwrap();
+            assert!(json.get("source").is_none());
+            assert!(json.get("studioHash").is_none());
+            assert!(json.get("className").is_none());
+            assert!(json.get("isDraft").is_none());
+            assert_eq!(json["message"], "Not found");
+        }
+
+        #[test]
+        fn tools_list_includes_get_script() {
+            let resp = handle_tools_list(Some(Value::from(1)));
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            let bytes = rt.block_on(async { resp.into_body().collect().await.unwrap().to_bytes() });
+            let json: Value = serde_json::from_slice(&bytes).unwrap();
+            let tools = json["result"]["tools"].as_array().unwrap();
+            assert_eq!(tools.len(), 2);
+
+            let get_script = tools.iter().find(|t| t["name"] == "get_script").unwrap();
+            assert!(get_script["description"]
+                .as_str()
+                .unwrap()
+                .contains("Conflict resolution"));
+            assert!(get_script["inputSchema"]["properties"]["id"].is_object());
+            assert!(get_script["inputSchema"]["properties"]["fsPath"].is_object());
+            assert!(get_script["inputSchema"]["properties"]["fromDraft"].is_object());
+        }
+
+        #[tokio::test]
+        async fn get_script_rejects_when_no_plugin() {
+            let state = Arc::new(McpState::new());
+            state.plugin_stream_connected.store(false, Ordering::SeqCst);
+
+            let args = serde_json::json!({"id": "aabb"});
+            let resp = handle_get_script(Some(Value::from(1)), args, state).await;
+            let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+            let json: Value = serde_json::from_slice(&bytes).unwrap();
+
+            assert_eq!(json["result"]["isError"], true);
+            let text = json["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("No Roblox Studio plugin"));
+        }
+
+        #[tokio::test]
+        async fn get_script_rejects_when_command_in_progress() {
+            let state = Arc::new(McpState::new());
+            state.command_in_progress.store(true, Ordering::SeqCst);
+            state.plugin_stream_connected.store(true, Ordering::SeqCst);
+
+            let args = serde_json::json!({"id": "aabb"});
+            let resp = handle_get_script(Some(Value::from(1)), args, state).await;
+            let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+            let json: Value = serde_json::from_slice(&bytes).unwrap();
+
+            assert_eq!(json["result"]["isError"], true);
+            let text = json["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("already in progress"));
+        }
+
+        #[tokio::test]
+        async fn get_script_requires_id_or_fspath() {
+            let state = Arc::new(McpState::new());
+            state.plugin_stream_connected.store(true, Ordering::SeqCst);
+
+            let args = serde_json::json!({"fromDraft": true});
+            let resp = handle_get_script(Some(Value::from(1)), args, state).await;
+            let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+            let json: Value = serde_json::from_slice(&bytes).unwrap();
+
+            assert_eq!(json["result"]["isError"], true);
+            let text = json["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("id") && text.contains("fsPath"));
+        }
+
+        #[tokio::test]
+        async fn get_script_success_includes_json_block() {
+            let state = Arc::new(McpState::new());
+            state.plugin_stream_connected.store(true, Ordering::SeqCst);
+
+            let state2 = Arc::clone(&state);
+            tokio::spawn(async move {
+                let mut rx = state2.command_rx.clone();
+                rx.changed().await.unwrap();
+                let cmd = rx.borrow().clone().unwrap();
+                let req_id = cmd["requestId"].as_str().unwrap_or("");
+
+                let result = serde_json::json!({
+                    "requestId": req_id,
+                    "status": "success",
+                    "source": "print('hello')",
+                    "studioHash": "abc123def456",
+                    "className": "Script",
+                    "instancePath": "ServerScriptService/Main",
+                    "isDraft": false,
+                });
+
+                let tx = state2.result_tx.lock().unwrap().take().unwrap();
+                tx.send(result).unwrap();
+            });
+
+            let args = serde_json::json!({"id": "00aabb"});
+            let resp = handle_get_script(Some(Value::from(1)), args, state).await;
+            let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+            let json: Value = serde_json::from_slice(&bytes).unwrap();
+
+            assert_eq!(json["result"]["isError"], false);
+            let text = json["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("ServerScriptService/Main"));
+            assert!(text.contains("abc123def456"));
+            assert!(text.contains("<json>"));
+            assert!(text.contains("</json>"));
+
+            let json_start = text.find("<json>\n").unwrap() + 7;
+            let json_end = text.find("\n</json>").unwrap();
+            let inner: Value = serde_json::from_str(&text[json_start..json_end]).unwrap();
+            assert_eq!(inner["status"], "success");
+            assert_eq!(inner["source"], "print('hello')");
+        }
+
+        #[tokio::test]
+        async fn get_script_error_from_plugin() {
+            let state = Arc::new(McpState::new());
+            state.plugin_stream_connected.store(true, Ordering::SeqCst);
+
+            let state2 = Arc::clone(&state);
+            tokio::spawn(async move {
+                let mut rx = state2.command_rx.clone();
+                rx.changed().await.unwrap();
+                let cmd = rx.borrow().clone().unwrap();
+                let req_id = cmd["requestId"].as_str().unwrap_or("");
+
+                let result = serde_json::json!({
+                    "requestId": req_id,
+                    "status": "error",
+                    "message": "Instance not found by id.",
+                });
+
+                let tx = state2.result_tx.lock().unwrap().take().unwrap();
+                tx.send(result).unwrap();
+            });
+
+            let args = serde_json::json!({"id": "deadbeef"});
+            let resp = handle_get_script(Some(Value::from(1)), args, state).await;
+            let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+            let json: Value = serde_json::from_slice(&bytes).unwrap();
+
+            assert_eq!(json["result"]["isError"], true);
+            let text = json["result"]["content"][0]["text"].as_str().unwrap();
+            assert!(text.contains("Instance not found by id"));
         }
     }
 }
