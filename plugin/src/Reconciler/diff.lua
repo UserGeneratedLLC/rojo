@@ -59,7 +59,14 @@ local function diff(instanceMap, virtualInstances, rootId, serverInfo)
 		updated = {},
 	}
 
+	local diffClock = os.clock()
 	local diffCount = 0
+
+	local virtualCount = 0
+	for _ in pairs(virtualInstances) do
+		virtualCount += 1
+	end
+	Log.trace("[TIMING] diff() starting ({} virtual instances to diff)", virtualCount)
 
 	-- Build a lookup table for visible services (for ignoreHiddenServices check)
 	local visibleServicesSet: { [string]: boolean } = {}
@@ -246,6 +253,19 @@ local function diff(instanceMap, virtualInstances, rootId, serverInfo)
 	if not diffSuccess then
 		return false, err
 	end
+
+	local addedCount = 0
+	for _ in pairs(patch.added) do
+		addedCount += 1
+	end
+	Log.trace(
+		"[TIMING] diff() completed: {} instances diffed, {} removals, {} additions, {} updates ({:.1} ms)",
+		diffCount,
+		#patch.removed,
+		addedCount,
+		#patch.updated,
+		(os.clock() - diffClock) * 1000
+	)
 
 	return true, patch
 end

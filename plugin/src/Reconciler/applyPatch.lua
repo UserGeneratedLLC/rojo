@@ -19,6 +19,8 @@ local reifyInstance, applyDeferredRefs = reify.reifyInstance, reify.applyDeferre
 local setProperty = require(script.Parent.setProperty)
 
 local function applyPatch(instanceMap, patch)
+	local applyPatchClock = os.clock()
+
 	-- Tracks any portions of the patch that could not be applied to the DOM.
 	local unappliedPatch = PatchSet.newEmpty()
 
@@ -40,6 +42,14 @@ local function applyPatch(instanceMap, patch)
 		)
 	end
 
+	Log.trace(
+		"[TIMING] applyPatch() starting: {} removals, {} additions, {} updates",
+		#patch.removed,
+		addCount,
+		#patch.updated
+	)
+
+	local removalClock = os.clock()
 	for _, removedIdOrInstance in ipairs(patch.removed) do
 		-- Skip auto-created instances that shouldn't be synced
 		local instance = if Types.RbxId(removedIdOrInstance)
@@ -66,6 +76,8 @@ local function applyPatch(instanceMap, patch)
 			table.insert(unappliedPatch.removed, removedIdOrInstance)
 		end
 	end
+
+	Log.trace("[TIMING] applyPatch() removals completed ({:.1} ms)", (os.clock() - removalClock) * 1000)
 
 	-- Detect echoed additions from DescendantAdded handler.
 	-- When the plugin pre-inserts instances with temp IDs and the server
@@ -100,6 +112,8 @@ local function applyPatch(instanceMap, patch)
 		end
 	end
 
+	local additionClock = os.clock()
+	Log.trace("[TIMING] applyPatch() additions starting")
 	for id, virtualInstance in pairs(patch.added) do
 		if instanceMap.fromIds[id] ~= nil then
 			-- This instance already exists. We might've already added it in a
@@ -146,6 +160,10 @@ local function applyPatch(instanceMap, patch)
 		end
 	end
 
+	Log.trace("[TIMING] applyPatch() additions completed ({:.1} ms)", (os.clock() - additionClock) * 1000)
+
+	local updateClock = os.clock()
+	Log.trace("[TIMING] applyPatch() updates starting ({} updates)", #patch.updated)
 	for _, update in ipairs(patch.updated) do
 		local instance = instanceMap.fromIds[update.id]
 
@@ -314,7 +332,14 @@ local function applyPatch(instanceMap, patch)
 		end
 	end
 
+	Log.trace("[TIMING] applyPatch() updates completed ({:.1} ms)", (os.clock() - updateClock) * 1000)
+
+	local refsClock = os.clock()
+	Log.trace("[TIMING] applyPatch() deferred refs starting ({} refs)", #deferredRefs)
 	applyDeferredRefs(instanceMap, deferredRefs, unappliedPatch)
+	Log.trace("[TIMING] applyPatch() deferred refs completed ({:.1} ms)", (os.clock() - refsClock) * 1000)
+
+	Log.trace("[TIMING] applyPatch() total completed ({:.1} ms)", (os.clock() - applyPatchClock) * 1000)
 
 	return unappliedPatch
 end

@@ -164,9 +164,22 @@ end
 function ApiContext:connect()
 	local url = ("%s/api/rojo"):format(self.__baseUrl)
 
+	local connectClock = os.clock()
+	Log.trace("[TIMING] ApiContext:connect() GET {} starting", url)
 	return Http.get(url)
+		:andThen(function(response)
+			Log.trace(
+				"[TIMING] ApiContext:connect() HTTP response received ({:.1} ms)",
+				(os.clock() - connectClock) * 1000
+			)
+			return response
+		end)
 		:andThen(rejectFailedRequests)
 		:andThen(Http.Response.msgpack)
+		:andThen(function(body)
+			Log.trace("[TIMING] ApiContext:connect() msgpack decoded")
+			return body
+		end)
 		:andThen(rejectWrongVersion)
 		:andThen(rejectWrongFork)
 		:andThen(function(body)
@@ -177,6 +190,11 @@ function ApiContext:connect()
 		:andThen(rejectWrongPlaceId)
 		:andThen(function(body)
 			self.__sessionId = body.sessionId
+			Log.trace(
+				"[TIMING] ApiContext:connect() fully validated ({:.1} ms), sessionId={}",
+				(os.clock() - connectClock) * 1000,
+				body.sessionId
+			)
 
 			return body
 		end)
@@ -185,15 +203,39 @@ end
 function ApiContext:read(ids)
 	local url = ("%s/api/read/%s"):format(self.__baseUrl, table.concat(ids, ","))
 
-	return Http.get(url):andThen(rejectFailedRequests):andThen(Http.Response.msgpack):andThen(function(body)
-		if body.sessionId ~= self.__sessionId then
-			return Promise.reject("Server changed ID")
-		end
+	local readClock = os.clock()
+	Log.trace("[TIMING] ApiContext:read() GET {} starting ({} ids)", url, #ids)
+	return Http.get(url)
+		:andThen(function(response)
+			Log.trace(
+				"[TIMING] ApiContext:read() HTTP response received ({:.1} ms, {} bytes)",
+				(os.clock() - readClock) * 1000,
+				if response.body then #response.body else 0
+			)
+			return response
+		end)
+		:andThen(rejectFailedRequests)
+		:andThen(function(response)
+			local decodeClock = os.clock()
+			Log.trace("[TIMING] ApiContext:read() msgpack decode starting")
+			return Http.Response.msgpack(response):andThen(function(body)
+				Log.trace(
+					"[TIMING] ApiContext:read() msgpack decode completed ({:.1} ms)",
+					(os.clock() - decodeClock) * 1000
+				)
+				return body
+			end)
+		end)
+		:andThen(function(body)
+			if body.sessionId ~= self.__sessionId then
+				return Promise.reject("Server changed ID")
+			end
 
-		assert(validateApiRead(body))
+			assert(validateApiRead(body))
+			Log.trace("[TIMING] ApiContext:read() fully completed ({:.1} ms)", (os.clock() - readClock) * 1000)
 
-		return body
-	end)
+			return body
+		end)
 end
 
 function ApiContext:write(patch, stageIds)
@@ -282,11 +324,18 @@ function ApiContext:connectWebSocket(packetHandlers)
 	-- Convert HTTP/HTTPS URL to WS/WSS
 	url = url:gsub("^http://", "ws://"):gsub("^https://", "wss://")
 
+	Log.trace("[TIMING] ApiContext:connectWebSocket() creating client for {}", url)
 	return Promise.new(function(resolve, reject)
+		local wsClock = os.clock()
 		local success, wsClient =
 			pcall(HttpService.CreateWebStreamClient, HttpService, Enum.WebStreamClientType.WebSocket, {
 				Url = url,
 			})
+		Log.trace(
+			"[TIMING] WebSocket CreateWebStreamClient ({:.1} ms, success={})",
+			(os.clock() - wsClock) * 1000,
+			success
+		)
 		if not success then
 			reject("Failed to create WebSocket client: " .. tostring(wsClient))
 			return

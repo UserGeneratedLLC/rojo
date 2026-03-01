@@ -16,12 +16,15 @@ local Matching = require(script.Parent.matching)
 local HYDRATE_YIELD_INTERVAL = 1000
 
 local function hydrate(instanceMap, virtualInstances, rootId, rootInstance, session)
+	local isRoot = not session or not session.hydrateCount
+
 	if not session then
 		session = Matching.newSession()
 	end
 
 	if not session.hydrateCount then
 		session.hydrateCount = 0
+		session.hydrateClock = os.clock()
 	end
 	session.hydrateCount += 1
 	if session.hydrateCount % HYDRATE_YIELD_INTERVAL == 0 then
@@ -32,6 +35,10 @@ local function hydrate(instanceMap, virtualInstances, rootId, rootInstance, sess
 
 	if virtualInstance == nil then
 		invariant("Cannot hydrate an instance not present in virtualInstances\nID: {}", rootId)
+	end
+
+	if isRoot then
+		Log.trace("[TIMING] hydrate() starting at root '{}' ({})", virtualInstance.Name, rootInstance:GetFullName())
 	end
 
 	instanceMap:insert(rootId, rootInstance)
@@ -54,8 +61,21 @@ local function hydrate(instanceMap, virtualInstances, rootId, rootInstance, sess
 		end
 	end
 
+	local matchClock = os.clock()
 	local result =
 		Matching.matchChildren(session, validVirtualIds, existingChildren, virtualInstances, rootId, rootInstance)
+	local matchElapsed = (os.clock() - matchClock) * 1000
+
+	if matchElapsed > 10 then
+		Log.trace(
+			"[TIMING] matchChildren for '{}' took {:.1} ms ({} virtual, {} studio, {} matched)",
+			virtualInstance.Name,
+			matchElapsed,
+			#validVirtualIds,
+			#existingChildren,
+			#result.matched
+		)
+	end
 
 	-- Recursively hydrate matched pairs
 	for _, pair in result.matched do
@@ -74,6 +94,15 @@ local function hydrate(instanceMap, virtualInstances, rootId, rootInstance, sess
 				rootInstance:GetFullName()
 			)
 		end
+	end
+
+	if isRoot then
+		Log.trace(
+			"[TIMING] hydrate() completed: {} instances processed, {} matched ({:.1} ms total)",
+			session.hydrateCount,
+			#result.matched,
+			(os.clock() - session.hydrateClock) * 1000
+		)
 	end
 end
 
