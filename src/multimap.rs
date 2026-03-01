@@ -39,6 +39,10 @@ impl<K: Hash + Eq, V: Eq> MultiMap<K, V> {
         bucket.push(v);
     }
 
+    pub fn keys(&self) -> hash_map::Keys<'_, K, Vec<V>> {
+        self.inner.keys()
+    }
+
     pub fn remove<Q: Borrow<K>, U: Borrow<V>>(&mut self, k: Q, v: U) -> Option<V> {
         let b = v.borrow();
 

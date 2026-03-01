@@ -235,6 +235,10 @@ impl RojoTree {
         self.path_to_ids.get(path)
     }
 
+    pub fn known_paths(&self) -> impl Iterator<Item = &PathBuf> {
+        self.path_to_ids.keys()
+    }
+
     pub fn get_metadata(&self, id: Ref) -> Option<&InstanceMetadata> {
         self.metadata_map.get(&id)
     }
