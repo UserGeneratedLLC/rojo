@@ -147,10 +147,7 @@ pub fn snapshot_project(
             // We SHOULD NOT mark the project file as a relevant path for any
             // nodes that aren't roots. They'll be updated as part of the project
             // file being updated.
-            snapshot
-                .metadata
-                .relevant_paths
-                .push(vfs.canonicalize(path)?);
+            snapshot.metadata.relevant_paths.push(path.to_path_buf());
 
             Ok(Some(snapshot))
         }

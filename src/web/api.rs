@@ -358,23 +358,8 @@ impl ApiService {
         }
     }
 
-    /// Canonicalize a path for use as a suppression map key.
     fn suppression_key(path: &Path) -> PathBuf {
-        if let Ok(canonical) = std::fs::canonicalize(path) {
-            canonical
-        } else if let Some(parent) = path.parent() {
-            if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
-                if let Some(file_name) = path.file_name() {
-                    canonical_parent.join(file_name)
-                } else {
-                    path.to_path_buf()
-                }
-            } else {
-                path.to_path_buf()
-            }
-        } else {
-            path.to_path_buf()
-        }
+        path.to_path_buf()
     }
 
     /// Suppress the next Create/Write VFS event for the given path.

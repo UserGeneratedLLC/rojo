@@ -39,7 +39,6 @@ pub use std_backend::{CriticalErrorHandler, StdBackend, WatcherCriticalError};
 /// the initial tree build to avoid stale data during live operation.
 pub struct PrefetchCache {
     pub files: HashMap<PathBuf, Vec<u8>>,
-    pub canonical: HashMap<PathBuf, PathBuf>,
     /// `true` = file, `false` = directory. Paths not in the map fall through
     /// to the backend (e.g. init-file probes for paths that don't exist).
     pub is_file: HashMap<PathBuf, bool>,
@@ -93,7 +92,6 @@ pub trait VfsBackend: sealed::Sealed + Send + 'static {
     fn metadata(&mut self, path: &Path) -> io::Result<Metadata>;
     fn remove_file(&mut self, path: &Path) -> io::Result<()>;
     fn remove_dir_all(&mut self, path: &Path) -> io::Result<()>;
-    fn canonicalize(&mut self, path: &Path) -> io::Result<PathBuf>;
 
     fn event_receiver(&self) -> crossbeam_channel::Receiver<VfsEvent>;
     fn watch(&mut self, path: &Path) -> io::Result<()>;
@@ -278,18 +276,6 @@ impl VfsInner {
         self.backend.metadata(path)
     }
 
-    fn canonicalize<P: AsRef<Path>>(&mut self, path: P) -> io::Result<PathBuf> {
-        let path = path.as_ref();
-
-        if let Some(cache) = &mut self.prefetch_cache {
-            if let Some(canonical) = cache.canonical.remove(path) {
-                return Ok(canonical);
-            }
-        }
-
-        self.backend.canonicalize(path)
-    }
-
     fn event_receiver(&self) -> crossbeam_channel::Receiver<VfsEvent> {
         self.backend.event_receiver()
     }
@@ -369,9 +355,9 @@ impl Vfs {
 
     /// Load a prefetch cache for fast initial reads.
     ///
-    /// File reads and canonicalize calls will check the cache before hitting
-    /// the backend. Call [`clear_prefetch_cache`] after the initial snapshot
-    /// build to free memory and ensure live operations get fresh data.
+    /// File reads will check the cache before hitting the backend. Call
+    /// [`clear_prefetch_cache`] after the initial snapshot build to free
+    /// memory and ensure live operations get fresh data.
     pub fn set_prefetch_cache(&self, cache: PrefetchCache) {
         let mut inner = self.inner.lock().unwrap();
         inner.prefetch_cache = Some(cache);
@@ -533,19 +519,6 @@ impl Vfs {
         self.inner.lock().unwrap().metadata(path)
     }
 
-    /// Normalize a path via the underlying backend.
-    ///
-    /// Roughly equivalent to [`std::fs::canonicalize`][std::fs::canonicalize]. Relative paths are
-    /// resolved against the backend's current working directory (if applicable) and errors are
-    /// surfaced directly from the backend.
-    ///
-    /// [std::fs::canonicalize]: https://doc.rust-lang.org/stable/std/fs/fn.canonicalize.html
-    #[inline]
-    pub fn canonicalize<P: AsRef<Path>>(&self, path: P) -> io::Result<PathBuf> {
-        let path = path.as_ref();
-        self.inner.lock().unwrap().canonicalize(path)
-    }
-
     /// Retrieve a handle to the event receiver for this `Vfs`.
     #[inline]
     pub fn event_receiver(&self) -> crossbeam_channel::Receiver<VfsEvent> {
@@ -673,13 +646,6 @@ impl VfsLock<'_> {
         self.inner.metadata(path)
     }
 
-    /// Normalize a path via the underlying backend.
-    #[inline]
-    pub fn normalize<P: AsRef<Path>>(&mut self, path: P) -> io::Result<PathBuf> {
-        let path = path.as_ref();
-        self.inner.canonicalize(path)
-    }
-
     /// Retrieve a handle to the event receiver for this `Vfs`.
     #[inline]
     pub fn event_receiver(&self) -> crossbeam_channel::Receiver<VfsEvent> {
@@ -715,73 +681,11 @@ mod test {
         );
     }
 
-    /// https://github.com/rojo-rbx/rojo/issues/1200
-    #[test]
-    fn canonicalize_in_memory_success() {
-        let mut imfs = InMemoryFs::new();
-        let contents = "Lorem ipsum dolor sit amet.".to_string();
-
-        imfs.load_snapshot("/test/file.txt", VfsSnapshot::file(contents.to_string()))
-            .unwrap();
-
-        let vfs = Vfs::new(imfs);
-
-        assert_eq!(
-            vfs.canonicalize("/test/nested/../file.txt").unwrap(),
-            PathBuf::from("/test/file.txt")
-        );
-        assert_eq!(
-            vfs.read_to_string(vfs.canonicalize("/test/nested/../file.txt").unwrap())
-                .unwrap()
-                .to_string(),
-            contents.to_string()
-        );
-    }
-
-    #[test]
-    fn canonicalize_in_memory_missing_errors() {
-        let imfs = InMemoryFs::new();
-        let vfs = Vfs::new(imfs);
-
-        let err = vfs.canonicalize("test").unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::NotFound);
-    }
-
-    #[test]
-    fn canonicalize_std_backend_success() {
-        let contents = "Lorem ipsum dolor sit amet.".to_string();
-        let dir = tempfile::tempdir().unwrap();
-        let file_path = dir.path().join("file.txt");
-        fs_err::write(&file_path, contents.to_string()).unwrap();
-
-        let vfs = Vfs::new(StdBackend::new_for_testing());
-        let canonicalized = vfs.canonicalize(&file_path).unwrap();
-        assert_eq!(canonicalized, file_path.canonicalize().unwrap());
-        assert_eq!(
-            vfs.read_to_string(&canonicalized).unwrap().to_string(),
-            contents.to_string()
-        );
-    }
-
-    #[test]
-    fn canonicalize_std_backend_missing_errors() {
-        let dir = tempfile::tempdir().unwrap();
-        let file_path = dir.path().join("test");
-
-        let vfs = Vfs::new(StdBackend::new_for_testing());
-        let err = vfs.canonicalize(&file_path).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::NotFound);
-    }
-
-    fn make_prefetch(files: Vec<(&str, &[u8])>, canonical: Vec<(&str, &str)>) -> PrefetchCache {
+    fn make_prefetch(files: Vec<(&str, &[u8])>) -> PrefetchCache {
         PrefetchCache {
             files: files
                 .into_iter()
                 .map(|(k, v)| (PathBuf::from(k), v.to_vec()))
-                .collect(),
-            canonical: canonical
-                .into_iter()
-                .map(|(k, v)| (PathBuf::from(k), PathBuf::from(v)))
                 .collect(),
             is_file: HashMap::new(),
             children: HashMap::new(),
@@ -792,7 +696,7 @@ mod test {
     fn prefetch_cache_read_hit() {
         let imfs = InMemoryFs::new();
         let vfs = Vfs::new(imfs);
-        vfs.set_prefetch_cache(make_prefetch(vec![("test", b"cached")], vec![]));
+        vfs.set_prefetch_cache(make_prefetch(vec![("test", b"cached")]));
 
         assert_eq!(vfs.read("test").unwrap().as_slice(), b"cached");
     }
@@ -803,7 +707,7 @@ mod test {
         imfs.load_snapshot("test", VfsSnapshot::file("backend"))
             .unwrap();
         let vfs = Vfs::new(imfs);
-        vfs.set_prefetch_cache(make_prefetch(vec![("test", b"cached")], vec![]));
+        vfs.set_prefetch_cache(make_prefetch(vec![("test", b"cached")]));
 
         assert_eq!(vfs.read("test").unwrap().as_slice(), b"cached");
         assert_eq!(vfs.read("test").unwrap().as_slice(), b"backend");
@@ -815,7 +719,7 @@ mod test {
         imfs.load_snapshot("other", VfsSnapshot::file("backend"))
             .unwrap();
         let vfs = Vfs::new(imfs);
-        vfs.set_prefetch_cache(make_prefetch(vec![("test", b"cached")], vec![]));
+        vfs.set_prefetch_cache(make_prefetch(vec![("test", b"cached")]));
 
         assert_eq!(vfs.read("other").unwrap().as_slice(), b"backend");
     }
@@ -824,7 +728,7 @@ mod test {
     fn prefetch_cache_read_to_string_hit() {
         let imfs = InMemoryFs::new();
         let vfs = Vfs::new(imfs);
-        vfs.set_prefetch_cache(make_prefetch(vec![("test", b"hello")], vec![]));
+        vfs.set_prefetch_cache(make_prefetch(vec![("test", b"hello")]));
 
         assert_eq!(vfs.read_to_string("test").unwrap().as_str(), "hello");
     }
@@ -833,37 +737,11 @@ mod test {
     fn prefetch_cache_lf_normalized_hit() {
         let imfs = InMemoryFs::new();
         let vfs = Vfs::new(imfs);
-        vfs.set_prefetch_cache(make_prefetch(vec![("test", b"line1\r\nline2\r\n")], vec![]));
+        vfs.set_prefetch_cache(make_prefetch(vec![("test", b"line1\r\nline2\r\n")]));
 
         assert_eq!(
             vfs.read_to_string_lf_normalized("test").unwrap().as_str(),
             "line1\nline2\n"
-        );
-    }
-
-    #[test]
-    fn prefetch_cache_canonicalize_hit() {
-        let imfs = InMemoryFs::new();
-        let vfs = Vfs::new(imfs);
-        vfs.set_prefetch_cache(make_prefetch(vec![], vec![("src/foo", "/abs/src/foo")]));
-
-        assert_eq!(
-            vfs.canonicalize("src/foo").unwrap(),
-            PathBuf::from("/abs/src/foo")
-        );
-    }
-
-    #[test]
-    fn prefetch_cache_canonicalize_miss_falls_through() {
-        let mut imfs = InMemoryFs::new();
-        imfs.load_snapshot("/real/file.txt", VfsSnapshot::file("x"))
-            .unwrap();
-        let vfs = Vfs::new(imfs);
-        vfs.set_prefetch_cache(make_prefetch(vec![], vec![("other", "/abs/other")]));
-
-        assert_eq!(
-            vfs.canonicalize("/real/file.txt").unwrap(),
-            PathBuf::from("/real/file.txt")
         );
     }
 
@@ -873,7 +751,7 @@ mod test {
         imfs.load_snapshot("test", VfsSnapshot::file("backend"))
             .unwrap();
         let vfs = Vfs::new(imfs);
-        vfs.set_prefetch_cache(make_prefetch(vec![("test", b"cached")], vec![]));
+        vfs.set_prefetch_cache(make_prefetch(vec![("test", b"cached")]));
         vfs.clear_prefetch_cache();
 
         assert_eq!(vfs.read("test").unwrap().as_slice(), b"backend");
@@ -914,36 +792,10 @@ mod test {
     fn prefetch_cache_read_to_string_invalid_utf8() {
         let imfs = InMemoryFs::new();
         let vfs = Vfs::new(imfs);
-        vfs.set_prefetch_cache(make_prefetch(
-            vec![("test", &[0xFF, 0xFE, 0x00, 0x80])],
-            vec![],
-        ));
+        vfs.set_prefetch_cache(make_prefetch(vec![("test", &[0xFF, 0xFE, 0x00, 0x80])]));
 
         let err = vfs.read_to_string("test").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData);
-    }
-
-    #[test]
-    fn prefetch_cache_canonicalize_depletion() {
-        let mut imfs = InMemoryFs::new();
-        imfs.load_snapshot("/real/path", VfsSnapshot::file("x"))
-            .unwrap();
-        let vfs = Vfs::new(imfs);
-        vfs.set_prefetch_cache(make_prefetch(
-            vec![],
-            vec![("/real/path", "/canonical/path")],
-        ));
-
-        assert_eq!(
-            vfs.canonicalize("/real/path").unwrap(),
-            PathBuf::from("/canonical/path"),
-            "First call should hit cache"
-        );
-        assert_eq!(
-            vfs.canonicalize("/real/path").unwrap(),
-            PathBuf::from("/real/path"),
-            "Second call should fall through to InMemoryFs backend"
-        );
     }
 
     #[test]
@@ -951,8 +803,8 @@ mod test {
         let imfs = InMemoryFs::new();
         let vfs = Vfs::new(imfs);
 
-        vfs.set_prefetch_cache(make_prefetch(vec![("a", b"first")], vec![]));
-        vfs.set_prefetch_cache(make_prefetch(vec![("a", b"second")], vec![]));
+        vfs.set_prefetch_cache(make_prefetch(vec![("a", b"first")]));
+        vfs.set_prefetch_cache(make_prefetch(vec![("a", b"second")]));
 
         assert_eq!(vfs.read("a").unwrap().as_slice(), b"second");
     }
@@ -1003,22 +855,17 @@ mod test {
     fn prefetch_cache_many_files_std_backend() {
         let dir = tempfile::tempdir().unwrap();
         let mut cache_files = HashMap::new();
-        let mut canonical = HashMap::new();
 
         for i in 0..50 {
             let path = dir.path().join(format!("f{i}.txt"));
             let content = format!("data_{i}");
             fs_err::write(&path, &content).unwrap();
             cache_files.insert(path.clone(), content.into_bytes());
-            if let Ok(c) = path.canonicalize() {
-                canonical.insert(path, c);
-            }
         }
 
         let vfs = Vfs::new(StdBackend::new_for_testing());
         vfs.set_prefetch_cache(PrefetchCache {
             files: cache_files,
-            canonical,
             is_file: HashMap::new(),
             children: HashMap::new(),
         });
@@ -1046,7 +893,7 @@ mod test {
         imfs.load_snapshot("test", VfsSnapshot::file("original"))
             .unwrap();
         let vfs = Vfs::new(imfs);
-        vfs.set_prefetch_cache(make_prefetch(vec![("test", b"cached")], vec![]));
+        vfs.set_prefetch_cache(make_prefetch(vec![("test", b"cached")]));
 
         vfs.write("test", b"written").unwrap();
         let data = vfs.read("test").unwrap();

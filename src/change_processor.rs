@@ -99,11 +99,6 @@ impl ChangeProcessor {
         // (non-serve commands). never() blocks forever without selecting.
         let critical_error_receiver =
             critical_error_receiver.unwrap_or_else(crossbeam_channel::never);
-        // Canonicalize project_root so path comparisons work with the
-        // \\?\ prefix that std::fs::canonicalize adds on Windows.
-        let project_root = std::fs::canonicalize(&project_root).unwrap_or(project_root);
-        let project_file_path =
-            std::fs::canonicalize(&project_file_path).unwrap_or(project_file_path);
         let task = JobThreadContext {
             tree,
             vfs,
@@ -306,23 +301,8 @@ impl JobThreadContext {
         None
     }
 
-    /// Canonicalize a path for use as a suppression map key.
     fn suppression_key(path: &Path) -> PathBuf {
-        if let Ok(canonical) = std::fs::canonicalize(path) {
-            canonical
-        } else if let Some(parent) = path.parent() {
-            if let Ok(canonical_parent) = std::fs::canonicalize(parent) {
-                if let Some(file_name) = path.file_name() {
-                    canonical_parent.join(file_name)
-                } else {
-                    path.to_path_buf()
-                }
-            } else {
-                path.to_path_buf()
-            }
-        } else {
-            path.to_path_buf()
-        }
+        path.to_path_buf()
     }
 
     /// Suppress the next Create/Write VFS event for the given path.
@@ -686,49 +666,33 @@ impl JobThreadContext {
             _ => None,
         };
         if let Some(ref path) = event_path {
-            let canonical = std::fs::canonicalize(path).ok();
             let mut suppressed = self.suppressed_paths.lock().unwrap();
-            // Determine which key matches: try canonical first (most likely
-            // to match what suppress_path stored), then fall back to raw.
-            let matched_key = canonical
-                .as_ref()
-                .filter(|c| suppressed.contains_key(c.as_path()))
-                .cloned()
-                .or_else(|| {
-                    if suppressed.contains_key(path) {
-                        Some(path.clone())
-                    } else {
-                        None
+            let key = path.clone();
+            if let Some(counts) = suppressed.get_mut(key.as_path()) {
+                let should_suppress = match &event {
+                    VfsEvent::Remove(_) if counts.0 > 0 => {
+                        counts.0 -= 1;
+                        true
                     }
-                });
-            if let Some(key) = matched_key {
-                if let Some(counts) = suppressed.get_mut(&key) {
-                    let should_suppress = match &event {
-                        VfsEvent::Remove(_) if counts.0 > 0 => {
-                            counts.0 -= 1;
-                            true
-                        }
-                        VfsEvent::Create(_) | VfsEvent::Write(_) if counts.1 > 0 => {
-                            counts.1 -= 1;
-                            true
-                        }
-                        _ => false,
-                    };
-                    if counts.0 == 0 && counts.1 == 0 {
-                        suppressed.remove(&key);
+                    VfsEvent::Create(_) | VfsEvent::Write(_) if counts.1 > 0 => {
+                        counts.1 -= 1;
+                        true
                     }
-                    if should_suppress {
-                        drop(suppressed);
-                        // Still commit so VFS stays consistent, but skip patching.
-                        self.vfs
-                            .commit_event(&event)
-                            .expect("Error applying VFS change");
-                        log::info!(
-                            "VFS event SUPPRESSED (API syncback echo): {}",
-                            self.display_path(path)
-                        );
-                        return Vec::new();
-                    }
+                    _ => false,
+                };
+                if counts.0 == 0 && counts.1 == 0 {
+                    suppressed.remove(&key);
+                }
+                if should_suppress {
+                    drop(suppressed);
+                    self.vfs
+                        .commit_event(&event)
+                        .expect("Error applying VFS change");
+                    log::info!(
+                        "VFS event SUPPRESSED (API syncback echo): {}",
+                        self.display_path(path)
+                    );
+                    return Vec::new();
                 }
             }
         }
@@ -763,107 +727,81 @@ impl JobThreadContext {
         // of the tree. Calculate and apply all of these changes.
         let applied_patches = match event {
             VfsEvent::Create(path) | VfsEvent::Write(path) => {
-                match self.vfs.canonicalize(&path) {
-                    Ok(canonical_path) => {
-                        log::info!(
-                            "VFS: canonicalize OK for {} -> {}",
-                            self.display_path(&path),
-                            self.display_path(&canonical_path)
-                        );
-                        self.apply_patches(canonical_path)
-                    }
-                    Err(_) => {
-                        // The path doesn't exist on disk. Two possible causes:
-                        //
-                        // 1. Phantom event from a rename we performed — macOS FSEvents
-                        //    can deliver a stale CREATE for the old path. If a pending
-                        //    suppression exists for this path, consume it and skip.
-                        //
-                        // 2. The file was deleted between the event firing and us
-                        //    processing it. Fall back to parent-directory canonicalize
-                        //    (same strategy as the Remove handler) so the tree can
-                        //    reconcile the disappearance.
-                        let consumed = {
-                            let key = Self::suppression_key(&path);
-                            let mut suppressed = self.suppressed_paths.lock().unwrap();
-                            if let Some(counts) = suppressed.get_mut(&key) {
-                                if counts.0 > 0 || counts.1 > 0 {
-                                    // Drain whichever counter is available
-                                    if counts.1 > 0 {
-                                        counts.1 -= 1;
-                                    } else {
-                                        counts.0 -= 1;
-                                    }
-                                    if counts.0 == 0 && counts.1 == 0 {
-                                        suppressed.remove(&key);
-                                    }
-                                    true
+                if path.exists() {
+                    self.apply_patches(path)
+                } else {
+                    // The path doesn't exist on disk. Two possible causes:
+                    //
+                    // 1. Phantom event from a rename we performed — macOS FSEvents
+                    //    can deliver a stale CREATE for the old path. If a pending
+                    //    suppression exists for this path, consume it and skip.
+                    //
+                    // 2. The file was deleted between the event firing and us
+                    //    processing it. Fall back to parent directory so the tree
+                    //    can reconcile the disappearance.
+                    let consumed = {
+                        let key = Self::suppression_key(&path);
+                        let mut suppressed = self.suppressed_paths.lock().unwrap();
+                        if let Some(counts) = suppressed.get_mut(&key) {
+                            if counts.0 > 0 || counts.1 > 0 {
+                                if counts.1 > 0 {
+                                    counts.1 -= 1;
                                 } else {
-                                    false
+                                    counts.0 -= 1;
                                 }
+                                if counts.0 == 0 && counts.1 == 0 {
+                                    suppressed.remove(&key);
+                                }
+                                true
                             } else {
                                 false
                             }
-                        };
+                        } else {
+                            false
+                        }
+                    };
 
-                        if consumed {
+                    if consumed {
+                        log::info!(
+                            "VFS: phantom Create/Write for non-existent {} — \
+                             consumed pending suppression (likely stale rename event)",
+                            self.display_path(&path)
+                        );
+                        Vec::new()
+                    } else {
+                        let parent = path.parent().unwrap();
+                        let file_name = path.file_name().unwrap();
+                        if parent.exists() {
+                            let resolved = parent.join(file_name);
                             log::info!(
-                                "VFS: phantom Create/Write for non-existent {} — \
-                                 consumed pending suppression (likely stale rename event)",
-                                self.display_path(&path)
+                                "VFS: Create/Write for vanished file {} — \
+                                 resolved via parent to {}",
+                                self.display_path(&path),
+                                self.display_path(&resolved)
+                            );
+                            self.apply_patches(resolved)
+                        } else {
+                            log::info!(
+                                "VFS: Skipping Create/Write for {} — \
+                                 parent no longer exists",
+                                self.display_path(&path),
                             );
                             Vec::new()
-                        } else {
-                            // No suppression — the file genuinely vanished. Use the
-                            // parent-directory fallback so the tree can reconcile.
-                            let parent = path.parent().unwrap();
-                            let file_name = path.file_name().unwrap();
-                            match self.vfs.canonicalize(parent) {
-                                Ok(parent_normalized) => {
-                                    let resolved = parent_normalized.join(file_name);
-                                    log::info!(
-                                        "VFS: Create/Write for vanished file {} — \
-                                         resolved via parent to {}",
-                                        self.display_path(&path),
-                                        self.display_path(&resolved)
-                                    );
-                                    self.apply_patches(resolved)
-                                }
-                                Err(err) => {
-                                    log::info!(
-                                        "VFS: Skipping Create/Write for {} — \
-                                         parent no longer exists: {}",
-                                        self.display_path(&path),
-                                        err
-                                    );
-                                    Vec::new()
-                                }
-                            }
                         }
                     }
                 }
             }
             VfsEvent::Remove(path) => {
-                // MemoFS does not track parent removals yet, so we can canonicalize
-                // the parent path safely and then append the removed path's file name.
-                // However, if the parent was also deleted (e.g., when deleting a directory
-                // tree), canonicalize will fail - in that case, just skip this event.
                 let parent = path.parent().unwrap();
-                let file_name = path.file_name().unwrap();
-                match self.vfs.canonicalize(parent) {
-                    Ok(parent_normalized) => {
-                        let resolved = parent_normalized.join(file_name);
-                        log::info!("VFS: Remove resolved to {}", self.display_path(&resolved));
-                        self.apply_patches(resolved)
-                    }
-                    Err(err) => {
-                        log::info!(
-                            "VFS: Skipping remove event for {} — parent no longer exists: {}",
-                            self.display_path(&path),
-                            err
-                        );
-                        Vec::new()
-                    }
+                if parent.exists() {
+                    log::info!("VFS: Remove for {}", self.display_path(&path));
+                    self.apply_patches(path)
+                } else {
+                    log::info!(
+                        "VFS: Skipping remove event for {} — parent no longer exists",
+                        self.display_path(&path),
+                    );
+                    Vec::new()
                 }
             }
             _ => {

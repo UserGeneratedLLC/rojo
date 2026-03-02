@@ -130,7 +130,7 @@ pub struct ServeSession {
 }
 
 /// Collect all filesystem paths reachable from the project tree's `$path`
-/// entries, then read file contents and compute canonical paths in parallel.
+/// entries, then read file contents in parallel.
 fn prefetch_project_files(project: &Project) -> io::Result<PrefetchCache> {
     use rayon::prelude::*;
     use std::collections::HashMap;
@@ -153,7 +153,6 @@ fn prefetch_project_files(project: &Project) -> io::Result<PrefetchCache> {
     if roots.is_empty() {
         return Ok(PrefetchCache {
             files: HashMap::new(),
-            canonical: HashMap::new(),
             is_file: HashMap::new(),
             children: HashMap::new(),
         });
@@ -208,24 +207,11 @@ fn prefetch_project_files(project: &Project) -> io::Result<PrefetchCache> {
         .collect();
 
     let read_elapsed = read_start.elapsed();
-    let canon_start = Instant::now();
-
-    let canonical_data: Vec<_> = entries
-        .par_iter()
-        .filter_map(|e| {
-            let path = e.path().to_path_buf();
-            std::fs::canonicalize(&path).ok().map(|c| (path, c))
-        })
-        .collect();
-
-    let canon_elapsed = canon_start.elapsed();
 
     log::debug!(
-        "Prefetch I/O: read {} files in {:.1?}, canonicalize {} paths in {:.1?}",
+        "Prefetch I/O: read {} files in {:.1?}",
         file_data.len(),
         read_elapsed,
-        canonical_data.len(),
-        canon_elapsed,
     );
 
     let mut is_file_map: HashMap<std::path::PathBuf, bool> = HashMap::new();
@@ -257,7 +243,6 @@ fn prefetch_project_files(project: &Project) -> io::Result<PrefetchCache> {
 
     Ok(PrefetchCache {
         files: file_data.into_iter().collect::<HashMap<_, _>>(),
-        canonical: canonical_data.into_iter().collect::<HashMap<_, _>>(),
         is_file: is_file_map,
         children: children_map,
     })
@@ -287,9 +272,8 @@ impl ServeSession {
             match prefetch_project_files(&root_project) {
                 Ok(cache) => {
                     log::debug!(
-                        "Prefetch total: {} files + {} canonical paths in {:.1?}",
+                        "Prefetch total: {} files in {:.1?}",
                         cache.files.len(),
-                        cache.canonical.len(),
                         prefetch_start.elapsed()
                     );
                     vfs.set_prefetch_cache(cache);

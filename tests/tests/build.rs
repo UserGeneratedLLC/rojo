@@ -241,22 +241,17 @@ fn parallel_snapshot_with_prefetch_cache() {
 
     use std::collections::HashMap;
     let mut files = HashMap::new();
-    let mut canonical = HashMap::new();
     for entry in walkdir::WalkDir::new(root).follow_links(true) {
         let entry = entry.unwrap();
         let path = entry.path().to_path_buf();
         if entry.file_type().is_file() {
             files.insert(path.clone(), fs::read(&path).unwrap());
         }
-        if let Ok(c) = fs::canonicalize(&path) {
-            canonical.insert(path, c);
-        }
     }
 
     let vfs_cached = memofs::Vfs::new_default();
     vfs_cached.set_prefetch_cache(memofs::PrefetchCache {
         files,
-        canonical,
         is_file: std::collections::HashMap::new(),
         children: std::collections::HashMap::new(),
     });
@@ -336,7 +331,6 @@ fn overlapping_path_roots_no_duplicate_children() {
 
     use std::collections::HashMap;
     let mut files = HashMap::new();
-    let mut canonical = HashMap::new();
     let mut is_file = HashMap::new();
     let mut children_map: HashMap<std::path::PathBuf, Vec<std::path::PathBuf>> = HashMap::new();
 
@@ -346,9 +340,6 @@ fn overlapping_path_roots_no_duplicate_children() {
         is_file.insert(path.clone(), entry.file_type().is_file());
         if entry.file_type().is_file() {
             files.insert(path.clone(), fs::read(&path).unwrap());
-        }
-        if let Ok(c) = fs::canonicalize(&path) {
-            canonical.insert(path.clone(), c);
         }
         if entry.depth() > 0 {
             if let Some(parent) = entry.path().parent() {
@@ -366,7 +357,6 @@ fn overlapping_path_roots_no_duplicate_children() {
     let vfs = memofs::Vfs::new_default();
     vfs.set_prefetch_cache(memofs::PrefetchCache {
         files,
-        canonical,
         is_file,
         children: children_map,
     });

@@ -263,8 +263,7 @@ pub(crate) fn write_sourcemap(
 ) -> anyhow::Result<()> {
     let tree = session.tree();
 
-    let canonical_project_dir = std::fs::canonicalize(session.root_dir())
-        .unwrap_or_else(|_| session.root_dir().to_path_buf());
+    let canonical_project_dir = session.root_dir().to_path_buf();
 
     let root_node = recurse_create_node(
         &tree,
@@ -306,8 +305,7 @@ pub(crate) fn write_sourcemap_from_syncback(
     project_dir: &Path,
     output: &Path,
 ) -> anyhow::Result<()> {
-    let canonical_project_dir =
-        std::fs::canonicalize(project_dir).unwrap_or_else(|_| project_dir.to_path_buf());
+    let canonical_project_dir = project_dir.to_path_buf();
 
     let root_node =
         recurse_create_node_from_dom(dom, dom.root_ref(), instance_paths, &canonical_project_dir);

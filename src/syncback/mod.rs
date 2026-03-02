@@ -254,15 +254,6 @@ pub fn syncback_loop_with_stats(
 
     let project_path = project.folder_location();
 
-    fn strip_unc_prefix(p: PathBuf) -> PathBuf {
-        let path_str = p.to_string_lossy();
-        if path_str.starts_with(r"\\?\") || path_str.starts_with("//?/") {
-            PathBuf::from(&path_str[4..])
-        } else {
-            p
-        }
-    }
-
     let phase_timer = std::time::Instant::now();
     let existing_paths: HashSet<PathBuf> = if !incremental {
         let mut paths = HashSet::new();
@@ -407,10 +398,7 @@ pub fn syncback_loop_with_stats(
                     continue;
                 }
             }
-            let canonical_dir = std::fs::canonicalize(dir)
-                .map(strip_unc_prefix)
-                .unwrap_or_else(|_| dir.clone());
-            for entry in walkdir::WalkDir::new(&canonical_dir)
+            for entry in walkdir::WalkDir::new(dir)
                 .follow_links(true)
                 .into_iter()
                 .filter_entry(|e| {
@@ -661,14 +649,10 @@ pub fn syncback_loop_with_stats(
     if !incremental && !existing_paths.is_empty() {
         log::debug!("Clean mode: checking for orphaned files to remove");
 
-        let canonical_project_path = strip_unc_prefix(
-            std::fs::canonicalize(project_path).unwrap_or_else(|_| project_path.to_path_buf()),
-        );
-
         let added_paths: HashSet<PathBuf> = fs_snapshot
             .added_paths()
             .into_iter()
-            .map(|p| strip_unc_prefix(canonical_project_path.join(p)))
+            .map(|p| project_path.join(p))
             .collect();
 
         let mut added_dir_prefixes: HashSet<PathBuf> = HashSet::new();
@@ -681,10 +665,7 @@ pub fn syncback_loop_with_stats(
             }
         }
 
-        let project_file = strip_unc_prefix(
-            std::fs::canonicalize(&project.file_location)
-                .unwrap_or_else(|_| project.file_location.clone()),
-        );
+        let project_file = project.file_location.clone();
 
         // Collect ALL paths explicitly referenced via $path in the project.
         // These paths should NOT be removed during orphan cleanup because they
@@ -706,12 +687,9 @@ pub fn syncback_loop_with_stats(
         ) {
             if let Some(ref path_node) = node.path {
                 let resolved = base_path.join(path_node.path());
-                let canonical = std::fs::canonicalize(&resolved)
-                    .map(strip_unc_prefix)
-                    .unwrap_or_else(|_| resolved.clone());
-                protected.insert(canonical.clone());
+                protected.insert(resolved.clone());
                 if !instance_path.is_empty() {
-                    mappings.push((canonical, instance_path.to_string()));
+                    mappings.push((resolved, instance_path.to_string()));
                 }
             }
             for (name, child) in &node.children {
@@ -881,9 +859,7 @@ pub fn syncback_loop_with_stats(
             }
             current_ancestor = Some(old_path);
 
-            let relative_path = old_path
-                .strip_prefix(&canonical_project_path)
-                .unwrap_or(old_path);
+            let relative_path = old_path.strip_prefix(project_path).unwrap_or(old_path);
 
             log::debug!("Removing orphaned path: {}", relative_path.display());
             if old_path.is_dir() {

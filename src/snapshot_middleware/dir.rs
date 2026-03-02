@@ -85,7 +85,7 @@ pub fn snapshot_dir_no_meta(
         children
     };
 
-    let normalized_path = vfs.canonicalize(path)?;
+    let normalized_path = path.to_path_buf();
     let relevant_paths = vec![
         normalized_path.clone(),
         // TODO: We shouldn't need to know about Lua existing in this
