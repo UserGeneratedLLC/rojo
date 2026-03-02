@@ -80,7 +80,7 @@ pub fn init_logging(
         .with_writer(io::stderr)
         .with_ansi(use_ansi)
         .without_time()
-        .with_target(false)
+        .with_target(true)
         .with_thread_names(false)
         .with_level(true)
         .with_filter(console_env_filter);
