@@ -424,6 +424,41 @@ pub fn git_clone_shallow(url: &str, target_dir: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Register a git submodule at `path` within the repo rooted at `repo_dir`.
+///
+/// If `path` already contains a valid clone, git skips the network fetch and
+/// just records the submodule in `.gitmodules` and the index.
+pub fn git_submodule_add(repo_dir: &Path, url: &str, path: &str) -> anyhow::Result<()> {
+    let output = Command::new("git")
+        .args(["submodule", "add", url, path])
+        .current_dir(repo_dir)
+        .output()
+        .context("Failed to run git submodule add")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git submodule add failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
+
+/// Set a git config value in the repo at `repo_dir`.
+pub fn git_config_set(repo_dir: &Path, key: &str, value: &str) -> anyhow::Result<()> {
+    let output = Command::new("git")
+        .args(["config", key, value])
+        .current_dir(repo_dir)
+        .output()
+        .context("Failed to run git config")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git config failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
+}
+
 struct ResolvedInstance {
     id: Ref,
     class_name: String,

@@ -127,26 +127,67 @@ impl InitCommand {
             !self.skip_git
         };
 
-        if !self.skip_rules {
-            log::debug!("Cloning cursor rules...");
+        if !self.skip_rules && did_git_init {
+            log::debug!("Adding agent submodules...");
 
-            let cursor_dir = base_path.join(".cursor");
-            let result = crate::git::git_clone_shallow(
-                "https://github.com/jrmelsha/cursor-rules.git",
-                &cursor_dir,
-            );
+            let submodules: &[(&str, &str)] = &[
+                (
+                    "https://github.com/UserGeneratedLLC/agent-rules.git",
+                    ".cursor/rules/shared",
+                ),
+                (
+                    "https://github.com/UserGeneratedLLC/agent-commands.git",
+                    ".cursor/commands/shared",
+                ),
+                (
+                    "https://github.com/UserGeneratedLLC/agent-skills.git",
+                    ".cursor/skills/shared",
+                ),
+                (
+                    "https://github.com/UserGeneratedLLC/agent-docs.git",
+                    ".cursor/docs/shared",
+                ),
+            ];
 
-            match result {
-                Ok(()) => {
-                    let git_dir = cursor_dir.join(".git");
-                    if git_dir.exists() {
-                        let _ = fs::remove_dir_all(&git_dir);
-                    }
-                    println!("Cloned cursor rules successfully.");
+            // Shallow-clone all repos in parallel (network I/O).
+            let clone_results: Vec<anyhow::Result<()>> = std::thread::scope(|s| {
+                let handles: Vec<_> = submodules
+                    .iter()
+                    .map(|(url, path)| {
+                        let target = base_path.join(path);
+                        s.spawn(move || crate::git::git_clone_shallow(url, &target))
+                    })
+                    .collect();
+                handles
+                    .into_iter()
+                    .map(|h| {
+                        h.join()
+                            .unwrap_or_else(|_| Err(anyhow::anyhow!("thread panicked")))
+                    })
+                    .collect()
+            });
+
+            // Register each clone as a submodule (sequential, index-lock safe).
+            let mut any_failed = false;
+            for ((url, path), clone_res) in submodules.iter().zip(clone_results) {
+                if let Err(e) = clone_res {
+                    log::warn!("Failed to clone {path}: {e}");
+                    any_failed = true;
+                    continue;
                 }
-                Err(_) => {
-                    log::debug!("Failed to clone cursor rules, skipping.");
+                if let Err(e) = crate::git::git_submodule_add(&base_path, url, path) {
+                    log::warn!("Failed to register submodule {path}: {e}");
+                    any_failed = true;
                 }
+            }
+
+            if let Err(e) = crate::git::git_config_set(&base_path, "submodule.recurse", "true") {
+                log::warn!("Failed to set submodule.recurse: {e}");
+                any_failed = true;
+            }
+
+            if !any_failed {
+                println!("Added agent submodules successfully.");
             }
         }
 

@@ -30,7 +30,7 @@ mod web;
 
 // TODO: Work out what we should expose publicly
 
-pub use git::{git_add, git_add_all_and_commit, git_clone_shallow, git_init_repo, git_is_staged};
+pub use git::{git_add, git_add_all_and_commit, git_init_repo, git_is_staged};
 pub use project::*;
 pub use rojo_ref::*;
 pub use serve_session::TreeFreshnessReport;
