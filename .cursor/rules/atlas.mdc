@@ -30,9 +30,11 @@ Atlas bridges filesystem and Roblox Studio, enabling professional development to
 **Core capabilities:**
 - Filesystem-based development with live sync to Studio
 - Build/upload rbxl/rbxm files from command line
-- Syncback: pull instances from Roblox → filesystem (7.7.0+)
+- Syncback: pull instances from Roblox → filesystem
 - Two-way sync (plugin-based): live bidirectional sync during `atlas serve` sessions
 - Live syncback: one-click full sync from Studio to filesystem during `atlas serve` (no WebSocket connection required)
+- MCP integration: AI agent-facing JSON-RPC layer for programmatic sync, script access, and Studio tool dispatch
+- Scripts-only mode (`syncScriptsOnly`): sync only script instances, ignore everything else
 
 ### Two-Way Sync Strategy
 
@@ -49,7 +51,7 @@ Atlas bridges filesystem and Roblox Studio, enabling professional development to
 
 ### Three Components
 
-1. **Server/CLI (Rust)** - `src/`, commands: serve, build, upload, syncback, sourcemap
+1. **Server/CLI (Rust)** - `src/`, commands: serve, build, upload, syncback, sourcemap, clone, completions, cursor, studio
 2. **Studio Plugin (Lua)** - `plugin/`, Roact UI, WebSocket sync
 3. **rbx-dom (submodule)** - `rbx-dom/`, Roblox format libraries (binary/XML, types, reflection)
 
@@ -314,7 +316,9 @@ Reconciler.applyPatch(instanceMap, patch)
 
 ```
 src/                     - Rust server/CLI
-  cli/                  - Command implementations
+  cli/                  - Command implementations (serve, build, upload, syncback,
+                          sourcemap, clone, completions, cursor, studio, init,
+                          fmt_project, doc, plugin)
   snapshot/             - Core snapshot system
     matching.rs         - Forward sync matching algorithm
   snapshot_middleware/   - File type handlers
@@ -323,9 +327,14 @@ src/                     - Rust server/CLI
     dedup_suffix.rs     - Dedup cleanup rules
     meta.rs             - Meta file read/write helpers
   web/                  - HTTP/WebSocket server
+    api.rs              - HTTP/WebSocket endpoints
     interface.rs        - Wire types (patches, syncback requests)
+    mcp.rs              - MCP JSON-RPC endpoint, McpState, tool handlers
+    mcp_docs/           - MCP tool description files
   change_processor.rs   - Two-way sync filesystem writer
-  git.rs                - Git integration (changed files, SHA1 hashing, auto-staging)
+  git.rs                - Git integration (CLI-based, changed files, SHA1, auto-staging)
+  logging.rs            - Structured logging, file output to ~/.atlas/logs/, rotation
+  roblox_api.rs         - Roblox auth, place download, experience name lookup
   rojo_ref.rs           - Ref path system (Rojo_Ref_*, RefPathIndex)
   variant_eq.rs         - Property value comparison
 
@@ -336,6 +345,8 @@ plugin/src/             - Lua Studio plugin
     trueEquals.lua      - Shared value equality module
   ChangeBatcher/        - Two-way sync patch creation
     encodeService.lua   - Service-level property encoding for live syncback
+  McpStream.lua         - MCP WebSocket client (ws://host:port/api/mcp/stream)
+  McpTools/             - Studio-side MCP tool dispatch (run_code, insert_model, etc.)
   Config.lua            - Version and protocol config
   PatchTree.lua         - Patch visualization tree (git-based default selections)
   SHA1.luau             - SHA1 hash for git blob format comparison
@@ -368,7 +379,9 @@ rojo-test/              - Test fixtures and utilities
 ## Version Information
 
 - **Protocol version:** 6 (`plugin/src/Config.lua`)
-- **Server/Plugin must match:** MAJOR.MINOR (e.g., 7.7.x works with 7.7.y)
+- **Version matching:** Plugin WebSocket connection requires **exact version match** (`ApiContext.lua`). Live syncback validation uses **MAJOR.MINOR** match (`api.rs`).
+- **Current version:** 8.5.0
+- **Default serve port:** 34873
 - **MSRV:** Rust 1.88
 - **License:** MPL-2.0 (rbx-dom uses MIT)
 

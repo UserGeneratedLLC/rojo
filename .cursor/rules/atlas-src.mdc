@@ -48,6 +48,7 @@ Transforms files → `InstanceSnapshot`. Main entry: `snapshot_from_vfs()`
 | `*.lua` | `lua.rs` | ModuleScript | Legacy |
 | `*.server.lua` | `lua.rs` | Script (RunContext.Legacy) | Legacy |
 | `*.client.lua` | `lua.rs` | LocalScript | Legacy |
+| `*.plugin.lua` | `lua.rs` | Script (RunContext.Plugin) | Legacy |
 | `*.rbxm` / `*.rbxmx` | `rbxm.rs` / `rbxmx.rs` | Binary/XML model tree | |
 | `*.model.json5` | `json_model.rs` | JSON instance | Preferred |
 | `*.model.json` | `json_model.rs` | JSON instance | Legacy |
@@ -84,6 +85,10 @@ Instance names with forbidden filesystem chars (`<>:"/\|?*~`) are handled by:
 - `upload.rs` - Upload to Roblox.com
 - `sourcemap.rs` - Generate sourcemaps
 - `syncback.rs` - Roblox → filesystem
+- `clone.rs` - Create project from Roblox place (init + syncback --download)
+- `completions.rs` - Shell completions (bash, zsh, fish, PowerShell, elvish) via `clap_complete`
+- `cursor.rs` - Open project directory in Cursor IDE
+- `studio.rs` - Open project in Roblox Studio via URL
 - `init.rs` / `fmt_project.rs` / `doc.rs` / `plugin.rs`
 
 ### 4. Syncback (`src/syncback/`)
@@ -102,9 +107,11 @@ Reverse: Roblox file → filesystem
 
 ### 5. Web Server (`src/web/`)
 
-- `api.rs` - HTTP/WebSocket endpoints, including `POST /api/syncback` handler (`handle_api_syncback`)
-- `interface.rs` - Wire types: patches, `SyncbackRequest`, `ServiceChunk`, `SyncbackPayload`, `ServerExitReason`
+- `api.rs` - HTTP/WebSocket endpoints, including `POST /api/syncback`, `GET /api/git-metadata`, MCP stream/syncback handlers
+- `interface.rs` - Wire types: patches, `SyncbackRequest`, `ServiceChunk`, `SyncbackPayload`, `ServerExitReason`, `GitMetadata`
 - `mod.rs` - `SyncbackSignal` (Mutex + Notify pattern), `LiveServer` (uses `tokio::select!` to wait for connections or syncback signal)
+- `mcp.rs` - MCP JSON-RPC endpoint (`POST /mcp`), `McpState`, tool definitions and handlers
+- `mcp_docs/` - MCP tool description markdown files
 - Protocol version enforcement
 
 ### 6. Project System (`src/project.rs`)
@@ -155,6 +162,9 @@ pub struct SyncbackRules {
     sync_current_camera: Option<bool>,   // Default: false
     sync_unscriptable: Option<bool>,     // Default: false
     ignore_referents: Option<bool>,      // Skip Ref properties, default: false
+    create_ignore_dir_paths: Option<bool>, // Default: true
+    ignore_hidden_services: Option<bool>,  // Override root-level ignoreHiddenServices
+    warn_duplicate_names: Option<bool>,    // Warn on duplicate child names
 }
 ```
 
@@ -221,26 +231,28 @@ Review: `cargo insta review`
 
 ## Web API
 
+**Default port:** 34873
+
 **HTTP:**
 - `GET /` - Browser UI
 - `GET /api/rojo` - Server info (version, project name, protocol)
-- `POST /api/syncback` - Live syncback: full Roblox → filesystem sync (validates protocol, version, place ID)
+- `GET /api/git-metadata` - Git metadata (changedIds, scriptCommittedHashes, newFileIds)
+- `POST /api/syncback` - Live syncback: full Roblox → filesystem sync
+- `POST /api/mcp/syncback` - MCP syncback (inline, returns stats)
+- `POST /mcp` - MCP JSON-RPC endpoint
 
-**WebSocket:** `ws://host:port/api/rojo`
+**WebSocket:** `ws://host:port/api/socket/:cursor` (live patches), `ws://host:port/api/mcp/stream` (MCP)
 
-**Protocol v6:**
+**Protocol v6 (MessagePack):**
 ```json
-// Handshake
-{"type": "ServerInfo", "protocolVersion": 6, "serverVersion": "7.7.0"}
-
-// Patch
 {
-  "type": "ApplyPatch",
   "sessionId": "<uuid>",
-  "patch": {
-    "removed": [id1, id2],
-    "added": {id3: {...}},
-    "updated": {id4: {changedProperties: {...}}}
+  "packetType": "messages",
+  "body": {
+    "messageCursor": 5,
+    "messages": [
+      { "removed": [], "added": {}, "updated": [] }
+    ]
   }
 }
 ```
@@ -278,7 +290,8 @@ pub struct SyncRule {
 **Load project:**
 ```rust
 use librojo::Project;
-let project = Project::load_from_slice(path, contents)?;
+let project = Project::load_fuzzy(&vfs, path)?;
+// or: Project::load_exact(&vfs, path, fallback_name)?;
 ```
 
 **Build snapshot:**
@@ -314,11 +327,15 @@ to_writer(&mut buffer, &dom, dom.root())?;
 
 ## Key Dependencies
 
-**Core:** rbx_binary, rbx_xml, rbx_dom_weak, memofs (local crate)
-**Async:** tokio, hyper, hyper-tungstenite
-**Serialization:** serde, json5, toml, yaml-rust2, csv
+**Core:** rbx_binary, rbx_xml, rbx_dom_weak, rbx_reflection, rbx_reflection_database, memofs (local crate)
+**Async:** tokio, hyper, hyper-util, http-body-util, hyper-tungstenite, reqwest, futures
+**Serialization:** serde, serde_json, json5, toml, yaml-rust2, csv, rmp-serde, serde_bytes, bincode
+**Hashing:** blake3, sha1
+**Logging:** log, tracing, tracing-appender, tracing-subscriber, time, dirs, flate2
+**CLI:** clap (with derive, env), clap_complete
+**Schema:** schemars
 **Float precision:** lexical-write-float (for roundtrip-safe f32/f64 formatting in JSON)
-**Utilities:** clap, anyhow, thiserror, crossbeam-channel, rayon, globset
+**Utilities:** anyhow, thiserror, crossbeam-channel, rayon, globset, uuid, walkdir, tempfile, pathdiff
 
 ## Module Organization
 
@@ -362,7 +379,7 @@ RUST_LOG=rojo=debug rojo build
 
 **Watch events:** `RUST_LOG=memofs=trace`
 
-**Protocol issues:** Browser dev tools on `http://localhost:34872`
+**Protocol issues:** Browser dev tools on `http://localhost:34873`
 
 ## Common Pitfalls
 
@@ -376,18 +393,27 @@ RUST_LOG=rojo=debug rojo build
 
 ```
 src/
-  cli/                  - Commands
+  cli/                  - Commands (serve, build, upload, syncback, sourcemap,
+                          clone, completions, cursor, studio, init, fmt_project,
+                          doc, plugin)
   snapshot/             - Core system
     matching.rs         - Forward sync matching algorithm
+    tree.rs             - RojoTree (script_refs, known_paths(), path_to_ids)
   snapshot_middleware/   - File handlers
   syncback/             - Reverse sync
     matching.rs         - Syncback matching algorithm
     dedup_suffix.rs     - Dedup cleanup rules
     meta.rs             - Meta file helpers
-  web/                  - HTTP/WebSocket (incl. SyncbackSignal, LiveServer)
-    interface.rs        - Wire types (patches, syncback requests)
+  web/                  - HTTP/WebSocket server
+    api.rs              - HTTP/WebSocket endpoints
+    interface.rs        - Wire types (patches, syncback requests, GitMetadata)
+    mcp.rs              - MCP JSON-RPC, McpState, tool handlers
+    mcp_docs/           - MCP tool descriptions
   change_processor.rs   - Two-way sync filesystem writer
-  git.rs                - Git integration (changed files, SHA1 hashing, auto-staging)
+  git.rs                - Git integration (CLI-based, changed files, SHA1, auto-staging)
+  logging.rs            - Structured logging, file output to ~/.atlas/logs/
+  message_queue.rs      - Patch message batching and cursor system
+  roblox_api.rs         - Roblox auth, place download, experience name lookup
   rojo_ref.rs           - Ref path system (Rojo_Ref_*, RefPathIndex, Luau-style relative paths)
   variant_eq.rs         - Property value comparison
   lib.rs                - Public API
@@ -397,6 +423,7 @@ crates/
   memofs/        - Virtual filesystem
 
 tests/
+  end_to_end.rs  - Integration test crate root
   rojo_test/     - Test utilities
   tests/         - Integration tests
 ```

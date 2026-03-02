@@ -85,8 +85,16 @@ pub fn syncback_loop(
     new_tree: WeakDom,             // Roblox file contents
     project: &Project,             // Project configuration
     incremental: bool,             // Preserve structure vs rebuild
-) -> anyhow::Result<FsSnapshot>
+) -> anyhow::Result<SyncbackResult>
+
+pub struct SyncbackResult {
+    pub fs_snapshot: FsSnapshot,
+    pub new_tree: WeakDom,
+    pub instance_paths: HashMap<Ref, String>,
+}
 ```
+
+Also available: `syncback_loop_with_stats()` accepts `external_stats: Option<&SyncbackStats>` for callers that track stats externally.
 
 ## Syncback Modes
 
@@ -215,10 +223,11 @@ pub struct SyncbackRules {
 ```
 
 **Property filtering** (`property_filter.rs`):
-- Filters out `Name`, `Parent` (always)
+- Filters out `Name`, `Parent`, `Source`, `Value`, `Contents` via reflection DB (`DoesNotSerialize`), not explicit property lists
+- Explicitly filters `Variant::Ref` and `Variant::UniqueId` by variant type
 - Filters out properties in `ignore_properties`
 - Filters out unscriptable properties if `sync_unscriptable: false`
-- Filters out middleware-specific properties (e.g., `Script.Source` when writing to `.luau` file)
+- Middleware-specific filtering (e.g., `Script.Source` for `.luau` files) is handled in `snapshot.rs` via `filter_out_property`, not in `property_filter.rs`
 
 ### Hidden Services
 
@@ -296,17 +305,14 @@ pub struct SyncbackSnapshot<'sync> {
 **Methods:**
 
 ```rust
-// Join child to current path
-snapshot.with_joined_path(new_ref, old_ref)?
-// Result: parent_path/ChildName.luau
+// Join child to current path (returns (Self, needs_meta_name, dedup_key))
+snapshot.with_joined_path(new_ref, old_ref, &taken_names)?
 
-// Use base path
-snapshot.with_base_path(&base, new_ref, old_ref)?
-// Result: base/ChildName.luau
+// Use base path (same return type)
+snapshot.with_base_path(&base, new_ref, old_ref, &taken_names)?
 
 // Explicit path
 snapshot.with_new_path(path, new_ref, old_ref)
-// Result: path (exactly as provided)
 ```
 
 **Filename generation** (`file_names.rs`):
@@ -366,7 +372,7 @@ fs_snapshot.merge(other)  // Combine snapshots
 
 // Apply to filesystem
 fs_snapshot.write_to_vfs(base_path, vfs)?;
-fs_snapshot.write_to_vfs_parallel(base_path, vfs)?;  // Parallel writes (see below)
+fs_snapshot.write_to_vfs_parallel(base_path, vfs, git_cache)?;  // Parallel writes; git_cache: Option<&GitIndexCache> skips unchanged files
 
 // Post-process ref paths
 fs_snapshot.fix_ref_paths(&substitutions);  // Replace placeholder paths with final relative paths
@@ -416,7 +422,7 @@ Forward sync also reads `Rojo_Target_*` attributes and resolves via `get_specifi
 - `collect_referents(dom, paths, final_paths)` - Finds all Ref properties, stores as (source, target_path) pairs
 - `tentative_fs_path(dom, ref)` - Computes pre-dedup path: slugified name + extension based on class/children
 - `tentative_fs_path_public()` - Public wrapper used in post-processing
-- `link_referents(dom, referents)` - Writes `Rojo_Ref_*` attributes to instances
+- `link_referents(links: RefLinks, dom: &mut WeakDom)` - Writes `Rojo_Ref_*` attributes to instances
 
 **Ref path post-processing (in `mod.rs`):**
 
@@ -576,6 +582,22 @@ diff place.rbxl rebuilt.rbxl
 - Support for partial syncback (only changed instances)
 - Globally optimal matching (Hungarian algorithm) for large ambiguous groups
 - ~~Matching cache (parent_ref -> match_assignments) for avoiding redundant scoring~~ (session-level caching now implemented via `MatchingSession`; per-parent invalidation cache still deferred)
+
+## GitIndexCache Integration
+
+`write_to_vfs_parallel()` accepts `git_cache: Option<&GitIndexCache>`. When provided (by `src/cli/syncback.rs` and `src/cli/serve.rs`), files whose SHA1 blob hash matches the git index are skipped. `GitIndexCache` is created via `GitIndexCache::new(project_root)` which runs `git ls-files --stage`.
+
+## $schema Roundtrip
+
+`.project.json5`, `.meta.json5`, and `.model.json5` files preserve a `$schema` field during syncback. Implemented via `schema: Option<String>` on `Project`, `AdjacentMetadata`, `DirectoryMetadata`, and `JsonModel` structs. Old instance metadata carries the schema through the pipeline.
+
+## Reserved Name: `init`
+
+`slugify_name()` appends `_` to `"init"` (case-insensitive): `"init"` -> `"init_"`. `name_needs_slugify()` returns `true` for `"init"`. This prevents collision with the init file convention (`init.luau`, `init.server.luau`, etc.).
+
+## MCP Syncback
+
+`POST /api/mcp/syncback` runs syncback inline and returns stats with a `syncback_complete` status. Unlike `/api/syncback` which restarts the serve loop, the MCP variant completes without server restart.
 
 ## Key Files to Reference
 

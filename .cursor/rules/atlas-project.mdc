@@ -16,7 +16,8 @@ alwaysApply: true
 |-------|------|----------|-------------|
 | `name` | string | Yes* | Instance name (*optional if `default.project.json5`) |
 | `tree` | ProjectNode | Yes | Root instance tree structure |
-| `servePort` | number | No | Port for `atlas serve` (default: 34872) |
+| `$schema` | string | No | JSON schema URL for editor validation (preserved during syncback roundtrip) |
+| `servePort` | number | No | Port for `atlas serve` (default: 34873) |
 | `serveAddress` | string | No | Address to bind (default: `"127.0.0.1"`) |
 | `servePlaceIds` | number[] | No | Only allow sync to these place IDs |
 | `blockedPlaceIds` | number[] | No | Block sync to these place IDs |
@@ -34,7 +35,7 @@ alwaysApply: true
   "$schema": "https://raw.githubusercontent.com/UserGeneratedLLC/vscode-rojo/master/schemas/project.schema.json",
   "name": "MyProject",
   "tree": { /* ProjectNode */ },
-  "servePort": 34872,
+  "servePort": 34873,
   "serveAddress": "0.0.0.0",
   "servePlaceIds": [123456],
   "blockedPlaceIds": [111111],
@@ -195,7 +196,7 @@ Configure `syncbackRules` object for Roblox → filesystem sync:
 | `syncCurrentCamera` | bool | `false` | Whether to sync `Workspace.CurrentCamera` |
 | `syncUnscriptable` | bool | `false` | Whether to sync unscriptable properties |
 | `ignoreReferents` | bool | `false` | Whether to skip Ref properties (e.g., `Model.PrimaryPart`) |
-| `createIgnoreDirPaths` | bool | `false` | Whether `/**` in ignore paths also matches the directory itself |
+| `createIgnoreDirPaths` | bool | `true` | Whether `/**` in ignore paths also matches the directory itself |
 | `ignoreHiddenServices` | bool | — | Override root-level `ignoreHiddenServices` for syncback |
 | `warnDuplicateNames` | bool | `false` | Warn on duplicate child names during syncback |
 
@@ -249,9 +250,11 @@ Add metadata to file-based instances. Meta files use **camelCase keys** (no `$` 
 
 **Key differences from ProjectNode:** Meta uses `className`, `properties`, `attributes` (camelCase, no `$` prefix). Adjacent meta does NOT support `className`.
 
-**`name` field (slugify support):** When an instance name contains forbidden filesystem characters (`: / ? * < > | " \`), syncback slugifies the filename (forbidden chars → `_`) and stores the real name in the `name` field. On forward sync, `name` overrides the filename-derived instance name. On collisions (e.g. `A/B` and `A_B` both slugify to `A_B`), `~2`, `~3` suffixes are appended and meta `name` fields distinguish them.
+**`name` field (slugify support):** When an instance name contains forbidden filesystem characters (`: / ? * < > | " \`), or is the reserved name `"init"` (case-insensitive, slugified to `"init_"`), syncback slugifies the filename (forbidden chars → `_`) and stores the real name in the `name` field. On forward sync, `name` overrides the filename-derived instance name. On collisions (e.g. `A/B` and `A_B` both slugify to `A_B`), `~2`, `~3` suffixes are appended and meta `name` fields distinguish them.
 
 **`Rojo_Ref_*` attributes:** Meta files may also contain `Rojo_Ref_PropertyName` attributes written by syncback/two-way sync for Ref property linking. These are managed automatically and should not be hand-edited.
+
+Meta files also support a `$schema` field (preserved during syncback roundtrip).
 
 **Meta files CAN'T:** Set `$path`, have children.
 
@@ -266,16 +269,17 @@ Inline instance definition. Like meta files, model files use **camelCase keys** 
   "id": "unique-id",
   "properties": { "CanBeDropped": false },
   "attributes": { "Damage": 50 },
-  "children": {
-    "Handle": {
+  "children": [
+    {
+      "name": "Handle",
       "className": "Part",
       "properties": { "Size": [1, 1, 3] }
     }
-  }
+  ]
 }
 ```
 
-**Note:** Children are nested under a `"children"` key (not flattened like in ProjectNode).
+**Note:** `children` is an **array** of child objects (each with a `name` field), not a map/object keyed by name. This differs from ProjectNode where children are flattened as keys.
 
 ## Property Formats
 

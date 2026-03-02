@@ -24,7 +24,7 @@ We are building a maintainable codebase. During audits, watch for duplicated log
 
 The goal is clean, DRY code that is easy to reason about and hard to get wrong. If the same "compute meta path, check if name needs slugify, upsert/remove name field" sequence appears in 3+ places, that's a refactor candidate.
 
-**Protocol Version:** 6 | Server/plugin MAJOR.MINOR must match
+**Protocol Version:** 6 | Plugin WebSocket requires exact version match; live syncback uses MAJOR.MINOR
 
 ## Architecture
 
@@ -47,12 +47,17 @@ Studio → ChangeBatcher → Plugin → WebSocket → Server → Filesystem
 | `/api/ref-patch/:id` | GET | Fix Ref properties after syncback |
 | `/api/syncback` | POST | Live syncback: full Roblox → filesystem sync |
 | `/api/socket/:cursor` | GET | WebSocket upgrade for live patch streaming |
+| `/api/git-metadata` | GET | Git metadata (changedIds, scriptCommittedHashes, newFileIds) |
+| `/api/validate-tree` | GET | Tree freshness check (test infra) |
+| `/api/mcp/stream` | GET | WebSocket upgrade for MCP plugin stream |
+| `/api/mcp/syncback` | POST | MCP syncback (runs inline, returns stats without server restart) |
+| `/mcp` | POST | MCP JSON-RPC endpoint (initialize, tools/list, tools/call) |
 
 ### Server Info Response (`GET /api/rojo`)
 
 ```json
 {
-    "serverVersion": "7.7.0-rc.1",
+    "serverVersion": "8.5.0",
     "serverFork": "atlas",
     "protocolVersion": 6,
     "sessionId": "uuid",
@@ -61,24 +66,36 @@ Studio → ChangeBatcher → Plugin → WebSocket → Server → Filesystem
     "unexpectedPlaceIds": [111111],
     "rootInstanceId": "00000000-0000-0000-0000-000000000000",
     "syncSourceOnly": true,
+    "syncScriptsOnly": false,
     "visibleServices": ["Workspace", "ServerScriptService"],
     "placeId": 123456,
     "gameId": 789012,
     "ignoreHiddenServices": true,
-    "gitMetadata": {
-        "changedIds": ["ref-1", "ref-2"],
-        "scriptCommittedHashes": {
-            "ref-1": ["a1b2c3...40-char-sha1-hex", "d4e5f6...staged-sha1"]
-        }
-    }
+    "gitMetadata": null
 }
 ```
 
-**`gitMetadata`** is `null` when the project is not in a git repo. Contains:
+**`gitMetadata`** is always `null` in the `/api/rojo` response. Git metadata is fetched separately via `GET /api/git-metadata`.
+
+### Git Metadata Endpoint (`GET /api/git-metadata`)
+
+Returns `Option<GitMetadata>` (msgpack). `null` when not in a git repo. Called by the plugin after connect and on debounced refresh.
+
+```json
+{
+    "changedIds": ["ref-1", "ref-2"],
+    "scriptCommittedHashes": {
+        "ref-1": ["a1b2c3...40-char-sha1-hex", "d4e5f6...staged-sha1"]
+    },
+    "newFileIds": ["ref-3"]
+}
+```
+
 - `changedIds`: Instance Refs whose backing files have changes relative to HEAD (staged + unstaged + untracked)
 - `scriptCommittedHashes`: For changed script instances, 1-2 SHA1 hashes (HEAD version and staged version if different) computed using the git blob format (`"blob <size>\0<content>"`). Plugin checks if Studio `script.Source` matches ANY hash to default "Atlas".
+- `newFileIds`: Instance Refs whose backing files have never been committed. Used by the plugin to default new-file additions to "push".
 
-Recomputed fresh on each `GET /api/rojo` connect. Uses a two-phase tree lock: snapshot path mappings briefly, then release before running git subprocesses.
+Uses a three-phase approach: (1) run git commands for changed files scoped to project prefixes (no lock), (2) briefly lock tree to resolve paths to Refs and class names, (3) run `git cat-file --batch-check` for blob hashes (no lock). 10-second timeout. Uses `project_prefixes` (relevant `$path` roots relative to repo root) to scope `git status`/`git diff` to project directories.
 
 ### Write Request (`POST /api/write`)
 
@@ -195,29 +212,36 @@ Serve loop restarts (new session, ready for connections)
 
 1. Connect → Receive `ServerInfo` handshake → Send `{type = "Subscribe"}` → Receive patches
 
-### Patch Message (`ApplyPatch`)
+### Patch Message (SocketPacket)
 
 ```lua
 {
-    type = "ApplyPatch",
     sessionId = "uuid",
-    patch = {
-        removed = {"id-1", "id-2"},
-        added = {
-            ["id-3"] = {
-                id = "id-3", className = "Folder", name = "New",
-                properties = {}, metadata = { ignoreUnknownInstances = false },
-                children = {"child-1"},
+    packetType = "messages",
+    body = {
+        messageCursor = 5,
+        messages = {
+            {
+                removed = {"id-1", "id-2"},
+                added = {
+                    ["id-3"] = {
+                        Id = "id-3", ClassName = "Folder", Name = "New",
+                        Properties = {}, Metadata = { ignoreUnknownInstances = false },
+                        Children = {"child-1"}, Parent = "parent-id",
+                    },
+                },
+                updated = {
+                    { id = "id-4", changedName = "Renamed", changedProperties = { Source = "code" } },
+                },
             },
-        },
-        updated = {
-            { id = "id-4", changedName = "Renamed", changedProperties = { Source = "code" } },
         },
     }
 }
 ```
 
-**Format:** MessagePack (~30% smaller than JSON, ~2x faster)
+**Note:** `added` Instance fields use **PascalCase** (`Id`, `Parent`, `Name`, `ClassName`, `Properties`, `Children`, `Metadata`). `updated` InstanceUpdate fields use **camelCase** (`id`, `changedName`, `changedClassName`, `changedProperties`, `changedMetadata`).
+
+**Format:** MessagePack (~30% smaller than JSON, ~2x faster). Plugin handler: `["messages"] = function(messagesPacket)`, iterates `messagesPacket.messages` and merges into a combined patch via `PatchSet.assign`.
 
 ## Server ServeSession (`src/serve_session.rs`)
 
@@ -228,16 +252,19 @@ pub struct ServeSession {
     message_queue: Arc<MessageQueue<AppliedPatchSet>>,
     root_project: Project,
     vfs: Arc<Vfs>,
-    change_processor: ChangeProcessor,
+    change_processor: Option<ChangeProcessor>,
     start_time: Instant,
-    tree_mutation_sender: Sender<PatchSet>,
-    suppressed_paths: Arc<Mutex<HashMap<PathBuf, (usize, usize)>>>,
+    tree_mutation_sender: Option<Sender<PatchSet>>,
+    suppressed_paths: Option<Arc<Mutex<HashMap<PathBuf, (usize, usize)>>>>,
+    ref_path_index: Option<Arc<Mutex<RefPathIndex>>>,
+    git_repo_root: Option<PathBuf>,
+    initial_head_commit: Option<String>,
 }
 ```
 
 **Lifecycle:** Create → Watch filesystem → Generate patches on changes → Broadcast to plugins → Shutdown
 
-**Message Queue:** Batches changes (~100ms window), cursor system for reconnect recovery
+**Message Queue:** Batches changes (~200ms window), cursor system for reconnect recovery
 
 **WebSocket loop:**
 ```rust
@@ -256,11 +283,16 @@ ServeSession = {
     __status = "NotStarted",  -- NotStarted → Connecting → Connected → Disconnected
     __apiContext = ApiContext,
     __twoWaySync = false,
+    __syncSourceOnly = false,
+    __syncScriptsOnly = false,
     __reconciler = Reconciler,
     __instanceMap = InstanceMap,
     __changeBatcher = ChangeBatcher,
     __confirmingPatch = nil,
     __isConfirming = false,  -- Prevents stacking dialogs, changes during review
+    __serverInfo = nil,
+    __applyingPatch = false,
+    __oneShotSyncDone = false,
 }
 ```
 
@@ -367,6 +399,8 @@ InstanceMap = {
     pausedUpdateInstances = {}, -- Set of instances to ignore changes from
     instancesToSignal = {},    -- Instance → RBXScriptConnection(s)
     onInstanceChanged = fn,    -- Callback: (instance, propertyName) → void
+    onInstanceInserted = fn,   -- Callback: when a new instance is inserted (deferred Ref resolution)
+    scriptsOnlyTempIds = {},   -- Temp IDs for scripts-only mode new script additions
 }
 ```
 
@@ -421,6 +455,7 @@ ChangeBatcher = {
     __pendingPropertyChanges = {},        -- Instance → { PropertyName → true }
     __pendingUnresolvedRefs = {},         -- targetInstance → [{sourceInstance, propertyName}]
     __syncSourceOnly = false,             -- Only sync Source property
+    __syncScriptsOnly = false,            -- Only sync LuaSourceContainer instances
     __paused = false,                     -- Pause during confirmation
     __renderSteppedConnection = conn,     -- Frame loop connection
     __instanceMap = instanceMap,
@@ -737,7 +772,7 @@ Only **Updated** items get defaults. Added/Removed items remain `nil`.
 
 The plugin uses a recursive change-count scoring algorithm (implemented in `matching.lua`) to pair incoming virtual instances with existing Studio instances during hydration.
 
-**Entry point:** `Matching.matchChildren(virtualChildren, studioChildren, virtualInstances)`
+**Entry point:** `Matching.matchChildren(session, virtualChildren, studioChildren, virtualInstances, parentVirtualId?, parentStudioInstance?, _depth?)`
 
 **Algorithm:**
 1. **Fast path:** Group by (Name, ClassName). 1:1 groups get instant-matched with zero scoring.
@@ -781,7 +816,7 @@ RUST_LOG=rojo::web=debug,rojo::serve_session=debug atlas serve
 Settings:set("logLevel", "Trace")
 ```
 
-Browser: `http://localhost:34872` → Network tab → WebSocket messages
+Browser: `http://localhost:34873` → Network tab → WebSocket messages
 
 ## Key Files
 
@@ -794,4 +829,33 @@ Browser: `http://localhost:34872` → Network tab → WebSocket messages
 | `src/cli/serve.rs` - Live syncback handler | `plugin/src/Reconciler/` - Patch application |
 | `src/change_processor.rs` - FS writer | `plugin/src/Reconciler/matching.lua` - Matching |
 | `src/rojo_ref.rs` - Ref paths | `plugin/src/PatchTree.lua` - Default selections |
-| `src/git.rs` - Git integration | `plugin/src/App/init.lua` - Live syncback UI |
+| `src/git.rs` - Git integration (CLI-based) | `plugin/src/App/init.lua` - Live syncback UI |
+| `src/web/mcp.rs` - MCP JSON-RPC | `plugin/src/McpStream.lua` - MCP stream client |
+| `src/logging.rs` - File logging | `plugin/src/McpTools/` - Studio tool dispatch |
+
+## MCP Integration
+
+AI agent-facing JSON-RPC layer exposed during `atlas serve`. Agents call `POST /mcp`; the server handles some tools directly and dispatches others to the plugin over the MCP stream WebSocket.
+
+**Architecture:**
+```
+AI Agent → POST /mcp (JSON-RPC) → Server (McpState) → ws://host:port/api/mcp/stream → Plugin
+```
+
+**McpState** (`src/web/mcp.rs`): Shared state for agent-plugin communication. Uses a watch channel (`command_tx`/`command_rx`) for commands and a oneshot channel (`result_tx`) for results. Tracks `plugin_stream_connected` and `plugin_config`.
+
+**MCP tools:**
+
+| Tool | Handled by | Purpose |
+|------|-----------|---------|
+| `atlas_sync` | Server | Snapshot diff, sends sync command to plugin |
+| `get_script` | Server | Resolves id/fsPath to script, returns Source |
+| `syncback` | Plugin | Full Roblox → filesystem sync via `/api/mcp/syncback` |
+| `run_code` | Plugin | Execute Luau code in Studio |
+| `insert_model` | Plugin | Insert model from Creator Store |
+| `get_console_output` | Plugin | Return console output |
+| `get_studio_mode` | Plugin | Return Studio mode (Edit/Play) |
+| `start_stop_play` | Plugin | Start/stop Play mode |
+| `run_script_in_play_mode` | Plugin | Run code in a play session |
+
+**Plugin side:** `McpStream.lua` connects to `ws://host:port/api/mcp/stream`, sends greeting with plugin config, handles incoming commands, and forwards results back. `McpTools/init.luau` dispatches Studio-side tools to individual handler files.

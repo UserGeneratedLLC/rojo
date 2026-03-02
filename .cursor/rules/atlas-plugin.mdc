@@ -7,14 +7,14 @@ alwaysApply: false
 
 Built with Roact (React-like), handles WebSocket sync with server, patch application to Studio, and UI.
 
-**Entry:** `plugin/src/init.server.lua` | **Protocol:** WebSocket v6 | **Must match server MAJOR.MINOR**
+**Entry:** `plugin/src/init.server.lua` | **Protocol:** WebSocket v6 | **Must match server exact version**
 
 ## Architecture
 
 ### Key Components
 
 **1. UI Layer** (`App/`)
-- **init.lua** - Root component, manages connection state, auto-reconnect, sync reminders, playtest server auto-connect. Also renders `SyncbackConfirm` floating dialog (StudioPluginGui with `isEphemeral=true`, not a StatusPage file). Contains `performSyncback()` and `SYNCBACK_SERVICES` constant.
+- **init.lua** - Root component, manages connection state, auto-reconnect, playtest server auto-connect. Also renders `SyncbackConfirm` floating dialog (StudioPluginGui with `isEphemeral=true`, not a StatusPage file). Contains `performSyncback()` and `SYNCBACK_SERVICES` constant. Creates `McpStream` for MCP integration and handles `startMcpSync`, `handleMcpGetScript`, `collectAndPostSyncback` (to `/api/mcp/syncback`), dispatches tool calls via `McpTools.dispatch`. Note: sync reminder polling is currently disabled (returns immediately).
 - **Theme.lua** - Studio-matched color palette (auto light/dark)
 - **Page.lua** - Page wrapper component
 - **Components/** - Reusable UI components
@@ -25,9 +25,9 @@ Built with Roact (React-like), handles WebSocket sync with server, patch applica
   - `Studio/` - Studio API wrappers (`StudioPluginAction`, `StudioPluginContext`, `StudioPluginGui`, `StudioToggleButton`, `StudioToolbarContext`, `StudioToolbar`)
   - General: `Header`, `TextInput`, `TextButton`, `Checkbox`, `Dropdown`, `Tag`, `IconButton`, `Tooltip`, `TouchRipple`, `VirtualScroller`, `ScrollingFrame`, `Spinner`, `BorderedContainer`, `EditableImage`, `SlicedImage`, `ClassIcon`
 - **StatusPages/** - Main UI pages
-  - `NotConnected.lua` - Connection form (host/port input), "Syncback" button (Danger style)
+  - `NotConnected.lua` - Connection form (host/port input), "Sync" button (Primary style), "Syncback" button (Danger style)
   - `Connecting.lua` - Loading screen
-  - `Confirming.lua` - Patch confirmation dialog with push/pull/ignore per-node selections
+  - `Confirming.lua` - Patch confirmation dialog with push/pull/ignore per-node selections. Accept button style=Primary/Neutral based on allSelected; text=Accept/OK based on hasChanges. Abort button only shown when hasChanges.
   - `Connected.lua` - Status display with patch history
   - `Error.lua` - Error display
   - `Settings/` - Settings UI (`init.lua`, `Setting.lua`)
@@ -39,8 +39,16 @@ Built with Roact (React-like), handles WebSocket sync with server, patch applica
 - Protocol version checking
 - Confirmation flow with push/pull/ignore
 - One-shot mode support
+- `ApiContext:getGitMetadata()` fetches git metadata from `GET /api/git-metadata` (separate from `/api/rojo`)
 
-**3. Reconciler** (`Reconciler/`)
+**3. MCP Integration** (`McpStream.lua`, `McpTools/`)
+- **McpStream.lua** - WebSocket client to `ws://host:port/api/mcp/stream`. `RECONNECT_INTERVAL = 3` seconds. Sends greeting with plugin config (`twoWaySync`, `oneShotSync`, `confirmationBehavior`, `placeId`). Handles commands: `sync`, `getScript`, `syncback`, and passthrough tools. Forwards Roblox console output via `ConsoleOutput.onLogMessage`.
+- **McpTools/** - Studio-side MCP tool dispatch
+  - `init.luau` - Dispatcher for: `run_code`, `insert_model`, `get_console_output`, `get_studio_mode`, `start_stop_play`, `run_script_in_play_mode`
+  - Tool handlers: `RunCode.luau`, `InsertModel.luau`, `GetConsoleOutput.luau`, `GetStudioMode.luau`, `StartStopPlay.luau`, `RunScriptInPlayMode.luau`
+  - `Utils/` - `ConsoleOutput.luau`, `StudioModeState.luau`, `GameStopUtil.luau`, `DeepCopy.luau`
+
+**4. Reconciler** (`Reconciler/`)
 - **applyPatch.lua** - Applies server patches to Studio tree
 - **reify.lua** - Creates instances from snapshots (parent last)
 - **hydrate.lua** - Updates InstanceMap with existing Studio instances
@@ -62,14 +70,14 @@ Built with Roact (React-like), handles WebSocket sync with server, patch applica
 - **encodeProperty.lua** - Single property value encoding via RbxDom
 - **propertyFilter.lua** - Property type filtering (only `UniqueId` blocked; `Ref` is allowed)
 
-**5. State Management**
+**6. State Management**
 - **Settings.lua** - Persistent plugin settings (prefixed `Atlas_` in plugin store)
 - **InstanceMap.lua** - Bidirectional Server ID <-> Studio Instance mapping with change detection
 - **PatchSet.lua** / **PatchTree.lua** - Patch representation and visualization tree (PatchTree.build accepts optional `gitMetadata` for smart default selections)
 - **Types.lua** - Type definitions and runtime validation
 - **ChangeMetadata.lua** - Change metadata tracking
 
-**6. Utilities**
+**7. Utilities**
 - **Timer.lua** - Performance timing
 - **DiffUtil.lua** - Diff utilities
 - **Version.lua** - Version parsing and comparison
@@ -84,10 +92,10 @@ Built with Roact (React-like), handles WebSocket sync with server, patch applica
 - **strict.lua** - Strict module wrapper
 - **invariant.lua** - Assertion utilities
 
-**7. Testing**
+**8. Testing**
 - Unit tests: `.spec.lua` files (TestEZ) throughout all modules
 - Integration tests: `integration/` directory (`confirmBehavior`, `oneShotSync`, `syncflow`, `twoWaySync`)
-- Stress tests: `.stress.spec.lua` files (applyPatch, diff, reify, encodeInstance, PatchSet)
+- Stress tests: `.stress.spec.lua` files (applyPatch, diff, reify, encodeInstance, PatchSet, InstanceMap)
 - Chaos tests: `chaos/` directory (`stressPatterns.spec.lua`)
 - Test utilities: `testUtils/` (`MockApiContext`, `PatchGenerator`, `LargeTreeGenerator`)
 - Test runner: `runTests.lua`
@@ -109,7 +117,8 @@ The plugin is built from `plugin.project.json` at the repo root:
       "Fmt": { "$path": "plugin/fmt" },
       "RbxDom": { "$path": "plugin/rbx_dom_lua" }
     },
-    "Version": { "$path": "plugin/Version.txt" }
+    "Version": { "$path": "plugin/Version.txt" },
+    "UploadDetails": { "$path": "plugin/UploadDetails.json" }
   }
 }
 ```
@@ -123,7 +132,7 @@ Vendored packages live under `plugin/Packages/`. Custom modules (`Log`, `Http`, 
     isDevBuild = false,           -- Detected from ROJO_DEV_BUILD instance
     codename = "Epiphany",
     version = { major, minor, patch, metadata },  -- Parsed from Version.txt
-    expectedServerVersionString = "7.7 or newer",
+    expectedServerVersionString = "8.5.0",  -- Dynamic from Version.txt (e.g. "%d.%d.%d")
     protocolVersion = 6,          -- MUST match server
     defaultHost = "localhost",
     defaultPort = "34873",
@@ -170,26 +179,33 @@ Persistent settings stored with `Atlas_` prefix in Studio plugin store:
 3. Plugin sends: `{type = "Subscribe"}`
 4. Server sends patches on filesystem changes (MessagePack encoded)
 
-**Patch structure:**
+**Packet structure (SocketPacket):**
 ```lua
 {
-    type = "ApplyPatch",
     sessionId = "uuid",
-    patch = {
-        removed = {"id-1", "id-2"},
-        added = {
-            ["id-3"] = {
-                id = "id-3", className = "Folder", name = "New",
-                properties = {}, metadata = { ignoreUnknownInstances = false },
-                children = {"child-1"},
+    packetType = "messages",
+    body = {
+        messageCursor = 5,
+        messages = {
+            {
+                removed = {"id-1", "id-2"},
+                added = {
+                    ["id-3"] = {
+                        Id = "id-3", ClassName = "Folder", Name = "New",
+                        Properties = {}, Metadata = { ignoreUnknownInstances = false },
+                        Children = {"child-1"}, Parent = "parent-id",
+                    },
+                },
+                updated = {
+                    { id = "id-4", changedName = "Renamed", changedProperties = { Source = "code" } },
+                },
             },
-        },
-        updated = {
-            { id = "id-4", changedName = "Renamed", changedProperties = { Source = "code" } },
         },
     }
 }
 ```
+
+**Note:** `added` Instance fields use **PascalCase**; `updated` InstanceUpdate fields use **camelCase**. Plugin handler: `["messages"] = function(messagesPacket)`, iterates `messagesPacket.messages`.
 
 ## ServeSession (`ServeSession.lua`)
 
@@ -197,14 +213,17 @@ Manages the lifecycle of a connection to the server.
 
 **Status flow:** `NotStarted` -> `Connecting` -> `Connected` -> `Disconnected`
 
+**Key fields:** `__syncSourceOnly`, `__syncScriptsOnly` (from serverInfo), `__serverInfo`, `__applyingPatch`, `__oneShotSyncDone`, `enableSyncFallback`
+
 **Key methods:**
 - `new(options)` - Creates session with `ApiContext` and `twoWaySync` flag
-- `start()` - Connects, computes initial patch, shows confirmation
+- `start()` - Connects, fetches git metadata via `apiContext:getGitMetadata()`, computes initial patch, shows confirmation
 - `stop()` - Disconnects and cleans up
-- `__onWebSocketMessage()` - Handles incoming patches
+- `__onWebSocketMessage()` - Handles incoming patches (packetType "messages")
 - `__applyPatch()` - Applies patches via Reconciler
 - `__confirmAndApplyInitialPatch()` - Handles user confirmation with push/pull/ignore
 - `__computeInitialPatch()` - Computes catch-up patch
+- `__connectScriptsOnlyWatchers()` - Connects `DescendantAdded` on visible services for scripts-only mode
 - `hookPrecommit()` / `hookPostcommit()` - Lifecycle hooks
 
 **Confirmation flow:**
@@ -240,7 +259,7 @@ Manages the lifecycle of a connection to the server.
 
 Pairs incoming virtual instances with existing Studio instances during hydration.
 
-**Entry point:** `Matching.matchChildren(virtualChildren, studioChildren, virtualInstances)`
+**Entry point:** `Matching.matchChildren(session, virtualChildren, studioChildren, virtualInstances, parentVirtualId?, parentStudioInstance?, _depth?)`
 
 **Algorithm:**
 1. **Fast path:** Group by (Name, ClassName). 1:1 groups get instant-matched with zero scoring.

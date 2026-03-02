@@ -43,7 +43,7 @@ One-shot command: reads a Roblox binary/XML file, diffs it against the existing 
 CLI Entry
 └── src/cli/syncback.rs                    Entry point. Loads project, reads .rbxl/.rbxm,
                                             creates ServeSession for existing tree, calls
-                                            syncback_loop(), writes FsSnapshot to disk.
+                                            syncback_loop(), writes result.fs_snapshot to disk.
 
 Syncback Core
 ├── src/syncback/mod.rs                    Main orchestration. syncback_loop() runs the full
@@ -60,8 +60,9 @@ Syncback Core
 │                                           .meta.json5 paths for scripts (strips .server/.client
 │                                           suffixes from stem).
 ├── src/syncback/property_filter.rs        Property filtering. filter_properties() removes Name,
-│                                           Parent, Source (scripts), Value (StringValue), Contents
-│                                           (LocalizationTable), Ref/UniqueId, unscriptable props.
+│                                           Parent, Source, Value, Contents via reflection DB
+│                                           (DoesNotSerialize). Explicitly filters Ref/UniqueId
+│                                           by variant type. Unscriptable props if configured.
 ├── src/syncback/ref_properties.rs         Ref property resolution. collect_referents() finds all
 │                                           Ref properties. link_referents() writes Rojo_Ref_*
 │                                           (path-based) and Rojo_Id attributes to instances.
@@ -289,10 +290,12 @@ Patch Application (Plugin)
 │                                           Used for confirmation dialog to show what will change.
 ├── plugin/src/Reconciler/matching.lua     Recursive change-count scoring algorithm. matchChildren()
 │                                           pairs virtual instances with Studio instances during
-│                                           hydration. Signature: (virtualChildren, studioChildren,
-│                                           virtualInstances). One of 3 parallel matching impls that
-│                                           must produce identical pairings (see also src/snapshot/
-│                                           matching.rs and src/syncback/matching.rs).
+│                                           hydration. Signature: (session, virtualChildren,
+│                                           studioChildren, virtualInstances, parentVirtualId?,
+│                                           parentStudioInstance?, _depth?). One of 3 parallel
+│                                           matching impls that must produce identical pairings
+│                                           (see also src/snapshot/matching.rs and src/syncback/
+│                                           matching.rs).
 ├── plugin/src/Reconciler/trueEquals.lua   Shared value equality. Fuzzy floats (epsilon 0.0001),
 │                                           Color3 via RGB ints, CFrame/Vector3 component-wise, NaN
 │                                           handling, nil/null-ref equivalence. Used by matching.lua
@@ -457,7 +460,7 @@ Plugin Shared Modules
 ├── plugin/src/strict.lua                  Module export wrapper (strict mode enforcement).
 └── plugin/src/DiffUtil.lua                Diff utilities for comparing instance data.
 
-Integration Tests (tests/tests/)
+Integration Tests (entry point: tests/end_to_end.rs)
 ├── tests/tests/build.rs                   Build tests (gen_build_tests! macro).
 ├── tests/tests/serve.rs                   Forward-sync serve tests.
 ├── tests/tests/connected_mode.rs          Connected mode tests.
@@ -474,6 +477,7 @@ Integration Tests (tests/tests/)
 ├── tests/tests/git_sync_defaults.rs       Git-based sync default selection tests.
 │                                           Hash computation parity, default selection logic,
 │                                           auto-staging flow, no-git-repo fallback.
+├── tests/tests/scripts_only_pruning.rs    Scripts-only mode pruning tests.
 └── tests/tests/matching_fixtures.rs       Matching algorithm fixture tests across all three
                                             implementations (Rust syncback, Rust forward, Lua plugin).
 ```
@@ -784,7 +788,7 @@ The matching algorithm exists in **3 parallel implementations** that must produc
 
 The confirmation dialog uses git metadata for smart default selections (`PatchTree.lua` + `src/git.rs`). Verify:
 
-- **Server-side `compute_git_metadata()`**: Does it correctly identify changed files vs HEAD? Does the two-phase tree lock (snapshot paths briefly, release before git subprocesses) prevent deadlocks?
+- **Server-side `compute_git_metadata()`**: Does it correctly identify changed files vs HEAD? Does the three-phase approach (1: run git commands for changed files with no lock, 2: briefly lock tree to resolve paths to Refs, 3: run `git cat-file --batch-check` with no lock) prevent deadlocks?
 - **Hash computation parity**: Server uses `compute_blob_sha1()` in `git.rs` and plugin uses `SHA1.luau` -- both must produce identical hashes for the same content using `SHA1("blob <byte_len>\0<content>")` git blob format.
 - **Default selection logic** (`PatchTree.lua`): File has no git changes → default "pull". File has git changes AND is script AND Studio Source matches committed hash → default "push". Otherwise → `nil` (user must decide). Verify these rules are applied correctly.
 - **Auto-staging (`stageIds`)**: After confirmation, `api.rs` receives `stageIds` and calls `git_add`. Push-accepted items are always staged. Pull-accepted items are only staged if auto-selected (`defaultSelection ~= nil`). Manually-chosen pulls are left unstaged. Is this flow correct?

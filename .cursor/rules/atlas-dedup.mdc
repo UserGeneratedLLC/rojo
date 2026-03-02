@@ -71,7 +71,11 @@ Pure, stateless. Replaces forbidden filesystem characters with `_`.
 const FORBIDDEN_CHARS: [char; 9] = ['<', '>', ':', '"', '/', '|', '?', '*', '\\'];
 const SLUGIFY_CHARS: [char; 10] = ['<', '>', ':', '"', '/', '|', '?', '*', '\\', '~'];
 const DANGEROUS_SUFFIXES: [&str; 8] = [".server", ".client", ".plugin", ".local", ".legacy", ".meta", ".model", ".project"];
-const INVALID_WINDOWS_NAMES: [&str; 22] = ["CON", "PRN", "AUX", "NUL", "COM1".."COM9", "LPT1".."LPT9"];
+const INVALID_WINDOWS_NAMES: [&str; 22] = [
+    "CON", "PRN", "AUX", "NUL",
+    "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+    "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+];
 ```
 
 **Behavior:**
@@ -79,12 +83,13 @@ const INVALID_WINDOWS_NAMES: [&str; 22] = ["CON", "PRN", "AUX", "NUL", "COM1".."
 - Strips leading/trailing spaces and dots
 - Neutralizes Windows reserved names (`CON` → `CON_`)
 - Neutralizes dangerous suffixes (`.server` etc.) that would be misinterpreted as middleware extensions
+- Neutralizes reserved name `"init"` (case-insensitive) → `"init_"` to avoid collision with init file convention
 
 **Key invariant:** `slugify_name` is idempotent. Applying it twice produces the same result.
 
 ### name_needs_slugify
 
-Returns `true` if the name requires slugification. Checks for: `SLUGIFY_CHARS`, control characters, leading/trailing spaces, trailing dots, dangerous suffixes (`.server` etc.), Windows reserved names (`CON` etc.), and empty string. Used to decide whether metadata `name` field is needed.
+Returns `true` if the name requires slugification. Checks for: `SLUGIFY_CHARS`, control characters, leading/trailing spaces, trailing dots, dangerous suffixes (`.server` etc.), Windows reserved names (`CON` etc.), reserved name `"init"` (case-insensitive), and empty string. Used to decide whether metadata `name` field is needed.
 
 ### deduplicate_name_with_ext
 
@@ -193,6 +198,7 @@ pub fn match_children(
     new_dom: &WeakDom, old_dom: &WeakDom,
     new_hashes: Option<&HashMap<Ref, Hash>>,
     old_hashes: Option<&HashMap<Ref, Hash>>,
+    session: &MatchingSession,
 ) -> MatchResult
 ```
 
@@ -202,16 +208,21 @@ pub fn match_forward(
     snapshot_children: Vec<InstanceSnapshot>,
     tree_children: &[Ref],
     tree: &RojoTree,
+    session: &MatchingSession,
 ) -> ForwardMatchResult
 ```
 
 **Lua plugin:**
 ```lua
 function Matching.matchChildren(
-    virtualChildren: { string },      -- array of virtual instance IDs
-    studioChildren: { Instance },      -- array of Studio Instance objects
-    virtualInstances: { [string]: any } -- map of virtual ID → virtual instance data
-) -> { matched, unmatchedVirtual, unmatchedStudio }
+    session: MatchingSession,
+    virtualChildren: { string },
+    studioChildren: { Instance },
+    virtualInstances: VirtualInstances,
+    parentVirtualId: string?,
+    parentStudioInstance: Instance?,
+    _depth: number?
+) -> MatchResult
 ```
 
 ### Algorithm (All Three Implementations)
