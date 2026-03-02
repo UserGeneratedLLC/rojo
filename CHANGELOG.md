@@ -31,6 +31,24 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+## [8.5.1] (March 2nd, 2026)
+
+* Add `atlas-push` agent skill for automated filesystem→Studio sync with conflict merging
+* Add `atlas-playtest` agent skill for quick runtime error detection after code changes
+* Add `git_submodule_add` and `git_config_set` helpers to git module
+* Improve `atlas init` to add agent submodules in parallel
+* Add MCP config template to place project template
+* Update internal documentation for syncback, API, dedup, and plugin architecture
+
+<details>
+<summary>Full commit log</summary>
+
+- `9a25109e` Enhance playtesting and error handling in atlas skills
+- `cb3036a5` Add atlas-push skill documentation and enhance git submodule management
+- `e8dc9b09` Enhance documentation and update syncback features
+
+</details>
+
 ## [8.5.0] (March 2nd, 2026)
 
 ### MCP Integration (Model Context Protocol for AI Agents)
@@ -406,6 +424,7 @@ Making a new release? Simply add the new header with the version and date undern
 
 </details>
 
+[8.5.1]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.5.1
 [8.5.0]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.5.0
 [8.4.1]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.4.1
 [8.4.0]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.4.0
