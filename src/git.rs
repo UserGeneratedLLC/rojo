@@ -80,46 +80,58 @@ fn git_changed_files_impl(
     let mut tracked = HashSet::new();
     let mut untracked = HashSet::new();
 
-    let base = initial_head.unwrap_or("HEAD");
-
-    let t = Instant::now();
-
-    let mut diff_cmd = Command::new("git");
-    diff_cmd
-        .args(["diff", base, "--name-only"])
+    let mut status_cmd = Command::new("git");
+    status_cmd
+        .args(["status", "--porcelain", "--no-renames", "-uall"])
         .current_dir(repo_root);
     if !project_prefixes.is_empty() {
-        diff_cmd.arg("--");
+        status_cmd.arg("--");
         for prefix in project_prefixes {
-            diff_cmd.arg(prefix);
+            status_cmd.arg(prefix);
         }
     }
-    let diff_output = diff_cmd.output().ok()?;
 
-    if diff_output.status.success() {
-        for line in String::from_utf8_lossy(&diff_output.stdout).lines() {
-            let trimmed = line.trim();
-            if !trimmed.is_empty() {
-                tracked.insert(PathBuf::from(trimmed));
+    let (status_output, diff_output) = if let Some(ih) = initial_head {
+        let mut diff_cmd = Command::new("git");
+        diff_cmd
+            .args(["diff", ih, "--name-only"])
+            .current_dir(repo_root);
+        if !project_prefixes.is_empty() {
+            diff_cmd.arg("--");
+            for prefix in project_prefixes {
+                diff_cmd.arg(prefix);
             }
         }
-    } else {
-        log::debug!("git diff {} failed (possibly no commits yet)", base);
-    }
 
-    let mut cached_cmd = Command::new("git");
-    cached_cmd
-        .args(["diff", "--cached", "--name-only"])
-        .current_dir(repo_root);
-    if !project_prefixes.is_empty() {
-        cached_cmd.arg("--");
-        for prefix in project_prefixes {
-            cached_cmd.arg(prefix);
+        std::thread::scope(|s| {
+            let diff_handle = s.spawn(move || diff_cmd.output().ok());
+            let status = status_cmd.output().ok();
+            let diff = diff_handle.join().ok().flatten();
+            (status, diff)
+        })
+    } else {
+        (status_cmd.output().ok(), None)
+    };
+
+    let output = status_output?;
+    if output.status.success() {
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            if line.len() < 4 {
+                continue;
+            }
+            let xy = &line[..2];
+            let path = &line[3..];
+            if xy == "??" {
+                untracked.insert(PathBuf::from(path));
+            } else {
+                tracked.insert(PathBuf::from(path));
+            }
         }
     }
-    if let Ok(cached_output) = cached_cmd.output() {
-        if cached_output.status.success() {
-            for line in String::from_utf8_lossy(&cached_output.stdout).lines() {
+
+    if let Some(output) = diff_output {
+        if output.status.success() {
+            for line in String::from_utf8_lossy(&output.stdout).lines() {
                 let trimmed = line.trim();
                 if !trimmed.is_empty() {
                     tracked.insert(PathBuf::from(trimmed));
@@ -127,34 +139,6 @@ fn git_changed_files_impl(
             }
         }
     }
-
-    let mut ls_cmd = Command::new("git");
-    ls_cmd
-        .args(["ls-files", "--others", "--exclude-standard"])
-        .current_dir(repo_root);
-    if !project_prefixes.is_empty() {
-        ls_cmd.arg("--");
-        for prefix in project_prefixes {
-            ls_cmd.arg(prefix);
-        }
-    }
-    if let Ok(untracked_output) = ls_cmd.output() {
-        if untracked_output.status.success() {
-            for line in String::from_utf8_lossy(&untracked_output.stdout).lines() {
-                let trimmed = line.trim();
-                if !trimmed.is_empty() {
-                    untracked.insert(PathBuf::from(trimmed));
-                }
-            }
-        }
-    }
-
-    log::debug!(
-        "[TIMING] compute_git_metadata: git_changed_files_impl {}ms ({} tracked, {} untracked)",
-        t.elapsed().as_millis(),
-        tracked.len(),
-        untracked.len()
-    );
 
     Some(ChangedFiles { tracked, untracked })
 }
