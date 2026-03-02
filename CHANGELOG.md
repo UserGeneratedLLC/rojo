@@ -31,6 +31,8 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+## [8.5.0] (March 2nd, 2026)
+
 ### MCP Integration (Model Context Protocol for AI Agents)
 
 * Implement MCP WebSocket server for AI agent integration, enabling programmatic syncs to Roblox Studio via the `atlas_sync` tool.
@@ -404,6 +406,7 @@ Making a new release? Simply add the new header with the version and date undern
 
 </details>
 
+[8.5.0]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.5.0
 [8.4.1]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.4.1
 [8.4.0]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.4.0
 [8.3.0]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.3.0
