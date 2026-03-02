@@ -176,6 +176,42 @@ Parse the response status:
 
 **Keep retrying** until sync succeeds or user explicitly says to stop. Each retry is safe because `studioHash` prevents clobbering.
 
+### Step 8: Post-Push Playtest
+
+**Skip this step** if the user's message contains "no test", "no playtest", "skip test", "no check", or "without testing".
+
+After a successful sync, automatically run a quick playtest to catch runtime errors introduced by the push.
+
+1. **Record pushed files.** Collect all `fsPath` values from changes where you pushed (direction `"push"` in the final sync response, or any script you merged and pushed). Also note the corresponding instance path segments (e.g. `src/server/GameManager.server.luau` corresponds to `ServerScriptService.GameManager`). You need these for error attribution.
+
+2. **Run the playtest:**
+
+```
+CallMcpTool:
+  server: "project-0-rojo-atlas"
+  toolName: "run_script_in_play_mode"
+  arguments: {
+    "code": "task.wait(7)\nprint(\"boot complete\")",
+    "mode": "start_play",
+    "timeout": 15
+  }
+```
+
+3. **Parse and filter errors.** From the response `errors` array, keep:
+   - All entries with level `"error"`
+   - Warnings that indicate real breakage ("Infinite yield possible", security errors)
+   - Ignore routine/cosmetic warnings, asset loading warnings, deprecation notices
+
+4. **Attribute errors to pushed files.** Roblox error messages include the script path, e.g.:
+   `ServerScriptService.GameManager.PlayerHandler:42: attempt to index nil`
+
+   Match the script name/path segments against your pushed `fsPath` list. Attribution is at the **whole-file level** -- if an error comes from a script we pushed, it's ours even if the erroring line wasn't part of our specific diff. Our change may have broken something else in that file.
+
+5. **Handle errors:**
+   - **Our errors** (originate from a pushed file): read the script, diagnose the error using the message and line number, fix the code, write the corrected file, then **loop back to Step 1** (dryrun the fix, sync it, re-test). Keep looping until the playtest is clean.
+   - **Others' errors** (no match to any pushed file): ask the user. Show the error, explain it doesn't originate from files we pushed, and recommend they investigate in a planning phase. Let the user decide via text input what to do. Do not auto-fix code you didn't push.
+   - **No errors**: report success. Push and playtest complete.
+
 ## Safety Invariants
 
 1. **Never sync without a dryrun first** -- always review what will change.

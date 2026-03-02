@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "atlas": {
+      "url": "http://localhost:34873/mcp"
+    }
+  }
+}
