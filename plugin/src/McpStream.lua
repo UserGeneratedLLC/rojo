@@ -28,6 +28,7 @@ function McpStream.new(options)
 
 	self._onSyncCommand = options.onSyncCommand
 	self._onGetScriptCommand = options.onGetScriptCommand
+	self._onSyncbackCommand = options.onSyncbackCommand
 	self._onToolCommand = options.onToolCommand
 	self._getPluginConfig = options.getPluginConfig
 	self._wsClient = nil
@@ -172,6 +173,33 @@ function McpStream:_tryConnect()
 							requestId = data.requestId,
 							status = "error",
 							message = tostring(err),
+						})
+						pcall(function()
+							self._wsClient:Send(errorResult)
+						end)
+					end
+				end)
+		elseif data.type == "syncback" and data.requestId then
+			Log.info("MCP stream: received syncback command (requestId={})", data.requestId)
+
+			local resultPromise = self._onSyncbackCommand(data.requestId)
+
+			resultPromise
+				:andThen(function(result)
+					if self._wsClient then
+						local json = HttpService:JSONEncode(result)
+						pcall(function()
+							self._wsClient:Send(json)
+						end)
+					end
+				end)
+				:catch(function(err)
+					Log.warn("MCP stream: syncback command failed: {}", tostring(err))
+					if self._wsClient then
+						local errorResult = HttpService:JSONEncode({
+							requestId = data.requestId,
+							status = "error",
+							response = tostring(err),
 						})
 						pcall(function()
 							self._wsClient:Send(errorResult)

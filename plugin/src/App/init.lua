@@ -215,6 +215,43 @@ function App:init()
 			onGetScriptCommand = function(requestId, data)
 				return self:handleMcpGetScript(requestId, data)
 			end,
+			onSyncbackCommand = function(requestId)
+				return Promise.new(function(resolve)
+					local host = Config.defaultHost
+					local port = Config.defaultPort
+
+					self:collectAndPostSyncback(host, port, "/api/mcp/syncback")
+						:andThen(function(httpResponse)
+							local message = "Syncback complete."
+							local decodeOk, decoded = pcall(function()
+								return httpResponse:msgpack()
+							end)
+							if decodeOk and type(decoded) == "table" then
+								local added = decoded.added or 0
+								local removed = decoded.removed or 0
+								message = string.format(
+									"Syncback complete: wrote %d files/folders, removed %d.",
+									added,
+									removed
+								)
+							end
+							Log.info("MCP syncback complete")
+							resolve({
+								requestId = requestId,
+								status = "success",
+								response = message,
+							})
+						end)
+						:catch(function(err)
+							Log.warn("MCP syncback failed: {}", tostring(err))
+							resolve({
+								requestId = requestId,
+								status = "error",
+								response = "Syncback failed: " .. tostring(err),
+							})
+						end)
+				end)
+			end,
 			onToolCommand = function(requestId, toolType, args)
 				return Promise.new(function(resolve)
 					local ok, result = pcall(McpTools.dispatch, toolType, args)
@@ -680,19 +717,7 @@ function App:useRunningConnectionInfo()
 	self.setPort(port)
 end
 
-function App:performSyncback()
-	self:setState({ showingSyncbackConfirm = false })
-
-	local host = self.host:getValue()
-	local port = self.port:getValue()
-
-	if host == "" then
-		host = Config.defaultHost
-	end
-	if port == "" then
-		port = Config.defaultPort
-	end
-
+function App:collectAndPostSyncback(host, port, endpoint)
 	local services = {}
 	local allChildren = {}
 	local allCarriers = {}
@@ -720,7 +745,7 @@ function App:performSyncback()
 		carrier:Destroy()
 	end
 
-	local url = ("http://%s:%s/api/syncback"):format(host, port)
+	local url = ("http://%s:%s%s"):format(host, port, endpoint)
 	local body = Http.msgpackEncode({
 		protocolVersion = Config.protocolVersion,
 		serverVersion = Config.expectedServerVersionString,
@@ -729,7 +754,23 @@ function App:performSyncback()
 		services = services,
 	})
 
-	Http.post(url, body)
+	return Http.post(url, body)
+end
+
+function App:performSyncback()
+	self:setState({ showingSyncbackConfirm = false })
+
+	local host = self.host:getValue()
+	local port = self.port:getValue()
+
+	if host == "" then
+		host = Config.defaultHost
+	end
+	if port == "" then
+		port = Config.defaultPort
+	end
+
+	self:collectAndPostSyncback(host, port, "/api/syncback")
 		:andThen(function()
 			Log.info("Syncback data sent to server.")
 			self:addNotification({

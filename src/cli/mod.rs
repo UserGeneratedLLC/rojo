@@ -8,7 +8,7 @@ mod doc;
 mod fmt_project;
 mod init;
 mod plugin;
-mod serve;
+pub(crate) mod serve;
 mod sourcemap;
 mod studio;
 mod syncback;

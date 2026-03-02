@@ -155,6 +155,9 @@ struct InsertModelArgs {
 #[derive(JsonSchema)]
 struct NoArgs {}
 
+#[derive(JsonSchema)]
+struct SyncbackArgs {}
+
 #[allow(dead_code)]
 #[derive(JsonSchema)]
 #[schemars(rename_all = "snake_case")]
@@ -431,6 +434,7 @@ fn handle_tools_list(id: Option<Value>) -> Response<Full<Bytes>> {
             "run_script_in_play_mode",
             include_str!("mcp_docs/run_script_in_play_mode.md"),
         ),
+        tool_def::<SyncbackArgs>("syncback", include_str!("mcp_docs/syncback.md")),
     ];
 
     let result = serde_json::json!({ "tools": tools });
@@ -465,6 +469,7 @@ async fn handle_tools_call(
     match tool_name {
         "atlas_sync" => handle_atlas_sync(id, arguments, mcp_state, active_api_connections).await,
         "get_script" => handle_get_script(id, arguments, mcp_state).await,
+        "syncback" => dispatch_to_plugin(id, "syncback", arguments, mcp_state).await,
         "run_code"
         | "insert_model"
         | "get_console_output"
@@ -1136,7 +1141,7 @@ mod tests {
             let bytes = rt.block_on(async { resp.into_body().collect().await.unwrap().to_bytes() });
             let json: Value = serde_json::from_slice(&bytes).unwrap();
             let tools = json["result"]["tools"].as_array().unwrap();
-            assert_eq!(tools.len(), 8);
+            assert_eq!(tools.len(), 9);
             let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
             assert_eq!(
                 names,
@@ -1149,6 +1154,7 @@ mod tests {
                     "get_studio_mode",
                     "start_stop_play",
                     "run_script_in_play_mode",
+                    "syncback",
                 ]
             );
             for tool in tools {
@@ -1874,7 +1880,7 @@ mod tests {
             let bytes = rt.block_on(async { resp.into_body().collect().await.unwrap().to_bytes() });
             let json: Value = serde_json::from_slice(&bytes).unwrap();
             let tools = json["result"]["tools"].as_array().unwrap();
-            assert_eq!(tools.len(), 8);
+            assert_eq!(tools.len(), 9);
 
             let get_script = tools.iter().find(|t| t["name"] == "get_script").unwrap();
             assert!(get_script["description"]

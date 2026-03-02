@@ -77,7 +77,7 @@ impl ServeCommand {
                 ServerExitReason::SyncbackRequested(payload) => {
                     log::info!("Live syncback requested, running...");
                     match run_live_syncback(&project_path, payload) {
-                        Ok(()) => log::info!("Syncback complete, restarting serve..."),
+                        Ok(_stats) => log::info!("Syncback complete, restarting serve..."),
                         Err(err) => {
                             log::error!("Live syncback failed: {err:#}. Restarting serve...")
                         }
@@ -95,7 +95,15 @@ impl ServeCommand {
     }
 }
 
-fn run_live_syncback(project_path: &Path, payload: SyncbackPayload) -> anyhow::Result<()> {
+pub(crate) struct SyncbackStats {
+    pub added: usize,
+    pub removed: usize,
+}
+
+pub(crate) fn run_live_syncback(
+    project_path: &Path,
+    payload: SyncbackPayload,
+) -> anyhow::Result<SyncbackStats> {
     let new_dom = build_dom_from_chunks(payload)?;
 
     let vfs = Vfs::new_oneshot();
@@ -128,20 +136,23 @@ fn run_live_syncback(project_path: &Path, payload: SyncbackPayload) -> anyhow::R
         .fs_snapshot
         .write_to_vfs_parallel(base_path, session_old.vfs(), git_cache.as_ref())?;
 
+    let added = result.fs_snapshot.added_paths().len();
+    let removed = result.fs_snapshot.removed_paths().len();
+
     log::info!(
         "Finished live syncback: wrote {} files/folders, removed {}.",
-        result.fs_snapshot.added_paths().len(),
-        result.fs_snapshot.removed_paths().len()
+        added,
+        removed
     );
 
     crate::git::refresh_git_index(base_path);
 
     drop(session_old);
 
-    Ok(())
+    Ok(SyncbackStats { added, removed })
 }
 
-fn build_dom_from_chunks(payload: SyncbackPayload) -> anyhow::Result<WeakDom> {
+pub(crate) fn build_dom_from_chunks(payload: SyncbackPayload) -> anyhow::Result<WeakDom> {
     use crate::syncback::VISIBLE_SERVICES;
 
     let mut dom = WeakDom::new(InstanceBuilder::new("DataModel"));

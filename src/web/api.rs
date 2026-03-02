@@ -182,6 +182,7 @@ pub async fn call(
         (&Method::POST, "/api/syncback") => {
             handle_api_syncback(request, &service, syncback_signal).await
         }
+        (&Method::POST, "/api/mcp/syncback") => handle_mcp_syncback(request, &service).await,
         (&Method::GET, "/api/validate-tree") => service.handle_api_validate_tree().await,
         (&Method::GET, "/api/git-metadata") => service.handle_api_git_metadata().await,
 
@@ -289,6 +290,131 @@ async fn handle_api_syncback(
     }
 
     msgpack_ok(serde_json::json!({"status": "syncback_initiated"}))
+}
+
+pub(super) async fn handle_mcp_syncback(
+    request: Request<Incoming>,
+    service: &ApiService,
+) -> Response<Full<Bytes>> {
+    let body = match request.into_body().collect().await {
+        Ok(collected) => collected.to_bytes(),
+        Err(err) => {
+            return msgpack(
+                ErrorResponse::bad_request(format!("Failed to read request body: {err}")),
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    };
+
+    let syncback_request: SyncbackRequest = match deserialize_msgpack(&body) {
+        Ok(req) => req,
+        Err(err) => {
+            return msgpack(
+                ErrorResponse::bad_request(format!(
+                    "Failed to deserialize syncback request: {err}"
+                )),
+                StatusCode::BAD_REQUEST,
+            );
+        }
+    };
+
+    let client_protocol = syncback_request.protocol_version as u64;
+    if client_protocol != PROTOCOL_VERSION {
+        return msgpack(
+            ErrorResponse::bad_request(format!(
+                "Protocol version mismatch: expected {}, got {}",
+                PROTOCOL_VERSION, client_protocol
+            )),
+            StatusCode::BAD_REQUEST,
+        );
+    }
+
+    let server_semver = SERVER_VERSION;
+    let server_parts: Vec<&str> = server_semver.split('.').collect();
+    let client_parts: Vec<&str> = syncback_request.server_version.split('.').collect();
+    let server_major_minor = server_parts.get(..2);
+    let client_major_minor = client_parts.get(..2);
+    if server_major_minor != client_major_minor {
+        return msgpack(
+            ErrorResponse::bad_request(format!(
+                "Server version mismatch: server is {}, plugin expects {}",
+                SERVER_VERSION, syncback_request.server_version
+            )),
+            StatusCode::BAD_REQUEST,
+        );
+    }
+
+    if let Some(place_id_f64) = syncback_request.place_id {
+        let place_id = place_id_f64 as u64;
+        if let Some(expected) = service.serve_session.serve_place_ids() {
+            if !expected.contains(&place_id) {
+                return msgpack(
+                    ErrorResponse::bad_request(format!(
+                        "Place ID {} is not in the servePlaceIds whitelist",
+                        place_id
+                    )),
+                    StatusCode::FORBIDDEN,
+                );
+            }
+        }
+        if let Some(blocked) = service.serve_session.blocked_place_ids() {
+            if blocked.contains(&place_id) {
+                return msgpack(
+                    ErrorResponse::bad_request(format!(
+                        "Place ID {} is in the blockedPlaceIds list",
+                        place_id
+                    )),
+                    StatusCode::FORBIDDEN,
+                );
+            }
+        }
+    }
+
+    log::info!(
+        "MCP syncback requested with {} service chunks, {} bytes of rbxm data",
+        syncback_request.services.len(),
+        syncback_request.data.len()
+    );
+
+    let payload = SyncbackPayload {
+        data: syncback_request.data,
+        services: syncback_request.services,
+    };
+
+    let project_path = service.serve_session.root_project().file_location.clone();
+
+    match tokio::task::spawn_blocking(move || {
+        crate::cli::serve::run_live_syncback(&project_path, payload)
+    })
+    .await
+    {
+        Ok(Ok(stats)) => {
+            log::info!(
+                "MCP syncback complete: wrote {} files/folders, removed {}",
+                stats.added,
+                stats.removed
+            );
+            msgpack_ok(serde_json::json!({
+                "status": "syncback_complete",
+                "added": stats.added,
+                "removed": stats.removed,
+            }))
+        }
+        Ok(Err(err)) => {
+            log::error!("MCP syncback failed: {err:#}");
+            msgpack(
+                ErrorResponse::bad_request(format!("Syncback failed: {err:#}")),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            )
+        }
+        Err(err) => {
+            log::error!("MCP syncback task panicked: {err}");
+            msgpack(
+                ErrorResponse::bad_request("Syncback task panicked"),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            )
+        }
+    }
 }
 
 pub struct ApiService {
