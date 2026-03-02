@@ -299,6 +299,31 @@ publish as a crate https://crates.io/crates/rojo
 [INFO  librojo::change_processor] VFS event applied: no changes
 [INFO  librojo::change_processor] Tree reconciliation: corrected 4 added, 4 removed (12.3s)
 
+ INFO [Studio] [Rojo] User selections: 0 push, 0 pull, 0 ignored
+ INFO [Studio] [Rojo] One-shot sync: disconnecting after initial sync complete
+DEBUG Could not resolve path reference Part0 at path '@game/ServerScriptService/Services/EventService/Events/Sammy's Base/SammyBase/Computer Desk/Taco~3/Meshes_Tacos_Cube4' - instance not found in tree
+DEBUG Could not resolve path reference Part0 at path '@game/Workspace/Events/FatSammy/Model/SammyArms/Arm~3/Meshes_SpyderSammyArms_spydersammy.007' - instance not found in tree
+DEBUG Could not resolve path reference Part0 at path '@game/ServerScriptService/Services/EventService/Events/Sammy's Base/SammyBase/Computer Desk/Taco~3/Meshes_Tacos_Cube4' - instance not found in tree
+DEBUG Could not resolve path reference Part0 at path '@game/Workspace/Events/FatSammy/Model/SammyArms/Arm/Meshes_SpyderSammyArms_spydersammy.005' - instance not found in tree
+DEBUG Could not resolve path reference Part0 at path '@game/ServerScriptService/Services/EventService/Events/Sammy's Base/SammyBase/Computer Desk/Taco~2/Meshes_Tacos_Cube3' - instance not found in tree
+DEBUG Could not resolve path reference Part0 at path '@game/ServerScriptService/Services/EventService/Events/Sammy's Base/SammyBase/Computer Desk/Taco~2/Meshes_Tacos_Cube3' - instance not found in tree
+DEBUG Could not resolve path reference Part0 at path '@game/Workspace/Events/FatSammy/Model/SammyArms/Arm~2/Meshes_SpyderSammyArms_spydersammy.006' - instance not found in tree
+DEBUG Could not resolve path reference Part0 at path '@game/ServerScriptService/Services/EventService/Events/Sammy's Base/SammyBase/Computer Desk/Taco~4/Meshes_Tacos_Cube5' - instance not found in tree
+DEBUG Could not resolve path reference Part0 at path '@game/Workspace/Events/FatSammy/Model/SammyArms/Arm~4/Meshes_SpyderSammyArms_spydersammy.008' - instance not found in tree
+DEBUG Could not resolve path reference Part0 at path '@game/ServerScriptService/Services/EventService/Events/Sammy's Base/SammyBase/Computer Desk/Taco~4/Meshes_Tacos_Cube5' - instance not found in tree
+DEBUG Could not resolve path reference Part1 at path '@game/ServerStorage/Backlog/Fruttina Jetolina/Fruttina Jetolina/Halo' - instance not found in tree
+DEBUG Could not resolve path reference Part0 at path '@game/ServerScriptService/Services/EventService/Events/Sammy's Base/SammyBase/Computer Desk/Taco/Meshes_Tacos_Cube1' - instance not found in tree
+DEBUG Could not resolve path reference Part0 at path '@game/ServerScriptService/Services/EventService/Events/Sammy's Base/SammyBase/Computer Desk/Taco~4/Meshes_Tacos_Cube5' - instance not found in tree
+DEBUG Could not resolve path reference Part0 at path '@game/ServerScriptService/Services/EventService/Events/Sammy's Base/SammyBase/Computer Desk/Taco/Meshes_Tacos_Cube1' - instance not found in tree
+DEBUG Could not resolve path reference Part0 at path '@game/ServerScriptService/Services/EventService/Events/Sammy's Base/SammyBase/Computer Desk/Taco~3/Meshes_Tacos_Cube4' - instance not found in tree
+DEBUG Could not resolve path reference Part1 at path '@game/ServerStorage/Backlog/Crabo Biscotto/Crabo Biscotto/Halo' - instance not found in tree
+DEBUG Could not resolve path reference Part0 at path '@game/ServerScriptService/Services/EventService/Events/Sammy's Base/SammyBase/Computer Desk/Taco/Meshes_Tacos_Cube1' - instance not found in tree
+DEBUG Could not resolve path reference Part0 at path '@game/ServerScriptService/Services/EventService/Events/Sammy's Base/SammyBase/Computer Desk/Taco~2/Meshes_Tacos_Cube3' - instance not found in tree
+ INFO Tree reconciliation: corrected 12 added, 12 removed (54.6s)
+ 
+ DEBUG Loading project file from \\?\D:\UserGenerated\steal-a-brainrot\default.project.json5
+ INFO Tree reconciliation: corrected 4 added, 4 removed (45.3s)
+
 CONSTANTLY happening everytime i modify a file:
 [INFO  librojo::change_processor] Tree reconciliation: corrected 4 added, 4 removed (22.1s)
 
@@ -307,6 +332,7 @@ We need to investigate Tree reconciliation, make sure it's parallel, etc.
 I'd really like to just reconcile specific paths that were modified - but i'm not sure if that just defeats the purpose.. need to explore this topic later.
 Worst case - we reconcile only on connect, but do so in mega-parallel
 
+[vscode file watcher]
 Also, we need to explore how VSCode deals with this. They seem to have ZERO issues.
 Maybe we can have a mode to tie into the vscode file watcher ourselves? luau-lsp does this.
 
@@ -422,3 +448,23 @@ additional inspo: https://cursor.com/dashboard?tab=bugbot
 [git]
 complete audit of our git module to see what we can leverage the gix api directly instead of hard coding in really slow ways ourselves
 we can probably just call built-in functions to accomplish a lot of that hardcore tasks we are doing that would give 10-100x speedups
+
+[path canonicalize]
+DEBUG Loading project file from D:\UserGenerated\steal-a-brainrot\default.project.json5
+DEBUG Prefetch walk: 248397 files + 74573 dirs from 1 root(s) in 2.2s
+DEBUG Prefetch I/O: read 248397 files in 702.5ms, canonicalize 322970 paths in 3.7s
+DEBUG Prefetch maps: 322970 is_file + 74573 children dirs built
+DEBUG Prefetch total: 248397 files + 322970 canonical paths in 7.9s
+get rid of this bulk path canonaclize where possible, it seems utterly pointless in most cases
+
+[git really slow]
+DEBUG [TIMING] compute_git_metadata: open_repo 1ms
+DEBUG [TIMING] compute_git_metadata: using 1 project prefixes
+DEBUG [TIMING] compute_git_metadata: status iterator created 155ms
+DEBUG [TIMING] compute_git_metadata: status iteration 2191ms (3 tracked, 0 untracked)
+DEBUG [TIMING] compute_git_metadata: git_changed_files_impl 2347ms (3 tracked, 0 untracked)
+DEBUG [TIMING] compute_git_metadata: tree resolution 0ms (3 changed -> 3 resolved)
+DEBUG [TIMING] compute_git_metadata: batch_check_hashes 389ms (9 refs)
+DEBUG [TIMING] compute_git_metadata: total 2739ms (3 changed_ids, 3 script_hashes, 0 new_file_ids)
+ INFO [Studio] [Rojo] One-shot mode: skipping all auto-accept paths, requiring explicit confirmation
+ 

@@ -23,6 +23,12 @@ use crate::{
     },
 };
 
+/// Set to `true` to enable periodic tree reconciliation after VFS events.
+/// Currently disabled: the per-event VFS handler handles file changes correctly,
+/// and the reconciler has a persistent drift bug that causes an infinite
+/// 12-14s re-snapshot loop on large projects.
+const ENABLE_TREE_RECONCILIATION: bool = false;
+
 /// Wrapper that displays a path relative to a project root directory.
 struct RelPath<'a> {
     path: &'a Path,
@@ -156,18 +162,20 @@ impl ChangeProcessor {
                                 }
                             }
 
-                            // Schedule a reconciliation 200ms from now if one isn't pending.
-                            if reconcile_at.is_none() {
-                                reconcile_at = Some(Instant::now() + Duration::from_millis(200));
-                            }
+                            if ENABLE_TREE_RECONCILIATION {
+                                // Schedule a reconciliation 200ms from now if one isn't pending.
+                                if reconcile_at.is_none() {
+                                    reconcile_at = Some(Instant::now() + Duration::from_millis(200));
+                                }
 
-                            // If the deadline has passed, reconcile now. This check runs
-                            // inside the VFS branch because during sustained event bursts,
-                            // the `default` branch never fires (the VFS channel is never
-                            // idle long enough).
-                            if reconcile_at.is_some_and(|d| Instant::now() >= d) {
-                                task.reconcile_tree();
-                                reconcile_at = None;
+                                // If the deadline has passed, reconcile now. This check runs
+                                // inside the VFS branch because during sustained event bursts,
+                                // the `default` branch never fires (the VFS channel is never
+                                // idle long enough).
+                                if reconcile_at.is_some_and(|d| Instant::now() >= d) {
+                                    task.reconcile_tree();
+                                    reconcile_at = None;
+                                }
                             }
                         },
                         recv(tree_mutation_receiver) -> patch_set => {
@@ -175,12 +183,19 @@ impl ChangeProcessor {
                         },
                         recv(critical_error_receiver) -> err => {
                             if let Ok(memofs::WatcherCriticalError::RescanRequired) = err {
-                                log::warn!(
-                                    "VFS watcher lost events (RescanRequired). \
-                                     Triggering full tree reconciliation."
-                                );
-                                task.reconcile_tree();
-                                reconcile_at = None;
+                                if ENABLE_TREE_RECONCILIATION {
+                                    log::warn!(
+                                        "VFS watcher lost events (RescanRequired). \
+                                         Triggering full tree reconciliation."
+                                    );
+                                    task.reconcile_tree();
+                                    reconcile_at = None;
+                                } else {
+                                    log::warn!(
+                                        "VFS watcher lost events (RescanRequired). \
+                                         Tree reconciliation is disabled; some changes may be missed."
+                                    );
+                                }
                             }
                         },
                         recv(shutdown_receiver) -> _ => {
@@ -190,10 +205,12 @@ impl ChangeProcessor {
                         default(timeout) => {
                             task.process_pending_recoveries();
 
-                            // If a reconciliation deadline has passed, run it now.
-                            if reconcile_at.is_some_and(|d| Instant::now() >= d) {
-                                task.reconcile_tree();
-                                reconcile_at = None;
+                            if ENABLE_TREE_RECONCILIATION {
+                                // If a reconciliation deadline has passed, run it now.
+                                if reconcile_at.is_some_and(|d| Instant::now() >= d) {
+                                    task.reconcile_tree();
+                                    reconcile_at = None;
+                                }
                             }
                         },
                     }

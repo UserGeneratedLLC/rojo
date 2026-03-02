@@ -202,11 +202,7 @@ impl TestServeSession {
         copy_recursive(&source_path, &project_path)
             .expect("Couldn't copy project to temporary directory");
 
-        // Initialize git repo and persist config to disk so that
-        // git_add_all_and_commit (which opens a fresh gix handle via
-        // gix::discover) can read user identity. The gix SnapshotMut
-        // API is in-memory only and never writes to .git/config.
-        gix::init(&project_path).expect("gix init failed");
+        librojo::git::git_init_repo(&project_path).expect("git init failed");
         fs::write(
             project_path.join(".git/config"),
             "[user]\n\tname = Test\n\temail = test@test.com\n[core]\n\tautocrlf = false\n",

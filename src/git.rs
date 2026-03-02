@@ -5,6 +5,7 @@ use std::{
     time::Instant,
 };
 
+use anyhow::Context;
 use gix::bstr::{BString, ByteSlice};
 use rbx_dom_weak::types::Ref;
 use sha1::{Digest, Sha1};
@@ -16,21 +17,6 @@ use crate::{
 
 fn open_repo(path: &Path) -> Option<gix::Repository> {
     gix::discover(path).ok()
-}
-
-#[cfg(windows)]
-fn strip_unc_prefix(path: &Path) -> PathBuf {
-    let s = path.to_string_lossy();
-    if let Some(stripped) = s.strip_prefix(r"\\?\") {
-        PathBuf::from(stripped)
-    } else {
-        path.to_owned()
-    }
-}
-
-#[cfg(not(windows))]
-fn strip_unc_prefix(path: &Path) -> PathBuf {
-    path.to_owned()
 }
 
 pub fn git_repo_root(project_root: &Path) -> Option<PathBuf> {
@@ -277,235 +263,123 @@ pub fn git_add(repo_root: &Path, paths: &[PathBuf]) {
         return;
     }
 
-    let repo = match open_repo(repo_root) {
-        Some(r) => r,
-        None => return,
-    };
-    let mut index = match repo.open_index() {
-        Ok(i) => i,
-        Err(_) => return,
-    };
-
-    let work_dir = match repo.workdir() {
-        Some(d) => d.to_owned(),
-        None => return,
-    };
-
-    for path in paths {
-        let abs_path = if path.is_absolute() {
-            path.to_owned()
-        } else {
-            work_dir.join(path)
-        };
-        let norm_abs = strip_unc_prefix(&abs_path);
-        let norm_work = strip_unc_prefix(&work_dir);
-        let rel_path = match norm_abs.strip_prefix(&norm_work) {
-            Ok(r) => r.to_owned(),
-            Err(_) => path.to_owned(),
-        };
-        let content = match std::fs::read(&abs_path) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
-
-        let blob_id = match repo.write_blob(&content) {
-            Ok(id) => id.detach(),
-            Err(_) => continue,
-        };
-
-        let rel_str = rel_path.to_string_lossy().replace('\\', "/");
-        let bstr_path: gix::bstr::BString = rel_str.into();
-
-        let gix_meta = match gix::index::fs::Metadata::from_path_no_follow(&abs_path) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        let stat = gix::index::entry::Stat::from_fs(&gix_meta).unwrap_or_default();
-
-        if let Some(existing) = index
-            .entry_mut_by_path_and_stage(bstr_path.as_ref(), gix::index::entry::Stage::Unconflicted)
-        {
-            existing.id = blob_id;
-            existing.stat = stat;
-        } else {
-            index.dangerously_push_entry(
-                stat,
-                blob_id,
-                gix::index::entry::Flags::empty(),
-                gix::index::entry::Mode::FILE,
-                bstr_path.as_ref(),
-            );
-        }
-    }
-
-    index.sort_entries();
-    if let Err(e) = index.write(gix::index::write::Options::default()) {
-        log::warn!("Failed to write git index: {}", e);
-    }
-}
-
-/// Build a tree object from sorted index entries and write it to the ODB.
-pub fn write_index_tree(repo: &gix::Repository, index: &gix::index::File) -> Option<gix::ObjectId> {
-    use gix::objs::tree;
-    use std::collections::BTreeMap;
-
-    enum TreeNode {
-        Blob(gix::ObjectId, tree::EntryKind),
-        Tree(BTreeMap<String, TreeNode>),
-    }
-
-    let mut root: BTreeMap<String, TreeNode> = BTreeMap::new();
-
-    for entry in index.entries() {
-        let path = entry.path(index).to_str_lossy();
-        let parts: Vec<&str> = path.split('/').collect();
-
-        let mut current = &mut root;
-        for (i, part) in parts.iter().enumerate() {
-            if i == parts.len() - 1 {
-                let kind = if entry.mode == gix::index::entry::Mode::FILE_EXECUTABLE {
-                    tree::EntryKind::BlobExecutable
-                } else {
-                    tree::EntryKind::Blob
-                };
-                current.insert(part.to_string(), TreeNode::Blob(entry.id, kind));
-            } else {
-                current = match current
-                    .entry(part.to_string())
-                    .or_insert_with(|| TreeNode::Tree(BTreeMap::new()))
-                {
-                    TreeNode::Tree(ref mut map) => map,
-                    _ => return None,
-                };
-            }
-        }
-    }
-
-    fn write_recursive(
-        repo: &gix::Repository,
-        nodes: &BTreeMap<String, TreeNode>,
-    ) -> Option<gix::ObjectId> {
-        let mut tree = gix::objs::Tree::empty();
-        for (name, node) in nodes {
-            match node {
-                TreeNode::Blob(id, kind) => {
-                    tree.entries.push(tree::Entry {
-                        mode: (*kind).into(),
-                        filename: name.as_str().into(),
-                        oid: *id,
-                    });
-                }
-                TreeNode::Tree(children) => {
-                    let subtree_id = write_recursive(repo, children)?;
-                    tree.entries.push(tree::Entry {
-                        mode: tree::EntryKind::Tree.into(),
-                        filename: name.as_str().into(),
-                        oid: subtree_id,
-                    });
-                }
-            }
-        }
-        repo.write_object(&tree).ok().map(|id| id.detach())
-    }
-
-    write_recursive(repo, &root)
-}
-
-/// Stage all worktree files and create a commit.
-pub fn git_add_all_and_commit(dir: &Path, message: &str) {
-    let repo = match open_repo(dir) {
-        Some(r) => r,
-        None => return,
-    };
-    let work_dir = match repo.workdir() {
-        Some(d) => d.to_owned(),
-        None => return,
-    };
-
-    log::info!("Staging all files...");
-    let mut index = gix::index::File::from_state(
-        gix::index::State::new(repo.object_hash()),
-        repo.index_path(),
-    );
-
-    fn add_dir(repo: &gix::Repository, base: &Path, dir: &Path, index: &mut gix::index::File) {
-        let entries = match std::fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-        for entry in entries {
-            let entry = match entry {
-                Ok(e) => e,
-                Err(_) => continue,
-            };
-            let path = entry.path();
-            let name = match path.file_name().and_then(|n| n.to_str()) {
-                Some(n) => n,
-                None => continue,
-            };
-            if name == ".git" {
-                continue;
-            }
-            if let Ok(ft) = entry.file_type() {
-                if ft.is_dir() {
-                    add_dir(repo, base, &path, index);
-                } else if ft.is_file() {
-                    let rel = match path.strip_prefix(base) {
-                        Ok(r) => r,
-                        Err(_) => continue,
-                    };
-                    let rel_str = rel.to_string_lossy().replace('\\', "/");
-                    let content = match std::fs::read(&path) {
-                        Ok(c) => c,
-                        Err(_) => continue,
-                    };
-                    let blob_id = match repo.write_blob(&content) {
-                        Ok(id) => id.detach(),
-                        Err(_) => continue,
-                    };
-                    let gix_meta = match gix::index::fs::Metadata::from_path_no_follow(&path) {
-                        Ok(m) => m,
-                        Err(_) => continue,
-                    };
-                    let stat = gix::index::entry::Stat::from_fs(&gix_meta).unwrap_or_default();
-                    let bstr_path: &gix::bstr::BStr = rel_str.as_bytes().as_bstr();
-                    index.dangerously_push_entry(
-                        stat,
-                        blob_id,
-                        gix::index::entry::Flags::empty(),
-                        gix::index::entry::Mode::FILE,
-                        bstr_path,
-                    );
-                }
-            }
-        }
-    }
-
-    add_dir(&repo, &work_dir, &work_dir, &mut index);
-    index.sort_entries();
-    if index.write(gix::index::write::Options::default()).is_err() {
-        log::warn!("Failed to write git index");
-        return;
-    }
-
-    log::info!("Committing: {}", message);
-    let tree_id = match write_index_tree(&repo, &index) {
-        Some(id) => id,
-        None => {
-            log::warn!("Failed to write tree from index");
+    let output = match std::process::Command::new("git")
+        .arg("add")
+        .arg("--")
+        .args(paths)
+        .current_dir(repo_root)
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            log::warn!("Failed to run git add: {}", e);
             return;
         }
     };
 
-    let parents: Vec<gix::ObjectId> = repo
-        .head_id()
-        .ok()
-        .map(|id| id.detach())
-        .into_iter()
-        .collect();
-    if let Err(e) = repo.commit("HEAD", message, tree_id, parents.iter().copied()) {
-        log::warn!("Failed to commit: {}", e);
+    if !output.status.success() {
+        log::warn!(
+            "git add failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
+}
+
+/// Returns true if the given file path is staged in the git index.
+pub fn git_is_staged(repo_root: &Path, file: &str) -> bool {
+    let output = match std::process::Command::new("git")
+        .args(["diff", "--cached", "--name-only"])
+        .current_dir(repo_root)
+        .output()
+    {
+        Ok(o) => o,
+        Err(_) => return false,
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout.lines().any(|l| l.trim() == file)
+}
+
+/// Stage all worktree files and create a commit.
+pub fn git_add_all_and_commit(dir: &Path, message: &str) {
+    let add = std::process::Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(dir)
+        .output();
+    match add {
+        Ok(o) if !o.status.success() => {
+            log::warn!("git add -A failed: {}", String::from_utf8_lossy(&o.stderr));
+            return;
+        }
+        Err(e) => {
+            log::warn!("Failed to run git add: {}", e);
+            return;
+        }
+        _ => {}
+    }
+
+    let commit = std::process::Command::new("git")
+        .args(["commit", "-m", message])
+        .current_dir(dir)
+        .output();
+    match commit {
+        Ok(o) if !o.status.success() => {
+            log::warn!("git commit failed: {}", String::from_utf8_lossy(&o.stderr));
+        }
+        Err(e) => {
+            log::warn!("Failed to run git commit: {}", e);
+        }
+        _ => {
+            log::info!("Committed: {}", message);
+        }
+    }
+}
+
+/// Initialize a new git repository with line-ending config for cross-platform consistency.
+pub fn git_init_repo(dir: &Path) -> anyhow::Result<()> {
+    let init = std::process::Command::new("git")
+        .arg("init")
+        .current_dir(dir)
+        .output()
+        .context("Failed to run git init")?;
+    if !init.status.success() {
+        anyhow::bail!("git init failed: {}", String::from_utf8_lossy(&init.stderr));
+    }
+
+    let config = std::process::Command::new("git")
+        .args(["config", "--local", "core.autocrlf", "false"])
+        .current_dir(dir)
+        .output();
+    if let Ok(o) = &config {
+        if !o.status.success() {
+            log::warn!("Failed to set core.autocrlf");
+        }
+    }
+    let _ = std::process::Command::new("git")
+        .args(["config", "--local", "core.eol", "lf"])
+        .current_dir(dir)
+        .output();
+    let _ = std::process::Command::new("git")
+        .args(["config", "--local", "core.safecrlf", "false"])
+        .current_dir(dir)
+        .output();
+
+    Ok(())
+}
+
+/// Shallow-clone a git repository into `target_dir`, depth 1.
+pub fn git_clone_shallow(url: &str, target_dir: &Path) -> anyhow::Result<()> {
+    let output = std::process::Command::new("git")
+        .args(["clone", "--depth", "1", url])
+        .arg(target_dir)
+        .output()
+        .context("Failed to run git clone")?;
+    if !output.status.success() {
+        anyhow::bail!(
+            "git clone failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    Ok(())
 }
 
 struct ResolvedInstance {
@@ -727,50 +601,26 @@ pub fn compute_git_metadata(
 /// This is useful because syncback may rewrite files with identical content,
 /// which can cause git to report them as modified due to timestamp changes.
 pub fn refresh_git_index(project_dir: &Path) {
-    let repo = match open_repo(project_dir) {
-        Some(r) => r,
-        None => {
-            log::debug!("Not a git repository, skipping index refresh.");
+    log::info!("Refreshing git index...");
+    let output = match std::process::Command::new("git")
+        .args(["update-index", "--refresh"])
+        .current_dir(project_dir)
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            log::debug!("Failed to run git update-index --refresh: {}", e);
             return;
         }
     };
 
-    log::info!("Refreshing git index...");
-    match repo.open_index() {
-        Ok(mut index) => {
-            let work_dir = match repo.workdir() {
-                Some(d) => d.to_owned(),
-                None => return,
-            };
-
-            let paths_and_stats: Vec<_> = index
-                .entries()
-                .iter()
-                .filter_map(|entry| {
-                    let path_str = entry.path(&index).to_str_lossy();
-                    let full_path = work_dir.join(path_str.as_ref());
-                    let gix_meta =
-                        gix::index::fs::Metadata::from_path_no_follow(&full_path).ok()?;
-                    let stat = gix::index::entry::Stat::from_fs(&gix_meta).ok()?;
-                    Some((path_str.to_string(), stat))
-                })
-                .collect();
-
-            for (path_str, stat) in paths_and_stats {
-                let bstr_path: &gix::bstr::BStr = path_str.as_bytes().as_bstr();
-                if let Some(entry) = index
-                    .entry_mut_by_path_and_stage(bstr_path, gix::index::entry::Stage::Unconflicted)
-                {
-                    entry.stat = stat;
-                }
-            }
-
-            match index.write(gix::index::write::Options::default()) {
-                Ok(_) => log::info!("Git index refreshed."),
-                Err(e) => log::warn!("Failed to write refreshed git index: {}", e),
-            }
-        }
-        Err(e) => log::warn!("Failed to open git index for refresh: {}", e),
+    if output.status.success() {
+        log::info!("Git index refreshed.");
+    } else {
+        log::warn!(
+            "git update-index --refresh failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 }
 
@@ -781,7 +631,7 @@ mod tests {
     use tempfile::tempdir;
 
     fn git_init(dir: &Path) {
-        gix::init(dir).expect("gix init failed");
+        git_init_repo(dir).expect("git init failed");
         let config_path = dir.join(".git/config");
         let mut content = fs::read_to_string(&config_path).unwrap_or_default();
         content.push_str("[user]\n\tname = Test\n\temail = test@test.com\n");
@@ -853,20 +703,31 @@ mod tests {
         assert_ne!(h1, h2);
     }
 
+    fn git_hash_object(dir: &Path, content: &[u8]) -> String {
+        let output = std::process::Command::new("git")
+            .args(["hash-object", "--stdin"])
+            .current_dir(dir)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                child.stdin.take().unwrap().write_all(content).unwrap();
+                child.wait_with_output()
+            })
+            .expect("git hash-object failed");
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    }
+
     #[test]
-    fn blob_sha1_matches_gix_hash_object() {
+    fn blob_sha1_matches_git_hash_object() {
         let dir = tempdir().unwrap();
         git_init(dir.path());
 
         let content = "print('test script')\n";
-        fs::write(dir.path().join("test.luau"), content).unwrap();
-
-        let repo = open_repo(dir.path()).unwrap();
-        let blob_id = repo.write_blob(content.as_bytes()).unwrap();
-        let gix_hash = blob_id.to_hex().to_string();
-
+        let git_hash = git_hash_object(dir.path(), content.as_bytes());
         let our_hash = compute_blob_sha1(content);
-        assert_eq!(our_hash, gix_hash);
+        assert_eq!(our_hash, git_hash);
     }
 
     // -----------------------------------------------------------------------
@@ -1362,9 +1223,8 @@ mod tests {
         let dir = tempdir().unwrap();
         git_init(dir.path());
 
-        let repo = open_repo(dir.path()).unwrap();
-        let gix_hash = repo.write_blob(b"").unwrap().to_hex().to_string();
-        assert_eq!(compute_blob_sha1(""), gix_hash);
+        let git_hash = git_hash_object(dir.path(), b"");
+        assert_eq!(compute_blob_sha1(""), git_hash);
     }
 
     #[test]
@@ -1373,13 +1233,8 @@ mod tests {
         let dir = tempdir().unwrap();
         git_init(dir.path());
 
-        let repo = open_repo(dir.path()).unwrap();
-        let gix_hash = repo
-            .write_blob(content.as_bytes())
-            .unwrap()
-            .to_hex()
-            .to_string();
-        assert_eq!(compute_blob_sha1(content), gix_hash);
+        let git_hash = git_hash_object(dir.path(), content.as_bytes());
+        assert_eq!(compute_blob_sha1(content), git_hash);
     }
 
     #[test]
@@ -1390,12 +1245,7 @@ mod tests {
         let dir = tempdir().unwrap();
         git_init(dir.path());
 
-        let repo = open_repo(dir.path()).unwrap();
-        let gix_hash = repo
-            .write_blob(content.as_bytes())
-            .unwrap()
-            .to_hex()
-            .to_string();
-        assert_eq!(compute_blob_sha1(&content), gix_hash);
+        let git_hash = git_hash_object(dir.path(), content.as_bytes());
+        assert_eq!(compute_blob_sha1(&content), git_hash);
     }
 }

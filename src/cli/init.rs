@@ -1,6 +1,4 @@
-use std::num::NonZero;
 use std::str::FromStr;
-use std::sync::atomic::AtomicBool;
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
@@ -119,18 +117,10 @@ impl InitCommand {
             }
         }
 
-        let did_git_init = if !self.skip_git && should_git_init(&base_path) {
+        let did_git_init = if !self.skip_git && crate::git::git_repo_root(&base_path).is_none() {
             log::debug!("Initializing Git repository...");
 
-            let mut repo = gix::init(&base_path).context("Failed to initialize git repository")?;
-
-            {
-                let mut config = repo.config_snapshot_mut();
-                let _ = config.set_raw_value(&gix::config::tree::Core::AUTO_CRLF, "false");
-                let _ = config.set_raw_value(&gix::config::tree::Core::EOL, "lf");
-                let _ = config.set_raw_value(&gix::config::tree::Core::SAFE_CRLF, "false");
-                let _ = config.commit_auto_rollback();
-            }
+            crate::git::git_init_repo(&base_path).context("Failed to initialize git repository")?;
 
             true
         } else {
@@ -141,20 +131,10 @@ impl InitCommand {
             log::debug!("Cloning cursor rules...");
 
             let cursor_dir = base_path.join(".cursor");
-            let result = (|| -> anyhow::Result<()> {
-                let prep = gix::prepare_clone(
-                    "https://github.com/jrmelsha/cursor-rules.git",
-                    &cursor_dir,
-                )?;
-                let mut prep = prep.with_shallow(gix::remote::fetch::Shallow::DepthAtRemote(
-                    NonZero::new(1).unwrap(),
-                ));
-                let (mut checkout, _) =
-                    prep.fetch_then_checkout(gix::progress::Discard, &AtomicBool::new(false))?;
-                let (_repo, _) =
-                    checkout.main_worktree(gix::progress::Discard, &AtomicBool::new(false))?;
-                Ok(())
-            })();
+            let result = crate::git::git_clone_shallow(
+                "https://github.com/jrmelsha/cursor-rules.git",
+                &cursor_dir,
+            );
 
             match result {
                 Ok(()) => {
@@ -183,13 +163,6 @@ impl InitCommand {
 
         Ok(())
     }
-}
-
-/// Tells whether we should initialize a Git repository inside the given path.
-///
-/// Returns true if the path is not already inside a Git repository.
-fn should_git_init(path: &Path) -> bool {
-    gix::discover(path).is_err()
 }
 
 /// The templates we support for initializing a Rojo project.

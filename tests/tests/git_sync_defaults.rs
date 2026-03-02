@@ -40,14 +40,7 @@ fn git_stage(dir: &Path, file: &str) {
 }
 
 fn git_is_staged(dir: &Path, file: &str) -> bool {
-    use std::process::Command;
-    let output = Command::new("git")
-        .args(["diff", "--cached", "--name-only"])
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.lines().any(|l| l.trim() == file)
+    librojo::git_is_staged(dir, file)
 }
 
 fn compute_blob_sha1(content: &str) -> String {
