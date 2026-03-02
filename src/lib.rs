@@ -18,6 +18,7 @@ mod multimap;
 mod path_serializer;
 mod project;
 mod resolution;
+pub mod roblox_api;
 mod rojo_ref;
 mod serve_session;
 mod session_id;

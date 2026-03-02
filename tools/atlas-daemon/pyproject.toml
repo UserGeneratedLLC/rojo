@@ -1,0 +1,14 @@
+[project]
+name = "atlas-daemon"
+version = "0.1.0"
+description = "Discord bot daemon for automated Roblox game code review"
+requires-python = ">=3.11"
+dependencies = [
+    "discord.py>=2.4",
+    "anthropic>=0.40",
+    "cryptography>=43",
+    "click>=8.1",
+]
+
+[project.scripts]
+atlas-daemon = "atlas_daemon.__main__:main"

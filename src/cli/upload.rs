@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::serve_session::ServeSession;
 
-use super::resolve_path;
+use super::{resolve_path, GlobalOptions};
 
 const ASSETS_API_BASE: &str = "https://apis.roblox.com/assets/v1";
 const MAX_OPERATION_RETRIES: u32 = 10;
@@ -50,7 +50,7 @@ pub struct UploadCommand {
 }
 
 impl UploadCommand {
-    pub fn run(self) -> Result<(), anyhow::Error> {
+    pub fn run(self, global: GlobalOptions) -> Result<(), anyhow::Error> {
         let project_path = resolve_path(&self.project);
 
         let vfs = Vfs::new_default();
@@ -71,7 +71,9 @@ impl UploadCommand {
         log::trace!("Encoding binary model");
         rbx_binary::to_writer(&mut buffer, tree.inner(), &encode_ids)?;
 
-        match (self.cookie, self.api_key, self.universe_id) {
+        let api_key = self.api_key.or(global.opencloud);
+
+        match (self.cookie, api_key, self.universe_id) {
             (cookie, None, universe) => {
                 // Legacy cookie auth
                 if universe.is_some() {

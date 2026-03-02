@@ -5,18 +5,11 @@ use std::process::Command;
 use anyhow::Context;
 use clap::Parser;
 use memofs::Vfs;
-use reqwest::header::COOKIE;
-use serde::Deserialize;
 
 use crate::project::Project;
+use crate::roblox_api;
 
 use super::resolve_path;
-
-#[derive(Deserialize)]
-struct UniverseResponse {
-    #[serde(rename = "universeId")]
-    universe_id: u64,
-}
 
 /// Open a Rojo project in Roblox Studio.
 #[derive(Debug, Parser)]
@@ -27,7 +20,7 @@ pub struct StudioCommand {
 }
 
 impl StudioCommand {
-    pub fn run(self) -> anyhow::Result<()> {
+    pub fn run(self, global: super::GlobalOptions) -> anyhow::Result<()> {
         let vfs = Vfs::new_oneshot();
 
         let base_path = resolve_path(&self.project);
@@ -45,14 +38,17 @@ impl StudioCommand {
             .copied()
             .context("servePlaceIds is empty in project file")?;
 
-        let universe_id = get_universe_id(place_id)?;
+        let auth = roblox_api::try_resolve_auth(global.opencloud.as_deref());
+        let universe_id = match auth {
+            Some(a) => roblox_api::get_universe_id(place_id, &a)?,
+            None => anyhow::bail!("No Roblox auth cookie found. Please log into Roblox Studio."),
+        };
 
         let url = format!(
             "roblox-studio:1+launchmode:edit+task:EditPlace+placeId:{}+universeId:{}",
             place_id, universe_id
         );
 
-        // Use cmd /c start to fully detach the process on Windows
         #[cfg(windows)]
         Command::new("cmd")
             .args(["/c", "start", "", &url])
@@ -64,25 +60,4 @@ impl StudioCommand {
 
         Ok(())
     }
-}
-
-fn get_universe_id(place_id: u64) -> anyhow::Result<u64> {
-    let cookie_header = rbx_cookie::get_value().map(|c| format!(".ROBLOSECURITY={}", c));
-
-    let url = format!(
-        "https://apis.roblox.com/universes/v1/places/{}/universe",
-        place_id
-    );
-
-    let mut req = reqwest::blocking::Client::new().get(&url);
-    if let Some(cookie) = &cookie_header {
-        req = req.header(COOKIE, cookie);
-    }
-    let response: UniverseResponse = req
-        .send()
-        .context("Failed to fetch universe ID from Roblox API")?
-        .json()
-        .context("Failed to parse universe ID response")?;
-
-    Ok(response.universe_id)
 }

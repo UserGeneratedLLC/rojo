@@ -5,18 +5,18 @@ use std::{
     time::Instant,
 };
 
-use anyhow::{bail, Context};
+use anyhow::Context;
 use clap::Parser;
 use fs_err::File;
 use memofs::Vfs;
 use rbx_dom_weak::{InstanceBuilder, WeakDom};
-use reqwest::header::{CACHE_CONTROL, COOKIE, PRAGMA, USER_AGENT};
 use tempfile::NamedTempFile;
 use termcolor::{BufferWriter, Color, ColorChoice, ColorSpec, WriteColor};
 
 use crate::{
     path_serializer::display_absolute,
     project::Project,
+    roblox_api,
     serve_session::ServeSession,
     syncback::{syncback_loop, FsSnapshot},
 };
@@ -109,7 +109,8 @@ impl SyncbackCommand {
                 // --download=PLACEID: always download this specific place
                 log::info!("Downloading place {}...", place_id);
                 let download_timer = Instant::now();
-                let temp = download_place(*place_id)?;
+                let auth = roblox_api::resolve_auth(global.opencloud.as_deref())?;
+                let temp = roblox_api::download_place(*place_id, &auth)?;
                 log::info!(
                     "Downloaded in {:.02}s",
                     download_timer.elapsed().as_secs_f32()
@@ -139,7 +140,8 @@ impl SyncbackCommand {
                     place_id
                 );
                 let download_timer = Instant::now();
-                let temp = download_place(place_id)?;
+                let auth = roblox_api::resolve_auth(global.opencloud.as_deref())?;
+                let temp = roblox_api::download_place(place_id, &auth)?;
                 log::info!(
                     "Downloaded in {:.02}s",
                     download_timer.elapsed().as_secs_f32()
@@ -333,61 +335,6 @@ fn get_place_id_from_project(project_path: &Path) -> anyhow::Result<u64> {
         .min()
         .copied()
         .context("servePlaceIds is empty in project file")
-}
-
-/// Downloads a place file from Roblox's asset delivery API.
-///
-/// Uses rbx_cookie to get the authentication cookie from the system.
-fn download_place(place_id: u64) -> anyhow::Result<NamedTempFile> {
-    let cookie = rbx_cookie::get_value()
-        .context("Could not find Roblox authentication cookie. Please log into Roblox Studio.")?;
-
-    let url = format!("https://assetdelivery.roblox.com/v1/asset/?id={}", place_id);
-
-    let client = reqwest::blocking::Client::builder()
-        .gzip(true)
-        .brotli(true)
-        .deflate(true)
-        .build()?;
-
-    let response = client
-        .get(&url)
-        .header(COOKIE, format!(".ROBLOSECURITY={}", cookie))
-        .header(CACHE_CONTROL, "no-cache, no-store, must-revalidate")
-        .header(PRAGMA, "no-cache")
-        .header("Expires", "0")
-        .header(USER_AGENT, "Rojo")
-        .send()?;
-
-    let status = response.status();
-    if !status.is_success() {
-        bail!(
-            "Failed to download place {}: HTTP {} - {}",
-            place_id,
-            status,
-            response.text().unwrap_or_default()
-        );
-    }
-
-    // Create temp file with .rbxl extension
-    let mut temp_file = tempfile::Builder::new()
-        .prefix("rojo-syncback-")
-        .suffix(".rbxl")
-        .tempfile()
-        .context("Failed to create temporary file")?;
-
-    // Write response body to temp file
-    let bytes = response.bytes()?;
-    io::copy(&mut bytes.as_ref(), &mut temp_file)?;
-    temp_file.flush()?;
-
-    log::debug!(
-        "Downloaded {} bytes to {}",
-        bytes.len(),
-        temp_file.path().display()
-    );
-
-    Ok(temp_file)
 }
 
 fn read_dom(path: &Path, file_kind: FileKind) -> anyhow::Result<WeakDom> {

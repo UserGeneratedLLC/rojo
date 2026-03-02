@@ -2,9 +2,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context};
 use clap::Parser;
-use reqwest::blocking::Client;
-use reqwest::header::COOKIE;
-use serde::Deserialize;
+
+use crate::roblox_api;
 
 use super::init::{InitCommand, InitKind};
 use super::syncback::SyncbackCommand;
@@ -46,7 +45,15 @@ impl CloneCommand {
         let path = match self.path {
             Some(p) => p,
             None => {
-                let name = fetch_experience_name(self.placeid)?;
+                let auth = roblox_api::try_resolve_auth(global.opencloud.as_deref());
+                let name = match auth {
+                    Some(a) => roblox_api::fetch_experience_name(self.placeid, &a)?
+                        .context("Could not fetch experience name from Roblox API")?,
+                    None => bail!(
+                        "No --opencloud API key or Roblox cookie available to fetch experience name. \
+                         Use --path to specify a folder manually, or pass --opencloud <KEY>."
+                    ),
+                };
                 let folder = sanitize_name(&name);
                 if folder.is_empty() {
                     bail!(
@@ -105,66 +112,6 @@ impl CloneCommand {
 
         Ok(())
     }
-}
-
-#[derive(Debug, Deserialize)]
-struct UniverseResponse {
-    #[serde(rename = "universeId")]
-    universe_id: u64,
-}
-
-#[derive(Debug, Deserialize)]
-struct GamesResponse {
-    data: Vec<GameData>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GameData {
-    name: String,
-}
-
-/// Resolves a place ID to its experience name via the Roblox API.
-fn fetch_experience_name(place_id: u64) -> anyhow::Result<String> {
-    let cookie_header = rbx_cookie::get_value().map(|c| format!(".ROBLOSECURITY={}", c));
-
-    let client = Client::new();
-
-    // Place ID -> Universe ID
-    let universe_url = format!("https://apis.roblox.com/universes/v1/places/{place_id}/universe");
-    let mut req = client.get(&universe_url);
-    if let Some(cookie) = &cookie_header {
-        req = req.header(COOKIE, cookie);
-    }
-    let universe: UniverseResponse = req
-        .send()
-        .context("Failed to reach Roblox universe API")?
-        .json()
-        .context("Failed to parse universe response")?;
-
-    // Universe ID -> Game info
-    let games_url = format!(
-        "https://games.roblox.com/v1/games?universeIds={}",
-        universe.universe_id
-    );
-    let mut req = client.get(&games_url);
-    if let Some(cookie) = &cookie_header {
-        req = req.header(COOKIE, cookie);
-    }
-    let games: GamesResponse = req
-        .send()
-        .context("Failed to reach Roblox games API")?
-        .json()
-        .context("Failed to parse games response")?;
-
-    let game = games
-        .data
-        .into_iter()
-        .next()
-        .context("No game data returned from Roblox")?;
-
-    println!("Experience: {}", game.name);
-
-    Ok(game.name)
 }
 
 /// Sanitize a Roblox experience name into a valid folder name.

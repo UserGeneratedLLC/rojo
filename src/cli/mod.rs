@@ -58,13 +58,13 @@ impl Options {
             Subcommand::Init(subcommand) => subcommand.run(),
             Subcommand::Serve(subcommand) => subcommand.run(),
             Subcommand::Build(subcommand) => subcommand.run(),
-            Subcommand::Upload(subcommand) => subcommand.run(),
+            Subcommand::Upload(subcommand) => subcommand.run(self.global),
             Subcommand::Sourcemap(subcommand) => subcommand.run(),
             Subcommand::FmtProject(subcommand) => subcommand.run(),
             Subcommand::Cursor(subcommand) => subcommand.run(),
             Subcommand::Doc(subcommand) => subcommand.run(),
             Subcommand::Plugin(subcommand) => subcommand.run(),
-            Subcommand::Studio(subcommand) => subcommand.run(),
+            Subcommand::Studio(subcommand) => subcommand.run(self.global),
             Subcommand::Syncback(subcommand) | Subcommand::Pull(subcommand) => {
                 subcommand.run(self.global)
             }
@@ -81,6 +81,11 @@ pub struct GlobalOptions {
     /// Set color behavior. Valid values are auto, always, and never.
     #[clap(long("color"), global(true), default_value("auto"))]
     pub color: ColorChoice,
+
+    /// OpenCloud API key for Roblox API access (alternative to cookie auth).
+    /// Requires the 'legacy-asset:manage' scope for downloading places.
+    #[clap(long, env = "ATLAS_OPENCLOUD_KEY", global(true), hide = true)]
+    pub opencloud: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
