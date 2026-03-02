@@ -1,12 +1,13 @@
 use std::{
     collections::{HashMap, HashSet},
+    io::Write,
     path::{Path, PathBuf},
+    process::{Command, Stdio},
     sync::{Arc, Mutex},
     time::Instant,
 };
 
 use anyhow::Context;
-use gix::bstr::{BString, ByteSlice};
 use rbx_dom_weak::types::Ref;
 use sha1::{Digest, Sha1};
 
@@ -15,21 +16,40 @@ use crate::{
     web::interface::GitMetadata,
 };
 
-fn open_repo(path: &Path) -> Option<gix::Repository> {
-    gix::discover(path).ok()
-}
-
 pub fn git_repo_root(project_root: &Path) -> Option<PathBuf> {
-    let repo = open_repo(project_root)?;
-    repo.workdir().map(|p| p.to_owned())
+    let output = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(project_root)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let path_str = stdout.trim();
+    if path_str.is_empty() {
+        return None;
+    }
+
+    Some(PathBuf::from(path_str))
 }
 
 /// Returns the current HEAD commit SHA, or `None` if there are no commits
 /// or the project is not in a git repo.
 pub fn git_head_commit(repo_root: &Path) -> Option<String> {
-    let repo = open_repo(repo_root)?;
-    let head_id = repo.head_id().ok()?;
-    let hex = head_id.to_hex().to_string();
+    let output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(repo_root)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let hex = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if hex.len() == 40 && hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         Some(hex)
     } else {
@@ -52,74 +72,85 @@ impl ChangedFiles {
     }
 }
 
-fn resolve_tree_id(repo: &gix::Repository, rev: &str) -> Option<gix::ObjectId> {
-    let id = repo.rev_parse_single(rev.as_bytes()).ok()?;
-    let tree = id.object().ok()?.peel_to_tree().ok()?;
-    Some(tree.id().detach())
-}
-
 fn git_changed_files_impl(
-    repo: &gix::Repository,
+    repo_root: &Path,
     initial_head: Option<&str>,
     project_prefixes: &[String],
 ) -> Option<ChangedFiles> {
     let mut tracked = HashSet::new();
     let mut untracked = HashSet::new();
 
-    let patterns: Vec<BString> = project_prefixes
-        .iter()
-        .map(|p| BString::from(p.as_str()))
-        .collect();
+    let base = initial_head.unwrap_or("HEAD");
 
     let t = Instant::now();
-    let mut platform = match repo.status(gix::progress::Discard) {
-        Ok(p) => p,
-        Err(e) => {
-            log::warn!("Failed to initialize git status: {}", e);
-            return None;
-        }
-    };
 
-    if let Some(ih) = initial_head {
-        if let Some(tree_id) = resolve_tree_id(repo, ih) {
-            platform = platform.head_tree(tree_id);
+    let mut diff_cmd = Command::new("git");
+    diff_cmd
+        .args(["diff", base, "--name-only"])
+        .current_dir(repo_root);
+    if !project_prefixes.is_empty() {
+        diff_cmd.arg("--");
+        for prefix in project_prefixes {
+            diff_cmd.arg(prefix);
         }
     }
+    let diff_output = diff_cmd.output().ok()?;
 
-    let iter = match platform.into_iter(patterns) {
-        Ok(i) => i,
-        Err(e) => {
-            log::warn!("Failed to create git status iterator: {}", e);
-            return None;
-        }
-    };
-    log::debug!(
-        "[TIMING] compute_git_metadata: status iterator created {}ms",
-        t.elapsed().as_millis()
-    );
-
-    let t = Instant::now();
-    for item in iter {
-        let item = match item {
-            Ok(i) => i,
-            Err(_) => continue,
-        };
-        match &item {
-            gix::status::Item::TreeIndex(_) => {
-                tracked.insert(PathBuf::from(item.location().to_str_lossy().as_ref()));
+    if diff_output.status.success() {
+        for line in String::from_utf8_lossy(&diff_output.stdout).lines() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                tracked.insert(PathBuf::from(trimmed));
             }
-            gix::status::Item::IndexWorktree(iw_item) => match iw_item {
-                gix::status::index_worktree::Item::DirectoryContents { .. } => {
-                    untracked.insert(PathBuf::from(item.location().to_str_lossy().as_ref()));
-                }
-                _ => {
-                    tracked.insert(PathBuf::from(item.location().to_str_lossy().as_ref()));
-                }
-            },
+        }
+    } else {
+        log::debug!("git diff {} failed (possibly no commits yet)", base);
+    }
+
+    let mut cached_cmd = Command::new("git");
+    cached_cmd
+        .args(["diff", "--cached", "--name-only"])
+        .current_dir(repo_root);
+    if !project_prefixes.is_empty() {
+        cached_cmd.arg("--");
+        for prefix in project_prefixes {
+            cached_cmd.arg(prefix);
         }
     }
+    if let Ok(cached_output) = cached_cmd.output() {
+        if cached_output.status.success() {
+            for line in String::from_utf8_lossy(&cached_output.stdout).lines() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    tracked.insert(PathBuf::from(trimmed));
+                }
+            }
+        }
+    }
+
+    let mut ls_cmd = Command::new("git");
+    ls_cmd
+        .args(["ls-files", "--others", "--exclude-standard"])
+        .current_dir(repo_root);
+    if !project_prefixes.is_empty() {
+        ls_cmd.arg("--");
+        for prefix in project_prefixes {
+            ls_cmd.arg(prefix);
+        }
+    }
+    if let Ok(untracked_output) = ls_cmd.output() {
+        if untracked_output.status.success() {
+            for line in String::from_utf8_lossy(&untracked_output.stdout).lines() {
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    untracked.insert(PathBuf::from(trimmed));
+                }
+            }
+        }
+    }
+
     log::debug!(
-        "[TIMING] compute_git_metadata: status iteration {}ms ({} tracked, {} untracked)",
+        "[TIMING] compute_git_metadata: git_changed_files_impl {}ms ({} tracked, {} untracked)",
         t.elapsed().as_millis(),
         tracked.len(),
         untracked.len()
@@ -128,53 +159,69 @@ fn git_changed_files_impl(
     Some(ChangedFiles { tracked, untracked })
 }
 
-fn resolve_object_ref(repo: &gix::Repository, object_ref: &str) -> Option<String> {
-    if let Some(path) = object_ref.strip_prefix(":0:") {
-        let index = repo.open_index().ok()?;
-        let bstr_path: &gix::bstr::BStr = path.as_bytes().as_bstr();
-        let entry = index.entry_by_path(bstr_path)?;
-        Some(entry.id.to_hex().to_string())
-    } else if let Some((rev, path)) = object_ref.split_once(':') {
-        let id = repo.rev_parse_single(rev.as_bytes()).ok()?;
-        let tree = id.object().ok()?.peel_to_tree().ok()?;
-        let entry = tree.lookup_entry_by_path(path).ok()??;
-        Some(entry.object_id().to_hex().to_string())
-    } else {
-        None
+fn git_batch_check_hashes_impl(repo_root: &Path, object_refs: &[String]) -> Vec<Option<String>> {
+    if object_refs.is_empty() {
+        return Vec::new();
     }
-}
 
-fn git_batch_check_hashes_impl(
-    repo: &gix::Repository,
-    object_refs: &[String],
-) -> Vec<Option<String>> {
-    object_refs
-        .iter()
-        .map(|r| resolve_object_ref(repo, r))
+    let mut child = match Command::new("git")
+        .args(["cat-file", "--batch-check"])
+        .current_dir(repo_root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            log::warn!("Failed to spawn git cat-file --batch-check: {}", e);
+            return object_refs.iter().map(|_| None).collect();
+        }
+    };
+
+    if let Some(mut stdin) = child.stdin.take() {
+        for r in object_refs {
+            let _ = writeln!(stdin, "{}", r);
+        }
+    }
+
+    let output = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(e) => {
+            log::warn!("git cat-file --batch-check failed: {}", e);
+            return object_refs.iter().map(|_| None).collect();
+        }
+    };
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout
+        .lines()
+        .map(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2 && parts[1] != "missing" {
+                let sha = parts[0];
+                if sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Some(sha.to_string());
+                }
+            }
+            None
+        })
         .collect()
 }
 
 #[cfg(test)]
 fn git_show(repo_root: &Path, object_ref: &str) -> Option<String> {
-    let repo = open_repo(repo_root)?;
-    if let Some(path) = object_ref.strip_prefix(":0:") {
-        let index = repo.open_index().ok()?;
-        let bstr_path: &gix::bstr::BStr = path.as_bytes().as_bstr();
-        let entry = index.entry_by_path(bstr_path)?;
-        let obj = repo.find_object(entry.id).ok()?;
-        String::from_utf8(obj.data.to_vec()).ok()
-    } else if object_ref.contains(':') {
-        let (rev, path) = object_ref.split_once(':')?;
-        let id = repo.rev_parse_single(rev.as_bytes()).ok()?;
-        let tree = id.object().ok()?.peel_to_tree().ok()?;
-        let entry = tree.lookup_entry_by_path(path).ok()??;
-        let obj = entry.id().object().ok()?;
-        String::from_utf8(obj.data.to_vec()).ok()
-    } else {
-        let id = repo.rev_parse_single(object_ref.as_bytes()).ok()?;
-        let obj = id.object().ok()?;
-        String::from_utf8(obj.data.to_vec()).ok()
+    let output = Command::new("git")
+        .args(["show", object_ref])
+        .current_dir(repo_root)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
     }
+
+    String::from_utf8(output.stdout).ok()
 }
 
 #[cfg(test)]
@@ -217,16 +264,32 @@ pub struct GitIndexCache {
 
 impl GitIndexCache {
     pub fn new(project_root: &Path) -> Option<Self> {
-        let repo = open_repo(project_root)?;
-        let repo_root = repo.workdir()?.to_owned();
-        let index = repo.open_index().ok()?;
+        let repo_root = git_repo_root(project_root)?;
+
+        let output = Command::new("git")
+            .args(["ls-files", "--stage"])
+            .current_dir(&repo_root)
+            .output()
+            .ok()?;
+
+        if !output.status.success() {
+            return None;
+        }
 
         let mut entries = HashMap::new();
-        for entry in index.entries() {
-            let path_bstr = entry.path(&index);
-            let path_str = path_bstr.to_str().ok()?;
-            let rel_path = PathBuf::from(path_str);
-            let hash_hex = entry.id.to_hex().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        for line in stdout.lines() {
+            // Format: <mode> <sha1> <stage>\t<path>
+            let (meta, path) = match line.split_once('\t') {
+                Some(pair) => pair,
+                None => continue,
+            };
+            let parts: Vec<&str> = meta.split_whitespace().collect();
+            if parts.len() < 2 {
+                continue;
+            }
+            let hash_hex = parts[1].to_string();
+            let rel_path = PathBuf::from(path);
 
             let abs_path = repo_root.join(&rel_path);
             let project_rel = abs_path
@@ -263,7 +326,7 @@ pub fn git_add(repo_root: &Path, paths: &[PathBuf]) {
         return;
     }
 
-    let output = match std::process::Command::new("git")
+    let output = match Command::new("git")
         .arg("add")
         .arg("--")
         .args(paths)
@@ -287,7 +350,7 @@ pub fn git_add(repo_root: &Path, paths: &[PathBuf]) {
 
 /// Returns true if the given file path is staged in the git index.
 pub fn git_is_staged(repo_root: &Path, file: &str) -> bool {
-    let output = match std::process::Command::new("git")
+    let output = match Command::new("git")
         .args(["diff", "--cached", "--name-only"])
         .current_dir(repo_root)
         .output()
@@ -301,7 +364,7 @@ pub fn git_is_staged(repo_root: &Path, file: &str) -> bool {
 
 /// Stage all worktree files and create a commit.
 pub fn git_add_all_and_commit(dir: &Path, message: &str) {
-    let add = std::process::Command::new("git")
+    let add = Command::new("git")
         .args(["add", "-A"])
         .current_dir(dir)
         .output();
@@ -317,7 +380,7 @@ pub fn git_add_all_and_commit(dir: &Path, message: &str) {
         _ => {}
     }
 
-    let commit = std::process::Command::new("git")
+    let commit = Command::new("git")
         .args(["commit", "-m", message])
         .current_dir(dir)
         .output();
@@ -336,7 +399,7 @@ pub fn git_add_all_and_commit(dir: &Path, message: &str) {
 
 /// Initialize a new git repository with line-ending config for cross-platform consistency.
 pub fn git_init_repo(dir: &Path) -> anyhow::Result<()> {
-    let init = std::process::Command::new("git")
+    let init = Command::new("git")
         .arg("init")
         .current_dir(dir)
         .output()
@@ -345,20 +408,15 @@ pub fn git_init_repo(dir: &Path) -> anyhow::Result<()> {
         anyhow::bail!("git init failed: {}", String::from_utf8_lossy(&init.stderr));
     }
 
-    let config = std::process::Command::new("git")
+    let _ = Command::new("git")
         .args(["config", "--local", "core.autocrlf", "false"])
         .current_dir(dir)
         .output();
-    if let Ok(o) = &config {
-        if !o.status.success() {
-            log::warn!("Failed to set core.autocrlf");
-        }
-    }
-    let _ = std::process::Command::new("git")
+    let _ = Command::new("git")
         .args(["config", "--local", "core.eol", "lf"])
         .current_dir(dir)
         .output();
-    let _ = std::process::Command::new("git")
+    let _ = Command::new("git")
         .args(["config", "--local", "core.safecrlf", "false"])
         .current_dir(dir)
         .output();
@@ -368,7 +426,7 @@ pub fn git_init_repo(dir: &Path) -> anyhow::Result<()> {
 
 /// Shallow-clone a git repository into `target_dir`, depth 1.
 pub fn git_clone_shallow(url: &str, target_dir: &Path) -> anyhow::Result<()> {
-    let output = std::process::Command::new("git")
+    let output = Command::new("git")
         .args(["clone", "--depth", "1", url])
         .arg(target_dir)
         .output()
@@ -390,13 +448,10 @@ struct ResolvedInstance {
 
 /// Computes git metadata for the two-way sync confirmation UI.
 ///
-/// `repo_root` must be the git repository root (from `git_repo_root()`),
-/// cached at session start by `ServeSession`.
-///
 /// Uses a three-phase approach to avoid holding the tree lock during I/O:
-/// 1. Use gix to get changed files scoped to project prefixes (no lock)
+/// 1. Run git commands to get changed files scoped to project prefixes (no lock)
 /// 2. Briefly lock tree to resolve file paths to instance Refs and class names
-/// 3. Direct object/index lookups to get blob hashes (no lock)
+/// 3. Single `git cat-file --batch-check` to get blob hashes (no lock)
 pub fn compute_git_metadata(
     tree_handle: &Arc<Mutex<RojoTree>>,
     repo_root: &Path,
@@ -406,28 +461,7 @@ pub fn compute_git_metadata(
     let total_t = Instant::now();
 
     let t = Instant::now();
-    let repo = match open_repo(repo_root) {
-        Some(r) => r,
-        None => {
-            return GitMetadata {
-                changed_ids: Vec::new(),
-                script_committed_hashes: HashMap::new(),
-                new_file_ids: Vec::new(),
-            };
-        }
-    };
-    log::debug!(
-        "[TIMING] compute_git_metadata: open_repo {}ms",
-        t.elapsed().as_millis()
-    );
-
-    log::debug!(
-        "[TIMING] compute_git_metadata: using {} project prefixes",
-        project_prefixes.len()
-    );
-
-    let t = Instant::now();
-    let changed_files = match git_changed_files_impl(&repo, initial_head, project_prefixes) {
+    let changed_files = match git_changed_files_impl(repo_root, initial_head, project_prefixes) {
         Some(files) => files,
         None => {
             log::debug!(
@@ -552,7 +586,7 @@ pub fn compute_git_metadata(
     }
 
     let t = Instant::now();
-    let batch_hashes = git_batch_check_hashes_impl(&repo, &object_refs);
+    let batch_hashes = git_batch_check_hashes_impl(repo_root, &object_refs);
     log::debug!(
         "[TIMING] compute_git_metadata: batch_check_hashes {}ms ({} refs)",
         t.elapsed().as_millis(),
@@ -602,7 +636,7 @@ pub fn compute_git_metadata(
 /// which can cause git to report them as modified due to timestamp changes.
 pub fn refresh_git_index(project_dir: &Path) {
     log::info!("Refreshing git index...");
-    let output = match std::process::Command::new("git")
+    let output = match Command::new("git")
         .args(["update-index", "--refresh"])
         .current_dir(project_dir)
         .output()
@@ -643,33 +677,22 @@ mod tests {
     }
 
     fn git_stage(dir: &Path, file: &str) {
-        let repo = open_repo(dir).expect("repo not found");
-        git_add(repo.workdir().unwrap_or(dir), &[PathBuf::from(file)]);
+        git_add(dir, &[PathBuf::from(file)]);
     }
 
-    fn git_is_staged(dir: &Path, file: &str) -> bool {
-        let repo = open_repo(dir).expect("repo not found");
-        let index = match repo.open_index() {
-            Ok(i) => i,
-            Err(_) => return false,
-        };
-        let bstr_path: &gix::bstr::BStr = file.as_bytes().as_bstr();
-        let index_entry = match index.entry_by_path(bstr_path) {
-            Some(e) => e,
-            None => return false,
-        };
-
-        let head_blob_id = repo
-            .head_commit()
-            .ok()
-            .and_then(|c| c.tree().ok())
-            .and_then(|t| t.lookup_entry_by_path(file).ok().flatten())
-            .map(|e| e.object_id());
-
-        match head_blob_id {
-            Some(head_id) => index_entry.id != head_id,
-            None => true,
-        }
+    fn git_hash_object(dir: &Path, content: &[u8]) -> String {
+        let output = Command::new("git")
+            .args(["hash-object", "--stdin"])
+            .current_dir(dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                child.stdin.take().unwrap().write_all(content).unwrap();
+                child.wait_with_output()
+            })
+            .expect("git hash-object failed");
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
     }
 
     // -----------------------------------------------------------------------
@@ -701,22 +724,6 @@ mod tests {
         let h1 = compute_blob_sha1("version 1");
         let h2 = compute_blob_sha1("version 2");
         assert_ne!(h1, h2);
-    }
-
-    fn git_hash_object(dir: &Path, content: &[u8]) -> String {
-        let output = std::process::Command::new("git")
-            .args(["hash-object", "--stdin"])
-            .current_dir(dir)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .and_then(|mut child| {
-                use std::io::Write;
-                child.stdin.take().unwrap().write_all(content).unwrap();
-                child.wait_with_output()
-            })
-            .expect("git hash-object failed");
-        String::from_utf8(output.stdout).unwrap().trim().to_string()
     }
 
     #[test]
@@ -772,8 +779,7 @@ mod tests {
         fs::write(dir.path().join("file.luau"), "content").unwrap();
         git_commit_all(dir.path(), "init");
 
-        let repo = open_repo(dir.path()).unwrap();
-        let changed = git_changed_files_impl(&repo, None, &[]);
+        let changed = git_changed_files_impl(dir.path(), None, &[]);
         assert!(changed.is_some());
         assert!(changed.unwrap().is_empty());
     }
@@ -786,8 +792,7 @@ mod tests {
         git_commit_all(dir.path(), "init");
         fs::write(dir.path().join("script.luau"), "modified").unwrap();
 
-        let repo = open_repo(dir.path()).unwrap();
-        let changed = git_changed_files_impl(&repo, None, &[]).unwrap();
+        let changed = git_changed_files_impl(dir.path(), None, &[]).unwrap();
         assert!(changed.tracked.contains(&PathBuf::from("script.luau")));
         assert!(changed.untracked.is_empty());
     }
@@ -801,8 +806,7 @@ mod tests {
         fs::write(dir.path().join("script.luau"), "staged version").unwrap();
         git_stage(dir.path(), "script.luau");
 
-        let repo = open_repo(dir.path()).unwrap();
-        let changed = git_changed_files_impl(&repo, None, &[]).unwrap();
+        let changed = git_changed_files_impl(dir.path(), None, &[]).unwrap();
         assert!(changed.tracked.contains(&PathBuf::from("script.luau")));
     }
 
@@ -814,8 +818,7 @@ mod tests {
         git_commit_all(dir.path(), "init");
         fs::write(dir.path().join("new_file.luau"), "new").unwrap();
 
-        let repo = open_repo(dir.path()).unwrap();
-        let changed = git_changed_files_impl(&repo, None, &[]).unwrap();
+        let changed = git_changed_files_impl(dir.path(), None, &[]).unwrap();
         assert!(changed.untracked.contains(&PathBuf::from("new_file.luau")));
         assert!(!changed.tracked.contains(&PathBuf::from("new_file.luau")));
     }
@@ -828,8 +831,7 @@ mod tests {
         git_commit_all(dir.path(), "init");
         fs::remove_file(dir.path().join("to_delete.luau")).unwrap();
 
-        let repo = open_repo(dir.path()).unwrap();
-        let changed = git_changed_files_impl(&repo, None, &[]).unwrap();
+        let changed = git_changed_files_impl(dir.path(), None, &[]).unwrap();
         assert!(changed.tracked.contains(&PathBuf::from("to_delete.luau")));
     }
 
@@ -844,8 +846,7 @@ mod tests {
         fs::write(dir.path().join("will_modify.luau"), "new").unwrap();
         fs::write(dir.path().join("untracked.luau"), "brand new").unwrap();
 
-        let repo = open_repo(dir.path()).unwrap();
-        let changed = git_changed_files_impl(&repo, None, &[]).unwrap();
+        let changed = git_changed_files_impl(dir.path(), None, &[]).unwrap();
         let all = changed.all();
         assert!(all.contains(&PathBuf::from("will_modify.luau")));
         assert!(all.contains(&PathBuf::from("untracked.luau")));
@@ -860,8 +861,7 @@ mod tests {
         git_init(dir.path());
         fs::write(dir.path().join("new.luau"), "content").unwrap();
 
-        let repo = open_repo(dir.path()).unwrap();
-        let changed = git_changed_files_impl(&repo, None, &[]);
+        let changed = git_changed_files_impl(dir.path(), None, &[]);
         assert!(changed.is_some());
         assert!(changed
             .unwrap()
@@ -878,8 +878,7 @@ mod tests {
         git_commit_all(dir.path(), "init");
         fs::write(dir.path().join("src/module.luau"), "modified").unwrap();
 
-        let repo = open_repo(dir.path()).unwrap();
-        let changed = git_changed_files_impl(&repo, None, &[]).unwrap();
+        let changed = git_changed_files_impl(dir.path(), None, &[]).unwrap();
         assert!(changed.tracked.contains(&PathBuf::from("src/module.luau")));
     }
 
@@ -895,15 +894,13 @@ mod tests {
         fs::write(dir.path().join("script.luau"), "modified").unwrap();
         git_commit_all(dir.path(), "edit");
 
-        let repo = open_repo(dir.path()).unwrap();
-
-        let without = git_changed_files_impl(&repo, None, &[]).unwrap();
+        let without = git_changed_files_impl(dir.path(), None, &[]).unwrap();
         assert!(
             !without.all().contains(&PathBuf::from("script.luau")),
             "without initial_head, committed file should NOT appear"
         );
 
-        let with = git_changed_files_impl(&repo, Some(&initial_head), &[]).unwrap();
+        let with = git_changed_files_impl(dir.path(), Some(&initial_head), &[]).unwrap();
         assert!(
             with.tracked.contains(&PathBuf::from("script.luau")),
             "with initial_head, committed file should appear"
@@ -1002,15 +999,14 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // git_batch_check_hashes (via resolve_object_ref)
+    // git_batch_check_hashes (via git cat-file --batch-check)
     // -----------------------------------------------------------------------
 
     #[test]
     fn batch_check_empty_refs() {
         let dir = tempdir().unwrap();
         git_init(dir.path());
-        let repo = open_repo(dir.path()).unwrap();
-        let results = git_batch_check_hashes_impl(&repo, &[]);
+        let results = git_batch_check_hashes_impl(dir.path(), &[]);
         assert!(results.is_empty());
     }
 
@@ -1021,9 +1017,8 @@ mod tests {
         fs::write(dir.path().join("script.luau"), "local x = 42\nreturn x").unwrap();
         git_commit_all(dir.path(), "init");
 
-        let repo = open_repo(dir.path()).unwrap();
         let refs = vec!["HEAD:script.luau".to_string()];
-        let results = git_batch_check_hashes_impl(&repo, &refs);
+        let results = git_batch_check_hashes_impl(dir.path(), &refs);
         assert_eq!(results.len(), 1);
 
         let batch_hash = results[0].as_ref().unwrap();
@@ -1039,9 +1034,8 @@ mod tests {
         fs::write(dir.path().join("dummy.luau"), "x").unwrap();
         git_commit_all(dir.path(), "init");
 
-        let repo = open_repo(dir.path()).unwrap();
         let refs = vec!["HEAD:nonexistent.luau".to_string()];
-        let results = git_batch_check_hashes_impl(&repo, &refs);
+        let results = git_batch_check_hashes_impl(dir.path(), &refs);
         assert_eq!(results.len(), 1);
         assert!(results[0].is_none());
     }
@@ -1053,9 +1047,8 @@ mod tests {
         fs::write(dir.path().join("a.luau"), "content a").unwrap();
         git_commit_all(dir.path(), "init");
 
-        let repo = open_repo(dir.path()).unwrap();
         let refs = vec!["HEAD:a.luau".to_string(), ":0:a.luau".to_string()];
-        let results = git_batch_check_hashes_impl(&repo, &refs);
+        let results = git_batch_check_hashes_impl(dir.path(), &refs);
         assert_eq!(results.len(), 2);
         assert!(results[0].is_some());
         assert_eq!(results[0], results[1]);
@@ -1074,9 +1067,8 @@ mod tests {
         fs::write(dir.path().join("b.luau"), "staged version").unwrap();
         git_stage(dir.path(), "b.luau");
 
-        let repo = open_repo(dir.path()).unwrap();
         let refs = vec!["HEAD:b.luau".to_string(), ":0:b.luau".to_string()];
-        let results = git_batch_check_hashes_impl(&repo, &refs);
+        let results = git_batch_check_hashes_impl(dir.path(), &refs);
         assert_eq!(results.len(), 2);
         assert!(results[0].is_some());
         assert!(results[1].is_some());
@@ -1098,7 +1090,6 @@ mod tests {
         fs::write(dir.path().join("b.luau"), "content b modified").unwrap();
         git_stage(dir.path(), "b.luau");
 
-        let repo = open_repo(dir.path()).unwrap();
         let refs = vec![
             "HEAD:a.luau".to_string(),
             ":0:a.luau".to_string(),
@@ -1106,7 +1097,7 @@ mod tests {
             ":0:b.luau".to_string(),
             "HEAD:nonexistent.luau".to_string(),
         ];
-        let results = git_batch_check_hashes_impl(&repo, &refs);
+        let results = git_batch_check_hashes_impl(dir.path(), &refs);
         assert_eq!(results.len(), 5);
 
         assert_eq!(results[0], results[1]); // a: HEAD == staged
@@ -1135,9 +1126,8 @@ mod tests {
         fs::write(dir.path().join("src/init.luau"), "init content").unwrap();
         git_commit_all(dir.path(), "init");
 
-        let repo = open_repo(dir.path()).unwrap();
         let refs = vec!["HEAD:src/init.luau".to_string()];
-        let results = git_batch_check_hashes_impl(&repo, &refs);
+        let results = git_batch_check_hashes_impl(dir.path(), &refs);
         assert_eq!(results.len(), 1);
         assert_eq!(
             results[0].as_ref().unwrap(),
@@ -1215,7 +1205,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Hash consistency: our SHA1 matches gix blob hashing
+    // Hash consistency: our SHA1 matches git hash-object
     // -----------------------------------------------------------------------
 
     #[test]
