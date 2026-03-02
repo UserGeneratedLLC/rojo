@@ -31,9 +31,178 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+### MCP Integration (Model Context Protocol for AI Agents)
+
+* Implement MCP WebSocket server for AI agent integration, enabling programmatic syncs to Roblox Studio via the `atlas_sync` tool.
+* Add `McpStream` plugin component to manage real-time WebSocket connections between the Studio plugin and the MCP server with automatic reconnect (3-second interval).
+* Add MCP tools: `execute_luau` (run Luau code in Studio), `insert_model` (insert models), `get_console_output` (retrieve Studio console logs), `get_script` (read script source directly from Studio for conflict resolution), and `syncback` (trigger full Roblox→filesystem syncback from MCP).
+* Implement sync modes and override capabilities in MCP commands with filesystem path enrichment for change traceability.
+* Add place ID validation for MCP connections to restrict access to whitelisted place IDs.
+* Integrate `schemars` for JSON schema generation on MCP tool arguments, improving API documentation and validation.
+* Add passthrough command handling in MCP stream for extensible tool integration.
+
+### Scripts-Only Mode
+
 * Optimize scripts-only mode with a server-side script index on `RojoTree` for O(scripts × depth) reads instead of full-tree walks, send `syncScriptsOnly` flag to the plugin so `ChangeBatcher` skips non-script two-way sync work, and filter non-script updates in the write API as defense-in-depth.
 * Fix WebSocket ancestor injection in scripts-only mode so new scripts appearing in previously-pruned subtrees are sent with their full ancestor chain.
 * Add plugin-side `DescendantAdded` watchers in scripts-only mode to detect new scripts created in Studio outside the mapped tree and send them to the server with skeleton intermediate containers.
+* Add patch application state management (`__applyingPatch` flag) to prevent `DescendantAdded` events from firing during reconciliation.
+* Implement temp ID resolution for intermediate containers, mapping scripts-only temp IDs to real tree references for correct parent-child relationships.
+* Add rollback of temp IDs when encoding fails for new scripts, preventing orphaned references.
+* Move `is_script_class` to the `snapshot` module for better organization and reusability.
+
+### Git Integration Overhaul
+
+* Replace `gix` API with command-line `git` for repository root detection, HEAD commit SHA retrieval, and change detection — improving compatibility and reducing dependency weight.
+* Introduce relevant-prefix filtering in `git_changed_files_impl` and `collect_untracked_files` to scope change detection to project directories only, avoiding full-repo scans.
+* Add `known_paths` method on `RojoTree` to extract project directory paths for prefix-based change filtering.
+* Add initial HEAD commit SHA tracking at session start so committed changes after serve startup are correctly reflected in auto-selection logic.
+* Implement `GitIndexCache` for syncback to skip writing unchanged files by comparing blob SHA1 hashes, significantly reducing I/O on large projects.
+* Add `wait_until_all_staged` test helper with exponential backoff polling, replacing fragile fixed-sleep assertions.
+* Add shallow clone and staging-check helpers in the git module for `InitCommand` use.
+* Implement tree reconciliation toggle constant to disable periodic re-reconciliation after VFS events, fixing an infinite re-snapshot loop on large projects.
+* Optimize `collect_untracked_files` to skip dot-directories not in the tracked set, avoiding unnecessary traversal.
+* Refactor `collect_tree_index_changes` to use HashMap for tree entries, streamlining index change detection.
+* Add detailed timing logs throughout `compute_git_metadata` for performance profiling.
+
+### Logging System Overhaul
+
+* Introduce `tracing`-based structured logging with file output to `~/.atlas/` (session log files named by UTC timestamp).
+* Add `ATLAS_NO_FILE_LOG` environment variable to disable file logging in CI/tests.
+* Add `write_log_header` function that stamps each log file with project name, command, and session details.
+* Prefix all Roblox Studio log messages with `[Studio]` for clear origin identification.
+* Add `isTraceEnabled` guard in the plugin to skip expensive HTTP request/response serialization when trace logging is disabled.
+* Standardize timing log format across `ApiContext`, `ServeSession`, `Reconciler`, and `App` using `string.format` for consistent output.
+* Remove `tracing-log` dependency — the bridge layer is no longer needed.
+* Add `time` crate for UTC-formatted session log filenames.
+* Add `dirs` crate (v6.0.0) for cross-platform home directory resolution for log storage.
+
+### CLI Enhancements
+
+* Add `CompletionsCommand` for generating shell completions (bash, zsh, fish, PowerShell, elvish) via `clap_complete`.
+* Extract Roblox API interactions into a dedicated `roblox_api` module with authentication handling and error feedback.
+* Refactor `CloneCommand` and `StudioCommand` to use the new `roblox_api` module, reducing duplication.
+* Remove VFS path canonicalization (`canonicalize` method) from `VfsBackend` trait and all implementations, simplifying the interface.
+* Refactor `ServeCommand` session management to create a new `Vfs` instance with error tracking per session.
+* Enable `clap` "env" feature for environment-variable-based argument defaults.
+* Handle non-terminal stdin in sourcemap watch mode for graceful exit when stdin is closed.
+
+### Syncback & Sync Improvements
+
+* Detect unchanged output file hashes during syncback to skip unnecessary writes, improving performance on large projects.
+* Enhance slugification to treat "init" (case-insensitive) as a reserved name, appending an underscore suffix to avoid init-file collisions.
+* Improve patch selection logic so auto-selection only fires when the current selection matches the default, preventing unwanted overrides during review.
+* Add one-shot sync state management (`__oneShotSyncDone` flag) to prevent further message processing after completion.
+
+### Plugin UI
+
+* Add right-click support in `PatchVisualizer` for unselecting nodes and managing subtree selections.
+* Update button styling in the Confirming page to dynamically reflect selection state (Primary vs Neutral).
+* Improve sync reminder polling by disabling unnecessary API calls that caused performance issues.
+* Debounce git metadata refreshes in the plugin to reduce redundant API calls during rapid changes.
+
+### CI & Build
+
+* Cap test threads at 8 in CI scripts to prevent resource exhaustion, with separate `$BuildThreads` and `$TestThreads` variables.
+* Disable `fail-fast` in CI matrix strategy so all platform jobs run to completion.
+* Add `atlas_command` test helper for consistent command creation across integration tests.
+
+### Dependencies
+
+* Add `schemars` for JSON schema generation.
+* Add `dirs` (v6.0.0) for home directory resolution.
+* Add `time` crate for UTC timestamp formatting.
+* Update `anyhow`, `tempfile`, `clap`, and other dependencies to latest versions.
+
+### Other
+
+* Update `.gitignore` to ignore `**/.atlas/` directory (logs, build artifacts).
+* Update default project templates to ignore `ServerStorage/RBX_ANIMSAVES` and `MoonAnimator2Saves` paths.
+* Adjust VSCode workspace settings: disable format-on-save for Lua/Luau, set column width to 100, configure StyLua accordingly.
+* Reduce MCP reconnect interval from 5 to 3 seconds.
+* Add fallback error handling in `__applyPatch` to log warnings instead of crashing on patch application failures.
+* Refactor `App:startSyncReminderPolling` for improved readability.
+
+<details>
+<summary>Full commit log (72 commits, Feb 19 – Mar 1 2026)</summary>
+
+- `98f39c1f` Cleanup TODO.txt by removing outdated tasks and adding new terminal management notes
+- `9934094d` Enhance Roblox API integration and refactor CLI commands
+- `fb465159` Remove obsolete tasks from TODO.txt to streamline project focus
+- `c5502191` Add syncback command handling to MCP stream and API
+- `fc8a6e9b` Remove canonicalization functionality from VFS and related components
+- `65f10f11` Refactor git_changed_files_impl for improved performance and clarity
+- `4846fc1f` Refactor git module to utilize command-line git for repository operations
+- `170e0dfc` Update logging configuration to enable target logging
+- `76b5d8bc` Implement tree reconciliation toggle and enhance git functionality
+- `1a03554e` Enhance git module performance and improve path collection
+- `8d54fff7` Refactor ServeCommand to improve session management and error handling
+- `a506b97e` Refactor git repository initialization and enhance logging levels
+- `f24e991a` Enhance logging and fix regression in TODO.txt
+- `059abd12` Refactor App:startSyncReminderPolling for clarity
+- `491d433a` Enhance ServeSession to fetch git metadata before initial patch computation
+- `8b4573b5` Refactor logging level from trace to debug for performance improvement
+- `25ca0bb2` Improve logging performance by conditionally checking trace level
+- `33022667` Enhance git change detection by introducing relevant prefixes
+- `6ed6d15a` Refactor CI scripts to improve thread management for Rust builds and tests
+- `77e214e0` Update dependencies and enhance logging functionality
+- `84253019` Refactor PatchTree tests and enhance git index change detection
+- `380041dc` Refactor logging configuration and streamline command execution in tests
+- `c0f5a01e` Remove unnecessary timing measurement in ApiContext:read
+- `a4042d3d` Enhance index change detection in collect_index_worktree_changes
+- `7b17d3d5` Refactor untracked file collection logic in collect_untracked_files
+- `8b0665b9` Update CI workflow to disable fail-fast strategy for improved job execution
+- `a7f72126` Enhance git metadata computation with detailed timing logs and refactor untracked file collection
+- `3f1af46f` Refactor variable names in App module for clarity and update .gitignore for Atlas artifacts
+- `a14abbb0` Update RECONNECT_INTERVAL in McpStream.lua from 5 to 3 seconds
+- `1f7682df` Add time crate for session log filename generation and refactor logging setup
+- `491506fa` Refactor log message formatting for timing information consistency
+- `7b9d4495` Enhance logging with detailed timing information for API and session operations
+- `a0e07bb5` Update log message formatting to include "[Studio]" prefix
+- `6df6d42b` Remove tracing-log dependency and related initialization from logging setup
+- `3fd50df0` Update logging and enhance .gitignore for Atlas directory
+- `b5583c4c` Update dependencies and integrate schemars for JSON schema generation
+- `fd990b86` Enhance MCP tool functionality and improve logging capabilities
+- `fd49602a` Implement get_script command for improved script retrieval in MCP
+- `9aa3145b` Enhance MCP sync functionality and improve documentation
+- `5d86b1eb` Refine TODO list and address sync performance issues
+- `a26b3123` sync rules
+- `99b0af36` Enhance MCP functionality and improve syncback performance
+- `581aeaef` Enhance MCP stream handling and update TODO list
+- `0f5cabb2` Implement MCP integration for AI agents and enhance sync functionality
+- `0a359cca` Update dependencies and refactor git integration
+- `d8d6a53f` Update dependencies and add CLI completions support
+- `640b2d3d` Enhance git metadata handling and improve change detection logic
+- `b8bd92d6` Update button style logic in Confirming page based on selection state
+- `cd87c63a` Enhance git integration and optimize change detection in ServeSession
+- `7d08b899` Update TODO list and refine selection logic in Confirming page
+- `118c195e` Enhance TODO list and improve ServeSession synchronization logic
+- `63b0b031` Optimize syncback process and enhance patch selection logic
+- `a15f4f1a` Refactor TODO list and enhance slugification for reserved names
+- `d2f739ec` Enhance right-click functionality in PatchVisualizer
+- `9abf2be6` Add wait_until_all_staged function to improve file staging checks
+- `288e6796` Add script reference handling in RojoTree during snapshot insertion
+- `22e437a0` Implement fallback error handling and enhance scripts-only mode in ServeSession
+- `d4b390a3` Refactor script class handling and improve imports in git.rs and ref_properties.rs
+- `a68e0ab7` Add patch application state management in ServeSession
+- `75727171` Enhance scripts-only mode in RojoTree with optimizations and fixes
+- `ec51c14a` Enhance error handling and improve script tracking in RojoTree and ServeSession
+- `9d6b48a5` Refactor TODO list and improve error handling in RojoTree
+- `9d387d2a` Update TODO list with error handling and sync issues
+- `57433a01` Enhance scripts-only mode handling and improve temp ID resolution
+- `dcd48642` Refactor error handling and improve code readability in ServeSession and applyPatch
+- `9820ec65` Enhance script handling and temp ID resolution in ServeSession and Reconciler
+- `4985a3fe` work
+- `89e7e028` Refactor TODO list and enhance sourcemap watch functionality
+- `8fc56dc6` Update TODO list and project template with new ignore paths and sync optimizations
+- `28021d52` Update TODO list with new tasks for auto selection and ignore list
+- `bd78ced2` Update VSCode settings to disable format on save for Lua and Luau
+- `4bb45d2f` Update column width settings in VSCode and stylua configuration
+- `7cee5ca8` Update TODO list with new tasks for Atlas sync functionality
+- `cdac7f74` Update TODO list with new tasks for versioning and merging
+- `43874126` Update VSCode settings for Lua and Luau formatting
+
+</details>
 
 ## [8.4.1] (February 19th, 2026)
 
