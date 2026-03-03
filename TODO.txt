@@ -98,3 +98,7 @@ this should utilize the mcp to run the game and fetch the errors, make sure the 
 
 modify /atlas-push to always trigger /playtest-quick after it finishes pushing, looping back around to fix issues if needed. make sure the errors are related to what we actually pushed, so it doesnt try to fix others work. if it's others work, ask the user if they want to fix it - thought recommend they should do a planning phase.
 "/atlas-push no test" or similar it just skips the automated test
+
+git config --system core.longpaths true
+
+make clone support multi-placeids like we did with defend-67

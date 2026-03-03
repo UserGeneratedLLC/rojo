@@ -3411,6 +3411,12 @@ impl ApiService {
                 }
             }
 
+            for &id in &requested_ids {
+                if tree.get_instance(id).is_some() {
+                    included_ids.insert(id);
+                }
+            }
+
             for &id in &included_ids {
                 if let Some(instance) = tree.get_instance(id) {
                     instances.insert(id, instance_for_scripts_only(instance, &included_ids));

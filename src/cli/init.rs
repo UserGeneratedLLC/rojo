@@ -127,6 +127,10 @@ impl InitCommand {
             !self.skip_git
         };
 
+        if did_git_init {
+            crate::git::git_add_all_and_commit(&base_path, "Initial commit");
+        }
+
         if !self.skip_rules && did_git_init {
             log::debug!("Adding agent submodules...");
 
@@ -189,10 +193,8 @@ impl InitCommand {
             if !any_failed {
                 println!("Added agent submodules successfully.");
             }
-        }
 
-        if did_git_init {
-            crate::git::git_add_all_and_commit(&base_path, "Initial commit");
+            crate::git::git_add_all_and_commit(&base_path, "Add agent submodules");
         }
 
         println!("Created project successfully.");
