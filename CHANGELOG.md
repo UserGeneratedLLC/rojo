@@ -31,6 +31,20 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+## [8.5.2] (March 3rd, 2026)
+
+* Fix `atlas init` to commit project files before adding agent submodules, producing cleaner git history
+* Fix scripts-only mode to include explicitly requested instances in API responses
+
+<details>
+<summary>Full commit log</summary>
+
+- `3b3bd04f` Enhance initialization and API handling
+
+</details>
+
+[8.5.2]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.5.2
+
 ## [8.5.1] (March 2nd, 2026)
 
 * Add `atlas-push` agent skill for automated filesystem→Studio sync with conflict merging
