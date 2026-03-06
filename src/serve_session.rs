@@ -309,6 +309,7 @@ impl ServeSession {
         apply_patch_set(&mut tree, patch_set);
         log::debug!("Patch computed + applied in {:.1?}", patch_start.elapsed());
 
+        let watch_start = Instant::now();
         if let Some(recorded_paths) = vfs.take_recorded_paths() {
             let dir_count = recorded_paths.iter().filter(|p| p.is_dir()).count();
             for path in &recorded_paths {
@@ -326,8 +327,9 @@ impl ServeSession {
                 let _ = vfs.watch(root);
             }
             log::debug!(
-                "Selective watching: {} directories watched (non-recursive)",
+                "Selective watching: {} directories watched (non-recursive) in {:.1?}",
                 dir_count + path_roots.len(),
+                watch_start.elapsed(),
             );
         }
 
