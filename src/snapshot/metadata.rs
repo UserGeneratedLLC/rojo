@@ -155,6 +155,8 @@ pub struct InstanceContext {
     pub path_ignore_rules: Arc<Vec<PathIgnoreRule>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub sync_rules: Vec<SyncRule>,
+    #[serde(skip)]
+    pub sync_scripts_only: bool,
 }
 
 impl InstanceContext {
@@ -162,6 +164,7 @@ impl InstanceContext {
         Self {
             path_ignore_rules: Arc::new(Vec::new()),
             sync_rules: Vec::new(),
+            sync_scripts_only: false,
         }
     }
 

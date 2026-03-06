@@ -54,7 +54,7 @@ impl VfsBackend for NoopBackend {
         crossbeam_channel::never()
     }
 
-    fn watch(&mut self, _path: &Path) -> io::Result<()> {
+    fn watch(&mut self, _path: &Path, _recursive: bool) -> io::Result<()> {
         Err(io::Error::other("NoopBackend doesn't do anything"))
     }
 

@@ -79,6 +79,13 @@ pub fn snapshot_from_vfs(
         // If and when we do, make sure to go support it in
         // `Project::set_file_name`, as right now it special-cases
         // `default.project.json5` as an `init` path.
+        if context.sync_scripts_only
+            && !middleware.is_script()
+            && middleware != Middleware::Dir
+            && middleware != Middleware::Project
+        {
+            return Ok(None);
+        }
         match middleware {
             Middleware::Dir => middleware.snapshot(context, vfs, path, dir_name),
             _ => middleware.snapshot(context, vfs, &init_path, dir_name),
@@ -168,11 +175,23 @@ fn snapshot_from_path(
     // name is needed (e.g. for names with special chars), it comes from the
     // `name` field in adjacent .meta.json / .model.json files.
     if let Some(rule) = context.get_user_sync_rule(path) {
+        if context.sync_scripts_only
+            && !rule.middleware.is_script()
+            && rule.middleware != Middleware::Project
+        {
+            return Ok(None);
+        }
         let name = rule.file_name_for_path(path)?;
         return rule.middleware.snapshot(context, vfs, path, name);
     } else {
         for rule in default_sync_rules() {
             if rule.matches(path) {
+                if context.sync_scripts_only
+                    && !rule.middleware.is_script()
+                    && rule.middleware != Middleware::Project
+                {
+                    return Ok(None);
+                }
                 let name = rule.file_name_for_path(path)?;
                 return rule.middleware.snapshot(context, vfs, path, name);
             }
@@ -319,6 +338,27 @@ impl Middleware {
         }
     }
 
+    /// Returns whether this middleware produces a script instance
+    /// (Script, LocalScript, or ModuleScript).
+    #[inline]
+    pub fn is_script(&self) -> bool {
+        matches!(
+            self,
+            Self::ServerScript
+                | Self::ClientScript
+                | Self::ModuleScript
+                | Self::PluginScript
+                | Self::LocalScript
+                | Self::LegacyScript
+                | Self::ServerScriptDir
+                | Self::ClientScriptDir
+                | Self::ModuleScriptDir
+                | Self::PluginScriptDir
+                | Self::LocalScriptDir
+                | Self::LegacyScriptDir
+        )
+    }
+
     /// Returns whether this particular middleware would become a directory.
     #[inline]
     pub fn is_dir(&self) -> bool {
@@ -453,4 +493,232 @@ pub fn default_sync_rules() -> &'static [SyncRule] {
             sync_rule!("*.{yml,yaml}", Yaml),
         ]
     })
+}
+
+/// Returns whether a filesystem path is relevant in scripts-only mode.
+///
+/// Matches script files (`.luau`, `.lua`), meta files (`.meta.json5`,
+/// `.meta.json`), and project files (`.project.json5`, `.project.json`).
+pub fn is_script_relevant_path(path: &Path) -> bool {
+    let name = match path.file_name().and_then(|n| n.to_str()) {
+        Some(n) => n.to_lowercase(),
+        None => return false,
+    };
+    name.ends_with(".luau")
+        || name.ends_with(".lua")
+        || name.ends_with(".meta.json5")
+        || name.ends_with(".meta.json")
+        || name.ends_with(".project.json5")
+        || name.ends_with(".project.json")
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::collections::HashMap;
+
+    use memofs::{InMemoryFs, VfsSnapshot};
+
+    #[test]
+    fn is_script_covers_all_script_types() {
+        assert!(Middleware::ServerScript.is_script());
+        assert!(Middleware::ClientScript.is_script());
+        assert!(Middleware::ModuleScript.is_script());
+        assert!(Middleware::PluginScript.is_script());
+        assert!(Middleware::LocalScript.is_script());
+        assert!(Middleware::LegacyScript.is_script());
+        assert!(Middleware::ServerScriptDir.is_script());
+        assert!(Middleware::ClientScriptDir.is_script());
+        assert!(Middleware::ModuleScriptDir.is_script());
+        assert!(Middleware::PluginScriptDir.is_script());
+        assert!(Middleware::LocalScriptDir.is_script());
+        assert!(Middleware::LegacyScriptDir.is_script());
+    }
+
+    #[test]
+    fn is_script_excludes_non_scripts() {
+        assert!(!Middleware::Dir.is_script());
+        assert!(!Middleware::Project.is_script());
+        assert!(!Middleware::Csv.is_script());
+        assert!(!Middleware::JsonModel.is_script());
+        assert!(!Middleware::Json.is_script());
+        assert!(!Middleware::Rbxm.is_script());
+        assert!(!Middleware::Rbxmx.is_script());
+        assert!(!Middleware::Toml.is_script());
+        assert!(!Middleware::Text.is_script());
+        assert!(!Middleware::Yaml.is_script());
+        assert!(!Middleware::Ignore.is_script());
+        assert!(!Middleware::CsvDir.is_script());
+    }
+
+    #[test]
+    fn scripts_only_skips_non_script_file() {
+        let mut imfs = InMemoryFs::new();
+        imfs.load_snapshot(
+            "/project",
+            VfsSnapshot::dir(HashMap::from([
+                ("data.json5", VfsSnapshot::file("{}")),
+                ("script.server.luau", VfsSnapshot::file("print('hi')")),
+            ])),
+        )
+        .unwrap();
+
+        let vfs = Vfs::new(imfs);
+        let mut context = InstanceContext::new();
+        context.sync_scripts_only = true;
+
+        let json_result =
+            snapshot_from_vfs(&context, &vfs, Path::new("/project/data.json5")).unwrap();
+        assert!(json_result.is_none());
+
+        let script_result =
+            snapshot_from_vfs(&context, &vfs, Path::new("/project/script.server.luau")).unwrap();
+        assert!(script_result.is_some());
+        assert_eq!(script_result.unwrap().class_name.as_str(), "Script");
+    }
+
+    #[test]
+    fn scripts_only_preserves_directories() {
+        let mut imfs = InMemoryFs::new();
+        imfs.load_snapshot(
+            "/project",
+            VfsSnapshot::dir(HashMap::from([(
+                "models",
+                VfsSnapshot::dir(HashMap::from([(
+                    "part.rbxm",
+                    VfsSnapshot::file(b"\x00".as_ref()),
+                )])),
+            )])),
+        )
+        .unwrap();
+
+        let vfs = Vfs::new(imfs);
+        let mut context = InstanceContext::new();
+        context.sync_scripts_only = true;
+
+        let result = snapshot_from_vfs(&context, &vfs, Path::new("/project/models")).unwrap();
+        assert!(result.is_some());
+        let snapshot = result.unwrap();
+        assert_eq!(snapshot.class_name.as_str(), "Folder");
+        assert!(snapshot.children.is_empty());
+    }
+
+    #[test]
+    fn scripts_only_allows_project_files() {
+        let mut imfs = InMemoryFs::new();
+        imfs.load_snapshot(
+            "/nested.project.json5",
+            VfsSnapshot::file(r#"{"name": "Nested", "tree": {"$className": "Folder"}}"#),
+        )
+        .unwrap();
+
+        let vfs = Vfs::new(imfs);
+        let mut context = InstanceContext::new();
+        context.sync_scripts_only = true;
+
+        let result = snapshot_from_vfs(&context, &vfs, Path::new("/nested.project.json5")).unwrap();
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn normal_mode_includes_all_files() {
+        let mut imfs = InMemoryFs::new();
+        imfs.load_snapshot(
+            "/project",
+            VfsSnapshot::dir(HashMap::from([
+                ("data.json5", VfsSnapshot::file("{}")),
+                ("script.server.luau", VfsSnapshot::file("print('hi')")),
+            ])),
+        )
+        .unwrap();
+
+        let vfs = Vfs::new(imfs);
+        let context = InstanceContext::new();
+
+        let json_result =
+            snapshot_from_vfs(&context, &vfs, Path::new("/project/data.json5")).unwrap();
+        assert!(json_result.is_some());
+
+        let script_result =
+            snapshot_from_vfs(&context, &vfs, Path::new("/project/script.server.luau")).unwrap();
+        assert!(script_result.is_some());
+    }
+
+    #[test]
+    fn is_script_relevant_path_accepts_scripts_and_meta() {
+        assert!(is_script_relevant_path(Path::new("/src/main.luau")));
+        assert!(is_script_relevant_path(Path::new("/src/init.server.luau")));
+        assert!(is_script_relevant_path(Path::new("/src/old.lua")));
+        assert!(is_script_relevant_path(Path::new("/src/old.server.lua")));
+        assert!(is_script_relevant_path(Path::new("/src/file.meta.json5")));
+        assert!(is_script_relevant_path(Path::new("/src/file.meta.json")));
+        assert!(is_script_relevant_path(Path::new("/nested.project.json5")));
+        assert!(is_script_relevant_path(Path::new("/nested.project.json")));
+    }
+
+    #[test]
+    fn is_script_relevant_path_rejects_non_scripts() {
+        assert!(!is_script_relevant_path(Path::new("/src/data.json5")));
+        assert!(!is_script_relevant_path(Path::new("/src/model.rbxm")));
+        assert!(!is_script_relevant_path(Path::new("/src/notes.txt")));
+        assert!(!is_script_relevant_path(Path::new("/src/table.csv")));
+        assert!(!is_script_relevant_path(Path::new("/src/config.toml")));
+        assert!(!is_script_relevant_path(Path::new("/src/data.yaml")));
+        assert!(!is_script_relevant_path(Path::new("/src/model.rbxmx")));
+        assert!(!is_script_relevant_path(Path::new("/src")));
+        assert!(!is_script_relevant_path(Path::new("/src/no_ext")));
+    }
+
+    #[test]
+    fn scripts_only_filters_csv_dir() {
+        let mut imfs = InMemoryFs::new();
+        imfs.load_snapshot(
+            "/project",
+            VfsSnapshot::dir(HashMap::from([(
+                "localization",
+                VfsSnapshot::dir(HashMap::from([(
+                    "init.csv",
+                    VfsSnapshot::file("Key,Source,Example\nkey1,Hello,Hello"),
+                )])),
+            )])),
+        )
+        .unwrap();
+
+        let vfs = Vfs::new(imfs);
+        let mut context = InstanceContext::new();
+        context.sync_scripts_only = true;
+
+        let result = snapshot_from_vfs(&context, &vfs, Path::new("/project/localization")).unwrap();
+        assert!(
+            result.is_none(),
+            "CsvDir should be filtered in scripts-only mode"
+        );
+    }
+
+    #[test]
+    fn scripts_only_preserves_script_dir() {
+        let mut imfs = InMemoryFs::new();
+        imfs.load_snapshot(
+            "/project",
+            VfsSnapshot::dir(HashMap::from([(
+                "MyScript",
+                VfsSnapshot::dir(HashMap::from([(
+                    "init.server.luau",
+                    VfsSnapshot::file("print('hello')"),
+                )])),
+            )])),
+        )
+        .unwrap();
+
+        let vfs = Vfs::new(imfs);
+        let mut context = InstanceContext::new();
+        context.sync_scripts_only = true;
+
+        let result = snapshot_from_vfs(&context, &vfs, Path::new("/project/MyScript")).unwrap();
+        assert!(
+            result.is_some(),
+            "Script dir should pass through in scripts-only mode"
+        );
+        assert_eq!(result.unwrap().class_name.as_str(), "Script");
+    }
 }

@@ -22,7 +22,7 @@ mod noop_backend;
 mod snapshot;
 mod std_backend;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::{io, str};
@@ -94,7 +94,7 @@ pub trait VfsBackend: sealed::Sealed + Send + 'static {
     fn remove_dir_all(&mut self, path: &Path) -> io::Result<()>;
 
     fn event_receiver(&self) -> crossbeam_channel::Receiver<VfsEvent>;
-    fn watch(&mut self, path: &Path) -> io::Result<()>;
+    fn watch(&mut self, path: &Path, recursive: bool) -> io::Result<()>;
     fn unwatch(&mut self, path: &Path) -> io::Result<()>;
 }
 
@@ -159,17 +159,28 @@ pub enum VfsEvent {
 struct VfsInner {
     backend: Box<dyn VfsBackend>,
     watch_enabled: bool,
+    watch_recursive: bool,
     prefetch_cache: Option<PrefetchCache>,
+    recorded_watch_paths: Option<HashSet<PathBuf>>,
 }
 
 impl VfsInner {
+    fn watch_or_record(&mut self, path: &Path) -> io::Result<()> {
+        if let Some(ref mut recorded) = self.recorded_watch_paths {
+            recorded.insert(path.to_path_buf());
+            Ok(())
+        } else {
+            self.backend.watch(path, self.watch_recursive)
+        }
+    }
+
     /// Read raw bytes from the prefetch cache or the backend.
     /// Removes the entry from the cache on hit to free memory.
     fn read_raw(&mut self, path: &Path) -> io::Result<Vec<u8>> {
         if let Some(cache) = &mut self.prefetch_cache {
             if let Some(contents) = cache.files.remove(path) {
                 if self.watch_enabled {
-                    self.backend.watch(path)?;
+                    self.watch_or_record(path)?;
                 }
                 return Ok(contents);
             }
@@ -178,7 +189,7 @@ impl VfsInner {
         let contents = self.backend.read(path)?;
 
         if self.watch_enabled {
-            self.backend.watch(path)?;
+            self.watch_or_record(path)?;
         }
 
         Ok(contents)
@@ -220,7 +231,7 @@ impl VfsInner {
         if let Some(cache) = &mut self.prefetch_cache {
             if let Some(child_paths) = cache.children.remove(path) {
                 if self.watch_enabled {
-                    self.backend.watch(path)?;
+                    self.watch_or_record(path)?;
                 }
                 let inner = child_paths.into_iter().map(|p| Ok(DirEntry { path: p }));
                 return Ok(ReadDir {
@@ -232,7 +243,7 @@ impl VfsInner {
         let dir = self.backend.read_dir(path)?;
 
         if self.watch_enabled {
-            self.backend.watch(path)?;
+            self.watch_or_record(path)?;
         }
 
         Ok(dir)
@@ -345,7 +356,9 @@ impl Vfs {
         let lock = VfsInner {
             backend: Box::new(backend),
             watch_enabled: true,
+            watch_recursive: true,
             prefetch_cache: None,
+            recorded_watch_paths: None,
         };
 
         Self {
@@ -386,6 +399,36 @@ impl Vfs {
     pub fn set_watch_enabled(&self, enabled: bool) {
         let mut inner = self.inner.lock().unwrap();
         inner.watch_enabled = enabled;
+    }
+
+    /// Sets whether new watches use recursive or non-recursive mode.
+    ///
+    /// When false, each `backend.watch()` call only watches the specific
+    /// directory -- not its children. This allows selective watching where
+    /// only directories actually traversed during snapshot get OS handles.
+    pub fn set_watch_recursive(&self, recursive: bool) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.watch_recursive = recursive;
+    }
+
+    /// Begin recording mode: `read`/`read_dir` calls record touched paths
+    /// into an internal set instead of calling `backend.watch()`.
+    pub fn start_watch_recording(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.recorded_watch_paths = Some(HashSet::new());
+    }
+
+    /// End recording mode and return the set of paths that were touched.
+    pub fn take_recorded_paths(&self) -> Option<HashSet<PathBuf>> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.recorded_watch_paths.take()
+    }
+
+    /// Explicitly watch a path using the current `watch_recursive` setting.
+    pub fn watch<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        let recursive = inner.watch_recursive;
+        inner.backend.watch(path.as_ref(), recursive)
     }
 
     /// Read a file from the VFS, or the underlying backend if it isn't
@@ -768,6 +811,50 @@ mod test {
     }
 
     #[test]
+    fn recording_mode_collects_read_dir_paths() {
+        let mut imfs = InMemoryFs::new();
+        imfs.load_snapshot(
+            "/root",
+            VfsSnapshot::dir(HashMap::from([
+                ("child.txt", VfsSnapshot::file("hello")),
+                (
+                    "subdir",
+                    VfsSnapshot::dir(HashMap::from([("nested.txt", VfsSnapshot::file("world"))])),
+                ),
+            ])),
+        )
+        .unwrap();
+
+        let vfs = Vfs::new(imfs);
+        vfs.start_watch_recording();
+
+        let _ = vfs.read_dir("/root").unwrap();
+        let _ = vfs.read_dir("/root/subdir").unwrap();
+        let _ = vfs.read("/root/child.txt").unwrap();
+
+        let recorded = vfs.take_recorded_paths().unwrap();
+        assert!(recorded.contains(&PathBuf::from("/root")));
+        assert!(recorded.contains(&PathBuf::from("/root/subdir")));
+        assert!(recorded.contains(&PathBuf::from("/root/child.txt")));
+    }
+
+    #[test]
+    fn recording_mode_returns_none_when_not_started() {
+        let imfs = InMemoryFs::new();
+        let vfs = Vfs::new(imfs);
+        assert!(vfs.take_recorded_paths().is_none());
+    }
+
+    #[test]
+    fn recording_mode_cleared_after_take() {
+        let imfs = InMemoryFs::new();
+        let vfs = Vfs::new(imfs);
+        vfs.start_watch_recording();
+        let _ = vfs.take_recorded_paths();
+        assert!(vfs.take_recorded_paths().is_none());
+    }
+
+    #[test]
     fn prefetch_cache_watch_registered_on_cache_hit() {
         let contents = "hello world".to_string();
         let dir = tempfile::tempdir().unwrap();
@@ -779,7 +866,6 @@ mod test {
         cache_files.insert(file_path.clone(), contents.as_bytes().to_vec());
         vfs.set_prefetch_cache(PrefetchCache {
             files: cache_files,
-            canonical: HashMap::new(),
             is_file: HashMap::new(),
             children: HashMap::new(),
         });
@@ -825,7 +911,6 @@ mod test {
         let vfs = Arc::new(Vfs::new(StdBackend::new_for_testing()));
         vfs.set_prefetch_cache(PrefetchCache {
             files: cache_files,
-            canonical: HashMap::new(),
             is_file: HashMap::new(),
             children: HashMap::new(),
         });

@@ -58,6 +58,7 @@ pub struct StdBackend {
     debouncer: Debouncer<notify::RecommendedWatcher, RecommendedCache>,
     watcher_receiver: Receiver<VfsEvent>,
     watches: HashSet<PathBuf>,
+    recursive_watches: HashSet<PathBuf>,
     /// Receiver for critical errors from the watcher thread.
     /// Callers should poll this to detect when watching becomes unreliable.
     critical_error_receiver: Receiver<WatcherCriticalError>,
@@ -113,6 +114,7 @@ impl StdBackend {
             debouncer,
             watcher_receiver: event_rx,
             watches: HashSet::new(),
+            recursive_watches: HashSet::new(),
             critical_error_receiver: error_rx,
         }
     }
@@ -328,26 +330,43 @@ impl VfsBackend for StdBackend {
         self.watcher_receiver.clone()
     }
 
-    fn watch(&mut self, path: &Path) -> io::Result<()> {
-        if self.watches.contains(path)
-            || path
-                .ancestors()
-                .any(|ancestor| self.watches.contains(ancestor))
+    fn watch(&mut self, path: &Path, recursive: bool) -> io::Result<()> {
+        if self.watches.contains(path) {
+            return Ok(());
+        }
+        if path
+            .ancestors()
+            .skip(1)
+            .any(|ancestor| self.recursive_watches.contains(ancestor))
         {
-            Ok(())
+            return Ok(());
+        }
+
+        let mode = if recursive {
+            RecursiveMode::Recursive
         } else {
-            // Only add to watches AFTER the watch succeeds
-            // This prevents a failed watch from permanently marking the path as "watched"
-            match self.debouncer.watch(path, RecursiveMode::Recursive) {
-                Ok(()) => {
-                    log::debug!("Watching path: {}", path.display());
-                    self.watches.insert(path.to_path_buf());
-                    Ok(())
+            RecursiveMode::NonRecursive
+        };
+        match self.debouncer.watch(path, mode) {
+            Ok(()) => {
+                log::debug!(
+                    "Watching path ({}): {}",
+                    if recursive {
+                        "recursive"
+                    } else {
+                        "non-recursive"
+                    },
+                    path.display()
+                );
+                self.watches.insert(path.to_path_buf());
+                if recursive {
+                    self.recursive_watches.insert(path.to_path_buf());
                 }
-                Err(err) => {
-                    log::warn!("Failed to watch path {}: {:?}", path.display(), err);
-                    Err(io::Error::other(format!("{:?}", err)))
-                }
+                Ok(())
+            }
+            Err(err) => {
+                log::warn!("Failed to watch path {}: {:?}", path.display(), err);
+                Err(io::Error::other(format!("{:?}", err)))
             }
         }
     }
@@ -366,6 +385,7 @@ impl VfsBackend for StdBackend {
                     );
                 }
                 self.watches.remove(path);
+                self.recursive_watches.remove(path);
                 Ok(())
             }
             Err(err) => {
@@ -382,6 +402,7 @@ impl VfsBackend for StdBackend {
                         path.display()
                     );
                     self.watches.remove(path);
+                    self.recursive_watches.remove(path);
                     Ok(())
                 } else {
                     log::warn!("Failed to unwatch path {}: {:?}", path.display(), err);
@@ -414,17 +435,17 @@ mod tests {
         let mut backend = StdBackend::new_for_testing();
 
         // Watch should succeed and add to internal set
-        assert!(backend.watch(&file_path).is_ok());
+        assert!(backend.watch(&file_path, true).is_ok());
 
         // Watching again should be a no-op (already watched)
-        assert!(backend.watch(&file_path).is_ok());
+        assert!(backend.watch(&file_path, true).is_ok());
 
         // Watch a non-existent path - behavior varies by platform
         // On some systems, watching a non-existent file might succeed
         // because notify watches the parent directory. We just verify
         // that calling watch doesn't panic or corrupt state.
         let nonexistent = dir.path().join("nonexistent.txt");
-        let _ = backend.watch(&nonexistent); // Result varies by platform
+        let _ = backend.watch(&nonexistent, true); // Result varies by platform
     }
 
     #[test]
@@ -451,13 +472,13 @@ mod tests {
         let mut backend = StdBackend::new_for_testing();
 
         // Watch the file
-        assert!(backend.watch(&file_path).is_ok());
+        assert!(backend.watch(&file_path, true).is_ok());
 
         // Unwatch should succeed
         assert!(backend.unwatch(&file_path).is_ok());
 
         // Should be able to watch again after unwatch
-        assert!(backend.watch(&file_path).is_ok());
+        assert!(backend.watch(&file_path, true).is_ok());
     }
 
     #[test]
@@ -471,10 +492,10 @@ mod tests {
         let mut backend = StdBackend::new_for_testing();
 
         // Watch the parent directory
-        assert!(backend.watch(&subdir).is_ok());
+        assert!(backend.watch(&subdir, true).is_ok());
 
         // Watching a file inside should be a no-op (covered by parent)
-        assert!(backend.watch(&file_path).is_ok());
+        assert!(backend.watch(&file_path, true).is_ok());
     }
 
     #[test]
@@ -504,12 +525,12 @@ mod tests {
 
         // Rapidly cycle watch/unwatch to stress test state consistency
         for _ in 0..10 {
-            assert!(backend.watch(&file_path).is_ok());
+            assert!(backend.watch(&file_path, true).is_ok());
             assert!(backend.unwatch(&file_path).is_ok());
         }
 
         // Final watch should still work
-        assert!(backend.watch(&file_path).is_ok());
+        assert!(backend.watch(&file_path, true).is_ok());
     }
 
     #[test]
@@ -522,7 +543,7 @@ mod tests {
         let event_rx = backend.event_receiver();
 
         // Watch the directory (more reliable than watching the file directly)
-        assert!(backend.watch(dir.path()).is_ok());
+        assert!(backend.watch(dir.path(), true).is_ok());
 
         // Give the watcher time to start
         std::thread::sleep(Duration::from_millis(100));
@@ -597,7 +618,7 @@ mod tests {
 
         let mut backend = StdBackend::new_for_testing();
         let event_rx = backend.event_receiver();
-        assert!(backend.watch(dir.path()).is_ok());
+        assert!(backend.watch(dir.path(), true).is_ok());
         std::thread::sleep(Duration::from_millis(100));
 
         // Rapid modifications - 20 writes in quick succession
@@ -635,7 +656,7 @@ mod tests {
 
         let mut backend = StdBackend::new_for_testing();
         let event_rx = backend.event_receiver();
-        assert!(backend.watch(dir.path()).is_ok());
+        assert!(backend.watch(dir.path(), true).is_ok());
         std::thread::sleep(Duration::from_millis(100));
 
         // 10 cycles of create/delete
@@ -670,7 +691,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let mut backend = StdBackend::new_for_testing();
         let event_rx = backend.event_receiver();
-        assert!(backend.watch(dir.path()).is_ok());
+        assert!(backend.watch(dir.path(), true).is_ok());
         std::thread::sleep(Duration::from_millis(100));
 
         // Create 20 files rapidly
@@ -722,7 +743,7 @@ mod tests {
 
         let mut backend = StdBackend::new_for_testing();
         let event_rx = backend.event_receiver();
-        assert!(backend.watch(dir.path()).is_ok());
+        assert!(backend.watch(dir.path(), true).is_ok());
         std::thread::sleep(Duration::from_millis(100));
 
         // Rename the file
@@ -758,7 +779,7 @@ mod tests {
 
         let mut backend = StdBackend::new_for_testing();
         let event_rx = backend.event_receiver();
-        assert!(backend.watch(dir.path()).is_ok());
+        assert!(backend.watch(dir.path(), true).is_ok());
         std::thread::sleep(Duration::from_millis(100));
 
         // Chain of renames
@@ -781,7 +802,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let mut backend = StdBackend::new_for_testing();
         let event_rx = backend.event_receiver();
-        assert!(backend.watch(dir.path()).is_ok());
+        assert!(backend.watch(dir.path(), true).is_ok());
         std::thread::sleep(Duration::from_millis(100));
 
         // Create nested structure
@@ -826,7 +847,7 @@ mod tests {
 
         let mut backend = StdBackend::new_for_testing();
         let event_rx = backend.event_receiver();
-        assert!(backend.watch(dir.path()).is_ok());
+        assert!(backend.watch(dir.path(), true).is_ok());
         std::thread::sleep(Duration::from_millis(100));
 
         // 100 writes with no delay
@@ -863,7 +884,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let mut backend = StdBackend::new_for_testing();
         let event_rx = backend.event_receiver();
-        assert!(backend.watch(dir.path()).is_ok());
+        assert!(backend.watch(dir.path(), true).is_ok());
         std::thread::sleep(Duration::from_millis(100));
 
         let files: Vec<_> = (0..5)
@@ -915,7 +936,7 @@ mod tests {
 
         let mut backend = StdBackend::new_for_testing();
         let event_rx = backend.event_receiver();
-        assert!(backend.watch(dir.path()).is_ok());
+        assert!(backend.watch(dir.path(), true).is_ok());
         std::thread::sleep(Duration::from_millis(100));
 
         // Simulate multiple undo/redo cycles
@@ -969,7 +990,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let mut backend = StdBackend::new_for_testing();
         let event_rx = backend.event_receiver();
-        assert!(backend.watch(dir.path()).is_ok());
+        assert!(backend.watch(dir.path(), true).is_ok());
         std::thread::sleep(Duration::from_millis(100));
 
         // Rapidly create subdirectories with files
@@ -1005,7 +1026,7 @@ mod tests {
 
         let mut backend = StdBackend::new_for_testing();
         let event_rx = backend.event_receiver();
-        assert!(backend.watch(dir.path()).is_ok());
+        assert!(backend.watch(dir.path(), true).is_ok());
         std::thread::sleep(Duration::from_millis(100));
 
         // Create empty file
@@ -1041,7 +1062,7 @@ mod tests {
 
         let mut backend = StdBackend::new_for_testing();
         let event_rx = backend.event_receiver();
-        assert!(backend.watch(dir.path()).is_ok());
+        assert!(backend.watch(dir.path(), true).is_ok());
         std::thread::sleep(Duration::from_millis(100));
 
         fs_err::write(&file_path, "-- long name test").unwrap();
@@ -1067,7 +1088,7 @@ mod tests {
 
         let mut backend = StdBackend::new_for_testing();
         let event_rx = backend.event_receiver();
-        assert!(backend.watch(dir.path()).is_ok());
+        assert!(backend.watch(dir.path(), true).is_ok());
         std::thread::sleep(Duration::from_millis(100));
 
         for name in &special_files {
