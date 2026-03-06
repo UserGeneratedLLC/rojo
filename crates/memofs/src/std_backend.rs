@@ -332,7 +332,11 @@ impl VfsBackend for StdBackend {
 
     fn watch(&mut self, path: &Path, recursive: bool) -> io::Result<()> {
         if self.watches.contains(path) {
-            return Ok(());
+            if !recursive || self.recursive_watches.contains(path) {
+                return Ok(());
+            }
+            // Upgrade: path was watched non-recursively, now needs recursive.
+            // Fall through to re-issue the watch with RecursiveMode::Recursive.
         }
         if path
             .ancestors()
@@ -496,6 +500,39 @@ mod tests {
 
         // Watching a file inside should be a no-op (covered by parent)
         assert!(backend.watch(&file_path, true).is_ok());
+    }
+
+    #[test]
+    fn non_recursive_watch_upgrades_to_recursive() {
+        let dir = tempdir().unwrap();
+        let subdir = dir.path().join("subdir");
+        fs_err::create_dir(&subdir).unwrap();
+        let child = subdir.join("child.txt");
+        fs_err::write(&child, "content").unwrap();
+
+        let mut backend = StdBackend::new_for_testing();
+
+        // Watch non-recursively first
+        assert!(backend.watch(&subdir, false).is_ok());
+        assert!(backend.watches.contains(subdir.as_path()));
+        assert!(!backend.recursive_watches.contains(subdir.as_path()));
+
+        // Child should NOT be covered (parent is non-recursive)
+        assert!(!subdir
+            .ancestors()
+            .skip(1)
+            .any(|a| backend.recursive_watches.contains(a)));
+
+        // Upgrade to recursive
+        assert!(backend.watch(&subdir, true).is_ok());
+        assert!(backend.recursive_watches.contains(subdir.as_path()));
+
+        // Now a child path should be recognized as covered by the recursive ancestor
+        assert!(child
+            .ancestors()
+            .skip(1)
+            .any(|a| backend.recursive_watches.contains(a)));
+        assert!(backend.watch(&child, true).is_ok());
     }
 
     #[test]
