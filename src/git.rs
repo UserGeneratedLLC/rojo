@@ -404,6 +404,10 @@ pub fn git_init_repo(dir: &Path) -> anyhow::Result<()> {
         .args(["config", "--local", "core.safecrlf", "false"])
         .current_dir(dir)
         .output();
+    let _ = Command::new("git")
+        .args(["config", "--system", "core.longpaths", "true"])
+        .current_dir(dir)
+        .output();
 
     Ok(())
 }
