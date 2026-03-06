@@ -179,7 +179,7 @@ impl VfsInner {
     fn read_raw(&mut self, path: &Path) -> io::Result<Vec<u8>> {
         if let Some(cache) = &mut self.prefetch_cache {
             if let Some(contents) = cache.files.remove(path) {
-                if self.watch_enabled {
+                if self.watch_enabled && self.watch_recursive {
                     self.watch_or_record(path)?;
                 }
                 return Ok(contents);
@@ -188,7 +188,7 @@ impl VfsInner {
 
         let contents = self.backend.read(path)?;
 
-        if self.watch_enabled {
+        if self.watch_enabled && self.watch_recursive {
             self.watch_or_record(path)?;
         }
 
