@@ -657,14 +657,11 @@ impl JobThreadContext {
     }
 
     fn handle_vfs_event(&self, event: VfsEvent) -> Vec<AppliedPatchSet> {
-        // Log EVERY VFS event at INFO level for diagnostics.
-        // This is intentionally verbose — it is critical for debugging
-        // file watcher desync issues (e.g., rapid delete+recreate).
         match &event {
-            VfsEvent::Create(path) => log::info!("VFS event: CREATE {}", self.display_path(path)),
-            VfsEvent::Write(path) => log::info!("VFS event: WRITE {}", self.display_path(path)),
-            VfsEvent::Remove(path) => log::info!("VFS event: REMOVE {}", self.display_path(path)),
-            _ => log::info!("VFS event: OTHER {:?}", event),
+            VfsEvent::Create(path) => log::debug!("VFS event: CREATE {}", self.display_path(path)),
+            VfsEvent::Write(path) => log::debug!("VFS event: WRITE {}", self.display_path(path)),
+            VfsEvent::Remove(path) => log::debug!("VFS event: REMOVE {}", self.display_path(path)),
+            _ => log::debug!("VFS event: OTHER {:?}", event),
         }
 
         // Check if this event should be suppressed (one-shot, from API syncback).
@@ -699,7 +696,7 @@ impl JobThreadContext {
                     self.vfs
                         .commit_event(&event)
                         .expect("Error applying VFS change");
-                    log::info!(
+                    log::debug!(
                         "VFS event SUPPRESSED (API syncback echo): {}",
                         self.display_path(path)
                     );
@@ -726,7 +723,7 @@ impl JobThreadContext {
         #[cfg(target_os = "windows")]
         if let VfsEvent::Write(ref path) = event {
             if path.is_dir() {
-                log::info!(
+                log::debug!(
                     "VFS event SKIPPED (directory WRITE, deferring to file events): {}",
                     self.display_path(path)
                 );

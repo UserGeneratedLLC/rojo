@@ -370,7 +370,6 @@ impl ServeSession {
         vfs.clear_prefetch_cache();
 
         let patch_start = Instant::now();
-        let project_folder = root_project.folder_location().to_path_buf();
         let watch_ignore_rules = root_project.path_ignore_rules();
         std::thread::scope(|s| {
             s.spawn(|| {
@@ -386,6 +385,11 @@ impl ServeSession {
                     // watches are required because kqueue directory watches
                     // only fire for structural changes, not child content edits.
                     let passes_ignore = |entry: &walkdir::DirEntry| -> bool {
+                        if let Some(name) = entry.file_name().to_str() {
+                            if matches!(name, ".git" | ".hg" | ".svn") {
+                                return false;
+                            }
+                        }
                         watch_ignore_rules
                             .iter()
                             .all(|rule: &PathIgnoreRule| rule.passes(entry.path()))
@@ -393,7 +397,6 @@ impl ServeSession {
                     vfs.set_watch_recursive(false);
                     for root in &path_roots {
                         for entry in WalkDir::new(root)
-                            .follow_links(true)
                             .into_iter()
                             .filter_entry(&passes_ignore)
                             .flatten()
@@ -402,8 +405,6 @@ impl ServeSession {
                             watch_count += 1;
                         }
                     }
-                    let _ = vfs.watch(&project_folder);
-                    watch_count += 1;
                     vfs.set_watch_recursive(true);
                 } else {
                     // Linux/Windows: inotify uses a single FD for all watches,
@@ -415,10 +416,6 @@ impl ServeSession {
                         let _ = vfs.watch(root);
                         watch_count += 1;
                     }
-                    vfs.set_watch_recursive(false);
-                    let _ = vfs.watch(&project_folder);
-                    vfs.set_watch_recursive(true);
-                    watch_count += 1;
                 }
                 log::debug!(
                     "Set up {} watches in {:.1?}",
