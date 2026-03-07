@@ -402,16 +402,14 @@ impl ServeSession {
                         .filter_entry(&passes_ignore)
                         .flatten()
                     {
-                        // On macOS kqueue, non-recursive directory watches only
-                        // fire for structural changes (child added/removed), NOT
-                        // for child file content modifications. Individual file
-                        // watches are required to detect edits. On Linux/Windows,
-                        // directory watches already cover child file events so
-                        // file watches would be redundant.
-                        if entry.file_type().is_dir() || cfg!(target_os = "macos") {
-                            let _ = vfs.watch(entry.path());
-                            watch_count += 1;
-                        }
+                        // Watch both files and directories. On macOS kqueue,
+                        // file watches are required because directory watches
+                        // only fire for structural changes. On Linux/Windows,
+                        // file watches prevent a debouncer race where read_raw's
+                        // auto-registered file watch conflicts with the directory
+                        // watch during rename-overwrite (atomic save pattern).
+                        let _ = vfs.watch(entry.path());
+                        watch_count += 1;
                     }
                 }
                 // Watch project folder non-recursively for project file edits.
