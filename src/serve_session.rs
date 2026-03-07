@@ -178,8 +178,16 @@ fn prefetch_project_files(project: &Project, sync_scripts_only: bool) -> io::Res
 
     // Also walk $path roots that may be OUTSIDE the project folder
     // (e.g. $path: "../module"). These wouldn't be covered above.
+    // Canonicalize before starts_with to resolve ".." components that
+    // would otherwise cause false positives (e.g. project/../module
+    // literally starts_with project/ but is actually a sibling).
+    let canonical_folder = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
     for root in &roots {
-        if !root.exists() || root.starts_with(folder) {
+        if !root.exists() {
+            continue;
+        }
+        let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        if canonical_root.starts_with(&canonical_folder) {
             continue;
         }
         for e in WalkDir::new(root).follow_links(true).into_iter().flatten() {
