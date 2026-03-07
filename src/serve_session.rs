@@ -291,8 +291,22 @@ impl ServeSession {
         let mut instance_context = InstanceContext::new();
         instance_context.sync_scripts_only = sync_scripts_only;
 
-        vfs.set_watch_recursive(false);
-        vfs.start_watch_recording();
+        let watch_start = Instant::now();
+        let mut path_roots = Vec::new();
+        collect_path_roots(
+            &root_project.tree,
+            root_project.folder_location(),
+            &mut path_roots,
+        );
+        let _ = vfs.watch(root_project.folder_location());
+        for root in &path_roots {
+            let _ = vfs.watch(root);
+        }
+        log::debug!(
+            "Set up {} recursive watches in {:.1?}",
+            path_roots.len() + 1,
+            watch_start.elapsed(),
+        );
 
         let snap_start = Instant::now();
         log::trace!("Generating snapshot of instances from VFS");
@@ -308,30 +322,6 @@ impl ServeSession {
         log::trace!("Applying initial patch set");
         apply_patch_set(&mut tree, patch_set);
         log::debug!("Patch computed + applied in {:.1?}", patch_start.elapsed());
-
-        let watch_start = Instant::now();
-        if let Some(recorded_paths) = vfs.take_recorded_paths() {
-            let dir_count = recorded_paths.iter().filter(|p| p.is_dir()).count();
-            for path in &recorded_paths {
-                if path.is_dir() {
-                    let _ = vfs.watch(path);
-                }
-            }
-            let mut path_roots = Vec::new();
-            collect_path_roots(
-                &root_project.tree,
-                root_project.folder_location(),
-                &mut path_roots,
-            );
-            for root in &path_roots {
-                let _ = vfs.watch(root);
-            }
-            log::debug!(
-                "Selective watching: {} directories watched (non-recursive) in {:.1?}",
-                dir_count + path_roots.len(),
-                watch_start.elapsed(),
-            );
-        }
 
         Ok((root_project, tree))
     }
