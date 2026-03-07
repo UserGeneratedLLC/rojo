@@ -154,9 +154,9 @@ pub fn syncback_loop_with_stats(
 
     // Collect all instance paths BEFORE pruning so we can track external references
     // (references to instances that will be pruned, like SoundGroups in SoundService).
-    log::info!("[PERF] syncback_loop entered");
+    log::debug!("[PERF] syncback_loop entered");
     let pre_prune_paths = collect_all_paths(&new_tree);
-    log::info!(
+    log::debug!(
         "[PERF] collect_all_paths: {:.3}s",
         phase_timer.elapsed().as_secs_f64()
     );
@@ -195,7 +195,7 @@ pub fn syncback_loop_with_stats(
     if ignore_hidden {
         strip_hidden_services(&mut new_tree);
     }
-    log::info!(
+    log::debug!(
         "[PERF] prune + filter: {:.3}s",
         phase_timer.elapsed().as_secs_f64()
     );
@@ -203,7 +203,7 @@ pub fn syncback_loop_with_stats(
     let phase_timer = std::time::Instant::now();
     let mut deferred_referents = collect_referents(&new_tree, &pre_prune_paths, None);
     let placeholder_map = std::mem::take(&mut deferred_referents.placeholder_to_source_and_target);
-    log::info!(
+    log::debug!(
         "[PERF] collect_referents: {:.3}s",
         phase_timer.elapsed().as_secs_f64()
     );
@@ -262,7 +262,7 @@ pub fn syncback_loop_with_stats(
     if !ignore_referents {
         link_referents(deferred_referents, &mut new_tree)?;
     }
-    log::info!(
+    log::debug!(
         "[PERF] filter props + link refs: {:.3}s",
         phase_timer.elapsed().as_secs_f64()
     );
@@ -275,13 +275,13 @@ pub fn syncback_loop_with_stats(
             || hash_tree(project, old_tree.inner(), old_tree.get_root_id()),
             || hash_tree(project, &new_tree, new_tree.root_ref()),
         );
-        log::info!(
+        log::debug!(
             "[PERF] hash both trees (parallel): {:.3}s",
             phase_timer.elapsed().as_secs_f64()
         );
         result
     } else {
-        log::info!("[PERF] hash skipped (clean mode)");
+        log::debug!("[PERF] hash skipped (clean mode)");
         (HashMap::new(), HashMap::new())
     };
 
@@ -295,7 +295,7 @@ pub fn syncback_loop_with_stats(
                 .into_iter()
                 .filter(|p| is_valid_path(&ignore_patterns, project_path, p))
                 .collect();
-            log::info!(
+            log::debug!(
                 "[PERF] orphan scan: reusing pre-walked paths ({} -> {} after syncback filters)",
                 before,
                 filtered.len()
@@ -465,7 +465,7 @@ pub fn syncback_loop_with_stats(
     } else {
         HashSet::new()
     };
-    log::info!(
+    log::debug!(
         "[PERF] orphan scan: {:.3}s ({} paths)",
         phase_timer.elapsed().as_secs_f64(),
         existing_paths.len()
@@ -649,7 +649,7 @@ pub fn syncback_loop_with_stats(
 
         snapshots.extend(syncback.children);
     }
-    log::info!(
+    log::debug!(
         "[PERF] main walk loop: {:.3}s ({} instances, syncback={:.3}s, merge={:.3}s, path={:.3}s)",
         phase_timer.elapsed().as_secs_f64(),
         walk_count,
@@ -676,7 +676,7 @@ pub fn syncback_loop_with_stats(
             let relative = crate::compute_relative_ref_path(&source_abs, &target_abs);
             substitutions.push((placeholder.clone(), relative));
         }
-        log::info!(
+        log::debug!(
             "[PERF] build ref substitutions: {:.3}s (count={})",
             phase_timer.elapsed().as_secs_f64(),
             substitutions.len()
@@ -686,7 +686,7 @@ pub fn syncback_loop_with_stats(
         if !substitutions.is_empty() {
             fs_snapshot.fix_ref_paths(&substitutions);
         }
-        log::info!(
+        log::debug!(
             "[PERF] apply ref substitutions: {:.3}s",
             sub_timer.elapsed().as_secs_f64()
         );
@@ -917,7 +917,7 @@ pub fn syncback_loop_with_stats(
         }
     }
 
-    log::info!(
+    log::debug!(
         "[PERF] orphan removal: {:.3}s",
         phase_timer.elapsed().as_secs_f64()
     );

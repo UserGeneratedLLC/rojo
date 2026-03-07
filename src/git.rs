@@ -674,31 +674,9 @@ pub fn compute_git_metadata(
 
 /// Refreshes the git index if the project is in a git repository.
 ///
-/// This is useful because syncback may rewrite files with identical content,
-/// which can cause git to report them as modified due to timestamp changes.
-pub fn refresh_git_index(project_dir: &Path) {
-    log::info!("Refreshing git index...");
-    let output = match Command::new("git")
-        .args(["update-index", "--refresh"])
-        .current_dir(project_dir)
-        .output()
-    {
-        Ok(o) => o,
-        Err(e) => {
-            log::debug!("Failed to run git update-index --refresh: {}", e);
-            return;
-        }
-    };
-
-    if output.status.success() {
-        log::info!("Git index refreshed.");
-    } else {
-        log::warn!(
-            "git update-index --refresh failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-}
+/// Currently a no-op -- `git update-index --refresh` adds latency without
+/// meaningful benefit since we already skip unchanged files via hash comparison.
+pub fn refresh_git_index(_project_dir: &Path) {}
 
 #[cfg(test)]
 mod tests {

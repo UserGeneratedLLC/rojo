@@ -382,7 +382,7 @@ impl ServeSession {
                                 })
                                 .cloned()
                                 .collect();
-                            log::info!(
+                            log::debug!(
                                 "[PERF] captured {} walked paths from prefetch ({} roots) for orphan reuse",
                                 paths.len(),
                                 roots.len()

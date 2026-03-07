@@ -145,8 +145,6 @@ pub(crate) fn run_live_syncback(
         removed
     );
 
-    crate::git::refresh_git_index(base_path);
-
     drop(session_old);
 
     Ok(SyncbackStats { added, removed })

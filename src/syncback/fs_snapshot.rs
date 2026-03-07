@@ -291,7 +291,7 @@ impl FsSnapshot {
     ) -> io::Result<()> {
         let base_path = base.as_ref();
 
-        log::info!(
+        log::debug!(
             "[PERF] write_to_vfs_parallel: {} files, {} dirs to add; {} files, {} dirs to remove",
             self.added_files.len(),
             self.added_dirs.len(),
@@ -318,7 +318,7 @@ impl FsSnapshot {
                 };
             }
         } // Release lock before parallel phase
-        log::info!(
+        log::debug!(
             "[PERF]   phase1 create dirs: {:.3}s",
             phase1_timer.elapsed().as_secs_f64()
         );
@@ -369,7 +369,7 @@ impl FsSnapshot {
             }
         });
 
-        log::info!(
+        log::debug!(
             "[PERF]   phase2 write files: {:.3}s (git_skip={}, byte_skip={}, size_diff={})",
             phase2_timer.elapsed().as_secs_f64(),
             git_skipped.load(Ordering::Relaxed),
@@ -409,7 +409,7 @@ impl FsSnapshot {
             }
         });
 
-        log::info!(
+        log::debug!(
             "[PERF]   phase3 remove files: {:.3}s",
             phase3_timer.elapsed().as_secs_f64()
         );
@@ -446,7 +446,7 @@ impl FsSnapshot {
             }
         }
 
-        log::info!(
+        log::debug!(
             "[PERF]   phase4 remove dirs: {:.3}s",
             phase4_timer.elapsed().as_secs_f64()
         );

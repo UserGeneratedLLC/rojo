@@ -159,14 +159,14 @@ impl SyncbackCommand {
         let dom_start_timer = Instant::now();
         let dom_new = read_dom(&path_new, input_kind)?;
         let dom_elapsed = dom_start_timer.elapsed();
-        log::info!("[PERF] parse rbxl: {:.3}s", dom_elapsed.as_secs_f64());
+        log::debug!("[PERF] parse rbxl: {:.3}s", dom_elapsed.as_secs_f64());
 
         let vfs = Vfs::new_oneshot();
 
         let project_start_timer = Instant::now();
         let mut session_old = ServeSession::new_oneshot(vfs, path_old.clone())?;
         let project_elapsed = project_start_timer.elapsed();
-        log::info!(
+        log::debug!(
             "[PERF] init old tree (prefetch+snapshot+patch): {:.3}s",
             project_elapsed.as_secs_f64()
         );
@@ -205,7 +205,7 @@ impl SyncbackCommand {
             pre_walked_paths,
         )?;
         let syncback_elapsed = syncback_timer.elapsed();
-        log::info!(
+        log::debug!(
             "[PERF] syncback_loop total: {:.3}s",
             syncback_elapsed.as_secs_f64()
         );
@@ -239,7 +239,7 @@ impl SyncbackCommand {
 
             let git_cache_timer = Instant::now();
             let git_cache = crate::git::GitIndexCache::new(base_path);
-            log::info!(
+            log::debug!(
                 "[PERF] git index cache build: {:.3}s (entries: {})",
                 git_cache_timer.elapsed().as_secs_f64(),
                 git_cache.as_ref().map_or(0, |c| c.len()),
@@ -286,7 +286,7 @@ impl SyncbackCommand {
                     git_cache.as_ref(),
                 )?;
             }
-            log::info!(
+            log::debug!(
                 "[PERF] write_to_vfs_parallel: {:.3}s",
                 write_timer.elapsed().as_secs_f64()
             );
@@ -295,13 +295,6 @@ impl SyncbackCommand {
                 "Finished syncback: wrote {} files/folders, removed {}.",
                 result.fs_snapshot.added_paths().len(),
                 result.fs_snapshot.removed_paths().len()
-            );
-
-            let git_refresh_timer = Instant::now();
-            crate::git::refresh_git_index(base_path);
-            log::info!(
-                "[PERF] git refresh_index: {:.3}s",
-                git_refresh_timer.elapsed().as_secs_f64()
             );
 
             // Delete input file if using default Project.rbxl location
@@ -324,7 +317,7 @@ impl SyncbackCommand {
             log::info!("Aborting before writing to file system due to `--dry-run`");
         }
 
-        log::info!(
+        log::debug!(
             "[PERF] TOTAL syncback command: {:.3}s",
             total_timer.elapsed().as_secs_f64()
         );
