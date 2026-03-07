@@ -384,38 +384,49 @@ impl ServeSession {
                 use walkdir::WalkDir;
 
                 let watch_start = Instant::now();
-                // Walk each $path root, skipping directories that match
-                // globIgnorePaths, and watch each non-ignored directory
-                // individually (non-recursive). This avoids creating kqueue
-                // FDs for ignored subtrees on macOS.
-                let passes_ignore = |entry: &walkdir::DirEntry| -> bool {
-                    watch_ignore_rules
-                        .iter()
-                        .all(|rule: &PathIgnoreRule| rule.passes(entry.path()))
-                };
-                vfs.set_watch_recursive(false);
                 let mut watch_count: usize = 0;
-                for root in &path_roots {
-                    for entry in WalkDir::new(root)
-                        .follow_links(true)
-                        .into_iter()
-                        .filter_entry(&passes_ignore)
-                        .flatten()
-                    {
-                        // Watch both files and directories. On macOS kqueue,
-                        // file watches are required because directory watches
-                        // only fire for structural changes. On Linux/Windows,
-                        // file watches prevent a debouncer race where read_raw's
-                        // auto-registered file watch conflicts with the directory
-                        // watch during rename-overwrite (atomic save pattern).
-                        let _ = vfs.watch(entry.path());
+
+                if cfg!(target_os = "macos") {
+                    // macOS kqueue: one FD per watched path. Walk each $path
+                    // root, skip globIgnorePaths subtrees, and watch every
+                    // non-ignored file and directory non-recursively. File
+                    // watches are required because kqueue directory watches
+                    // only fire for structural changes, not child content edits.
+                    let passes_ignore = |entry: &walkdir::DirEntry| -> bool {
+                        watch_ignore_rules
+                            .iter()
+                            .all(|rule: &PathIgnoreRule| rule.passes(entry.path()))
+                    };
+                    vfs.set_watch_recursive(false);
+                    for root in &path_roots {
+                        for entry in WalkDir::new(root)
+                            .follow_links(true)
+                            .into_iter()
+                            .filter_entry(&passes_ignore)
+                            .flatten()
+                        {
+                            let _ = vfs.watch(entry.path());
+                            watch_count += 1;
+                        }
+                    }
+                    let _ = vfs.watch(&project_folder);
+                    watch_count += 1;
+                    vfs.set_watch_recursive(true);
+                } else {
+                    // Linux/Windows: inotify uses a single FD for all watches,
+                    // RDCW uses one handle per directory. Recursive watches are
+                    // cheap and directory watches already cover child file
+                    // events. globIgnorePaths filtering is handled by the
+                    // change processor's event filter.
+                    for root in &path_roots {
+                        let _ = vfs.watch(root);
                         watch_count += 1;
                     }
+                    vfs.set_watch_recursive(false);
+                    let _ = vfs.watch(&project_folder);
+                    vfs.set_watch_recursive(true);
+                    watch_count += 1;
                 }
-                // Watch project folder non-recursively for project file edits.
-                let _ = vfs.watch(&project_folder);
-                watch_count += 1;
-                vfs.set_watch_recursive(true);
                 log::debug!(
                     "Set up {} watches in {:.1?}",
                     watch_count,
