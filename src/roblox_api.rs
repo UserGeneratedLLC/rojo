@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::{self, Write as _};
 
 use anyhow::{bail, Context};
@@ -248,6 +249,56 @@ pub fn fetch_experience_name(place_id: u64, auth: &RobloxAuth) -> anyhow::Result
     }
 
     Ok(None)
+}
+
+#[derive(Debug, Deserialize)]
+struct PlaceDetail {
+    #[serde(rename = "placeId")]
+    place_id: u64,
+    name: String,
+}
+
+/// Fetch place names for one or more place IDs via the multiget-place-details endpoint.
+///
+/// Returns a map of place_id -> place_name. Places that cannot be resolved are omitted.
+/// Falls back to no-auth if API key auth fails (games.roblox.com may not support it).
+pub fn fetch_place_names(
+    place_ids: &[u64],
+    auth: &RobloxAuth,
+) -> anyhow::Result<HashMap<u64, String>> {
+    let client = reqwest::blocking::Client::new();
+
+    let mut url = "https://games.roblox.com/v1/games/multiget-place-details?".to_string();
+    for (i, id) in place_ids.iter().enumerate() {
+        if i > 0 {
+            url.push('&');
+        }
+        url.push_str(&format!("placeIds={id}"));
+    }
+
+    let try_parse = |resp: reqwest::blocking::Response| -> Option<HashMap<u64, String>> {
+        let details: Vec<PlaceDetail> = resp.json().ok()?;
+        let map: HashMap<u64, String> = details.into_iter().map(|d| (d.place_id, d.name)).collect();
+        Some(map)
+    };
+
+    let req = apply_auth(client.get(&url), auth);
+    if let Ok(resp) = req.send() {
+        if let Some(map) = try_parse(resp) {
+            return Ok(map);
+        }
+    }
+
+    if matches!(auth, RobloxAuth::ApiKey(_)) {
+        let req = client.get(&url);
+        if let Ok(resp) = req.send() {
+            if let Some(map) = try_parse(resp) {
+                return Ok(map);
+            }
+        }
+    }
+
+    Ok(HashMap::new())
 }
 
 fn apply_auth(

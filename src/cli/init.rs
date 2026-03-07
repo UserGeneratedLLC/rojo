@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::str::FromStr;
 use std::{
     collections::VecDeque,
@@ -53,8 +54,6 @@ pub struct InitCommand {
 
 impl InitCommand {
     pub fn run(self) -> anyhow::Result<()> {
-        let template = self.kind.template();
-
         let base_path = resolve_path(&self.path);
 
         if base_path.exists() {
@@ -75,132 +74,18 @@ impl InitCommand {
             .and_then(|name| name.to_str())
             .unwrap_or("new-project");
 
-        let project_params = ProjectParams {
-            name: project_name.to_owned(),
-            place_id: self.placeid,
-        };
+        println!("Creating new {:?} project '{}'", self.kind, project_name);
 
-        println!(
-            "Creating new {:?} project '{}'",
-            self.kind, project_params.name
-        );
+        write_template_files(
+            &base_path,
+            self.kind,
+            project_name,
+            self.placeid,
+            self.skip_git,
+            &HashSet::new(),
+        )?;
 
-        let vfs = Vfs::new(template);
-        vfs.set_watch_enabled(false);
-
-        let mut queue = VecDeque::with_capacity(8);
-        for entry in vfs.read_dir("")? {
-            queue.push_back(entry?.path().to_path_buf())
-        }
-
-        while let Some(mut path) = queue.pop_front() {
-            let metadata = vfs.metadata(&path)?;
-            if metadata.is_dir() {
-                fs_err::create_dir(base_path.join(&path))?;
-                for entry in vfs.read_dir(&path)? {
-                    queue.push_back(entry?.path().to_path_buf());
-                }
-            } else {
-                let content = vfs.read_to_string_lf_normalized(&path)?;
-                if let Some(file_stem) = path.file_name().and_then(OsStr::to_str) {
-                    if file_stem == GIT_IGNORE_PLACEHOLDER {
-                        if self.skip_git {
-                            continue;
-                        } else {
-                            path.set_file_name(".gitignore");
-                        }
-                    }
-                }
-                write_if_not_exists(
-                    &base_path.join(&path),
-                    &project_params.render_template(&content),
-                )?;
-            }
-        }
-
-        let rules_dir = base_path.join(".cursor/rules");
-        fs::create_dir_all(&rules_dir)?;
-        write_if_not_exists(&rules_dir.join("atlas-project.mdc"), ATLAS_PROJECT_MDC)?;
-
-        let did_git_init = if !self.skip_git && crate::git::git_repo_root(&base_path).is_none() {
-            log::debug!("Initializing Git repository...");
-
-            crate::git::git_init_repo(&base_path).context("Failed to initialize git repository")?;
-
-            true
-        } else {
-            !self.skip_git
-        };
-
-        if did_git_init {
-            crate::git::git_add_all_and_commit(&base_path, "Initial commit");
-        }
-
-        if !self.skip_rules && did_git_init {
-            log::debug!("Adding agent submodules...");
-
-            let submodules: &[(&str, &str)] = &[
-                (
-                    "https://github.com/UserGeneratedLLC/agent-rules.git",
-                    ".cursor/rules/shared",
-                ),
-                (
-                    "https://github.com/UserGeneratedLLC/agent-commands.git",
-                    ".cursor/commands/shared",
-                ),
-                (
-                    "https://github.com/UserGeneratedLLC/agent-skills.git",
-                    ".cursor/skills/shared",
-                ),
-                (
-                    "https://github.com/UserGeneratedLLC/agent-docs.git",
-                    ".cursor/docs/shared",
-                ),
-            ];
-
-            // Shallow-clone all repos in parallel (network I/O).
-            let clone_results: Vec<anyhow::Result<()>> = std::thread::scope(|s| {
-                let handles: Vec<_> = submodules
-                    .iter()
-                    .map(|(url, path)| {
-                        let target = base_path.join(path);
-                        s.spawn(move || crate::git::git_clone_shallow(url, &target))
-                    })
-                    .collect();
-                handles
-                    .into_iter()
-                    .map(|h| {
-                        h.join()
-                            .unwrap_or_else(|_| Err(anyhow::anyhow!("thread panicked")))
-                    })
-                    .collect()
-            });
-
-            // Register each clone as a submodule (sequential, index-lock safe).
-            let mut any_failed = false;
-            for ((url, path), clone_res) in submodules.iter().zip(clone_results) {
-                if let Err(e) = clone_res {
-                    log::warn!("Failed to clone {path}: {e}");
-                    any_failed = true;
-                    continue;
-                }
-                if let Err(e) = crate::git::git_submodule_add(&base_path, url, path) {
-                    log::warn!("Failed to register submodule {path}: {e}");
-                    any_failed = true;
-                }
-            }
-
-            if let Err(e) = crate::git::git_config_set(&base_path, "submodule.recurse", "true") {
-                log::warn!("Failed to set submodule.recurse: {e}");
-                any_failed = true;
-            }
-
-            if !any_failed {
-                println!("Added agent submodules successfully.");
-            }
-
-            crate::git::git_add_all_and_commit(&base_path, "Add agent submodules");
-        }
+        setup_git_and_rules(&base_path, self.skip_git, self.skip_rules)?;
 
         println!("Created project successfully.");
 
@@ -211,6 +96,154 @@ impl InitCommand {
 
         Ok(())
     }
+}
+
+/// Write template files from the baked-in template to `base_path`.
+///
+/// `exclude_files` is a set of template filenames to skip (e.g. `"default.project.json5"`).
+pub fn write_template_files(
+    base_path: &Path,
+    kind: InitKind,
+    project_name: &str,
+    place_id: Option<u64>,
+    skip_git: bool,
+    exclude_files: &HashSet<&str>,
+) -> anyhow::Result<()> {
+    let template = kind.template();
+    let project_params = ProjectParams {
+        name: project_name.to_owned(),
+        place_id,
+    };
+
+    let vfs = Vfs::new(template);
+    vfs.set_watch_enabled(false);
+
+    let mut queue = VecDeque::with_capacity(8);
+    for entry in vfs.read_dir("")? {
+        queue.push_back(entry?.path().to_path_buf())
+    }
+
+    while let Some(mut path) = queue.pop_front() {
+        let metadata = vfs.metadata(&path)?;
+        if metadata.is_dir() {
+            fs_err::create_dir_all(base_path.join(&path))?;
+            for entry in vfs.read_dir(&path)? {
+                queue.push_back(entry?.path().to_path_buf());
+            }
+        } else {
+            if let Some(file_name) = path.file_name().and_then(OsStr::to_str) {
+                if exclude_files.contains(file_name) {
+                    continue;
+                }
+            }
+
+            let content = vfs.read_to_string_lf_normalized(&path)?;
+            if let Some(file_name) = path.file_name().and_then(OsStr::to_str) {
+                if file_name == GIT_IGNORE_PLACEHOLDER {
+                    if skip_git {
+                        continue;
+                    } else {
+                        path.set_file_name(".gitignore");
+                    }
+                }
+            }
+            write_if_not_exists(
+                &base_path.join(&path),
+                &project_params.render_template(&content),
+            )?;
+        }
+    }
+
+    let rules_dir = base_path.join(".cursor/rules");
+    fs::create_dir_all(&rules_dir)?;
+    write_if_not_exists(&rules_dir.join("atlas-project.mdc"), ATLAS_PROJECT_MDC)?;
+
+    Ok(())
+}
+
+/// Initialize git repository, make initial commit, and optionally add agent submodules.
+pub fn setup_git_and_rules(
+    base_path: &Path,
+    skip_git: bool,
+    skip_rules: bool,
+) -> anyhow::Result<()> {
+    let did_git_init = if !skip_git && crate::git::git_repo_root(base_path).is_none() {
+        log::debug!("Initializing Git repository...");
+        crate::git::git_init_repo(base_path).context("Failed to initialize git repository")?;
+        true
+    } else {
+        !skip_git
+    };
+
+    if did_git_init {
+        crate::git::git_add_all_and_commit(base_path, "Initial commit");
+    }
+
+    if !skip_rules && did_git_init {
+        log::debug!("Adding agent submodules...");
+
+        let submodules: &[(&str, &str)] = &[
+            (
+                "https://github.com/UserGeneratedLLC/agent-rules.git",
+                ".cursor/rules/shared",
+            ),
+            (
+                "https://github.com/UserGeneratedLLC/agent-commands.git",
+                ".cursor/commands/shared",
+            ),
+            (
+                "https://github.com/UserGeneratedLLC/agent-skills.git",
+                ".cursor/skills/shared",
+            ),
+            (
+                "https://github.com/UserGeneratedLLC/agent-docs.git",
+                ".cursor/docs/shared",
+            ),
+        ];
+
+        let clone_results: Vec<anyhow::Result<()>> = std::thread::scope(|s| {
+            let handles: Vec<_> = submodules
+                .iter()
+                .map(|(url, path)| {
+                    let target = base_path.join(path);
+                    s.spawn(move || crate::git::git_clone_shallow(url, &target))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .map(|h| {
+                    h.join()
+                        .unwrap_or_else(|_| Err(anyhow::anyhow!("thread panicked")))
+                })
+                .collect()
+        });
+
+        let mut any_failed = false;
+        for ((url, path), clone_res) in submodules.iter().zip(clone_results) {
+            if let Err(e) = clone_res {
+                log::warn!("Failed to clone {path}: {e}");
+                any_failed = true;
+                continue;
+            }
+            if let Err(e) = crate::git::git_submodule_add(base_path, url, path) {
+                log::warn!("Failed to register submodule {path}: {e}");
+                any_failed = true;
+            }
+        }
+
+        if let Err(e) = crate::git::git_config_set(base_path, "submodule.recurse", "true") {
+            log::warn!("Failed to set submodule.recurse: {e}");
+            any_failed = true;
+        }
+
+        if !any_failed {
+            println!("Added agent submodules successfully.");
+        }
+
+        crate::git::git_add_all_and_commit(base_path, "Add agent submodules");
+    }
+
+    Ok(())
 }
 
 /// The templates we support for initializing a Rojo project.
@@ -289,7 +322,7 @@ impl ProjectParams {
 }
 
 /// Write a file if it does not exist yet, otherwise, leave it alone.
-fn write_if_not_exists(path: &Path, contents: &str) -> Result<(), anyhow::Error> {
+pub fn write_if_not_exists(path: &Path, contents: &str) -> Result<(), anyhow::Error> {
     let file_res = OpenOptions::new().write(true).create_new(true).open(path);
 
     let mut file = match file_res {
