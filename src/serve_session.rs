@@ -189,7 +189,7 @@ fn prefetch_project_files(project: &Project, sync_scripts_only: bool) -> io::Res
         }
         let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
         if canonical_root != canonical_folder {
-            walked_roots.push(canonical_root.clone());
+            walked_roots.push(root.clone());
         }
         if canonical_root == canonical_folder {
             // $path points to the project folder itself -- shallow walk
