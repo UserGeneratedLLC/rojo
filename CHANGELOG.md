@@ -33,13 +33,28 @@ Making a new release? Simply add the new header with the version and date undern
 
 * Add VFS recording mode and optimized watch setup to reduce OS file-watch handles during `atlas serve` startup on large projects
 * Add PrefetchCache directory init-file resolution for faster directory handling during snapshot prefetch
+* Optimize project file prefetching with shallow folder walk and depth-limited traversal for `$path` roots
+* Watch project folder non-recursively while using recursive watches only for `$path` roots, reducing watch handle count
+* Add `is_watch_enabled` method to VFS for querying file watching status
 * Enhance scripts-only mode to filter non-script files at the snapshot middleware, VFS event, and prefetch layers
 * Fix `sync_scripts_only` not being propagated to `InstanceContext` during tree freshness checks in `ServeSession`
+* Fix prefetch path canonicalization to avoid false positives with relative paths
+* Fix `walked_roots` tracking to correctly store raw paths and only include recursively watched directories
 * Set `core.longpaths` git config during repository initialization for Windows long-path support
+* Add guard test ensuring `INIT_FILE_PRIORITY` and `DEFAULT_PROJECT_NAMES` arrays stay in sync
+* Add prefetch cache integration tests for metadata retrieval and walked-root boundaries
 
 <details>
 <summary>Full commit log</summary>
 
+- `5275d45a` Add is_watch_enabled method to VFS and enhance prefetch cache tests
+- `8b18dc45` Add guard test for INIT_FILE_PRIORITY vs DEFAULT_PROJECT_NAMES sync
+- `e86ebdad` Fix walked_roots to store raw paths, not canonical
+- `5ff0ed3f` Refactor cache lookup logic in VFS to streamline path checks
+- `dc788711` Fix walked_roots to only include recursively walked directories
+- `4e9e676c` Refactor prefetch_project_files and VFS watch setup for improved efficiency
+- `df773eab` Improve project file prefetching by canonicalizing paths
+- `aa203177` Enhance VFS functionality and performance improvements
 - `6168597a` Enhance PrefetchCache with directory init-file resolution
 - `14d4bc13` Update instance context in ServeSession for script synchronization
 - `0fb5c877` Refactor VFS watching mechanism for improved performance
