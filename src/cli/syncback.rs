@@ -18,7 +18,7 @@ use crate::{
     project::Project,
     roblox_api,
     serve_session::ServeSession,
-    syncback::{syncback_loop, FsSnapshot},
+    syncback::{syncback_loop_with_walked_paths, FsSnapshot},
 };
 
 use super::{resolve_path, sourcemap::write_sourcemap_from_syncback, GlobalOptions};
@@ -153,25 +153,25 @@ impl SyncbackCommand {
             }
         };
 
+        let total_timer = Instant::now();
+
         let input_kind = FileKind::from_path(&path_new).context(UNKNOWN_INPUT_KIND_ERR)?;
         let dom_start_timer = Instant::now();
         let dom_new = read_dom(&path_new, input_kind)?;
-        log::debug!(
-            "Finished opening file in {:0.02}s",
-            dom_start_timer.elapsed().as_secs_f32()
-        );
+        let dom_elapsed = dom_start_timer.elapsed();
+        log::info!("[PERF] parse rbxl: {:.3}s", dom_elapsed.as_secs_f64());
 
-        // Use oneshot Vfs for syncback - file watching isn't needed and
-        // watcher errors shouldn't terminate the process
         let vfs = Vfs::new_oneshot();
 
         let project_start_timer = Instant::now();
-        let session_old = ServeSession::new_oneshot(vfs, path_old.clone())?;
-        log::debug!(
-            "Finished opening project in {:0.02}s",
-            project_start_timer.elapsed().as_secs_f32()
+        let mut session_old = ServeSession::new_oneshot(vfs, path_old.clone())?;
+        let project_elapsed = project_start_timer.elapsed();
+        log::info!(
+            "[PERF] init old tree (prefetch+snapshot+patch): {:.3}s",
+            project_elapsed.as_secs_f64()
         );
 
+        let pre_walked_paths = session_old.take_walked_paths();
         let mut dom_old = session_old.tree();
 
         log::debug!("Old root: {}", dom_old.inner().root().class);
@@ -196,16 +196,18 @@ impl SyncbackCommand {
         } else {
             log::info!("Beginning syncback (clean mode)...");
         }
-        let result = syncback_loop(
+        let result = syncback_loop_with_walked_paths(
             session_old.vfs(),
             &mut dom_old,
             dom_new,
             session_old.root_project(),
             self.incremental,
+            pre_walked_paths,
         )?;
-        log::debug!(
-            "Syncback finished in {:.02}s!",
-            syncback_timer.elapsed().as_secs_f32()
+        let syncback_elapsed = syncback_timer.elapsed();
+        log::info!(
+            "[PERF] syncback_loop total: {:.3}s",
+            syncback_elapsed.as_secs_f64()
         );
 
         let base_path = session_old.root_project().folder_location();
@@ -235,14 +237,18 @@ impl SyncbackCommand {
 
             log::info!("Writing to the file system...");
 
+            let git_cache_timer = Instant::now();
             let git_cache = crate::git::GitIndexCache::new(base_path);
+            log::info!(
+                "[PERF] git index cache build: {:.3}s (entries: {})",
+                git_cache_timer.elapsed().as_secs_f64(),
+                git_cache.as_ref().map_or(0, |c| c.len()),
+            );
 
+            let write_timer = Instant::now();
             if self.sourcemap {
                 let sourcemap_path = base_path.join("sourcemap.json");
 
-                // Run file writes and sourcemap generation in parallel.
-                // The sourcemap is built entirely from in-memory data (WeakDom + path map),
-                // so it doesn't need to wait for files to be on disk.
                 let (write_result, sourcemap_result) = std::thread::scope(|s| {
                     let write_handle = s.spawn(|| {
                         result.fs_snapshot.write_to_vfs_parallel(
@@ -280,6 +286,10 @@ impl SyncbackCommand {
                     git_cache.as_ref(),
                 )?;
             }
+            log::info!(
+                "[PERF] write_to_vfs_parallel: {:.3}s",
+                write_timer.elapsed().as_secs_f64()
+            );
 
             log::info!(
                 "Finished syncback: wrote {} files/folders, removed {}.",
@@ -287,7 +297,12 @@ impl SyncbackCommand {
                 result.fs_snapshot.removed_paths().len()
             );
 
+            let git_refresh_timer = Instant::now();
             crate::git::refresh_git_index(base_path);
+            log::info!(
+                "[PERF] git refresh_index: {:.3}s",
+                git_refresh_timer.elapsed().as_secs_f64()
+            );
 
             // Delete input file if using default Project.rbxl location
             if let Some(input_path) = &delete_input_after_syncback {
@@ -309,9 +324,11 @@ impl SyncbackCommand {
             log::info!("Aborting before writing to file system due to `--dry-run`");
         }
 
-        // It is potentially prohibitively expensive to drop a ServeSession,
-        // and the program is about to exit anyway so we're just going to forget
-        // about it.
+        log::info!(
+            "[PERF] TOTAL syncback command: {:.3}s",
+            total_timer.elapsed().as_secs_f64()
+        );
+
         forget(session_old);
 
         // Temp file is automatically cleaned up when _temp_file is dropped

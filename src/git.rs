@@ -248,13 +248,25 @@ pub struct GitIndexCache {
 
 impl GitIndexCache {
     pub fn new(project_root: &Path) -> Option<Self> {
+        let timer = Instant::now();
         let repo_root = git_repo_root(project_root)?;
 
-        let output = Command::new("git")
-            .args(["ls-files", "--stage"])
-            .current_dir(&repo_root)
-            .output()
-            .ok()?;
+        let project_rel_prefix = project_root
+            .strip_prefix(&repo_root)
+            .ok()
+            .and_then(|p| p.to_str())
+            .map(|s| s.replace('\\', "/"));
+
+        let mut cmd = Command::new("git");
+        cmd.args(["ls-files", "--stage"]);
+        if let Some(ref prefix) = project_rel_prefix {
+            if !prefix.is_empty() {
+                cmd.arg("--").arg(prefix);
+            }
+        }
+        cmd.current_dir(&repo_root);
+
+        let output = cmd.output().ok()?;
 
         if !output.status.success() {
             return None;
@@ -263,7 +275,6 @@ impl GitIndexCache {
         let mut entries = HashMap::new();
         let stdout = String::from_utf8_lossy(&output.stdout);
         for line in stdout.lines() {
-            // Format: <mode> <sha1> <stage>\t<path>
             let (meta, path) = match line.split_once('\t') {
                 Some(pair) => pair,
                 None => continue,
@@ -283,8 +294,16 @@ impl GitIndexCache {
             entries.insert(project_rel, hash_hex);
         }
 
-        log::debug!("GitIndexCache: loaded {} index entries", entries.len());
+        log::debug!(
+            "GitIndexCache: loaded {} index entries in {:.3}s",
+            entries.len(),
+            timer.elapsed().as_secs_f64()
+        );
         Some(Self { entries })
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
     }
 
     /// Returns `true` if the new content's blob SHA1 matches the git index

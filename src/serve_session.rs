@@ -127,6 +127,11 @@ pub struct ServeSession {
     /// Used as diff baseline so that files committed after session start
     /// still appear in `changedIds` for auto-select defaults.
     initial_head_commit: Option<String>,
+
+    /// Filesystem paths discovered during prefetch walk (non-root entries).
+    /// Available for syncback to reuse for orphan detection, avoiding a
+    /// redundant walkdir.
+    prefetch_walked_paths: Option<HashSet<PathBuf>>,
 }
 
 /// Collect all filesystem paths reachable from the project tree's `$path`
@@ -321,11 +326,17 @@ pub fn collect_path_roots(node: &crate::project::ProjectNode, base: &Path, out: 
 impl ServeSession {
     /// Shared initialization: loads the project and builds the initial
     /// snapshot tree. Used by both `new()` and `new_oneshot()`.
-    fn init_tree(vfs: &Vfs, start_path: &Path) -> Result<(Project, RojoTree), ServeSessionError> {
+    /// Returns the walked paths from prefetch (if available) for syncback reuse.
+    fn init_tree(
+        vfs: &Vfs,
+        start_path: &Path,
+    ) -> Result<(Project, RojoTree, Option<HashSet<PathBuf>>), ServeSessionError> {
         log::trace!("Starting new ServeSession at path {}", start_path.display());
 
         let root_project = Project::load_initial_project(vfs, start_path)?;
         let sync_scripts_only = root_project.sync_scripts_only.unwrap_or(false);
+
+        let mut walked_paths: Option<HashSet<PathBuf>> = None;
 
         if std::env::var("ATLAS_SEQUENTIAL").is_err() {
             let prefetch_start = Instant::now();
@@ -338,6 +349,46 @@ impl ServeSession {
                         prefetch_start.elapsed()
                     );
                     if !cache.is_file.is_empty() {
+                        let ignore_rules = root_project.path_ignore_rules();
+                        let project_path = root_project.folder_location();
+                        let git_glob = crate::glob::Glob::new(".git/**").unwrap();
+                        let has_hidden_component = |p: &Path| -> bool {
+                            if let Some(parent) = p.parent() {
+                                for component in parent.components() {
+                                    if let Some(name) = component.as_os_str().to_str() {
+                                        if name.starts_with('.') {
+                                            return true;
+                                        }
+                                    }
+                                }
+                            }
+                            if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                                if name.starts_with('.') && name != ".gitkeep" {
+                                    return true;
+                                }
+                            }
+                            false
+                        };
+                        let paths: HashSet<PathBuf> = cache
+                            .is_file
+                            .keys()
+                            .filter(|p| {
+                                let test_path = p.strip_prefix(project_path).unwrap_or(p);
+                                if git_glob.is_match(test_path) {
+                                    return false;
+                                }
+                                if has_hidden_component(test_path) {
+                                    return false;
+                                }
+                                ignore_rules.iter().all(|rule| rule.passes(p))
+                            })
+                            .cloned()
+                            .collect();
+                        log::info!(
+                            "[PERF] captured {} walked paths from prefetch for orphan reuse",
+                            paths.len()
+                        );
+                        walked_paths = Some(paths);
                         vfs.set_prefetch_cache(cache);
                     }
                 }
@@ -432,7 +483,7 @@ impl ServeSession {
         });
         log::debug!("Watch + patch in {:.1?}", patch_start.elapsed());
 
-        Ok((root_project, tree))
+        Ok((root_project, tree, walked_paths))
     }
 
     /// Start a new serve session from the given in-memory filesystem and start
@@ -449,7 +500,7 @@ impl ServeSession {
         let start_path = start_path.as_ref();
         let start_time = Instant::now();
 
-        let (root_project, tree) = Self::init_tree(&vfs, start_path)?;
+        let (root_project, tree, _walked_paths) = Self::init_tree(&vfs, start_path)?;
 
         let session_id = SessionId::new();
         let message_queue = MessageQueue::new();
@@ -512,6 +563,7 @@ impl ServeSession {
             ref_path_index: Some(ref_path_index),
             git_repo_root,
             initial_head_commit,
+            prefetch_walked_paths: None,
         })
     }
 
@@ -524,7 +576,7 @@ impl ServeSession {
         let start_path = start_path.as_ref();
         let start_time = Instant::now();
 
-        let (root_project, tree) = Self::init_tree(&vfs, start_path)?;
+        let (root_project, tree, walked_paths) = Self::init_tree(&vfs, start_path)?;
 
         Ok(Self {
             change_processor: None,
@@ -539,7 +591,12 @@ impl ServeSession {
             ref_path_index: None,
             git_repo_root: None,
             initial_head_commit: None,
+            prefetch_walked_paths: walked_paths,
         })
+    }
+
+    pub fn take_walked_paths(&mut self) -> Option<HashSet<PathBuf>> {
+        self.prefetch_walked_paths.take()
     }
 
     pub fn tree_handle(&self) -> Arc<Mutex<RojoTree>> {

@@ -172,14 +172,28 @@ struct IdRefLink {
 /// Collects all instance paths in a WeakDom before any pruning occurs.
 /// Returns a map of Ref -> filesystem-name-compatible path for all instances.
 pub fn collect_all_paths(dom: &WeakDom) -> HashMap<Ref, String> {
+    let root_ref = dom.root_ref();
     let mut paths = HashMap::new();
     let mut queue = VecDeque::new();
-    queue.push_back(dom.root_ref());
+
+    paths.insert(root_ref, String::new());
+    queue.push_back(root_ref);
 
     while let Some(inst_ref) = queue.pop_front() {
         let inst = dom.get_by_ref(inst_ref).unwrap();
-        queue.extend(inst.children().iter().copied());
-        paths.insert(inst_ref, tentative_fs_path(dom, inst_ref));
+        let parent_path = paths.get(&inst_ref).unwrap().clone();
+
+        for &child_ref in inst.children() {
+            let child = dom.get_by_ref(child_ref).unwrap();
+            let segment = tentative_fs_name(child);
+            let child_path = if parent_path.is_empty() {
+                segment
+            } else {
+                format!("{}/{}", parent_path, segment)
+            };
+            paths.insert(child_ref, child_path);
+            queue.push_back(child_ref);
+        }
     }
 
     paths
