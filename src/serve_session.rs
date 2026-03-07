@@ -411,6 +411,7 @@ impl ServeSession {
                 // Watch project folder non-recursively for project file edits.
                 let _ = vfs.watch(&project_folder);
                 watch_count += 1;
+                vfs.set_watch_recursive(true);
                 log::debug!(
                     "Set up {} watches in {:.1?}",
                     watch_count,
