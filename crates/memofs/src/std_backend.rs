@@ -331,12 +331,8 @@ impl VfsBackend for StdBackend {
     }
 
     fn watch(&mut self, path: &Path, recursive: bool) -> io::Result<()> {
-        if self.watches.contains(path) {
-            if !recursive || self.recursive_watches.contains(path) {
-                return Ok(());
-            }
-            // Upgrade: path was watched non-recursively, now needs recursive.
-            // Fall through to re-issue the watch with RecursiveMode::Recursive.
+        if self.watches.contains(path) && (!recursive || self.recursive_watches.contains(path)) {
+            return Ok(());
         }
         if path
             .ancestors()

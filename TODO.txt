@@ -90,13 +90,12 @@ in all 3 matchers, simply randomize the order of the children - this will break 
 can we allow the terminal to stay so i can like run some git commands myself without having to make a whole new terminal?
 i also want to just cleanup terminals / use one terminal for syncback and serve...
 
-[skill]
-'/playtest-quick'
-simply runs the game and checks for literal errors, typically created just after completing a code change
-resolve these errors in the project, or if in plan mode create a plan to resolve the errors
-this should utilize the mcp to run the game and fetch the errors, make sure the server is fully booted up (INTELLIGENT 5-10s wait) and then fix stop the game
+[multi place clone]
+make clone support multi-placeids like we did with defend-67 in D:\UserGenerated\place-for-defend-67 (i did this manually)
+see specifically game/ and game.project.json5, lobby/ and lobby.project.json5.
+atlas clone PLACEID1 PLACEID2 .....
+This is extremely helpful for games that have diverged places within the same game, e.g. a lobby and an actual game place
+we will probably have to start dynamically generating the x.project.json5 rather than using a template file now though, which is fine..
 
-modify /atlas-push to always trigger /playtest-quick after it finishes pushing, looping back around to fix issues if needed. make sure the errors are related to what we actually pushed, so it doesnt try to fix others work. if it's others work, ask the user if they want to fix it - thought recommend they should do a planning phase.
-"/atlas-push no test" or similar it just skips the automated test
-
-make clone support multi-placeids like we did with defend-67
+[syncback]
+optimize syncback like we did serve.

@@ -39,6 +39,6 @@ pub use snapshot::{
     InstanceContext, InstanceMetadata, InstanceSnapshot, InstanceWithMeta, InstanceWithMetaMut,
     RojoDescendants, RojoTree,
 };
-pub use snapshot_middleware::{snapshot_from_vfs, Middleware, ScriptType};
+pub use snapshot_middleware::{snapshot_from_vfs, Middleware, ScriptType, INIT_FILE_PRIORITY};
 pub use syncback::{syncback_loop, FsSnapshot, SyncbackData, SyncbackResult, SyncbackSnapshot};
 pub use web::interface as web_api;

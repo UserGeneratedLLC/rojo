@@ -44,6 +44,17 @@ pub struct PrefetchCache {
     pub is_file: HashMap<PathBuf, bool>,
     /// Directory path -> sorted child paths. Consumed once per directory.
     pub children: HashMap<PathBuf, Vec<PathBuf>>,
+    /// Pre-resolved init-file info for each directory. The value is `None`
+    /// when the directory has no init file (plain `Folder`), or
+    /// `Some((init_file_name, init_path))` for the winning init entry.
+    /// Populated during prefetch so that `get_dir_middleware` can skip
+    /// per-file VFS metadata probes entirely.
+    pub dir_init: HashMap<PathBuf, Option<(String, PathBuf)>>,
+    /// Directories that were recursively walked during prefetch. A metadata
+    /// cache miss is only treated as NotFound if the queried path falls
+    /// under one of these roots. Paths outside walked roots fall through
+    /// to the backend (they may exist but weren't covered by the walk).
+    pub walked_roots: Vec<PathBuf>,
 }
 
 mod sealed {
@@ -282,6 +293,12 @@ impl VfsInner {
             if let Some(&is_file) = cache.is_file.get(path) {
                 return Ok(Metadata { is_file });
             }
+            if cache.walked_roots.iter().any(|root| path.starts_with(root)) {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "not in prefetch cache",
+                ));
+            }
         }
 
         self.backend.metadata(path)
@@ -384,11 +401,27 @@ impl Vfs {
         inner.prefetch_cache = None;
     }
 
+    /// Look up pre-resolved init-file info for a directory from the
+    /// prefetch cache. Returns `Some(Some((name, path)))` when the
+    /// directory was found in the cache with an init file, `Some(None)`
+    /// when the directory was found but has no init file, and `None`
+    /// when there is no prefetch cache or the directory is not in it.
+    pub fn prefetch_dir_init(&self, dir: &Path) -> Option<Option<(String, PathBuf)>> {
+        let inner = self.inner.lock().unwrap();
+        let cache = inner.prefetch_cache.as_ref()?;
+        cache.dir_init.get(dir).cloned()
+    }
+
     /// Manually lock the Vfs, useful for large batches of operations.
     pub fn lock(&self) -> VfsLock<'_> {
         VfsLock {
             inner: self.inner.lock().unwrap(),
         }
+    }
+
+    /// Returns whether automatic file watching is currently enabled.
+    pub fn is_watch_enabled(&self) -> bool {
+        self.inner.lock().unwrap().watch_enabled
     }
 
     /// Turns automatic file watching on or off. Enabled by default.
@@ -732,6 +765,8 @@ mod test {
                 .collect(),
             is_file: HashMap::new(),
             children: HashMap::new(),
+            dir_init: HashMap::new(),
+            walked_roots: Vec::new(),
         }
     }
 
@@ -868,6 +903,8 @@ mod test {
             files: cache_files,
             is_file: HashMap::new(),
             children: HashMap::new(),
+            dir_init: HashMap::new(),
+            walked_roots: Vec::new(),
         });
 
         let result = vfs.read(&file_path).unwrap();
@@ -913,6 +950,8 @@ mod test {
             files: cache_files,
             is_file: HashMap::new(),
             children: HashMap::new(),
+            dir_init: HashMap::new(),
+            walked_roots: Vec::new(),
         });
 
         let handles: Vec<_> = (0..100)
@@ -953,6 +992,8 @@ mod test {
             files: cache_files,
             is_file: HashMap::new(),
             children: HashMap::new(),
+            dir_init: HashMap::new(),
+            walked_roots: Vec::new(),
         });
 
         for i in 0..50 {
@@ -970,6 +1011,63 @@ mod test {
                 "Second read (backend) of f{i}.txt diverged"
             );
         }
+    }
+
+    #[test]
+    fn prefetch_cache_walked_roots_fast_reject() {
+        let mut imfs = InMemoryFs::new();
+        imfs.load_snapshot(
+            "/root",
+            VfsSnapshot::dir(HashMap::from([
+                ("known.txt", VfsSnapshot::file("hello")),
+                (
+                    "subdir",
+                    VfsSnapshot::dir(HashMap::from([("nested.txt", VfsSnapshot::file("world"))])),
+                ),
+            ])),
+        )
+        .unwrap();
+        imfs.load_snapshot("/outside/other.txt", VfsSnapshot::file("external"))
+            .unwrap();
+
+        let vfs = Vfs::new(imfs);
+        let mut is_file = HashMap::new();
+        is_file.insert(PathBuf::from("/root"), false);
+        is_file.insert(PathBuf::from("/root/known.txt"), true);
+        is_file.insert(PathBuf::from("/root/subdir"), false);
+
+        vfs.set_prefetch_cache(PrefetchCache {
+            files: HashMap::new(),
+            is_file,
+            children: HashMap::new(),
+            dir_init: HashMap::new(),
+            walked_roots: vec![PathBuf::from("/root")],
+        });
+
+        let known = vfs.metadata("/root/known.txt").unwrap();
+        assert!(
+            known.is_file(),
+            "cached entry should return correct metadata"
+        );
+
+        let subdir = vfs.metadata("/root/subdir").unwrap();
+        assert!(
+            subdir.is_dir(),
+            "cached directory should return correct metadata"
+        );
+
+        let missing = vfs.metadata("/root/subdir/nested.txt");
+        assert!(
+            missing.is_err(),
+            "path under walked root but not in cache should return NotFound"
+        );
+        assert_eq!(missing.unwrap_err().kind(), io::ErrorKind::NotFound);
+
+        let outside = vfs.metadata("/outside/other.txt").unwrap();
+        assert!(
+            outside.is_file(),
+            "path outside walked roots should fall through to backend"
+        );
     }
 
     #[test]

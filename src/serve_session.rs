@@ -19,7 +19,7 @@ use crate::{
         apply_patch_set, compute_patch_set, AppliedPatchSet, InstanceContext, InstanceSnapshot,
         PatchSet, RojoTree,
     },
-    snapshot_middleware::{is_script_relevant_path, snapshot_from_vfs},
+    snapshot_middleware::{is_script_relevant_path, snapshot_from_vfs, INIT_FILE_PRIORITY},
 };
 
 /// Set to `true` to validate on plugin connect (useful for testing, do not enable on production).
@@ -155,31 +155,57 @@ fn prefetch_project_files(project: &Project, sync_scripts_only: bool) -> io::Res
             files: HashMap::new(),
             is_file: HashMap::new(),
             children: HashMap::new(),
+            dir_init: HashMap::new(),
+            walked_roots: Vec::new(),
         });
     }
 
     let walk_start = Instant::now();
 
     let mut entries: Vec<walkdir::DirEntry> = Vec::new();
-    for root in &roots {
-        if !root.exists() {
-            continue;
-        }
-        for e in WalkDir::new(root).follow_links(true).into_iter().flatten() {
+
+    // Shallow walk of project folder: just the folder entry + direct
+    // children. Covers the project file and top-level siblings (nested
+    // project files). One readdir syscall -- NOT recursive into
+    // target/, .git/, node_modules/, etc.
+    if folder.exists() {
+        for e in WalkDir::new(folder)
+            .follow_links(true)
+            .max_depth(1)
+            .into_iter()
+            .flatten()
+        {
             entries.push(e);
         }
     }
 
-    // Also include the project file itself (read by project middleware).
-    if let Ok(meta) = std::fs::metadata(&project.file_location) {
-        if meta.is_file() {
-            entries.push(
-                WalkDir::new(&project.file_location)
-                    .into_iter()
-                    .next()
-                    .unwrap()
-                    .unwrap(),
-            );
+    // Recursive walk of each $path root. Canonicalize to resolve ".."
+    // before the equality/starts_with checks.
+    let canonical_folder = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
+    let mut walked_roots: Vec<PathBuf> = Vec::new();
+    for root in &roots {
+        if !root.exists() {
+            continue;
+        }
+        let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        if canonical_root != canonical_folder {
+            walked_roots.push(root.clone());
+        }
+        if canonical_root == canonical_folder {
+            // $path points to the project folder itself -- shallow walk
+            // already covers depth 0-1, fill in the subtree.
+            for e in WalkDir::new(root)
+                .follow_links(true)
+                .min_depth(2)
+                .into_iter()
+                .flatten()
+            {
+                entries.push(e);
+            }
+        } else {
+            for e in WalkDir::new(root).follow_links(true).into_iter().flatten() {
+                entries.push(e);
+            }
         }
     }
 
@@ -215,8 +241,9 @@ fn prefetch_project_files(project: &Project, sync_scripts_only: bool) -> io::Res
         read_elapsed,
     );
 
-    let mut is_file_map: HashMap<std::path::PathBuf, bool> = HashMap::new();
-    let mut children_map: HashMap<std::path::PathBuf, Vec<std::path::PathBuf>> = HashMap::new();
+    let mut is_file_map: HashMap<std::path::PathBuf, bool> = HashMap::with_capacity(entries.len());
+    let mut children_map: HashMap<std::path::PathBuf, Vec<std::path::PathBuf>> =
+        HashMap::with_capacity(dir_count);
 
     for entry in &entries {
         let path = entry.path().to_path_buf();
@@ -242,10 +269,29 @@ fn prefetch_project_files(project: &Project, sync_scripts_only: bool) -> io::Res
         children_map.len(),
     );
 
+    let mut dir_init_map: HashMap<std::path::PathBuf, Option<(String, std::path::PathBuf)>> =
+        HashMap::with_capacity(children_map.len());
+    for (dir_path, child_paths) in &children_map {
+        let child_names: std::collections::HashSet<&str> = child_paths
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        let mut found = None;
+        for &(_, init_name) in INIT_FILE_PRIORITY {
+            if child_names.contains(init_name) {
+                found = Some((init_name.to_string(), dir_path.join(init_name)));
+                break;
+            }
+        }
+        dir_init_map.insert(dir_path.clone(), found);
+    }
+
     Ok(PrefetchCache {
         files: file_data.into_iter().collect::<HashMap<_, _>>(),
         is_file: is_file_map,
         children: children_map,
+        dir_init: dir_init_map,
+        walked_roots,
     })
 }
 
@@ -273,12 +319,15 @@ impl ServeSession {
             let prefetch_start = Instant::now();
             match prefetch_project_files(&root_project, sync_scripts_only) {
                 Ok(cache) => {
+                    let count = cache.files.len();
                     log::debug!(
                         "Prefetch total: {} files in {:.1?}",
-                        cache.files.len(),
+                        count,
                         prefetch_start.elapsed()
                     );
-                    vfs.set_prefetch_cache(cache);
+                    if !cache.is_file.is_empty() {
+                        vfs.set_prefetch_cache(cache);
+                    }
                 }
                 Err(err) => {
                     log::warn!("Prefetch failed, falling back to sequential reads: {err}");
@@ -291,37 +340,51 @@ impl ServeSession {
         let mut instance_context = InstanceContext::new();
         instance_context.sync_scripts_only = sync_scripts_only;
 
-        let watch_start = Instant::now();
         let mut path_roots = Vec::new();
         collect_path_roots(
             &root_project.tree,
             root_project.folder_location(),
             &mut path_roots,
         );
-        let _ = vfs.watch(root_project.folder_location());
-        for root in &path_roots {
-            let _ = vfs.watch(root);
-        }
-        log::debug!(
-            "Set up {} recursive watches in {:.1?}",
-            path_roots.len() + 1,
-            watch_start.elapsed(),
-        );
 
         let snap_start = Instant::now();
         log::trace!("Generating snapshot of instances from VFS");
+        let was_watch_enabled = vfs.is_watch_enabled();
+        vfs.set_watch_enabled(false);
         let snapshot = snapshot_from_vfs(&instance_context, vfs, start_path)?;
+        vfs.set_watch_enabled(was_watch_enabled);
         log::debug!("Snapshot built in {:.1?}", snap_start.elapsed());
 
         vfs.clear_prefetch_cache();
 
         let patch_start = Instant::now();
-        log::trace!("Computing initial patch set");
-        let patch_set = compute_patch_set(snapshot, &tree, root_id);
+        let project_folder = root_project.folder_location().to_path_buf();
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                let watch_start = Instant::now();
+                // Watch each $path root recursively (NOT the project folder --
+                // that would walk target/, .git/, etc. for repo-root projects).
+                for root in &path_roots {
+                    let _ = vfs.watch(root);
+                }
+                // Watch project folder non-recursively for project file edits.
+                vfs.set_watch_recursive(false);
+                let _ = vfs.watch(&project_folder);
+                vfs.set_watch_recursive(true);
+                log::debug!(
+                    "Set up {} watches in {:.1?}",
+                    path_roots.len() + 1,
+                    watch_start.elapsed(),
+                );
+            });
 
-        log::trace!("Applying initial patch set");
-        apply_patch_set(&mut tree, patch_set);
-        log::debug!("Patch computed + applied in {:.1?}", patch_start.elapsed());
+            log::trace!("Computing initial patch set");
+            let patch_set = compute_patch_set(snapshot, &tree, root_id);
+
+            log::trace!("Applying initial patch set");
+            apply_patch_set(&mut tree, patch_set);
+        });
+        log::debug!("Watch + patch in {:.1?}", patch_start.elapsed());
 
         Ok((root_project, tree))
     }
@@ -354,7 +417,15 @@ impl ServeSession {
         let ref_path_index = {
             let mut index = crate::RefPathIndex::new();
             let tree_guard = tree.lock().unwrap();
-            index.populate_from_dir(root_project.folder_location(), &tree_guard);
+            let mut ref_roots = Vec::new();
+            collect_path_roots(
+                &root_project.tree,
+                root_project.folder_location(),
+                &mut ref_roots,
+            );
+            for root in &ref_roots {
+                index.populate_from_dir(root, &tree_guard);
+            }
             drop(tree_guard);
             Arc::new(Mutex::new(index))
         };

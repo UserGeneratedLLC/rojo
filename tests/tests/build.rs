@@ -241,19 +241,52 @@ fn parallel_snapshot_with_prefetch_cache() {
 
     use std::collections::HashMap;
     let mut files = HashMap::new();
+    let mut is_file = HashMap::new();
+    let mut children_map: HashMap<std::path::PathBuf, Vec<std::path::PathBuf>> = HashMap::new();
     for entry in walkdir::WalkDir::new(root).follow_links(true) {
         let entry = entry.unwrap();
         let path = entry.path().to_path_buf();
+        is_file.insert(path.clone(), entry.file_type().is_file());
         if entry.file_type().is_file() {
             files.insert(path.clone(), fs::read(&path).unwrap());
         }
+        if entry.depth() > 0 {
+            if let Some(parent) = entry.path().parent() {
+                children_map
+                    .entry(parent.to_path_buf())
+                    .or_default()
+                    .push(path);
+            }
+        }
+    }
+    for children in children_map.values_mut() {
+        children.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
+    }
+
+    let mut dir_init: HashMap<std::path::PathBuf, Option<(String, std::path::PathBuf)>> =
+        HashMap::new();
+    for (dir_path, child_paths) in &children_map {
+        let child_names: std::collections::HashSet<&str> = child_paths
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        let mut found = None;
+        for &(_, init_name) in librojo::INIT_FILE_PRIORITY {
+            if child_names.contains(init_name) {
+                found = Some((init_name.to_string(), dir_path.join(init_name)));
+                break;
+            }
+        }
+        dir_init.insert(dir_path.clone(), found);
     }
 
     let vfs_cached = memofs::Vfs::new_default();
     vfs_cached.set_prefetch_cache(memofs::PrefetchCache {
         files,
-        is_file: std::collections::HashMap::new(),
-        children: std::collections::HashMap::new(),
+        is_file,
+        children: children_map,
+        dir_init,
+        walked_roots: Vec::new(),
     });
 
     let snap_cached = librojo::snapshot_from_vfs(&ctx, &vfs_cached, &project_path)
@@ -359,6 +392,8 @@ fn overlapping_path_roots_no_duplicate_children() {
         files,
         is_file,
         children: children_map,
+        dir_init: std::collections::HashMap::new(),
+        walked_roots: Vec::new(),
     });
 
     let snap = librojo::snapshot_from_vfs(&ctx, &vfs, &project_path)
