@@ -14,7 +14,8 @@ use std::{
 use crate::{
     message_queue::MessageQueue,
     snapshot::{
-        apply_patch_set, compute_patch_set, AppliedPatchSet, InstigatingSource, PatchSet, RojoTree,
+        apply_patch_set, compute_patch_set, AppliedPatchSet, InstigatingSource, PatchSet,
+        PathIgnoreRule, RojoTree,
     },
     snapshot_middleware::{is_script_relevant_path, snapshot_from_vfs, snapshot_project_node},
     syncback::{
@@ -93,6 +94,7 @@ impl ChangeProcessor {
         critical_error_receiver: Option<Receiver<memofs::WatcherCriticalError>>,
         git_repo_root: Option<PathBuf>,
         sync_scripts_only: bool,
+        path_ignore_rules: Vec<PathIgnoreRule>,
     ) -> Self {
         let (shutdown_sender, shutdown_receiver) = crossbeam_channel::bounded(1);
         let vfs_receiver = vfs.event_receiver();
@@ -111,6 +113,7 @@ impl ChangeProcessor {
             ref_path_index,
             git_repo_root,
             sync_scripts_only,
+            path_ignore_rules,
         };
 
         let job_thread = jod_thread::Builder::new()
@@ -273,6 +276,9 @@ struct JobThreadContext {
 
     /// When true, only script-related VFS events are processed.
     sync_scripts_only: bool,
+
+    /// Rules from `globIgnorePaths` -- VFS events matching these are discarded.
+    path_ignore_rules: Vec<PathIgnoreRule>,
 }
 
 impl JobThreadContext {
@@ -722,6 +728,16 @@ impl JobThreadContext {
             if path.is_dir() {
                 log::info!(
                     "VFS event SKIPPED (directory WRITE, deferring to file events): {}",
+                    self.display_path(path)
+                );
+                return Vec::new();
+            }
+        }
+
+        if let Some(ref path) = event_path {
+            if !self.path_ignore_rules.iter().all(|rule| rule.passes(path)) {
+                log::trace!(
+                    "VFS event SKIPPED (globIgnorePaths): {}",
                     self.display_path(path)
                 );
                 return Vec::new();

@@ -17,7 +17,7 @@ use crate::{
     session_id::SessionId,
     snapshot::{
         apply_patch_set, compute_patch_set, AppliedPatchSet, InstanceContext, InstanceSnapshot,
-        PatchSet, RojoTree,
+        PatchSet, PathIgnoreRule, RojoTree,
     },
     snapshot_middleware::{is_script_relevant_path, snapshot_from_vfs, INIT_FILE_PRIORITY},
 };
@@ -138,6 +138,15 @@ fn prefetch_project_files(project: &Project, sync_scripts_only: bool) -> io::Res
 
     let folder = project.folder_location();
 
+    let ignore_rules: Vec<PathIgnoreRule> = project
+        .glob_ignore_paths
+        .iter()
+        .map(|glob| PathIgnoreRule {
+            glob: glob.clone(),
+            base_path: folder.to_path_buf(),
+        })
+        .collect();
+
     let mut roots: Vec<std::path::PathBuf> = Vec::new();
     collect_path_roots(&project.tree, folder, &mut roots);
 
@@ -160,6 +169,10 @@ fn prefetch_project_files(project: &Project, sync_scripts_only: bool) -> io::Res
         });
     }
 
+    let passes_ignore = |entry: &walkdir::DirEntry| -> bool {
+        ignore_rules.iter().all(|rule| rule.passes(entry.path()))
+    };
+
     let walk_start = Instant::now();
 
     let mut entries: Vec<walkdir::DirEntry> = Vec::new();
@@ -181,6 +194,8 @@ fn prefetch_project_files(project: &Project, sync_scripts_only: bool) -> io::Res
 
     // Recursive walk of each $path root. Canonicalize to resolve ".."
     // before the equality/starts_with checks.
+    // filter_entry skips entire subtrees when a directory matches
+    // globIgnorePaths, preventing descent into ignored directories.
     let canonical_folder = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
     let mut walked_roots: Vec<PathBuf> = Vec::new();
     for root in &roots {
@@ -192,18 +207,22 @@ fn prefetch_project_files(project: &Project, sync_scripts_only: bool) -> io::Res
             walked_roots.push(root.clone());
         }
         if canonical_root == canonical_folder {
-            // $path points to the project folder itself -- shallow walk
-            // already covers depth 0-1, fill in the subtree.
             for e in WalkDir::new(root)
                 .follow_links(true)
                 .min_depth(2)
                 .into_iter()
+                .filter_entry(&passes_ignore)
                 .flatten()
             {
                 entries.push(e);
             }
         } else {
-            for e in WalkDir::new(root).follow_links(true).into_iter().flatten() {
+            for e in WalkDir::new(root)
+                .follow_links(true)
+                .into_iter()
+                .filter_entry(&passes_ignore)
+                .flatten()
+            {
                 entries.push(e);
             }
         }
@@ -435,6 +454,15 @@ impl ServeSession {
             .as_deref()
             .and_then(crate::git::git_head_commit);
 
+        let path_ignore_rules: Vec<PathIgnoreRule> = root_project
+            .glob_ignore_paths
+            .iter()
+            .map(|glob| PathIgnoreRule {
+                glob: glob.clone(),
+                base_path: root_project.folder_location().to_path_buf(),
+            })
+            .collect();
+
         log::trace!("Starting ChangeProcessor");
         let change_processor = ChangeProcessor::start(
             Arc::clone(&tree),
@@ -448,6 +476,7 @@ impl ServeSession {
             critical_error_receiver,
             git_repo_root.clone(),
             root_project.sync_scripts_only.unwrap_or(false),
+            path_ignore_rules,
         );
 
         Ok(Self {
