@@ -31,6 +31,18 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+* Add VFS recording mode and non-recursive watch support to reduce OS file-watch handles during `atlas serve` startup on large projects
+* Enhance scripts-only mode to filter non-script files at the snapshot middleware, VFS event, and prefetch layers
+* Set `core.longpaths` git config during repository initialization for Windows long-path support
+
+<details>
+<summary>Full commit log</summary>
+
+- `2ea1d493` Enhance VFS watch functionality and introduce recording mode
+- `bfb5815f` Update TODO and enhance git configuration
+
+</details>
+
 ## [8.5.2] (March 3rd, 2026)
 
 * Fix `atlas init` to commit project files before adding agent submodules, producing cleaner git history

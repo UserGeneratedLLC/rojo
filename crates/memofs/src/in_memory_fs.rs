@@ -241,7 +241,7 @@ impl VfsBackend for InMemoryFs {
         inner.event_receiver.clone()
     }
 
-    fn watch(&mut self, _path: &Path) -> io::Result<()> {
+    fn watch(&mut self, _path: &Path, _recursive: bool) -> io::Result<()> {
         Ok(())
     }
 

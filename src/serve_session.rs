@@ -19,7 +19,7 @@ use crate::{
         apply_patch_set, compute_patch_set, AppliedPatchSet, InstanceContext, InstanceSnapshot,
         PatchSet, RojoTree,
     },
-    snapshot_middleware::snapshot_from_vfs,
+    snapshot_middleware::{is_script_relevant_path, snapshot_from_vfs},
 };
 
 /// Set to `true` to validate on plugin connect (useful for testing, do not enable on production).
@@ -131,7 +131,7 @@ pub struct ServeSession {
 
 /// Collect all filesystem paths reachable from the project tree's `$path`
 /// entries, then read file contents in parallel.
-fn prefetch_project_files(project: &Project) -> io::Result<PrefetchCache> {
+fn prefetch_project_files(project: &Project, sync_scripts_only: bool) -> io::Result<PrefetchCache> {
     use rayon::prelude::*;
     use std::collections::HashMap;
     use walkdir::WalkDir;
@@ -200,6 +200,7 @@ fn prefetch_project_files(project: &Project) -> io::Result<PrefetchCache> {
     let file_data: Vec<_> = entries
         .par_iter()
         .filter(|e| e.file_type().is_file())
+        .filter(|e| !sync_scripts_only || is_script_relevant_path(e.path()))
         .filter_map(|e| {
             let path = e.path().to_path_buf();
             std::fs::read(&path).ok().map(|c| (path, c))
@@ -266,10 +267,11 @@ impl ServeSession {
         log::trace!("Starting new ServeSession at path {}", start_path.display());
 
         let root_project = Project::load_initial_project(vfs, start_path)?;
+        let sync_scripts_only = root_project.sync_scripts_only.unwrap_or(false);
 
         if std::env::var("ATLAS_SEQUENTIAL").is_err() {
             let prefetch_start = Instant::now();
-            match prefetch_project_files(&root_project) {
+            match prefetch_project_files(&root_project, sync_scripts_only) {
                 Ok(cache) => {
                     log::debug!(
                         "Prefetch total: {} files in {:.1?}",
@@ -286,7 +288,25 @@ impl ServeSession {
 
         let mut tree = RojoTree::new(InstanceSnapshot::new());
         let root_id = tree.get_root_id();
-        let instance_context = InstanceContext::new();
+        let mut instance_context = InstanceContext::new();
+        instance_context.sync_scripts_only = sync_scripts_only;
+
+        let watch_start = Instant::now();
+        let mut path_roots = Vec::new();
+        collect_path_roots(
+            &root_project.tree,
+            root_project.folder_location(),
+            &mut path_roots,
+        );
+        let _ = vfs.watch(root_project.folder_location());
+        for root in &path_roots {
+            let _ = vfs.watch(root);
+        }
+        log::debug!(
+            "Set up {} recursive watches in {:.1?}",
+            path_roots.len() + 1,
+            watch_start.elapsed(),
+        );
 
         let snap_start = Instant::now();
         log::trace!("Generating snapshot of instances from VFS");
@@ -356,6 +376,7 @@ impl ServeSession {
             root_project.file_location.clone(),
             critical_error_receiver,
             git_repo_root.clone(),
+            root_project.sync_scripts_only.unwrap_or(false),
         );
 
         Ok(Self {
@@ -526,7 +547,8 @@ impl ServeSession {
     pub fn check_tree_freshness(&self) -> TreeFreshnessReport {
         let start = Instant::now();
         let start_path: &Path = &self.root_project.file_location;
-        let instance_context = InstanceContext::new();
+        let mut instance_context = InstanceContext::new();
+        instance_context.sync_scripts_only = self.sync_scripts_only();
 
         let snapshot = match snapshot_from_vfs(&instance_context, &self.vfs, start_path) {
             Ok(s) => s,
@@ -589,7 +611,8 @@ impl ServeSession {
 
         let start = Instant::now();
         let start_path: &Path = &self.root_project.file_location;
-        let instance_context = InstanceContext::new();
+        let mut instance_context = InstanceContext::new();
+        instance_context.sync_scripts_only = self.sync_scripts_only();
 
         let snapshot = match snapshot_from_vfs(&instance_context, &self.vfs, start_path) {
             Ok(s) => s,

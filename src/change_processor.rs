@@ -16,7 +16,7 @@ use crate::{
     snapshot::{
         apply_patch_set, compute_patch_set, AppliedPatchSet, InstigatingSource, PatchSet, RojoTree,
     },
-    snapshot_middleware::{snapshot_from_vfs, snapshot_project_node},
+    snapshot_middleware::{is_script_relevant_path, snapshot_from_vfs, snapshot_project_node},
     syncback::{
         dedup_suffix::{compute_cleanup_action, parse_dedup_suffix, DedupCleanupAction},
         deduplicate_name, name_needs_slugify, slugify_name, strip_script_suffix,
@@ -92,6 +92,7 @@ impl ChangeProcessor {
         project_file_path: PathBuf,
         critical_error_receiver: Option<Receiver<memofs::WatcherCriticalError>>,
         git_repo_root: Option<PathBuf>,
+        sync_scripts_only: bool,
     ) -> Self {
         let (shutdown_sender, shutdown_receiver) = crossbeam_channel::bounded(1);
         let vfs_receiver = vfs.event_receiver();
@@ -109,6 +110,7 @@ impl ChangeProcessor {
             project_file_path,
             ref_path_index,
             git_repo_root,
+            sync_scripts_only,
         };
 
         let job_thread = jod_thread::Builder::new()
@@ -268,6 +270,9 @@ struct JobThreadContext {
     /// Git repository root, if the project is in a git repo.
     /// Used for auto-staging Source writes.
     git_repo_root: Option<PathBuf>,
+
+    /// When true, only script-related VFS events are processed.
+    sync_scripts_only: bool,
 }
 
 impl JobThreadContext {
@@ -723,6 +728,24 @@ impl JobThreadContext {
             }
         }
 
+        if self.sync_scripts_only {
+            if let Some(ref path) = event_path {
+                if path.is_file() {
+                    let not_in_tree = {
+                        let tree = self.tree.lock().unwrap();
+                        tree.get_ids_at_path(path).is_empty()
+                    };
+                    if not_in_tree && !is_script_relevant_path(path) {
+                        log::trace!(
+                            "VFS event SKIPPED (scripts-only, non-script file): {}",
+                            self.display_path(path)
+                        );
+                        return Vec::new();
+                    }
+                }
+            }
+        }
+
         // For a given VFS event, we might have many changes to different parts
         // of the tree. Calculate and apply all of these changes.
         let applied_patches = match event {
@@ -890,7 +913,8 @@ impl JobThreadContext {
         use crate::snapshot::InstanceContext;
 
         let start = Instant::now();
-        let instance_context = InstanceContext::new();
+        let mut instance_context = InstanceContext::new();
+        instance_context.sync_scripts_only = self.sync_scripts_only;
 
         let snapshot =
             match snapshot_from_vfs(&instance_context, &self.vfs, &self.project_file_path) {
