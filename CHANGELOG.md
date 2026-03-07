@@ -31,13 +31,22 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
-* Add VFS recording mode and non-recursive watch support to reduce OS file-watch handles during `atlas serve` startup on large projects
+* Add VFS recording mode and optimized watch setup to reduce OS file-watch handles during `atlas serve` startup on large projects
+* Add PrefetchCache directory init-file resolution for faster directory handling during snapshot prefetch
 * Enhance scripts-only mode to filter non-script files at the snapshot middleware, VFS event, and prefetch layers
+* Fix `sync_scripts_only` not being propagated to `InstanceContext` during tree freshness checks in `ServeSession`
 * Set `core.longpaths` git config during repository initialization for Windows long-path support
 
 <details>
 <summary>Full commit log</summary>
 
+- `6168597a` Enhance PrefetchCache with directory init-file resolution
+- `14d4bc13` Update instance context in ServeSession for script synchronization
+- `0fb5c877` Refactor VFS watching mechanism for improved performance
+- `a1b65dbb` Enhance logging for VFS directory watching
+- `a1825f7c` Enhance VFS watch functionality to support upgrade from non-recursive to recursive watching
+- `9ddd9379` Refine VFS watch behavior to support recursive watching
+- `02638535` Add VFS recording mode and enhance git configuration
 - `2ea1d493` Enhance VFS watch functionality and introduce recording mode
 - `bfb5815f` Update TODO and enhance git configuration
 
