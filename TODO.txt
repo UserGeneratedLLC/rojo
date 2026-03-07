@@ -99,3 +99,6 @@ we will probably have to start dynamically generating the x.project.json5 rather
 
 [syncback]
 optimize syncback like we did serve.
+
+[atlas-project.mdc]
+we need to remove atlas-project.mdc from the main shared agent rules and migrate it to being manually cloned into newly created projects.....

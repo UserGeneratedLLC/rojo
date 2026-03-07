@@ -19,6 +19,7 @@ use super::resolve_path;
 const GIT_IGNORE_PLACEHOLDER: &str = "gitignore.txt";
 
 static TEMPLATE_BINCODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/templates.bincode"));
+static ATLAS_PROJECT_MDC: &str = include_str!("../../.cursor/rules/atlas-project.mdc");
 
 /// Initializes a new Rojo project.
 ///
@@ -116,6 +117,10 @@ impl InitCommand {
                 )?;
             }
         }
+
+        let rules_dir = base_path.join(".cursor/rules");
+        fs::create_dir_all(&rules_dir)?;
+        write_if_not_exists(&rules_dir.join("atlas-project.mdc"), ATLAS_PROJECT_MDC)?;
 
         let did_git_init = if !self.skip_git && crate::git::git_repo_root(&base_path).is_none() {
             log::debug!("Initializing Git repository...");
