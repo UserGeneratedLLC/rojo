@@ -4317,6 +4317,7 @@ fn filter_subscribe_message_for_scripts<'a>(
     for inst in msg.added.values_mut() {
         inst.metadata = Some(InstanceMetadata {
             ignore_unknown_instances: true,
+            glob_ignored_children: false,
         });
 
         // Non-scripts don't sync properties - they're just tree structure
@@ -4384,6 +4385,7 @@ fn instance_for_scripts_only<'a>(
     // This ensures we only sync script content, never delete/modify other instances
     let metadata = Some(InstanceMetadata {
         ignore_unknown_instances: true,
+        glob_ignored_children: false,
     });
 
     Instance {

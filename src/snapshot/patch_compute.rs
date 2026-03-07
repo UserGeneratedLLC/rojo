@@ -110,7 +110,7 @@ fn compute_patch_set_internal(
         .get_instance(id)
         .expect("Instance did not exist in tree");
 
-    let ignore_unknown = snapshot.metadata.ignore_unknown_instances;
+    let suppress_removals = snapshot.metadata.glob_ignored_children;
 
     compute_property_patches(
         &context.snapshot_specified_ids,
@@ -126,7 +126,7 @@ fn compute_patch_set_internal(
         id,
         patch_set,
         session,
-        ignore_unknown,
+        suppress_removals,
     );
 }
 
@@ -277,7 +277,7 @@ fn compute_children_patches(
     id: Ref,
     patch_set: &mut PatchSet,
     session: &super::matching::MatchingSession,
-    ignore_unknown_instances: bool,
+    suppress_removals: bool,
 ) {
     use super::matching::match_forward;
 
@@ -322,9 +322,10 @@ fn compute_children_patches(
     }
 
     // Unmatched tree children: instances to be removed, unless the parent
-    // snapshot says to ignore unknown instances (e.g. $ignoreUnknownInstances
-    // or directories with glob-ignored children).
-    if !ignore_unknown_instances {
+    // directory has glob-ignored children. Standard $ignoreUnknownInstances
+    // (scripts-only mode) still allows server-side removals -- the plugin's
+    // shouldDeleteChild handles the selective keep logic for non-scripts.
+    if !suppress_removals {
         for tree_child_id in match_result.unmatched_tree {
             patch_set.removed_instances.push(tree_child_id);
         }
@@ -442,13 +443,12 @@ mod test {
     }
 
     #[test]
-    fn ignore_unknown_instances_suppresses_removals() {
+    fn glob_ignored_children_suppresses_removals() {
         use super::super::patch_apply::apply_patch_set;
 
         let mut tree = RojoTree::new(InstanceSnapshot::new().name("root").class_name("Folder"));
         let root_id = tree.get_root_id();
 
-        // Add two children (A and B) to the tree via a patch.
         let add_patch = PatchSet {
             added_instances: vec![
                 PatchAdd {
@@ -467,8 +467,55 @@ mod test {
         };
         apply_patch_set(&mut tree, add_patch);
 
-        // Snapshot only has child A, with ignore_unknown_instances = true.
+        // Snapshot only has child A, with glob_ignored_children = true.
         // Child B is "unknown" and should NOT be removed.
+        let snapshot = InstanceSnapshot {
+            snapshot_id: Ref::none(),
+            metadata: super::super::InstanceMetadata::new()
+                .ignore_unknown_instances(true)
+                .glob_ignored_children(true),
+            properties: UstrMap::new(),
+            name: Cow::Borrowed("root"),
+            class_name: ustr("Folder"),
+            children: vec![InstanceSnapshot::new().name("A").class_name("Folder")],
+        };
+
+        let patch_set = compute_patch_set(Some(snapshot), &tree, root_id);
+
+        assert!(
+            patch_set.removed_instances.is_empty(),
+            "Unmatched tree children should NOT be removed when glob_ignored_children is true"
+        );
+    }
+
+    #[test]
+    fn ignore_unknown_instances_alone_still_removes() {
+        use super::super::patch_apply::apply_patch_set;
+
+        let mut tree = RojoTree::new(InstanceSnapshot::new().name("root").class_name("Folder"));
+        let root_id = tree.get_root_id();
+
+        let add_patch = PatchSet {
+            added_instances: vec![
+                PatchAdd {
+                    parent_id: root_id,
+                    instance: InstanceSnapshot::new().name("A").class_name("Folder"),
+                },
+                PatchAdd {
+                    parent_id: root_id,
+                    instance: InstanceSnapshot::new().name("B").class_name("Folder"),
+                },
+            ],
+            updated_instances: Vec::new(),
+            removed_instances: Vec::new(),
+            stage_ids: std::collections::HashSet::new(),
+            stage_paths: Vec::new(),
+        };
+        apply_patch_set(&mut tree, add_patch);
+
+        // ignore_unknown_instances = true (scripts-only mode) but
+        // glob_ignored_children = false. Server still sends removals;
+        // the plugin's shouldDeleteChild handles the selective keep.
         let snapshot = InstanceSnapshot {
             snapshot_id: Ref::none(),
             metadata: super::super::InstanceMetadata::new().ignore_unknown_instances(true),
@@ -480,9 +527,10 @@ mod test {
 
         let patch_set = compute_patch_set(Some(snapshot), &tree, root_id);
 
-        assert!(
-            patch_set.removed_instances.is_empty(),
-            "Unmatched tree children should NOT be removed when ignore_unknown_instances is true"
+        assert_eq!(
+            patch_set.removed_instances.len(),
+            1,
+            "ignore_unknown_instances alone should NOT suppress server-side removals"
         );
     }
 
@@ -511,8 +559,6 @@ mod test {
         };
         apply_patch_set(&mut tree, add_patch);
 
-        // Snapshot only has child A, with default metadata (ignore_unknown_instances = false).
-        // Child B should be removed.
         let snapshot = InstanceSnapshot {
             snapshot_id: Ref::none(),
             metadata: Default::default(),
@@ -527,7 +573,7 @@ mod test {
         assert_eq!(
             patch_set.removed_instances.len(),
             1,
-            "Unmatched tree children should be removed when ignore_unknown_instances is false"
+            "Unmatched tree children should be removed with default metadata"
         );
     }
 
