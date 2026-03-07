@@ -50,6 +50,11 @@ pub struct PrefetchCache {
     /// Populated during prefetch so that `get_dir_middleware` can skip
     /// per-file VFS metadata probes entirely.
     pub dir_init: HashMap<PathBuf, Option<(String, PathBuf)>>,
+    /// Directories that were recursively walked during prefetch. A metadata
+    /// cache miss is only treated as NotFound if the queried path falls
+    /// under one of these roots. Paths outside walked roots fall through
+    /// to the backend (they may exist but weren't covered by the walk).
+    pub walked_roots: Vec<PathBuf>,
 }
 
 mod sealed {
@@ -288,10 +293,16 @@ impl VfsInner {
             if let Some(&is_file) = cache.is_file.get(path) {
                 return Ok(Metadata { is_file });
             }
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                "not in prefetch cache",
-            ));
+            if cache
+                .walked_roots
+                .iter()
+                .any(|root| path.starts_with(root))
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotFound,
+                    "not in prefetch cache",
+                ));
+            }
         }
 
         self.backend.metadata(path)
@@ -754,6 +765,7 @@ mod test {
             is_file: HashMap::new(),
             children: HashMap::new(),
             dir_init: HashMap::new(),
+            walked_roots: Vec::new(),
         }
     }
 
@@ -891,6 +903,7 @@ mod test {
             is_file: HashMap::new(),
             children: HashMap::new(),
             dir_init: HashMap::new(),
+            walked_roots: Vec::new(),
         });
 
         let result = vfs.read(&file_path).unwrap();
@@ -937,6 +950,7 @@ mod test {
             is_file: HashMap::new(),
             children: HashMap::new(),
             dir_init: HashMap::new(),
+            walked_roots: Vec::new(),
         });
 
         let handles: Vec<_> = (0..100)
@@ -978,6 +992,7 @@ mod test {
             is_file: HashMap::new(),
             children: HashMap::new(),
             dir_init: HashMap::new(),
+            walked_roots: Vec::new(),
         });
 
         for i in 0..50 {

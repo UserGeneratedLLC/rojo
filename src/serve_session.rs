@@ -156,6 +156,7 @@ fn prefetch_project_files(project: &Project, sync_scripts_only: bool) -> io::Res
             is_file: HashMap::new(),
             children: HashMap::new(),
             dir_init: HashMap::new(),
+            walked_roots: Vec::new(),
         });
     }
 
@@ -181,11 +182,15 @@ fn prefetch_project_files(project: &Project, sync_scripts_only: bool) -> io::Res
     // Recursive walk of each $path root. Canonicalize to resolve ".."
     // before the equality/starts_with checks.
     let canonical_folder = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
+    let mut walked_roots: Vec<PathBuf> = Vec::new();
     for root in &roots {
         if !root.exists() {
             continue;
         }
         let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+        if canonical_root != canonical_folder {
+            walked_roots.push(canonical_root.clone());
+        }
         if canonical_root == canonical_folder {
             // $path points to the project folder itself -- shallow walk
             // already covers depth 0-1, fill in the subtree.
@@ -286,6 +291,7 @@ fn prefetch_project_files(project: &Project, sync_scripts_only: bool) -> io::Res
         is_file: is_file_map,
         children: children_map,
         dir_init: dir_init_map,
+        walked_roots,
     })
 }
 

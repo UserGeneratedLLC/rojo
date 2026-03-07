@@ -269,6 +269,7 @@ fn parallel_snapshot_with_prefetch_cache() {
         is_file,
         children: children_map,
         dir_init: std::collections::HashMap::new(),
+        walked_roots: Vec::new(),
     });
 
     let snap_cached = librojo::snapshot_from_vfs(&ctx, &vfs_cached, &project_path)
@@ -375,6 +376,7 @@ fn overlapping_path_roots_no_duplicate_children() {
         is_file,
         children: children_map,
         dir_init: std::collections::HashMap::new(),
+        walked_roots: Vec::new(),
     });
 
     let snap = librojo::snapshot_from_vfs(&ctx, &vfs, &project_path)
