@@ -1,6 +1,6 @@
 [package]
 name = "atlas"
-version = "8.5.3"
+version = "8.5.4"
 rust-version = "1.88"
 authors = [
     "Lucien Greathouse <me@lpghatguy.com>",

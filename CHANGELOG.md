@@ -31,7 +31,42 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
-* Add multi-place support to `atlas clone`: pass multiple place IDs to create a project with separate `<name>.project.json5` and `<name>/` directories per place, matching the multi-place project layout
+## [8.5.4] (March 7th, 2026)
+
+* Add multi-place support to `atlas clone`: pass multiple place IDs to create a project with separate `<name>.project.json5` and `<name>/` directories per place, with `fetch_place_names()` API for name resolution
+* Fix `globIgnorePaths` incorrectly setting `ignoreUnknownInstances` on directories, which leaked into meta files and caused wrong deletion behavior; a new `glob_ignored_children` metadata flag now correctly suppresses removals for glob-matched children in both the server patch computation and plugin reconciler
+* Add `globIgnorePaths` filtering to the change processor (discard matching VFS events) and prefetch walker (skip ignored subtrees via `filter_entry`)
+* Fix VFS watch setup on macOS: use per-file non-recursive watches (required by kqueue) with glob-ignore-aware subtree skipping, while Linux/Windows continue using recursive watches
+* Downgrade VFS event logging from INFO to DEBUG level
+* Update `tokio` to 1.50.0 and `uuid` to 1.22.0
+
+<details>
+<summary>Full commit log</summary>
+
+- `345d36cd` Refactor VFS event logging and streamline ServeSession watch setup
+- `9ed8cf3f` Refactor run-tests.server.lua to improve package loading and update subproject dependencies
+- `2d9f5aef` Merge pull request #9 from UserGeneratedLLC/macos_fix
+- `1871a0b4` update-rules
+- `dad5320a` Enhance patch computation to support glob-ignored children
+- `73ac94c6` Stop setting ignore_unknown_instances from glob filtering to prevent meta file leak
+- `8772077e` Move globIgnoredChildren guard before shouldDeleteUnknownInstances
+- `1406c1a1` Refactor instance metadata handling to incorporate glob-ignored children
+- `12bccf91` Enhance instance metadata and reconciliation logic for glob-ignored children
+- `4b38c070` Refactor VFS watch logic for macOS and Linux/Windows compatibility
+- `c19b2496` Update TODO.txt and refine VFS watch logic in ServeSession
+- `372b605f` Enhance snapshot handling to account for glob-ignored children
+- `1ab347f4` Refactor VFS watch logic in ServeSession
+- `e7969101` Update TODO.txt with new entries for luau-lsp sourcemap fix and two-way sync issue
+- `8acbfc0c` Refactor notify dependency configuration and enhance VFS watch setup
+- `02431817` Refactor path ignore rule handling in Project and ServeSession
+- `89869f68` Add multi-place clone to changelog
+- `6fcb1b9c` Update dependencies and enhance path ignore functionality
+- `093e62af` Enhance project cloning and initialization process
+- `cf31e9b9` Update TODO.txt and init.rs to manage atlas-project.mdc
+
+</details>
+
+[8.5.4]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.5.4
 
 ## [8.5.3] (March 6th, 2026)
 
