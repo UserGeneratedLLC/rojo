@@ -291,6 +291,16 @@ impl FsSnapshot {
     ) -> io::Result<()> {
         let base_path = base.as_ref();
 
+        log::debug!(
+            "[PERF] write_to_vfs_parallel: {} files, {} dirs to add; {} files, {} dirs to remove",
+            self.added_files.len(),
+            self.added_dirs.len(),
+            self.removed_files.len(),
+            self.removed_dirs.len(),
+        );
+
+        let phase1_timer = std::time::Instant::now();
+
         // Phase 1: Create directories (sequential - parent must exist before child)
         let skipped_dirs = AtomicUsize::new(0);
         {
@@ -308,11 +318,21 @@ impl FsSnapshot {
                 };
             }
         } // Release lock before parallel phase
+        log::debug!(
+            "[PERF]   phase1 create dirs: {:.3}s",
+            phase1_timer.elapsed().as_secs_f64()
+        );
+
+        let phase2_timer = std::time::Instant::now();
 
         // Phase 2: Write files (parallel - independent operations)
         let write_errors = AtomicUsize::new(0);
         let first_error: std::sync::Mutex<Option<io::Error>> = std::sync::Mutex::new(None);
         let skipped_files = AtomicUsize::new(0);
+        let git_skipped = AtomicUsize::new(0);
+        let byte_skipped = AtomicUsize::new(0);
+
+        let size_skipped = AtomicUsize::new(0);
 
         self.added_files.par_iter().for_each(|(path, contents)| {
             let full_path = base_path.join(path);
@@ -320,16 +340,24 @@ impl FsSnapshot {
             if let Some(cache) = git_cache {
                 if cache.file_matches_index(path, contents) {
                     skipped_files.fetch_add(1, Ordering::Relaxed);
+                    git_skipped.fetch_add(1, Ordering::Relaxed);
                     return;
                 }
             }
 
-            match std::fs::read(&full_path) {
-                Ok(existing) if existing == *contents => {
-                    skipped_files.fetch_add(1, Ordering::Relaxed);
-                    return;
+            match std::fs::metadata(&full_path) {
+                Ok(meta) if meta.len() != contents.len() as u64 => {
+                    size_skipped.fetch_add(1, Ordering::Relaxed);
                 }
-                _ => {}
+                Ok(_) => match std::fs::read(&full_path) {
+                    Ok(existing) if existing == *contents => {
+                        skipped_files.fetch_add(1, Ordering::Relaxed);
+                        byte_skipped.fetch_add(1, Ordering::Relaxed);
+                        return;
+                    }
+                    _ => {}
+                },
+                Err(_) => {}
             }
 
             if let Err(err) = write_with_retry(&full_path, contents) {
@@ -341,6 +369,14 @@ impl FsSnapshot {
             }
         });
 
+        log::debug!(
+            "[PERF]   phase2 write files: {:.3}s (git_skip={}, byte_skip={}, size_diff={})",
+            phase2_timer.elapsed().as_secs_f64(),
+            git_skipped.load(Ordering::Relaxed),
+            byte_skipped.load(Ordering::Relaxed),
+            size_skipped.load(Ordering::Relaxed),
+        );
+
         // Check for write errors
         if let Some(err) = first_error.into_inner().unwrap() {
             let error_count = write_errors.load(Ordering::Relaxed);
@@ -350,8 +386,9 @@ impl FsSnapshot {
             return Err(err);
         }
 
+        let phase3_timer = std::time::Instant::now();
+
         // Phase 3: Remove files not inside removed directories (parallel)
-        // Uses retry logic on Windows for transient errors.
         let files_to_remove: Vec<_> = self
             .removed_files
             .iter()
@@ -372,6 +409,11 @@ impl FsSnapshot {
             }
         });
 
+        log::debug!(
+            "[PERF]   phase3 remove files: {:.3}s",
+            phase3_timer.elapsed().as_secs_f64()
+        );
+
         // Check for remove errors
         if let Some(err) = first_remove_error.into_inner().unwrap() {
             let error_count = remove_errors.load(Ordering::Relaxed);
@@ -383,6 +425,8 @@ impl FsSnapshot {
             }
             return Err(err);
         }
+
+        let phase4_timer = std::time::Instant::now();
 
         // Phase 4: Remove directories (sequential - uses VFS for proper unwatch handling)
         {
@@ -401,6 +445,11 @@ impl FsSnapshot {
                 }
             }
         }
+
+        log::debug!(
+            "[PERF]   phase4 remove dirs: {:.3}s",
+            phase4_timer.elapsed().as_secs_f64()
+        );
 
         let skipped_file_count = skipped_files.load(Ordering::Relaxed);
         let skipped_dir_count = skipped_dirs.load(Ordering::Relaxed);

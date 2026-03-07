@@ -31,6 +31,10 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+* Optimize syncback performance for large projects (~42% faster): skip hash computation in clean mode, reuse prefetch walkdir for orphan detection, rewrite collect_all_paths as O(n) top-down BFS, add file-size-first comparison in write phase, scope git index queries to project directory ([#10])
+
+[#10]: https://github.com/UserGeneratedLLC/rojo/pull/10
+
 ## [8.5.4] (March 7th, 2026)
 
 * Add multi-place support to `atlas clone`: pass multiple place IDs to create a project with separate `<name>.project.json5` and `<name>/` directories per place, with `fetch_place_names()` API for name resolution
