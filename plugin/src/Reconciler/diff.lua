@@ -35,15 +35,16 @@ local SCRIPT_CLASS_NAMES = {
 }
 
 local function shouldDeleteChild(virtualInstance, childInstance)
-	if shouldDeleteUnknownInstances(virtualInstance) then
-		return true
-	end
-
 	-- When the parent has glob-ignored children, suppress ALL deletions
-	-- (including scripts). This differs from scripts-only mode where
-	-- scripts are still eligible for deletion.
+	-- (including scripts) unconditionally. This must be checked before
+	-- shouldDeleteUnknownInstances because project nodes and meta files
+	-- can override ignoreUnknownInstances independently.
 	if virtualInstance.Metadata and virtualInstance.Metadata.globIgnoredChildren then
 		return false
+	end
+
+	if shouldDeleteUnknownInstances(virtualInstance) then
+		return true
 	end
 
 	-- In scripts-only mode (where parent has ignoreUnknownInstances: true),
