@@ -96,3 +96,6 @@ see specifically game/ and game.project.json5, lobby/ and lobby.project.json5.
 atlas clone PLACEID1 PLACEID2 .....
 This is extremely helpful for games that have diverged places within the same game, e.g. a lobby and an actual game place
 we will probably have to start dynamically generating the x.project.json5 rather than using a template file now though, which is fine..
+
+[syncback]
+optimize syncback like we did serve.
