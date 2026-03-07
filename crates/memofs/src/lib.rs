@@ -419,6 +419,11 @@ impl Vfs {
         }
     }
 
+    /// Returns whether automatic file watching is currently enabled.
+    pub fn is_watch_enabled(&self) -> bool {
+        self.inner.lock().unwrap().watch_enabled
+    }
+
     /// Turns automatic file watching on or off. Enabled by default.
     ///
     /// Turning off file watching may be useful for single-use cases, especially
@@ -1006,6 +1011,63 @@ mod test {
                 "Second read (backend) of f{i}.txt diverged"
             );
         }
+    }
+
+    #[test]
+    fn prefetch_cache_walked_roots_fast_reject() {
+        let mut imfs = InMemoryFs::new();
+        imfs.load_snapshot(
+            "/root",
+            VfsSnapshot::dir(HashMap::from([
+                ("known.txt", VfsSnapshot::file("hello")),
+                (
+                    "subdir",
+                    VfsSnapshot::dir(HashMap::from([("nested.txt", VfsSnapshot::file("world"))])),
+                ),
+            ])),
+        )
+        .unwrap();
+        imfs.load_snapshot("/outside/other.txt", VfsSnapshot::file("external"))
+            .unwrap();
+
+        let vfs = Vfs::new(imfs);
+        let mut is_file = HashMap::new();
+        is_file.insert(PathBuf::from("/root"), false);
+        is_file.insert(PathBuf::from("/root/known.txt"), true);
+        is_file.insert(PathBuf::from("/root/subdir"), false);
+
+        vfs.set_prefetch_cache(PrefetchCache {
+            files: HashMap::new(),
+            is_file,
+            children: HashMap::new(),
+            dir_init: HashMap::new(),
+            walked_roots: vec![PathBuf::from("/root")],
+        });
+
+        let known = vfs.metadata("/root/known.txt").unwrap();
+        assert!(
+            known.is_file(),
+            "cached entry should return correct metadata"
+        );
+
+        let subdir = vfs.metadata("/root/subdir").unwrap();
+        assert!(
+            subdir.is_dir(),
+            "cached directory should return correct metadata"
+        );
+
+        let missing = vfs.metadata("/root/subdir/nested.txt");
+        assert!(
+            missing.is_err(),
+            "path under walked root but not in cache should return NotFound"
+        );
+        assert_eq!(missing.unwrap_err().kind(), io::ErrorKind::NotFound);
+
+        let outside = vfs.metadata("/outside/other.txt").unwrap();
+        assert!(
+            outside.is_file(),
+            "path outside walked roots should fall through to backend"
+        );
     }
 
     #[test]

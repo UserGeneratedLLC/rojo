@@ -544,6 +544,12 @@ mod test {
                 "DEFAULT_PROJECT_NAMES entry {project_name:?} missing from INIT_FILE_PRIORITY"
             );
         }
+        for &name in &priority_names {
+            assert!(
+                DEFAULT_PROJECT_NAMES.contains(&name),
+                "INIT_FILE_PRIORITY has Project entry {name:?} not in DEFAULT_PROJECT_NAMES"
+            );
+        }
     }
 
     #[test]

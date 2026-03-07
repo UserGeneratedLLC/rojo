@@ -263,12 +263,29 @@ fn parallel_snapshot_with_prefetch_cache() {
         children.sort_by(|a, b| a.file_name().cmp(&b.file_name()));
     }
 
+    let mut dir_init: HashMap<std::path::PathBuf, Option<(String, std::path::PathBuf)>> =
+        HashMap::new();
+    for (dir_path, child_paths) in &children_map {
+        let child_names: std::collections::HashSet<&str> = child_paths
+            .iter()
+            .filter_map(|p| p.file_name().and_then(|n| n.to_str()))
+            .collect();
+        let mut found = None;
+        for &(_, init_name) in librojo::INIT_FILE_PRIORITY {
+            if child_names.contains(init_name) {
+                found = Some((init_name.to_string(), dir_path.join(init_name)));
+                break;
+            }
+        }
+        dir_init.insert(dir_path.clone(), found);
+    }
+
     let vfs_cached = memofs::Vfs::new_default();
     vfs_cached.set_prefetch_cache(memofs::PrefetchCache {
         files,
         is_file,
         children: children_map,
-        dir_init: std::collections::HashMap::new(),
+        dir_init,
         walked_roots: Vec::new(),
     });
 

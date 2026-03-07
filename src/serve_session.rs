@@ -349,9 +349,10 @@ impl ServeSession {
 
         let snap_start = Instant::now();
         log::trace!("Generating snapshot of instances from VFS");
+        let was_watch_enabled = vfs.is_watch_enabled();
         vfs.set_watch_enabled(false);
         let snapshot = snapshot_from_vfs(&instance_context, vfs, start_path)?;
-        vfs.set_watch_enabled(true);
+        vfs.set_watch_enabled(was_watch_enabled);
         log::debug!("Snapshot built in {:.1?}", snap_start.elapsed());
 
         vfs.clear_prefetch_cache();
