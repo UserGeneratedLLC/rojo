@@ -547,7 +547,8 @@ impl ServeSession {
     pub fn check_tree_freshness(&self) -> TreeFreshnessReport {
         let start = Instant::now();
         let start_path: &Path = &self.root_project.file_location;
-        let instance_context = InstanceContext::new();
+        let mut instance_context = InstanceContext::new();
+        instance_context.sync_scripts_only = self.sync_scripts_only();
 
         let snapshot = match snapshot_from_vfs(&instance_context, &self.vfs, start_path) {
             Ok(s) => s,
@@ -610,7 +611,8 @@ impl ServeSession {
 
         let start = Instant::now();
         let start_path: &Path = &self.root_project.file_location;
-        let instance_context = InstanceContext::new();
+        let mut instance_context = InstanceContext::new();
+        instance_context.sync_scripts_only = self.sync_scripts_only();
 
         let snapshot = match snapshot_from_vfs(&instance_context, &self.vfs, start_path) {
             Ok(s) => s,
