@@ -112,6 +112,10 @@ pub fn snapshot_from_vfs(
 /// Single source of truth for init-file resolution priority.
 /// Project files are checked first, then init files in this order.
 /// Used by both `get_dir_middleware` (live) and `prefetch_project_files` (cache).
+///
+/// NOTE: The project file entries must match `DEFAULT_PROJECT_NAMES` in
+/// `project.rs`. The `init_file_priority_includes_all_project_names` test
+/// guards against drift.
 pub static INIT_FILE_PRIORITY: &[(Middleware, &str)] = &[
     (Middleware::Project, "default.project.json5"),
     (Middleware::Project, "default.project.json"),
@@ -525,6 +529,22 @@ mod test {
     use std::collections::HashMap;
 
     use memofs::{InMemoryFs, VfsSnapshot};
+
+    #[test]
+    fn init_file_priority_includes_all_project_names() {
+        use crate::project::DEFAULT_PROJECT_NAMES;
+        let priority_names: Vec<&str> = INIT_FILE_PRIORITY
+            .iter()
+            .filter(|(m, _)| *m == Middleware::Project)
+            .map(|(_, name)| *name)
+            .collect();
+        for project_name in DEFAULT_PROJECT_NAMES {
+            assert!(
+                priority_names.contains(&project_name),
+                "DEFAULT_PROJECT_NAMES entry {project_name:?} missing from INIT_FILE_PRIORITY"
+            );
+        }
+    }
 
     #[test]
     fn is_script_covers_all_script_types() {
