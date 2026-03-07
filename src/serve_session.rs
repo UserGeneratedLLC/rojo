@@ -17,7 +17,7 @@ use crate::{
     session_id::SessionId,
     snapshot::{
         apply_patch_set, compute_patch_set, AppliedPatchSet, InstanceContext, InstanceSnapshot,
-        PatchSet, RojoTree,
+        PatchSet, PathIgnoreRule, RojoTree,
     },
     snapshot_middleware::{is_script_relevant_path, snapshot_from_vfs, INIT_FILE_PRIORITY},
 };
@@ -371,21 +371,49 @@ impl ServeSession {
 
         let patch_start = Instant::now();
         let project_folder = root_project.folder_location().to_path_buf();
+        let watch_ignore_rules: Vec<PathIgnoreRule> = root_project
+            .glob_ignore_paths
+            .iter()
+            .map(|glob| PathIgnoreRule {
+                glob: glob.clone(),
+                base_path: root_project.folder_location().to_path_buf(),
+            })
+            .collect();
         std::thread::scope(|s| {
             s.spawn(|| {
+                use walkdir::WalkDir;
+
                 let watch_start = Instant::now();
-                // Watch each $path root recursively (NOT the project folder --
-                // that would walk target/, .git/, etc. for repo-root projects).
+                // Walk each $path root, skipping directories that match
+                // globIgnorePaths, and watch each non-ignored directory
+                // individually (non-recursive). This avoids creating kqueue
+                // FDs for ignored subtrees on macOS.
+                let passes_ignore = |entry: &walkdir::DirEntry| -> bool {
+                    watch_ignore_rules
+                        .iter()
+                        .all(|rule: &PathIgnoreRule| rule.passes(entry.path()))
+                };
+                vfs.set_watch_recursive(false);
+                let mut watch_count: usize = 0;
                 for root in &path_roots {
-                    let _ = vfs.watch(root);
+                    for entry in WalkDir::new(root)
+                        .follow_links(true)
+                        .into_iter()
+                        .filter_entry(&passes_ignore)
+                        .flatten()
+                    {
+                        if entry.file_type().is_dir() {
+                            let _ = vfs.watch(entry.path());
+                            watch_count += 1;
+                        }
+                    }
                 }
                 // Watch project folder non-recursively for project file edits.
-                vfs.set_watch_recursive(false);
                 let _ = vfs.watch(&project_folder);
-                vfs.set_watch_recursive(true);
+                watch_count += 1;
                 log::debug!(
                     "Set up {} watches in {:.1?}",
-                    path_roots.len() + 1,
+                    watch_count,
                     watch_start.elapsed(),
                 );
             });
