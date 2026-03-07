@@ -349,46 +349,46 @@ impl ServeSession {
                         prefetch_start.elapsed()
                     );
                     if !cache.is_file.is_empty() {
-                        let ignore_rules = root_project.path_ignore_rules();
-                        let project_path = root_project.folder_location();
-                        let git_glob = crate::glob::Glob::new(".git/**").unwrap();
-                        let has_hidden_component = |p: &Path| -> bool {
-                            if let Some(parent) = p.parent() {
-                                for component in parent.components() {
-                                    if let Some(name) = component.as_os_str().to_str() {
-                                        if name.starts_with('.') {
-                                            return true;
+                        // Only include paths under walked $path roots (not
+                        // the shallow project-folder entries like README.md).
+                        // No syncback-specific filtering is applied here;
+                        // syncback_loop applies is_valid_path() per-path
+                        // which handles syncbackRules.ignorePaths.
+                        let roots = &cache.walked_roots;
+                        if !roots.is_empty() {
+                            let has_hidden_ancestor = |p: &Path, root: &Path| -> bool {
+                                if let Ok(rel) = p.strip_prefix(root) {
+                                    for component in rel.components() {
+                                        if let Some(name) = component.as_os_str().to_str() {
+                                            if name.starts_with('.') && name != ".gitkeep" {
+                                                return true;
+                                            }
                                         }
                                     }
                                 }
-                            }
-                            if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
-                                if name.starts_with('.') && name != ".gitkeep" {
-                                    return true;
-                                }
-                            }
-                            false
-                        };
-                        let paths: HashSet<PathBuf> = cache
-                            .is_file
-                            .keys()
-                            .filter(|p| {
-                                let test_path = p.strip_prefix(project_path).unwrap_or(p);
-                                if git_glob.is_match(test_path) {
-                                    return false;
-                                }
-                                if has_hidden_component(test_path) {
-                                    return false;
-                                }
-                                ignore_rules.iter().all(|rule| rule.passes(p))
-                            })
-                            .cloned()
-                            .collect();
-                        log::info!(
-                            "[PERF] captured {} walked paths from prefetch for orphan reuse",
-                            paths.len()
-                        );
-                        walked_paths = Some(paths);
+                                false
+                            };
+                            let paths: HashSet<PathBuf> = cache
+                                .is_file
+                                .keys()
+                                .filter(|p| {
+                                    roots.iter().any(|root| {
+                                        p.starts_with(root) && !has_hidden_ancestor(p, root)
+                                    })
+                                })
+                                .filter(|p| {
+                                    // Exclude root entries themselves (depth 0)
+                                    !roots.contains(p)
+                                })
+                                .cloned()
+                                .collect();
+                            log::info!(
+                                "[PERF] captured {} walked paths from prefetch ({} roots) for orphan reuse",
+                                paths.len(),
+                                roots.len()
+                            );
+                            walked_paths = Some(paths);
+                        }
                         vfs.set_prefetch_cache(cache);
                     }
                 }

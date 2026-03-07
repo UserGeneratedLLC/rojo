@@ -290,11 +290,17 @@ pub fn syncback_loop_with_stats(
     let phase_timer = std::time::Instant::now();
     let existing_paths: HashSet<PathBuf> = if !incremental {
         if let Some(pre_walked) = pre_walked_paths.filter(|p| p.len() > 100) {
+            let before = pre_walked.len();
+            let filtered: HashSet<PathBuf> = pre_walked
+                .into_iter()
+                .filter(|p| is_valid_path(&ignore_patterns, project_path, p))
+                .collect();
             log::info!(
-                "[PERF] orphan scan: reusing {} pre-walked paths",
-                pre_walked.len()
+                "[PERF] orphan scan: reusing pre-walked paths ({} -> {} after syncback filters)",
+                before,
+                filtered.len()
             );
-            pre_walked
+            filtered
         } else {
             let mut paths = HashSet::new();
 
