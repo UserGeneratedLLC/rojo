@@ -371,14 +371,7 @@ impl ServeSession {
 
         let patch_start = Instant::now();
         let project_folder = root_project.folder_location().to_path_buf();
-        let watch_ignore_rules: Vec<PathIgnoreRule> = root_project
-            .glob_ignore_paths
-            .iter()
-            .map(|glob| PathIgnoreRule {
-                glob: glob.clone(),
-                base_path: root_project.folder_location().to_path_buf(),
-            })
-            .collect();
+        let watch_ignore_rules = root_project.path_ignore_rules();
         std::thread::scope(|s| {
             s.spawn(|| {
                 use walkdir::WalkDir;

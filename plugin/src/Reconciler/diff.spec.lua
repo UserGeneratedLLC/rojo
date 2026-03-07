@@ -244,6 +244,64 @@ return function()
 		assert(isEmpty(patch.removed))
 	end)
 
+	it(
+		"should still remove unknown scripts when ignoreUnknownInstances is true but globIgnoredChildren is false",
+		function()
+			local knownInstances = InstanceMap.new()
+			local virtualInstances = {
+				ROOT = {
+					ClassName = "Folder",
+					Name = "Folder",
+					Properties = {},
+					Children = {},
+					Metadata = {
+						ignoreUnknownInstances = true,
+						globIgnoredChildren = false,
+					},
+				},
+			}
+
+			local rootInstance = Instance.new("Folder")
+			local unknownScript = Instance.new("ModuleScript")
+			unknownScript.Parent = rootInstance
+			knownInstances:insert("ROOT", rootInstance)
+
+			local ok, patch = diff(knownInstances, virtualInstances, "ROOT")
+
+			assert(ok, tostring(patch))
+
+			expect(#patch.removed).to.equal(1)
+			expect(patch.removed[1]).to.equal(unknownScript)
+		end
+	)
+
+	it("should NOT remove unknown scripts when globIgnoredChildren is true", function()
+		local knownInstances = InstanceMap.new()
+		local virtualInstances = {
+			ROOT = {
+				ClassName = "Folder",
+				Name = "Folder",
+				Properties = {},
+				Children = {},
+				Metadata = {
+					ignoreUnknownInstances = true,
+					globIgnoredChildren = true,
+				},
+			},
+		}
+
+		local rootInstance = Instance.new("Folder")
+		local unknownScript = Instance.new("ModuleScript")
+		unknownScript.Parent = rootInstance
+		knownInstances:insert("ROOT", rootInstance)
+
+		local ok, patch = diff(knownInstances, virtualInstances, "ROOT")
+
+		assert(ok, tostring(patch))
+
+		assert(isEmpty(patch.removed))
+	end)
+
 	it("should generate a patch with an added child", function()
 		local knownInstances = InstanceMap.new()
 		local virtualInstances = {

@@ -21,6 +21,11 @@ pub struct InstanceMetadata {
     /// manage.
     pub ignore_unknown_instances: bool,
 
+    /// Whether this directory had children excluded by `globIgnorePaths`.
+    /// Distinguishes glob-ignored directories (suppress ALL deletions including
+    /// scripts) from scripts-only mode (suppress non-script deletions only).
+    pub glob_ignored_children: bool,
+
     /// If a change occurs to this instance, the instigating source is what
     /// should be run through the snapshot functions to regenerate it.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -79,6 +84,7 @@ impl InstanceMetadata {
     pub fn new() -> Self {
         Self {
             ignore_unknown_instances: false,
+            glob_ignored_children: false,
             instigating_source: None,
             relevant_paths: Vec::new(),
             context: InstanceContext::default(),
@@ -92,6 +98,13 @@ impl InstanceMetadata {
     pub fn ignore_unknown_instances(self, ignore_unknown_instances: bool) -> Self {
         Self {
             ignore_unknown_instances,
+            ..self
+        }
+    }
+
+    pub fn glob_ignored_children(self, glob_ignored_children: bool) -> Self {
+        Self {
+            glob_ignored_children,
             ..self
         }
     }

@@ -118,7 +118,8 @@ pub fn snapshot_dir_no_meta(
                 .instigating_source(path)
                 .relevant_paths(relevant_paths)
                 .context(context)
-                .ignore_unknown_instances(any_child_glob_ignored),
+                .ignore_unknown_instances(any_child_glob_ignored)
+                .glob_ignored_children(any_child_glob_ignored),
         );
 
     Ok(Some(snapshot))
@@ -602,6 +603,10 @@ mod test {
             snap.metadata.ignore_unknown_instances,
             "Directory with glob-ignored children should have ignore_unknown_instances = true"
         );
+        assert!(
+            snap.metadata.glob_ignored_children,
+            "Directory with glob-ignored children should have glob_ignored_children = true"
+        );
         assert_eq!(
             snap.children.len(),
             1,
@@ -635,6 +640,10 @@ mod test {
         assert!(
             !snap.metadata.ignore_unknown_instances,
             "Directory without glob-ignored children should have ignore_unknown_instances = false"
+        );
+        assert!(
+            !snap.metadata.glob_ignored_children,
+            "Directory without glob-ignored children should have glob_ignored_children = false"
         );
         assert_eq!(snap.children.len(), 2);
     }

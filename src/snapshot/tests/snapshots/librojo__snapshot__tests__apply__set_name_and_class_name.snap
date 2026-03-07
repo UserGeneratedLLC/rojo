@@ -8,6 +8,7 @@ class_name: Folder
 properties: {}
 metadata:
   ignore_unknown_instances: false
+  glob_ignored_children: false
   relevant_paths: []
   context: {}
   specified_id: ~

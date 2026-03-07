@@ -10,6 +10,7 @@ properties:
     "!String": Should be removed
 metadata:
   ignore_unknown_instances: false
+  glob_ignored_children: false
   relevant_paths: []
   context: {}
   specified_id: ~

@@ -110,6 +110,8 @@ fn compute_patch_set_internal(
         .get_instance(id)
         .expect("Instance did not exist in tree");
 
+    let ignore_unknown = snapshot.metadata.ignore_unknown_instances;
+
     compute_property_patches(
         &context.snapshot_specified_ids,
         &mut snapshot,
@@ -117,7 +119,15 @@ fn compute_patch_set_internal(
         patch_set,
         tree,
     );
-    compute_children_patches(context, &mut snapshot, tree, id, patch_set, session);
+    compute_children_patches(
+        context,
+        &mut snapshot,
+        tree,
+        id,
+        patch_set,
+        session,
+        ignore_unknown,
+    );
 }
 
 fn compute_property_patches(
@@ -267,6 +277,7 @@ fn compute_children_patches(
     id: Ref,
     patch_set: &mut PatchSet,
     session: &super::matching::MatchingSession,
+    ignore_unknown_instances: bool,
 ) {
     use super::matching::match_forward;
 
@@ -310,9 +321,13 @@ fn compute_children_patches(
         });
     }
 
-    // Unmatched tree children: instances to be removed.
-    for tree_child_id in match_result.unmatched_tree {
-        patch_set.removed_instances.push(tree_child_id);
+    // Unmatched tree children: instances to be removed, unless the parent
+    // snapshot says to ignore unknown instances (e.g. $ignoreUnknownInstances
+    // or directories with glob-ignored children).
+    if !ignore_unknown_instances {
+        for tree_child_id in match_result.unmatched_tree {
+            patch_set.removed_instances.push(tree_child_id);
+        }
     }
 }
 
@@ -424,6 +439,96 @@ mod test {
         };
 
         assert_eq!(patch_set, expected_patch_set);
+    }
+
+    #[test]
+    fn ignore_unknown_instances_suppresses_removals() {
+        use super::super::patch_apply::apply_patch_set;
+
+        let mut tree = RojoTree::new(InstanceSnapshot::new().name("root").class_name("Folder"));
+        let root_id = tree.get_root_id();
+
+        // Add two children (A and B) to the tree via a patch.
+        let add_patch = PatchSet {
+            added_instances: vec![
+                PatchAdd {
+                    parent_id: root_id,
+                    instance: InstanceSnapshot::new().name("A").class_name("Folder"),
+                },
+                PatchAdd {
+                    parent_id: root_id,
+                    instance: InstanceSnapshot::new().name("B").class_name("Folder"),
+                },
+            ],
+            updated_instances: Vec::new(),
+            removed_instances: Vec::new(),
+            stage_ids: std::collections::HashSet::new(),
+            stage_paths: Vec::new(),
+        };
+        apply_patch_set(&mut tree, add_patch);
+
+        // Snapshot only has child A, with ignore_unknown_instances = true.
+        // Child B is "unknown" and should NOT be removed.
+        let snapshot = InstanceSnapshot {
+            snapshot_id: Ref::none(),
+            metadata: super::super::InstanceMetadata::new().ignore_unknown_instances(true),
+            properties: UstrMap::new(),
+            name: Cow::Borrowed("root"),
+            class_name: ustr("Folder"),
+            children: vec![InstanceSnapshot::new().name("A").class_name("Folder")],
+        };
+
+        let patch_set = compute_patch_set(Some(snapshot), &tree, root_id);
+
+        assert!(
+            patch_set.removed_instances.is_empty(),
+            "Unmatched tree children should NOT be removed when ignore_unknown_instances is true"
+        );
+    }
+
+    #[test]
+    fn default_removes_unmatched_children() {
+        use super::super::patch_apply::apply_patch_set;
+
+        let mut tree = RojoTree::new(InstanceSnapshot::new().name("root").class_name("Folder"));
+        let root_id = tree.get_root_id();
+
+        let add_patch = PatchSet {
+            added_instances: vec![
+                PatchAdd {
+                    parent_id: root_id,
+                    instance: InstanceSnapshot::new().name("A").class_name("Folder"),
+                },
+                PatchAdd {
+                    parent_id: root_id,
+                    instance: InstanceSnapshot::new().name("B").class_name("Folder"),
+                },
+            ],
+            updated_instances: Vec::new(),
+            removed_instances: Vec::new(),
+            stage_ids: std::collections::HashSet::new(),
+            stage_paths: Vec::new(),
+        };
+        apply_patch_set(&mut tree, add_patch);
+
+        // Snapshot only has child A, with default metadata (ignore_unknown_instances = false).
+        // Child B should be removed.
+        let snapshot = InstanceSnapshot {
+            snapshot_id: Ref::none(),
+            metadata: Default::default(),
+            properties: UstrMap::new(),
+            name: Cow::Borrowed("root"),
+            class_name: ustr("Folder"),
+            children: vec![InstanceSnapshot::new().name("A").class_name("Folder")],
+        };
+
+        let patch_set = compute_patch_set(Some(snapshot), &tree, root_id);
+
+        assert_eq!(
+            patch_set.removed_instances.len(),
+            1,
+            "Unmatched tree children should be removed when ignore_unknown_instances is false"
+        );
     }
 
     /// The same as rewrite_ref_existing_instance_update, except that the
