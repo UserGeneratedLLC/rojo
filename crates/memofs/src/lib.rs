@@ -293,11 +293,7 @@ impl VfsInner {
             if let Some(&is_file) = cache.is_file.get(path) {
                 return Ok(Metadata { is_file });
             }
-            if cache
-                .walked_roots
-                .iter()
-                .any(|root| path.starts_with(root))
-            {
+            if cache.walked_roots.iter().any(|root| path.starts_with(root)) {
                 return Err(io::Error::new(
                     io::ErrorKind::NotFound,
                     "not in prefetch cache",
