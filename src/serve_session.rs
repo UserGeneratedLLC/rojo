@@ -163,12 +163,14 @@ fn prefetch_project_files(project: &Project, sync_scripts_only: bool) -> io::Res
 
     let mut entries: Vec<walkdir::DirEntry> = Vec::new();
 
-    // Walk the entire project folder so that every file under it
-    // (nested project files, etc.) is covered by the is_file map.
-    // P1 returns NotFound for cache misses when prefetch is active.
+    // Shallow walk of project folder: just the folder entry + direct
+    // children. Covers the project file and top-level siblings (nested
+    // project files). One readdir syscall -- NOT recursive into
+    // target/, .git/, node_modules/, etc.
     if folder.exists() {
         for e in WalkDir::new(folder)
             .follow_links(true)
+            .max_depth(1)
             .into_iter()
             .flatten()
         {
@@ -176,22 +178,29 @@ fn prefetch_project_files(project: &Project, sync_scripts_only: bool) -> io::Res
         }
     }
 
-    // Also walk $path roots that may be OUTSIDE the project folder
-    // (e.g. $path: "../module"). These wouldn't be covered above.
-    // Canonicalize before starts_with to resolve ".." components that
-    // would otherwise cause false positives (e.g. project/../module
-    // literally starts_with project/ but is actually a sibling).
+    // Recursive walk of each $path root. Canonicalize to resolve ".."
+    // before the equality/starts_with checks.
     let canonical_folder = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
     for root in &roots {
         if !root.exists() {
             continue;
         }
         let canonical_root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
-        if canonical_root.starts_with(&canonical_folder) {
-            continue;
-        }
-        for e in WalkDir::new(root).follow_links(true).into_iter().flatten() {
-            entries.push(e);
+        if canonical_root == canonical_folder {
+            // $path points to the project folder itself -- shallow walk
+            // already covers depth 0-1, fill in the subtree.
+            for e in WalkDir::new(root)
+                .follow_links(true)
+                .min_depth(2)
+                .into_iter()
+                .flatten()
+            {
+                entries.push(e);
+            }
+        } else {
+            for e in WalkDir::new(root).follow_links(true).into_iter().flatten() {
+                entries.push(e);
+            }
         }
     }
 
@@ -346,12 +355,17 @@ impl ServeSession {
         std::thread::scope(|s| {
             s.spawn(|| {
                 let watch_start = Instant::now();
-                let _ = vfs.watch(&project_folder);
+                // Watch each $path root recursively (NOT the project folder --
+                // that would walk target/, .git/, etc. for repo-root projects).
                 for root in &path_roots {
                     let _ = vfs.watch(root);
                 }
+                // Watch project folder non-recursively for project file edits.
+                vfs.set_watch_recursive(false);
+                let _ = vfs.watch(&project_folder);
+                vfs.set_watch_recursive(true);
                 log::debug!(
-                    "Set up {} recursive watches in {:.1?}",
+                    "Set up {} watches in {:.1?}",
                     path_roots.len() + 1,
                     watch_start.elapsed(),
                 );
@@ -396,7 +410,15 @@ impl ServeSession {
         let ref_path_index = {
             let mut index = crate::RefPathIndex::new();
             let tree_guard = tree.lock().unwrap();
-            index.populate_from_dir(root_project.folder_location(), &tree_guard);
+            let mut ref_roots = Vec::new();
+            collect_path_roots(
+                &root_project.tree,
+                root_project.folder_location(),
+                &mut ref_roots,
+            );
+            for root in &ref_roots {
+                index.populate_from_dir(root, &tree_guard);
+            }
             drop(tree_guard);
             Arc::new(Mutex::new(index))
         };
