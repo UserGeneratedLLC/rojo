@@ -31,6 +31,8 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+## [8.5.3] (March 6th, 2026)
+
 * Add VFS recording mode and optimized watch setup to reduce OS file-watch handles during `atlas serve` startup on large projects
 * Add PrefetchCache directory init-file resolution for faster directory handling during snapshot prefetch
 * Optimize project file prefetching with shallow folder walk and depth-limited traversal for `$path` roots
@@ -47,15 +49,20 @@ Making a new release? Simply add the new header with the version and date undern
 <details>
 <summary>Full commit log</summary>
 
+- `622c2bb1` Merge pull request #8 from UserGeneratedLLC/optim_serve
+- `e8daa9e9` Enhance VFS and PrefetchCache functionality
+- `04565dab` Update TODO.txt to include syncback optimization task
 - `5275d45a` Add is_watch_enabled method to VFS and enhance prefetch cache tests
 - `8b18dc45` Add guard test for INIT_FILE_PRIORITY vs DEFAULT_PROJECT_NAMES sync
 - `e86ebdad` Fix walked_roots to store raw paths, not canonical
 - `5ff0ed3f` Refactor cache lookup logic in VFS to streamline path checks
 - `dc788711` Fix walked_roots to only include recursively walked directories
 - `4e9e676c` Refactor prefetch_project_files and VFS watch setup for improved efficiency
+- `f53e8007` Update TODO.txt to reflect new multi-place clone support
 - `df773eab` Improve project file prefetching by canonicalizing paths
 - `aa203177` Enhance VFS functionality and performance improvements
 - `6168597a` Enhance PrefetchCache with directory init-file resolution
+- `f1992a61` Merge pull request #7 from UserGeneratedLLC/vfs_exclusions
 - `14d4bc13` Update instance context in ServeSession for script synchronization
 - `0fb5c877` Refactor VFS watching mechanism for improved performance
 - `a1b65dbb` Enhance logging for VFS directory watching
@@ -66,6 +73,8 @@ Making a new release? Simply add the new header with the version and date undern
 - `bfb5815f` Update TODO and enhance git configuration
 
 </details>
+
+[8.5.3]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.5.3
 
 ## [8.5.2] (March 3rd, 2026)
 
