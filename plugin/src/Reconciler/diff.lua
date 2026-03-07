@@ -35,7 +35,14 @@ local SCRIPT_CLASS_NAMES = {
 }
 
 local function shouldDeleteChild(virtualInstance, childInstance)
-	-- If the parent allows deleting unknown instances, always allow
+	-- When the parent has glob-ignored children, suppress ALL deletions
+	-- (including scripts) unconditionally. This must be checked before
+	-- shouldDeleteUnknownInstances because project nodes and meta files
+	-- can override ignoreUnknownInstances independently.
+	if virtualInstance.Metadata and virtualInstance.Metadata.globIgnoredChildren then
+		return false
+	end
+
 	if shouldDeleteUnknownInstances(virtualInstance) then
 		return true
 	end

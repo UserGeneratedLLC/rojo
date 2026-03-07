@@ -17,7 +17,7 @@ use crate::{
     session_id::SessionId,
     snapshot::{
         apply_patch_set, compute_patch_set, AppliedPatchSet, InstanceContext, InstanceSnapshot,
-        PatchSet, RojoTree,
+        PatchSet, PathIgnoreRule, RojoTree,
     },
     snapshot_middleware::{is_script_relevant_path, snapshot_from_vfs, INIT_FILE_PRIORITY},
 };
@@ -138,6 +138,8 @@ fn prefetch_project_files(project: &Project, sync_scripts_only: bool) -> io::Res
 
     let folder = project.folder_location();
 
+    let ignore_rules = project.path_ignore_rules();
+
     let mut roots: Vec<std::path::PathBuf> = Vec::new();
     collect_path_roots(&project.tree, folder, &mut roots);
 
@@ -160,6 +162,10 @@ fn prefetch_project_files(project: &Project, sync_scripts_only: bool) -> io::Res
         });
     }
 
+    let passes_ignore = |entry: &walkdir::DirEntry| -> bool {
+        ignore_rules.iter().all(|rule| rule.passes(entry.path()))
+    };
+
     let walk_start = Instant::now();
 
     let mut entries: Vec<walkdir::DirEntry> = Vec::new();
@@ -181,6 +187,8 @@ fn prefetch_project_files(project: &Project, sync_scripts_only: bool) -> io::Res
 
     // Recursive walk of each $path root. Canonicalize to resolve ".."
     // before the equality/starts_with checks.
+    // filter_entry skips entire subtrees when a directory matches
+    // globIgnorePaths, preventing descent into ignored directories.
     let canonical_folder = std::fs::canonicalize(folder).unwrap_or_else(|_| folder.to_path_buf());
     let mut walked_roots: Vec<PathBuf> = Vec::new();
     for root in &roots {
@@ -192,18 +200,22 @@ fn prefetch_project_files(project: &Project, sync_scripts_only: bool) -> io::Res
             walked_roots.push(root.clone());
         }
         if canonical_root == canonical_folder {
-            // $path points to the project folder itself -- shallow walk
-            // already covers depth 0-1, fill in the subtree.
             for e in WalkDir::new(root)
                 .follow_links(true)
                 .min_depth(2)
                 .into_iter()
+                .filter_entry(&passes_ignore)
                 .flatten()
             {
                 entries.push(e);
             }
         } else {
-            for e in WalkDir::new(root).follow_links(true).into_iter().flatten() {
+            for e in WalkDir::new(root)
+                .follow_links(true)
+                .into_iter()
+                .filter_entry(&passes_ignore)
+                .flatten()
+            {
                 entries.push(e);
             }
         }
@@ -359,21 +371,58 @@ impl ServeSession {
 
         let patch_start = Instant::now();
         let project_folder = root_project.folder_location().to_path_buf();
+        let watch_ignore_rules = root_project.path_ignore_rules();
         std::thread::scope(|s| {
             s.spawn(|| {
+                use walkdir::WalkDir;
+
                 let watch_start = Instant::now();
-                // Watch each $path root recursively (NOT the project folder --
-                // that would walk target/, .git/, etc. for repo-root projects).
-                for root in &path_roots {
-                    let _ = vfs.watch(root);
+                let mut watch_count: usize = 0;
+
+                if cfg!(target_os = "macos") {
+                    // macOS kqueue: one FD per watched path. Walk each $path
+                    // root, skip globIgnorePaths subtrees, and watch every
+                    // non-ignored file and directory non-recursively. File
+                    // watches are required because kqueue directory watches
+                    // only fire for structural changes, not child content edits.
+                    let passes_ignore = |entry: &walkdir::DirEntry| -> bool {
+                        watch_ignore_rules
+                            .iter()
+                            .all(|rule: &PathIgnoreRule| rule.passes(entry.path()))
+                    };
+                    vfs.set_watch_recursive(false);
+                    for root in &path_roots {
+                        for entry in WalkDir::new(root)
+                            .follow_links(true)
+                            .into_iter()
+                            .filter_entry(&passes_ignore)
+                            .flatten()
+                        {
+                            let _ = vfs.watch(entry.path());
+                            watch_count += 1;
+                        }
+                    }
+                    let _ = vfs.watch(&project_folder);
+                    watch_count += 1;
+                    vfs.set_watch_recursive(true);
+                } else {
+                    // Linux/Windows: inotify uses a single FD for all watches,
+                    // RDCW uses one handle per directory. Recursive watches are
+                    // cheap and directory watches already cover child file
+                    // events. globIgnorePaths filtering is handled by the
+                    // change processor's event filter.
+                    for root in &path_roots {
+                        let _ = vfs.watch(root);
+                        watch_count += 1;
+                    }
+                    vfs.set_watch_recursive(false);
+                    let _ = vfs.watch(&project_folder);
+                    vfs.set_watch_recursive(true);
+                    watch_count += 1;
                 }
-                // Watch project folder non-recursively for project file edits.
-                vfs.set_watch_recursive(false);
-                let _ = vfs.watch(&project_folder);
-                vfs.set_watch_recursive(true);
                 log::debug!(
                     "Set up {} watches in {:.1?}",
-                    path_roots.len() + 1,
+                    watch_count,
                     watch_start.elapsed(),
                 );
             });
@@ -435,6 +484,8 @@ impl ServeSession {
             .as_deref()
             .and_then(crate::git::git_head_commit);
 
+        let path_ignore_rules = root_project.path_ignore_rules();
+
         log::trace!("Starting ChangeProcessor");
         let change_processor = ChangeProcessor::start(
             Arc::clone(&tree),
@@ -448,6 +499,7 @@ impl ServeSession {
             critical_error_receiver,
             git_repo_root.clone(),
             root_project.sync_scripts_only.unwrap_or(false),
+            path_ignore_rules,
         );
 
         Ok(Self {

@@ -5,6 +5,7 @@ expression: instance_snapshot
 snapshot_id: "00000000000000000000000000000000"
 metadata:
   ignore_unknown_instances: false
+  glob_ignored_children: false
   instigating_source:
     Path: /root/init.luau
   relevant_paths:

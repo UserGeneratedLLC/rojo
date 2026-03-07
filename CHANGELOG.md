@@ -31,6 +31,8 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+* Add multi-place support to `atlas clone`: pass multiple place IDs to create a project with separate `<name>.project.json5` and `<name>/` directories per place, matching the multi-place project layout
+
 ## [8.5.3] (March 6th, 2026)
 
 * Add VFS recording mode and optimized watch setup to reduce OS file-watch handles during `atlas serve` startup on large projects

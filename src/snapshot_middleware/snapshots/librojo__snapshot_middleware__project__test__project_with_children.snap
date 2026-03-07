@@ -5,6 +5,7 @@ expression: instance_snapshot
 snapshot_id: "00000000000000000000000000000000"
 metadata:
   ignore_unknown_instances: true
+  glob_ignored_children: false
   instigating_source:
     Path: /foo.project.json5
   relevant_paths:
@@ -20,6 +21,7 @@ children:
   - snapshot_id: "00000000000000000000000000000000"
     metadata:
       ignore_unknown_instances: true
+      glob_ignored_children: false
       instigating_source:
         ProjectNode:
           path: /foo.project.json5

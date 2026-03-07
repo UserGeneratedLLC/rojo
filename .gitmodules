@@ -28,3 +28,15 @@
 [submodule ".lune/opencloud-execute"]
 	path = .lune/opencloud-execute
 	url = https://github.com/Dekkonot/opencloud-luau-execute-lune.git
+[submodule ".cursor/rules/shared"]
+	path = .cursor/rules/shared
+	url = https://github.com/UserGeneratedLLC/agent-rules.git
+[submodule ".cursor/commands/shared"]
+	path = .cursor/commands/shared
+	url = https://github.com/UserGeneratedLLC/agent-commands.git
+[submodule ".cursor/skills/shared"]
+	path = .cursor/skills/shared
+	url = https://github.com/UserGeneratedLLC/agent-skills.git
+[submodule ".cursor/docs/shared"]
+	path = .cursor/docs/shared
+	url = https://github.com/UserGeneratedLLC/agent-docs.git

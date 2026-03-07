@@ -103,3 +103,9 @@ optimize syncback like we did serve.
 [sourcemap / luau-lsp]
 we need to fix   "luau-lsp.sourcemap.generatorCommand": "atlas sourcemap default.project.json5 --output sourcemap.json --include-non-scripts --watch",
 and make luau-lsp actually use the 'atlas' cli...
+
+[two way sync]
+so the plugin isnt respecting two-way sync for glob ignore
+basically if a new script is on studio that isn't in atlas but even though it's glob ignored, it still tries to two-way sync it over and say there has been a change
+
+[hit up coelho]

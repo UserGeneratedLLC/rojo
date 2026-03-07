@@ -1,7 +1,7 @@
 //! Defines the algorithm for computing a roughly-minimal patch set given an
 //! existing instance tree and an instance snapshot.
 
-use std::{collections::HashMap, mem::take};
+use std::{collections::HashMap, mem::take, sync::Arc};
 
 use rbx_dom_weak::{
     types::{Ref, Variant},
@@ -15,7 +15,7 @@ use crate::{
 
 use super::{
     patch::{PatchAdd, PatchSet, PatchUpdate},
-    InstanceSnapshot, InstanceWithMeta, RojoTree,
+    InstanceSnapshot, InstanceWithMeta, InstigatingSource, PathIgnoreRule, RojoTree,
 };
 
 #[profiling::function]
@@ -110,6 +110,12 @@ fn compute_patch_set_internal(
         .get_instance(id)
         .expect("Instance did not exist in tree");
 
+    let glob_ignore_rules = if snapshot.metadata.glob_ignored_children {
+        Some(Arc::clone(&snapshot.metadata.context.path_ignore_rules))
+    } else {
+        None
+    };
+
     compute_property_patches(
         &context.snapshot_specified_ids,
         &mut snapshot,
@@ -117,7 +123,15 @@ fn compute_patch_set_internal(
         patch_set,
         tree,
     );
-    compute_children_patches(context, &mut snapshot, tree, id, patch_set, session);
+    compute_children_patches(
+        context,
+        &mut snapshot,
+        tree,
+        id,
+        patch_set,
+        session,
+        glob_ignore_rules.as_ref().map(|v| v.as_slice()),
+    );
 }
 
 fn compute_property_patches(
@@ -267,6 +281,7 @@ fn compute_children_patches(
     id: Ref,
     patch_set: &mut PatchSet,
     session: &super::matching::MatchingSession,
+    glob_ignore_rules: Option<&[PathIgnoreRule]>,
 ) {
     use super::matching::match_forward;
 
@@ -310,8 +325,26 @@ fn compute_children_patches(
         });
     }
 
-    // Unmatched tree children: instances to be removed.
+    // Unmatched tree children: instances to be removed. When the parent has
+    // glob-ignored children, each child is checked individually -- only
+    // children whose InstigatingSource path matches a glob rule are kept.
+    // Standard $ignoreUnknownInstances (scripts-only mode) still allows
+    // server-side removals; the plugin's shouldDeleteChild handles the
+    // selective keep logic for non-scripts.
     for tree_child_id in match_result.unmatched_tree {
+        if let Some(rules) = glob_ignore_rules {
+            let is_glob_ignored = tree
+                .get_instance(tree_child_id)
+                .and_then(|inst| inst.metadata().instigating_source.as_ref())
+                .map(|source| match source {
+                    InstigatingSource::Path(path) => !rules.iter().all(|rule| rule.passes(path)),
+                    _ => false,
+                })
+                .unwrap_or(false);
+            if is_glob_ignored {
+                continue;
+            }
+        }
         patch_set.removed_instances.push(tree_child_id);
     }
 }
@@ -424,6 +457,250 @@ mod test {
         };
 
         assert_eq!(patch_set, expected_patch_set);
+    }
+
+    #[test]
+    fn glob_ignored_children_suppresses_glob_matched_removals() {
+        use super::super::patch_apply::apply_patch_set;
+        use crate::glob::Glob;
+        use std::path::PathBuf;
+
+        let mut tree = RojoTree::new(InstanceSnapshot::new().name("root").class_name("Folder"));
+        let root_id = tree.get_root_id();
+
+        let add_patch = PatchSet {
+            added_instances: vec![
+                PatchAdd {
+                    parent_id: root_id,
+                    instance: InstanceSnapshot::new()
+                        .name("A")
+                        .class_name("Folder")
+                        .metadata(
+                            super::super::InstanceMetadata::new()
+                                .instigating_source(PathBuf::from("/project/src/A")),
+                        ),
+                },
+                PatchAdd {
+                    parent_id: root_id,
+                    instance: InstanceSnapshot::new()
+                        .name("B")
+                        .class_name("Folder")
+                        .metadata(
+                            super::super::InstanceMetadata::new()
+                                .instigating_source(PathBuf::from("/project/src/generated/B")),
+                        ),
+                },
+            ],
+            updated_instances: Vec::new(),
+            removed_instances: Vec::new(),
+            stage_ids: std::collections::HashSet::new(),
+            stage_paths: Vec::new(),
+        };
+        apply_patch_set(&mut tree, add_patch);
+
+        let mut context = super::super::InstanceContext::new();
+        context.add_path_ignore_rules(vec![PathIgnoreRule {
+            base_path: PathBuf::from("/project"),
+            glob: Glob::new("src/generated/**").unwrap(),
+        }]);
+
+        // Snapshot has only A. B is unmatched but its path matches the
+        // glob rule, so it should NOT be removed.
+        let snapshot = InstanceSnapshot {
+            snapshot_id: Ref::none(),
+            metadata: super::super::InstanceMetadata::new()
+                .ignore_unknown_instances(true)
+                .glob_ignored_children(true)
+                .context(&context),
+            properties: UstrMap::new(),
+            name: Cow::Borrowed("root"),
+            class_name: ustr("Folder"),
+            children: vec![InstanceSnapshot::new().name("A").class_name("Folder")],
+        };
+
+        let patch_set = compute_patch_set(Some(snapshot), &tree, root_id);
+
+        assert!(
+            patch_set.removed_instances.is_empty(),
+            "Glob-matched child should NOT be removed"
+        );
+    }
+
+    #[test]
+    fn glob_ignored_children_per_child_matching() {
+        use super::super::patch_apply::apply_patch_set;
+        use crate::glob::Glob;
+        use std::path::PathBuf;
+
+        let mut tree = RojoTree::new(InstanceSnapshot::new().name("root").class_name("Folder"));
+        let root_id = tree.get_root_id();
+
+        // A: will be in the snapshot (matched).
+        // B: deleted from filesystem, path does NOT match glob → removed.
+        // C: glob-ignored, path matches glob → NOT removed.
+        let add_patch = PatchSet {
+            added_instances: vec![
+                PatchAdd {
+                    parent_id: root_id,
+                    instance: InstanceSnapshot::new()
+                        .name("A")
+                        .class_name("Folder")
+                        .metadata(
+                            super::super::InstanceMetadata::new()
+                                .instigating_source(PathBuf::from("/project/src/A")),
+                        ),
+                },
+                PatchAdd {
+                    parent_id: root_id,
+                    instance: InstanceSnapshot::new()
+                        .name("B")
+                        .class_name("Folder")
+                        .metadata(
+                            super::super::InstanceMetadata::new()
+                                .instigating_source(PathBuf::from("/project/src/B")),
+                        ),
+                },
+                PatchAdd {
+                    parent_id: root_id,
+                    instance: InstanceSnapshot::new()
+                        .name("C")
+                        .class_name("Folder")
+                        .metadata(
+                            super::super::InstanceMetadata::new()
+                                .instigating_source(PathBuf::from("/project/src/generated/C")),
+                        ),
+                },
+            ],
+            updated_instances: Vec::new(),
+            removed_instances: Vec::new(),
+            stage_ids: std::collections::HashSet::new(),
+            stage_paths: Vec::new(),
+        };
+        apply_patch_set(&mut tree, add_patch);
+
+        let mut context = super::super::InstanceContext::new();
+        context.add_path_ignore_rules(vec![PathIgnoreRule {
+            base_path: PathBuf::from("/project"),
+            glob: Glob::new("src/generated/**").unwrap(),
+        }]);
+
+        let snapshot = InstanceSnapshot {
+            snapshot_id: Ref::none(),
+            metadata: super::super::InstanceMetadata::new()
+                .ignore_unknown_instances(true)
+                .glob_ignored_children(true)
+                .context(&context),
+            properties: UstrMap::new(),
+            name: Cow::Borrowed("root"),
+            class_name: ustr("Folder"),
+            children: vec![InstanceSnapshot::new().name("A").class_name("Folder")],
+        };
+
+        let patch_set = compute_patch_set(Some(snapshot), &tree, root_id);
+
+        assert_eq!(
+            patch_set.removed_instances.len(),
+            1,
+            "Only genuinely deleted child B should be removed, not glob-ignored child C"
+        );
+
+        let removed_inst = tree
+            .get_instance(patch_set.removed_instances[0])
+            .expect("Removed instance should exist in tree");
+        assert_eq!(
+            removed_inst.name(),
+            "B",
+            "The removed instance should be B (genuine deletion)"
+        );
+    }
+
+    #[test]
+    fn ignore_unknown_instances_alone_still_removes() {
+        use super::super::patch_apply::apply_patch_set;
+
+        let mut tree = RojoTree::new(InstanceSnapshot::new().name("root").class_name("Folder"));
+        let root_id = tree.get_root_id();
+
+        let add_patch = PatchSet {
+            added_instances: vec![
+                PatchAdd {
+                    parent_id: root_id,
+                    instance: InstanceSnapshot::new().name("A").class_name("Folder"),
+                },
+                PatchAdd {
+                    parent_id: root_id,
+                    instance: InstanceSnapshot::new().name("B").class_name("Folder"),
+                },
+            ],
+            updated_instances: Vec::new(),
+            removed_instances: Vec::new(),
+            stage_ids: std::collections::HashSet::new(),
+            stage_paths: Vec::new(),
+        };
+        apply_patch_set(&mut tree, add_patch);
+
+        // ignore_unknown_instances = true (scripts-only mode) but
+        // glob_ignored_children = false. Server still sends removals;
+        // the plugin's shouldDeleteChild handles the selective keep.
+        let snapshot = InstanceSnapshot {
+            snapshot_id: Ref::none(),
+            metadata: super::super::InstanceMetadata::new().ignore_unknown_instances(true),
+            properties: UstrMap::new(),
+            name: Cow::Borrowed("root"),
+            class_name: ustr("Folder"),
+            children: vec![InstanceSnapshot::new().name("A").class_name("Folder")],
+        };
+
+        let patch_set = compute_patch_set(Some(snapshot), &tree, root_id);
+
+        assert_eq!(
+            patch_set.removed_instances.len(),
+            1,
+            "ignore_unknown_instances alone should NOT suppress server-side removals"
+        );
+    }
+
+    #[test]
+    fn default_removes_unmatched_children() {
+        use super::super::patch_apply::apply_patch_set;
+
+        let mut tree = RojoTree::new(InstanceSnapshot::new().name("root").class_name("Folder"));
+        let root_id = tree.get_root_id();
+
+        let add_patch = PatchSet {
+            added_instances: vec![
+                PatchAdd {
+                    parent_id: root_id,
+                    instance: InstanceSnapshot::new().name("A").class_name("Folder"),
+                },
+                PatchAdd {
+                    parent_id: root_id,
+                    instance: InstanceSnapshot::new().name("B").class_name("Folder"),
+                },
+            ],
+            updated_instances: Vec::new(),
+            removed_instances: Vec::new(),
+            stage_ids: std::collections::HashSet::new(),
+            stage_paths: Vec::new(),
+        };
+        apply_patch_set(&mut tree, add_patch);
+
+        let snapshot = InstanceSnapshot {
+            snapshot_id: Ref::none(),
+            metadata: Default::default(),
+            properties: UstrMap::new(),
+            name: Cow::Borrowed("root"),
+            class_name: ustr("Folder"),
+            children: vec![InstanceSnapshot::new().name("A").class_name("Folder")],
+        };
+
+        let patch_set = compute_patch_set(Some(snapshot), &tree, root_id);
+
+        assert_eq!(
+            patch_set.removed_instances.len(),
+            1,
+            "Unmatched tree children should be removed with default metadata"
+        );
     }
 
     /// The same as rewrite_ref_existing_instance_update, except that the

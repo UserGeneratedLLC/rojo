@@ -155,12 +155,15 @@ pub struct InstanceUpdate {
 #[serde(rename_all = "camelCase")]
 pub struct InstanceMetadata {
     pub ignore_unknown_instances: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub glob_ignored_children: bool,
 }
 
 impl InstanceMetadata {
     pub(crate) fn from_rojo_metadata(meta: &RojoInstanceMetadata) -> Self {
         Self {
             ignore_unknown_instances: meta.ignore_unknown_instances,
+            glob_ignored_children: meta.glob_ignored_children,
         }
     }
 }

@@ -49,11 +49,14 @@ pub fn snapshot_dir_no_meta(
             .all(|rule| rule.passes(child.path()))
     };
 
+    let mut any_child_glob_ignored = false;
+
     let snapshot_children = if std::env::var("ATLAS_SEQUENTIAL").is_ok() {
         let mut children = Vec::new();
         for entry in vfs.read_dir(path)? {
             let entry = entry?;
             if !passes_filter_rules(&entry) {
+                any_child_glob_ignored = true;
                 continue;
             }
             if let Some(child_snapshot) = snapshot_from_vfs(context, vfs, entry.path())? {
@@ -65,6 +68,8 @@ pub fn snapshot_dir_no_meta(
         use rayon::prelude::*;
 
         let entries: Vec<_> = vfs.read_dir(path)?.filter_map(|e| e.ok()).collect();
+
+        any_child_glob_ignored = entries.iter().any(|e| !passes_filter_rules(e));
 
         let results: Vec<anyhow::Result<Option<InstanceSnapshot>>> = entries
             .par_iter()
@@ -112,7 +117,8 @@ pub fn snapshot_dir_no_meta(
             InstanceMetadata::new()
                 .instigating_source(path)
                 .relevant_paths(relevant_paths)
-                .context(context),
+                .context(context)
+                .glob_ignored_children(any_child_glob_ignored),
         );
 
     Ok(Some(snapshot))
@@ -563,5 +569,81 @@ mod test {
                 .unwrap();
 
         insta::assert_yaml_snapshot!(instance_snapshot);
+    }
+
+    #[test]
+    fn glob_ignored_children_set_ignore_unknown_instances() {
+        use crate::glob::Glob;
+        use crate::snapshot::PathIgnoreRule;
+        use std::path::PathBuf;
+
+        let mut imfs = InMemoryFs::new();
+        imfs.load_snapshot(
+            "/project/src",
+            VfsSnapshot::dir([
+                ("kept.luau", VfsSnapshot::file("return 1")),
+                ("ignored.luau", VfsSnapshot::file("return 2")),
+            ]),
+        )
+        .unwrap();
+        let vfs = Vfs::new(imfs);
+
+        let mut context = InstanceContext::default();
+        context.add_path_ignore_rules(vec![PathIgnoreRule {
+            base_path: PathBuf::from("/project"),
+            glob: Glob::new("src/ignored.luau").unwrap(),
+        }]);
+
+        let snap = snapshot_dir(&context, &vfs, Path::new("/project/src"), "src")
+            .unwrap()
+            .unwrap();
+
+        assert!(
+            !snap.metadata.ignore_unknown_instances,
+            "Glob filtering should not set ignore_unknown_instances (avoids meta file leak)"
+        );
+        assert!(
+            snap.metadata.glob_ignored_children,
+            "Directory with glob-ignored children should have glob_ignored_children = true"
+        );
+        assert_eq!(
+            snap.children.len(),
+            1,
+            "Only non-ignored child should be snapshotted"
+        );
+        assert_eq!(snap.children[0].name, "kept");
+    }
+
+    #[test]
+    fn no_glob_ignored_children_leaves_ignore_unknown_instances_false() {
+        let mut imfs = InMemoryFs::new();
+        imfs.load_snapshot(
+            "/project/src",
+            VfsSnapshot::dir([
+                ("a.luau", VfsSnapshot::file("return 1")),
+                ("b.luau", VfsSnapshot::file("return 2")),
+            ]),
+        )
+        .unwrap();
+        let vfs = Vfs::new(imfs);
+
+        let snap = snapshot_dir(
+            &InstanceContext::default(),
+            &vfs,
+            Path::new("/project/src"),
+            "src",
+        )
+        .unwrap()
+        .unwrap();
+
+        assert!(
+            !snap.metadata.ignore_unknown_instances,
+            "Directory without glob-ignored children should have ignore_unknown_instances = false"
+        );
+        assert!(
+            !snap.metadata.glob_ignored_children,
+            "Directory without glob-ignored children should have glob_ignored_children = false"
+        );
+        assert_eq!(snap.children.len(), 2);
     }
 }
