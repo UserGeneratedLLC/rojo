@@ -118,7 +118,6 @@ pub fn snapshot_dir_no_meta(
                 .instigating_source(path)
                 .relevant_paths(relevant_paths)
                 .context(context)
-                .ignore_unknown_instances(any_child_glob_ignored)
                 .glob_ignored_children(any_child_glob_ignored),
         );
 
@@ -600,8 +599,8 @@ mod test {
             .unwrap();
 
         assert!(
-            snap.metadata.ignore_unknown_instances,
-            "Directory with glob-ignored children should have ignore_unknown_instances = true"
+            !snap.metadata.ignore_unknown_instances,
+            "Glob filtering should not set ignore_unknown_instances (avoids meta file leak)"
         );
         assert!(
             snap.metadata.glob_ignored_children,
