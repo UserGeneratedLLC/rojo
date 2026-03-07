@@ -30,7 +30,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     glob::Glob,
-    project::DEFAULT_PROJECT_NAMES,
     syncback::{dedup_suffix::strip_dedup_suffix, SyncbackReturn, SyncbackSnapshot},
 };
 use crate::{
@@ -110,6 +109,27 @@ pub fn snapshot_from_vfs(
     }
 }
 
+/// Single source of truth for init-file resolution priority.
+/// Project files are checked first, then init files in this order.
+/// Used by both `get_dir_middleware` (live) and `prefetch_project_files` (cache).
+pub static INIT_FILE_PRIORITY: &[(Middleware, &str)] = &[
+    (Middleware::Project, "default.project.json5"),
+    (Middleware::Project, "default.project.json"),
+    (Middleware::ModuleScriptDir, "init.luau"),
+    (Middleware::ServerScriptDir, "init.server.luau"),
+    (Middleware::ClientScriptDir, "init.client.luau"),
+    (Middleware::PluginScriptDir, "init.plugin.luau"),
+    (Middleware::LocalScriptDir, "init.local.luau"),
+    (Middleware::LegacyScriptDir, "init.legacy.luau"),
+    (Middleware::CsvDir, "init.csv"),
+    // Legacy extensions (for backwards compatibility)
+    // init.server.lua → Script with RunContext.Legacy (old emitLegacyScripts behavior)
+    // init.client.lua → LocalScript (old emitLegacyScripts behavior)
+    (Middleware::ModuleScriptDir, "init.lua"),
+    (Middleware::LegacyScriptDir, "init.server.lua"),
+    (Middleware::LocalScriptDir, "init.client.lua"),
+];
+
 /// Gets the appropriate middleware for a directory by checking for `init`
 /// files. This uses an intrinsic priority list and for compatibility,
 /// that order should be left unchanged.
@@ -127,37 +147,24 @@ fn get_dir_middleware<'path>(
         .ok_or_else(|| anyhow::anyhow!("File name was not valid UTF-8: {}", dir_path.display()))?;
     let dir_name = strip_dedup_suffix(dir_name);
 
-    static INIT_PATHS: OnceLock<Vec<(Middleware, &str)>> = OnceLock::new();
-    let order = INIT_PATHS.get_or_init(|| {
-        vec![
-            // Modern extensions (preferred)
-            (Middleware::ModuleScriptDir, "init.luau"),
-            (Middleware::ServerScriptDir, "init.server.luau"),
-            (Middleware::ClientScriptDir, "init.client.luau"),
-            (Middleware::PluginScriptDir, "init.plugin.luau"),
-            (Middleware::LocalScriptDir, "init.local.luau"),
-            (Middleware::LegacyScriptDir, "init.legacy.luau"),
-            (Middleware::CsvDir, "init.csv"),
-            // Legacy extensions (for backwards compatibility)
-            // init.server.lua → Script with RunContext.Legacy (old emitLegacyScripts behavior)
-            // init.client.lua → LocalScript (old emitLegacyScripts behavior)
-            (Middleware::ModuleScriptDir, "init.lua"),
-            (Middleware::LegacyScriptDir, "init.server.lua"),
-            (Middleware::LocalScriptDir, "init.client.lua"),
-        ]
-    });
-
-    for default_project_name in DEFAULT_PROJECT_NAMES {
-        let project_path = dir_path.join(default_project_name);
-        if vfs.metadata(&project_path).with_not_found()?.is_some() {
-            return Ok((Middleware::Project, dir_name, project_path));
-        }
+    if let Some(cached) = vfs.prefetch_dir_init(dir_path) {
+        return match cached {
+            Some((init_name, init_path)) => {
+                let middleware = INIT_FILE_PRIORITY
+                    .iter()
+                    .find(|(_, name)| *name == init_name)
+                    .map(|(m, _)| *m)
+                    .unwrap_or(Middleware::Dir);
+                Ok((middleware, dir_name, init_path))
+            }
+            None => Ok((Middleware::Dir, dir_name, dir_path.to_path_buf())),
+        };
     }
 
-    for (middleware, name) in order {
+    for &(middleware, name) in INIT_FILE_PRIORITY {
         let test_path = dir_path.join(name);
         if vfs.metadata(&test_path).with_not_found()?.is_some() {
-            return Ok((*middleware, dir_name, test_path));
+            return Ok((middleware, dir_name, test_path));
         }
     }
 

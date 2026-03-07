@@ -274,9 +274,20 @@ fn compute_children_patches(
         .get_instance(id)
         .expect("Instance did not exist in tree");
 
-    let instance_children = instance.children().to_vec();
+    let instance_children = instance.children();
     let snapshot_children = take(&mut snapshot.children);
 
+    if instance_children.is_empty() {
+        for snapshot_child in snapshot_children {
+            patch_set.added_instances.push(PatchAdd {
+                parent_id: id,
+                instance: snapshot_child,
+            });
+        }
+        return;
+    }
+
+    let instance_children = instance_children.to_vec();
     let match_result = match_forward(snapshot_children, &instance_children, tree, session);
 
     // Matched pairs: recursively compute patches.

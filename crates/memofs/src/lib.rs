@@ -44,6 +44,12 @@ pub struct PrefetchCache {
     pub is_file: HashMap<PathBuf, bool>,
     /// Directory path -> sorted child paths. Consumed once per directory.
     pub children: HashMap<PathBuf, Vec<PathBuf>>,
+    /// Pre-resolved init-file info for each directory. The value is `None`
+    /// when the directory has no init file (plain `Folder`), or
+    /// `Some((init_file_name, init_path))` for the winning init entry.
+    /// Populated during prefetch so that `get_dir_middleware` can skip
+    /// per-file VFS metadata probes entirely.
+    pub dir_init: HashMap<PathBuf, Option<(String, PathBuf)>>,
 }
 
 mod sealed {
@@ -282,6 +288,10 @@ impl VfsInner {
             if let Some(&is_file) = cache.is_file.get(path) {
                 return Ok(Metadata { is_file });
             }
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                "not in prefetch cache",
+            ));
         }
 
         self.backend.metadata(path)
@@ -382,6 +392,17 @@ impl Vfs {
     pub fn clear_prefetch_cache(&self) {
         let mut inner = self.inner.lock().unwrap();
         inner.prefetch_cache = None;
+    }
+
+    /// Look up pre-resolved init-file info for a directory from the
+    /// prefetch cache. Returns `Some(Some((name, path)))` when the
+    /// directory was found in the cache with an init file, `Some(None)`
+    /// when the directory was found but has no init file, and `None`
+    /// when there is no prefetch cache or the directory is not in it.
+    pub fn prefetch_dir_init(&self, dir: &Path) -> Option<Option<(String, PathBuf)>> {
+        let inner = self.inner.lock().unwrap();
+        let cache = inner.prefetch_cache.as_ref()?;
+        cache.dir_init.get(dir).cloned()
     }
 
     /// Manually lock the Vfs, useful for large batches of operations.
@@ -732,6 +753,7 @@ mod test {
                 .collect(),
             is_file: HashMap::new(),
             children: HashMap::new(),
+            dir_init: HashMap::new(),
         }
     }
 
@@ -868,6 +890,7 @@ mod test {
             files: cache_files,
             is_file: HashMap::new(),
             children: HashMap::new(),
+            dir_init: HashMap::new(),
         });
 
         let result = vfs.read(&file_path).unwrap();
@@ -913,6 +936,7 @@ mod test {
             files: cache_files,
             is_file: HashMap::new(),
             children: HashMap::new(),
+            dir_init: HashMap::new(),
         });
 
         let handles: Vec<_> = (0..100)
@@ -953,6 +977,7 @@ mod test {
             files: cache_files,
             is_file: HashMap::new(),
             children: HashMap::new(),
+            dir_init: HashMap::new(),
         });
 
         for i in 0..50 {
