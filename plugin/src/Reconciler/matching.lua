@@ -89,13 +89,6 @@ type ClassComparisonKeys = {
 	defaults: { [string]: any },
 }
 
-type ScoredPair = {
-	vi: number,
-	si: number,
-	cost: number,
-	idx: number,
-}
-
 -- ================================================================
 -- Session constructor
 -- ================================================================
@@ -334,6 +327,97 @@ local function countOwnDiffs(vCache: VCache, sCache: SCache, classKeys: ClassCom
 end
 
 -- ================================================================
+-- Optimal assignment via Hungarian (Kuhn-Munkres) algorithm
+-- ================================================================
+
+local function minCostAssignment(cost: { { number } }, rows: number, cols: number): { { number } }
+	if rows == 0 or cols == 0 then
+		return {}
+	end
+
+	local n = math.max(rows, cols)
+	local big = UNMATCHED_PENALTY * 2
+
+	local c: { { number } } = table.create(n)
+	for i = 1, n do
+		local row = table.create(n, big)
+		for j = 1, n do
+			if i <= rows and j <= cols then
+				row[j] = cost[i][j]
+			end
+		end
+		c[i] = row
+	end
+
+	local u = table.create(n + 1, 0)
+	local v = table.create(n + 1, 0)
+	local p = table.create(n + 1, 0)
+	local way = table.create(n + 1, 0)
+
+	local INF = math.huge
+
+	for i = 1, n do
+		p[0] = i
+		local j0 = 0
+		local minV = table.create(n + 1, INF)
+		local used = table.create(n + 1, false)
+
+		while true do
+			used[j0] = true
+			local i0 = p[j0]
+			local delta = INF
+			local j1 = 0
+
+			for j = 1, n do
+				if used[j] then
+					continue
+				end
+				local cur = c[i0][j] - u[i0] - v[j]
+				if cur < minV[j] then
+					minV[j] = cur
+					way[j] = j0
+				end
+				if minV[j] < delta then
+					delta = minV[j]
+					j1 = j
+				end
+			end
+
+			for j = 0, n do
+				if used[j] then
+					u[p[j]] += delta
+					v[j] -= delta
+				else
+					minV[j] -= delta
+				end
+			end
+
+			j0 = j1
+			if p[j0] == 0 then
+				break
+			end
+		end
+
+		while true do
+			local j1 = way[j0]
+			p[j0] = p[j1]
+			j0 = j1
+			if j0 == 0 then
+				break
+			end
+		end
+	end
+
+	local result: { { number } } = {}
+	for j = 1, n do
+		if p[j] ~= 0 and p[j] <= rows and j <= cols then
+			table.insert(result, { p[j], j })
+		end
+	end
+	return result
+end
+
+-- ================================================================
 -- Core: 2-function mutual recursion
 -- ================================================================
 
@@ -527,74 +611,66 @@ matchChildren = function(
 			sCaches[si] = cacheStudio(studioChildren[si], classKeys, extraPropNamesArray, refPropNamesArray)
 		end
 
-		local scoredPairs: { ScoredPair } = {}
-		local pairIdx = 0
-		local bestSoFar = math.huge
+		-- Build cost matrix for the Hungarian algorithm.
+		local m = #vIndices
+		local n = #sIndices
+		local costMatrix: { { number } } = table.create(m)
 
-		for _, vi in ipairs(vIndices) do
+		for ri, vi in ipairs(vIndices) do
 			local vCache = vCaches[vi]
-			if not vCache then
-				continue
-			end
+			local row = table.create(n, UNMATCHED_PENALTY)
+			if vCache then
+				for ci, si in ipairs(sIndices) do
+					local sCache = sCaches[si]
+					if not sCache then
+						continue
+					end
 
-			for _, si in ipairs(sIndices) do
-				local sCache = sCaches[si]
-				if not sCache then
-					continue
-				end
+					local cost = countOwnDiffs(vCache, sCache, classKeys)
 
-				pairIdx += 1
-				local cost = countOwnDiffs(vCache, sCache, classKeys)
+					if depth < MAX_SCORING_DEPTH then
+						local validVChildren = vCache.validChildren
+						local studioKids = sCache.children
 
-				if cost < bestSoFar and depth < MAX_SCORING_DEPTH then
-					local validVChildren = vCache.validChildren
-					local studioKids = sCache.children
-
-					if #validVChildren > 0 or #studioKids > 0 then
-						if #validVChildren == 0 then
-							cost += #studioKids * UNMATCHED_PENALTY
-						elseif #studioKids == 0 then
-							cost += #validVChildren * UNMATCHED_PENALTY
-						else
-							local childResult = matchChildren(
-								session,
-								validVChildren,
-								studioKids,
-								virtualInstances,
-								virtualChildren[vi],
-								sCache.instance,
-								depth + 1
-							)
-							cost += childResult.totalCost
+						if #validVChildren > 0 or #studioKids > 0 then
+							if #validVChildren == 0 then
+								cost += #studioKids * UNMATCHED_PENALTY
+							elseif #studioKids == 0 then
+								cost += #validVChildren * UNMATCHED_PENALTY
+							else
+								local childResult = matchChildren(
+									session,
+									validVChildren,
+									studioKids,
+									virtualInstances,
+									virtualChildren[vi],
+									sCache.instance,
+									depth + 1
+								)
+								cost += childResult.totalCost
+							end
 						end
 					end
-				end
 
-				table.insert(scoredPairs, { vi = vi, si = si, cost = cost, idx = pairIdx })
-				if cost < bestSoFar then
-					bestSoFar = cost
+					row[ci] = cost
 				end
 			end
+			costMatrix[ri] = row
 		end
 
-		table.sort(scoredPairs, function(a: ScoredPair, b: ScoredPair): boolean
-			if a.cost ~= b.cost then
-				return a.cost < b.cost
-			end
-			return a.idx < b.idx
-		end)
-
-		for _, pair in ipairs(scoredPairs) do
-			if matchedV[pair.vi] or matchedS[pair.si] then
-				continue
-			end
+		-- Optimal assignment via the Hungarian algorithm.
+		local assignment = minCostAssignment(costMatrix, m, n)
+		for _, pair in ipairs(assignment) do
+			local vi = vIndices[pair[1]]
+			local si = sIndices[pair[2]]
+			local cost = costMatrix[pair[1]][pair[2]]
 			table.insert(matched, {
-				virtualId = virtualChildren[pair.vi],
-				studioInstance = studioChildren[pair.si],
+				virtualId = virtualChildren[vi],
+				studioInstance = studioChildren[si],
 			})
-			table.insert(matchedCosts, pair.cost)
-			matchedV[pair.vi] = true
-			matchedS[pair.si] = true
+			table.insert(matchedCosts, cost)
+			matchedV[vi] = true
+			matchedS[si] = true
 		end
 	end
 

@@ -5,7 +5,8 @@
 //!
 //! Algorithm per parent:
 //!   1. Group by (Name, ClassName) -- 1:1 groups instant-match
-//!   2. Ambiguous groups: recursive change-count scoring + greedy assignment
+//!   2. Ambiguous groups: recursive change-count scoring + optimal assignment
+//!      via the Hungarian algorithm
 //!
 //! The change count = how many things the reconciler would need to touch
 //! to turn instance A into instance B, including the entire subtree.
@@ -26,6 +27,93 @@ const UNMATCHED_PENALTY: u32 = 10_000;
 /// only flat property comparison is used (no subtree recursion). Prevents
 /// O(n^k) explosion on deeply nested trees with many same-named instances.
 const MAX_SCORING_DEPTH: u32 = 3;
+
+/// Minimum-cost bipartite matching via the Hungarian (Kuhn-Munkres) algorithm.
+/// See `src/syncback/matching.rs` for detailed documentation.
+fn min_cost_assignment(cost: &[Vec<u32>], rows: usize, cols: usize) -> Vec<(usize, usize)> {
+    if rows == 0 || cols == 0 {
+        return Vec::new();
+    }
+
+    let n = rows.max(cols);
+    let big = UNMATCHED_PENALTY.saturating_mul(2);
+
+    let mut c = vec![vec![0i64; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            c[i][j] = if i < rows && j < cols {
+                cost[i][j] as i64
+            } else {
+                big as i64
+            };
+        }
+    }
+
+    let mut u = vec![0i64; n + 1];
+    let mut v = vec![0i64; n + 1];
+    let mut p = vec![0usize; n + 1];
+    let mut way = vec![0usize; n + 1];
+
+    for i in 1..=n {
+        p[0] = i;
+        let mut j0 = 0usize;
+        let mut min_v = vec![i64::MAX; n + 1];
+        let mut used = vec![false; n + 1];
+
+        loop {
+            used[j0] = true;
+            let i0 = p[j0];
+            let mut delta = i64::MAX;
+            let mut j1 = 0usize;
+
+            for j in 1..=n {
+                if used[j] {
+                    continue;
+                }
+                let cur = c[i0 - 1][j - 1] - u[i0] - v[j];
+                if cur < min_v[j] {
+                    min_v[j] = cur;
+                    way[j] = j0;
+                }
+                if min_v[j] < delta {
+                    delta = min_v[j];
+                    j1 = j;
+                }
+            }
+
+            for j in 0..=n {
+                if used[j] {
+                    u[p[j]] += delta;
+                    v[j] -= delta;
+                } else {
+                    min_v[j] -= delta;
+                }
+            }
+
+            j0 = j1;
+            if p[j0] == 0 {
+                break;
+            }
+        }
+
+        loop {
+            let j1 = way[j0];
+            p[j0] = p[j1];
+            j0 = j1;
+            if j0 == 0 {
+                break;
+            }
+        }
+    }
+
+    let mut result = Vec::with_capacity(rows.min(cols));
+    for j in 1..=n {
+        if p[j] != 0 && p[j] <= rows && j <= cols {
+            result.push((p[j] - 1, j - 1));
+        }
+    }
+    result
+}
 
 /// Session-scoped cache for the matching algorithm. Caches
 /// `compute_change_count` results so that recursive scoring work is
@@ -125,14 +213,13 @@ pub fn match_forward(
     }
 
     // ================================================================
-    // Ambiguous groups: change-count scoring + greedy assignment
+    // Ambiguous groups: change-count scoring + optimal assignment
     // ================================================================
     for (key, snap_indices) in &snap_by_key {
         let Some(tree_indices) = tree_by_key.get(key) else {
             continue;
         };
 
-        // Collect unmatched indices in this group
         let avail_snap: Vec<usize> = snap_indices
             .iter()
             .filter(|&&si| !snap_matched[si])
@@ -147,7 +234,6 @@ pub fn match_forward(
         if avail_snap.is_empty() || avail_tree.is_empty() {
             continue;
         }
-        // 1:1 already handled above; skip if not truly ambiguous
         if avail_snap.len() <= 1 && avail_tree.len() <= 1 {
             if avail_snap.len() == 1 && avail_tree.len() == 1 {
                 let si = avail_snap[0];
@@ -159,33 +245,27 @@ pub fn match_forward(
             continue;
         }
 
-        // Score all (A, B) pairs using recursive change-count scoring
-        let mut pairs: Vec<(u32, usize, usize)> =
-            Vec::with_capacity(avail_snap.len() * avail_tree.len());
-        let mut best_so_far = u32::MAX;
+        let m = avail_snap.len();
+        let n = avail_tree.len();
+        let mut cost_matrix = Vec::with_capacity(m);
         for &si in &avail_snap {
             let snap = match &snap_available[si] {
                 Some(s) => s,
                 None => continue,
             };
+            let mut row = Vec::with_capacity(n);
             for &ti in &avail_tree {
                 let cost =
-                    compute_change_count(snap, tree_children[ti], tree, best_so_far, 0, session);
-                pairs.push((cost, si, ti));
-                if cost < best_so_far {
-                    best_so_far = cost;
-                }
+                    compute_change_count(snap, tree_children[ti], tree, u32::MAX, 0, session);
+                row.push(cost);
             }
+            cost_matrix.push(row);
         }
 
-        // Stable sort by cost ascending (slice::sort_by is stable in Rust)
-        pairs.sort_by_key(|&(cost, _, _)| cost);
-
-        // Greedy assign
-        for &(_, si, ti) in &pairs {
-            if snap_matched[si] || !tree_available[ti] {
-                continue;
-            }
+        let assignment = min_cost_assignment(&cost_matrix, m, n);
+        for (row, col) in assignment {
+            let si = avail_snap[row];
+            let ti = avail_tree[col];
             matched.push((si, ti));
             snap_matched[si] = true;
             tree_available[ti] = false;
@@ -291,7 +371,7 @@ fn match_children_for_scoring(
         }
     }
 
-    // Ambiguous groups: score + greedy assign
+    // Ambiguous groups: score + optimal assign
     for (key, snap_indices) in &snap_by_key {
         let Some(tree_indices) = tree_by_key.get(key) else {
             continue;
@@ -320,32 +400,29 @@ fn match_children_for_scoring(
             continue;
         }
 
-        let mut pairs: Vec<(u32, usize, usize)> =
-            Vec::with_capacity(avail_snap.len() * avail_tree.len());
-        let mut best_so_far = u32::MAX;
+        let m = avail_snap.len();
+        let n = avail_tree.len();
+        let mut cost_matrix = Vec::with_capacity(m);
         for &si in &avail_snap {
+            let mut row = Vec::with_capacity(n);
             for &ti in &avail_tree {
                 let cost = compute_change_count(
                     &snap_children[si],
                     tree_children[ti],
                     tree,
-                    best_so_far,
+                    u32::MAX,
                     depth,
                     session,
                 );
-                pairs.push((cost, si, ti));
-                if cost < best_so_far {
-                    best_so_far = cost;
-                }
+                row.push(cost);
             }
+            cost_matrix.push(row);
         }
 
-        pairs.sort_by_key(|&(cost, _, _)| cost);
-
-        for &(_, si, ti) in &pairs {
-            if snap_matched[si] || tree_matched[ti] {
-                continue;
-            }
+        let assignment = min_cost_assignment(&cost_matrix, m, n);
+        for (row, col) in assignment {
+            let si = avail_snap[row];
+            let ti = avail_tree[col];
             matched.push((si, ti));
             snap_matched[si] = true;
             tree_matched[ti] = true;

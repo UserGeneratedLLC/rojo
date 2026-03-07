@@ -5,8 +5,8 @@
 //!
 //! Algorithm per parent:
 //!   1. Group by (Name, ClassName) -- 1:1 groups instant-match
-//!   2. Ambiguous groups: change-count scoring + greedy assignment
-//!      (with hash fast-path: hash equal = 0 cost)
+//!   2. Ambiguous groups: change-count scoring + optimal assignment
+//!      via the Hungarian algorithm (with hash fast-path: hash equal = 0 cost)
 //!
 //! The change count = how many things the reconciler would need to touch
 //! to turn instance A into instance B.
@@ -25,6 +25,103 @@ const UNMATCHED_PENALTY: u32 = 10_000;
 /// Maximum recursion depth for `compute_change_count`. Beyond this depth,
 /// only flat property comparison is used (no subtree recursion).
 const MAX_SCORING_DEPTH: u32 = 3;
+
+/// Minimum-cost bipartite matching via the Hungarian (Kuhn-Munkres) algorithm.
+///
+/// Given a cost matrix `cost[i][j]` for `rows` row-agents and `cols`
+/// column-agents, returns a Vec of `(row, col)` pairs representing the
+/// optimal assignment that minimizes total cost. Handles rectangular
+/// matrices by padding to square with `UNMATCHED_PENALTY`.
+///
+/// Complexity: O(N^3) where N = max(rows, cols).
+fn min_cost_assignment(cost: &[Vec<u32>], rows: usize, cols: usize) -> Vec<(usize, usize)> {
+    if rows == 0 || cols == 0 {
+        return Vec::new();
+    }
+
+    let n = rows.max(cols);
+    let big = UNMATCHED_PENALTY.saturating_mul(2);
+
+    // Build square matrix, padding with `big` for dummy entries.
+    let mut c = vec![vec![0i64; n]; n];
+    for i in 0..n {
+        for j in 0..n {
+            c[i][j] = if i < rows && j < cols {
+                cost[i][j] as i64
+            } else {
+                big as i64
+            };
+        }
+    }
+
+    // u[i] = potential for row i, v[j] = potential for column j
+    let mut u = vec![0i64; n + 1];
+    let mut v = vec![0i64; n + 1];
+    // p[j] = row assigned to column j (1-indexed, 0 = unassigned)
+    let mut p = vec![0usize; n + 1];
+    // way[j] = previous column in augmenting path for column j
+    let mut way = vec![0usize; n + 1];
+
+    for i in 1..=n {
+        p[0] = i;
+        let mut j0 = 0usize;
+        let mut min_v = vec![i64::MAX; n + 1];
+        let mut used = vec![false; n + 1];
+
+        loop {
+            used[j0] = true;
+            let i0 = p[j0];
+            let mut delta = i64::MAX;
+            let mut j1 = 0usize;
+
+            for j in 1..=n {
+                if used[j] {
+                    continue;
+                }
+                let cur = c[i0 - 1][j - 1] - u[i0] - v[j];
+                if cur < min_v[j] {
+                    min_v[j] = cur;
+                    way[j] = j0;
+                }
+                if min_v[j] < delta {
+                    delta = min_v[j];
+                    j1 = j;
+                }
+            }
+
+            for j in 0..=n {
+                if used[j] {
+                    u[p[j]] += delta;
+                    v[j] -= delta;
+                } else {
+                    min_v[j] -= delta;
+                }
+            }
+
+            j0 = j1;
+            if p[j0] == 0 {
+                break;
+            }
+        }
+
+        loop {
+            let j1 = way[j0];
+            p[j0] = p[j1];
+            j0 = j1;
+            if j0 == 0 {
+                break;
+            }
+        }
+    }
+
+    let mut result = Vec::with_capacity(rows.min(cols));
+    for j in 1..=n {
+        if p[j] != 0 && p[j] <= rows && j <= cols {
+            result.push((p[j] - 1, j - 1));
+        }
+    }
+    result
+}
 
 /// Session-scoped cache for the syncback matching algorithm.
 pub struct MatchingSession {
@@ -70,6 +167,22 @@ pub fn match_children(
             unmatched_old: Vec::new(),
         };
     }
+
+    // In debug builds, shuffle to catch order-dependent matching bugs.
+    #[cfg(debug_assertions)]
+    let new_children = &{
+        use rand::seq::SliceRandom;
+        let mut v = new_children.to_vec();
+        v.shuffle(&mut rand::rng());
+        v
+    };
+    #[cfg(debug_assertions)]
+    let old_children = &{
+        use rand::seq::SliceRandom;
+        let mut v = old_children.to_vec();
+        v.shuffle(&mut rand::rng());
+        v
+    };
 
     let new_len = new_children.len();
     let old_len = old_children.len();
@@ -127,7 +240,7 @@ pub fn match_children(
     }
 
     // ================================================================
-    // Ambiguous groups: change-count scoring + greedy assignment
+    // Ambiguous groups: change-count scoring + optimal assignment
     // ================================================================
     for (key, new_indices) in &new_by_key {
         let Some(old_indices) = old_by_key.get(key) else {
@@ -158,12 +271,12 @@ pub fn match_children(
             continue;
         }
 
-        // Score all (A, B) pairs using recursive change-count scoring
-        let mut pairs: Vec<(u32, usize, usize)> =
-            Vec::with_capacity(avail_new.len() * avail_old.len());
-        let mut best_so_far = u32::MAX;
-
+        // Build cost matrix for the Hungarian algorithm.
+        let m = avail_new.len();
+        let n = avail_old.len();
+        let mut cost_matrix = Vec::with_capacity(m);
         for &ni in &avail_new {
+            let mut row = Vec::with_capacity(n);
             for &oi in &avail_old {
                 let cost = compute_change_count(
                     new_children[ni],
@@ -172,25 +285,20 @@ pub fn match_children(
                     old_dom,
                     new_hashes,
                     old_hashes,
-                    best_so_far,
+                    u32::MAX,
                     0,
                     session,
                 );
-                pairs.push((cost, ni, oi));
-                if cost < best_so_far {
-                    best_so_far = cost;
-                }
+                row.push(cost);
             }
+            cost_matrix.push(row);
         }
 
-        // Stable sort by cost ascending
-        pairs.sort_by_key(|&(cost, _, _)| cost);
-
-        // Greedy assign
-        for &(_, ni, oi) in &pairs {
-            if new_matched[ni] || old_matched[oi] {
-                continue;
-            }
+        // Optimal assignment via the Hungarian algorithm.
+        let assignment = min_cost_assignment(&cost_matrix, m, n);
+        for (row, col) in assignment {
+            let ni = avail_new[row];
+            let oi = avail_old[col];
             matched.push((ni, oi));
             new_matched[ni] = true;
             old_matched[oi] = true;
@@ -310,7 +418,7 @@ fn match_children_for_scoring(
         }
     }
 
-    // Ambiguous groups: score + greedy assign
+    // Ambiguous groups: score + optimal assign
     for (key, new_indices) in &new_by_key {
         let Some(old_indices) = old_by_key.get(key) else {
             continue;
@@ -339,10 +447,11 @@ fn match_children_for_scoring(
             continue;
         }
 
-        let mut pairs: Vec<(u32, usize, usize)> =
-            Vec::with_capacity(avail_new.len() * avail_old.len());
-        let mut best_so_far = u32::MAX;
+        let m = avail_new.len();
+        let n = avail_old.len();
+        let mut cost_matrix = Vec::with_capacity(m);
         for &ni in &avail_new {
+            let mut row = Vec::with_capacity(n);
             for &oi in &avail_old {
                 let cost = compute_change_count(
                     new_children[ni],
@@ -351,23 +460,19 @@ fn match_children_for_scoring(
                     old_dom,
                     new_hashes,
                     old_hashes,
-                    best_so_far,
+                    u32::MAX,
                     depth,
                     session,
                 );
-                pairs.push((cost, ni, oi));
-                if cost < best_so_far {
-                    best_so_far = cost;
-                }
+                row.push(cost);
             }
+            cost_matrix.push(row);
         }
 
-        pairs.sort_by_key(|&(cost, _, _)| cost);
-
-        for &(_, ni, oi) in &pairs {
-            if new_matched[ni] || old_matched[oi] {
-                continue;
-            }
+        let assignment = min_cost_assignment(&cost_matrix, m, n);
+        for (row, col) in assignment {
+            let ni = avail_new[row];
+            let oi = avail_old[col];
             matched.push((ni, oi));
             new_matched[ni] = true;
             old_matched[oi] = true;
@@ -800,6 +905,8 @@ mod tests {
 
     #[test]
     fn matching_stability() {
+        use std::collections::HashSet;
+
         let mut new_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
         let new_root = new_dom.root_ref();
         new_dom.insert(new_root, InstanceBuilder::new("Folder").with_name("X"));
@@ -833,9 +940,9 @@ mod tests {
         );
 
         assert_eq!(r1.matched.len(), r2.matched.len());
-        for (a, b) in r1.matched.iter().zip(r2.matched.iter()) {
-            assert_eq!(a, b);
-        }
+        let set1: HashSet<(Ref, Ref)> = r1.matched.into_iter().collect();
+        let set2: HashSet<(Ref, Ref)> = r2.matched.into_iter().collect();
+        assert_eq!(set1, set2);
     }
 
     #[test]
