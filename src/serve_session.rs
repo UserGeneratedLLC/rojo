@@ -402,8 +402,16 @@ impl ServeSession {
                         .filter_entry(&passes_ignore)
                         .flatten()
                     {
-                        let _ = vfs.watch(entry.path());
-                        watch_count += 1;
+                        // On macOS kqueue, non-recursive directory watches only
+                        // fire for structural changes (child added/removed), NOT
+                        // for child file content modifications. Individual file
+                        // watches are required to detect edits. On Linux/Windows,
+                        // directory watches already cover child file events so
+                        // file watches would be redundant.
+                        if entry.file_type().is_dir() || cfg!(target_os = "macos") {
+                            let _ = vfs.watch(entry.path());
+                            watch_count += 1;
+                        }
                     }
                 }
                 // Watch project folder non-recursively for project file edits.
