@@ -287,16 +287,131 @@ pub fn syncback_loop_with_stats(
 
     let project_path = project.folder_location();
 
+    // Collect alternate file representations of $path entries.
+    // e.g., if $path: "src" expects a directory, but "src.luau" exists as a file,
+    // that orphan file should be removed.
+    fn collect_alternate_files(
+        node: &crate::project::ProjectNode,
+        base_path: &Path,
+        files: &mut Vec<PathBuf>,
+    ) {
+        if let Some(ref path_node) = node.path {
+            let path_str = path_node.path();
+            let resolved = base_path.join(path_str);
+
+            if resolved.is_dir() {
+                let extensions = [
+                    ".luau",
+                    ".lua",
+                    ".server.luau",
+                    ".server.lua",
+                    ".client.luau",
+                    ".client.lua",
+                    ".local.luau",
+                    ".local.lua",
+                ];
+                for ext in extensions {
+                    let path_str_display = path_str.display().to_string();
+                    let alt_file = base_path.join(format!("{}{}", path_str_display, ext));
+                    if alt_file.exists() && alt_file.is_file() {
+                        log::trace!(
+                            "Found alternate file for $path '{}': {}",
+                            path_str_display,
+                            alt_file.display()
+                        );
+                        files.push(alt_file);
+                    }
+                }
+            }
+        }
+        for child in node.children.values() {
+            collect_alternate_files(child, base_path, files);
+        }
+    }
+
+    /// Collect non-project-file instigating_source directories from the old tree root
+    /// and its direct children. These may point to directories not covered by `$path`.
+    fn collect_instigating_dirs(old_tree: &RojoTree, existing: &mut Vec<PathBuf>) {
+        let is_project_file = |p: &Path| {
+            let s = p.to_string_lossy();
+            s.ends_with(".project.json5") || s.ends_with(".project.json")
+        };
+        if let Some(source) = &old_tree.root().metadata().instigating_source {
+            let path = source.path();
+            if !is_project_file(path) {
+                log::trace!("Root has instigating_source: {}", path.display());
+                if path.exists() && !existing.contains(&path.to_path_buf()) {
+                    existing.push(path.to_path_buf());
+                }
+            }
+        }
+        for ref_id in old_tree.inner().root().children() {
+            if let Some(inst) = old_tree.get_instance(*ref_id) {
+                if let Some(source) = &inst.metadata().instigating_source {
+                    let path = source.path();
+                    if !is_project_file(path)
+                        && path.exists()
+                        && !existing.contains(&path.to_path_buf())
+                    {
+                        existing.push(path.to_path_buf());
+                    }
+                }
+            }
+        }
+    }
+
     let phase_timer = std::time::Instant::now();
     let existing_paths: HashSet<PathBuf> = if !incremental {
+        // Alternate-file orphan candidates and instigating_source dirs are
+        // cheap to collect (a few exists() calls) and needed by both paths.
+        let mut orphan_files_to_check: Vec<PathBuf> = Vec::new();
+        collect_alternate_files(&project.tree, project_path, &mut orphan_files_to_check);
+
+        let mut extra_dirs: Vec<PathBuf> = Vec::new();
+        collect_instigating_dirs(old_tree, &mut extra_dirs);
+
         if let Some(pre_walked) = pre_walked_paths.filter(|p| p.len() > 100) {
             let before = pre_walked.len();
-            let filtered: HashSet<PathBuf> = pre_walked
+            let mut filtered: HashSet<PathBuf> = pre_walked
                 .into_iter()
                 .filter(|p| is_valid_path(&ignore_patterns, project_path, p))
                 .collect();
-            log::debug!(
-                "[PERF] orphan scan: reusing pre-walked paths ({} -> {} after syncback filters)",
+
+            // Supplement with alternate files + instigating_source dirs
+            for file in &orphan_files_to_check {
+                if is_valid_path(&ignore_patterns, project_path, file) {
+                    filtered.insert(file.clone());
+                }
+            }
+            for dir in &extra_dirs {
+                if !dir.is_dir() {
+                    continue;
+                }
+                for entry in walkdir::WalkDir::new(dir)
+                    .follow_links(true)
+                    .into_iter()
+                    .filter_entry(|e| {
+                        if e.depth() == 0 {
+                            return true;
+                        }
+                        e.file_name()
+                            .to_str()
+                            .is_none_or(|n| !n.starts_with('.') || n == ".gitkeep")
+                    })
+                    .flatten()
+                {
+                    if entry.depth() == 0 {
+                        continue;
+                    }
+                    let path = entry.path().to_path_buf();
+                    if is_valid_path(&ignore_patterns, project_path, &path) {
+                        filtered.insert(path);
+                    }
+                }
+            }
+
+            log::info!(
+                "[PERF] orphan scan: reusing pre-walked paths ({} -> {} after filters + supplements)",
                 before,
                 filtered.len()
             );
@@ -329,86 +444,7 @@ pub fn syncback_loop_with_stats(
             }
 
             collect_paths_from_project(&project.tree, project_path, &mut dirs_to_scan);
-
-            // Collect alternate file representations of $path entries.
-            // e.g., if $path: "src" expects a directory, but "src.luau" exists as a file,
-            // that orphan file should be removed.
-            let mut orphan_files_to_check: Vec<PathBuf> = Vec::new();
-
-            fn collect_alternate_files(
-                node: &crate::project::ProjectNode,
-                base_path: &Path,
-                files: &mut Vec<PathBuf>,
-            ) {
-                if let Some(ref path_node) = node.path {
-                    let path_str = path_node.path();
-                    let resolved = base_path.join(path_str);
-
-                    if resolved.is_dir() {
-                        let extensions = [
-                            ".luau",
-                            ".lua",
-                            ".server.luau",
-                            ".server.lua",
-                            ".client.luau",
-                            ".client.lua",
-                            ".local.luau",
-                            ".local.lua",
-                        ];
-                        for ext in extensions {
-                            let path_str_display = path_str.display().to_string();
-                            let alt_file = base_path.join(format!("{}{}", path_str_display, ext));
-                            if alt_file.exists() && alt_file.is_file() {
-                                log::trace!(
-                                    "Found alternate file for $path '{}': {}",
-                                    path_str_display,
-                                    alt_file.display()
-                                );
-                                files.push(alt_file);
-                            }
-                        }
-                    }
-                }
-                for child in node.children.values() {
-                    collect_alternate_files(child, base_path, files);
-                }
-            }
-            collect_alternate_files(&project.tree, project_path, &mut orphan_files_to_check);
-
-            // Check instance metadata for paths that might not be in the project
-            // (e.g., from nested project references)
-            let root = old_tree.root();
-            log::trace!(
-                "Root instance: name={}, class={}",
-                root.name(),
-                root.class_name()
-            );
-            if let Some(source) = &root.metadata().instigating_source {
-                let path = source.path();
-                if !path.to_string_lossy().ends_with(".project.json5")
-                    && !path.to_string_lossy().ends_with(".project.json")
-                {
-                    log::trace!("Root has instigating_source: {}", path.display());
-                    if path.exists() && !dirs_to_scan.contains(&path.to_path_buf()) {
-                        dirs_to_scan.push(path.to_path_buf());
-                    }
-                }
-            }
-
-            for ref_id in old_tree.inner().root().children() {
-                if let Some(inst) = old_tree.get_instance(*ref_id) {
-                    if let Some(source) = &inst.metadata().instigating_source {
-                        let path = source.path();
-                        if !path.to_string_lossy().ends_with(".project.json5")
-                            && !path.to_string_lossy().ends_with(".project.json")
-                            && path.exists()
-                            && !dirs_to_scan.contains(&path.to_path_buf())
-                        {
-                            dirs_to_scan.push(path.to_path_buf());
-                        }
-                    }
-                }
-            }
+            dirs_to_scan.extend(extra_dirs);
 
             if log::log_enabled!(log::Level::Trace) {
                 let dirs_str: Vec<_> = dirs_to_scan
@@ -465,7 +501,7 @@ pub fn syncback_loop_with_stats(
     } else {
         HashSet::new()
     };
-    log::debug!(
+    log::info!(
         "[PERF] orphan scan: {:.3}s ({} paths)",
         phase_timer.elapsed().as_secs_f64(),
         existing_paths.len()
