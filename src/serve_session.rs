@@ -402,10 +402,8 @@ impl ServeSession {
                         .filter_entry(&passes_ignore)
                         .flatten()
                     {
-                        if entry.file_type().is_dir() {
-                            let _ = vfs.watch(entry.path());
-                            watch_count += 1;
-                        }
+                        let _ = vfs.watch(entry.path());
+                        watch_count += 1;
                     }
                 }
                 // Watch project folder non-recursively for project file edits.
