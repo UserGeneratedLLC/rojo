@@ -17,7 +17,7 @@ use crate::{
     session_id::SessionId,
     snapshot::{
         apply_patch_set, compute_patch_set, AppliedPatchSet, InstanceContext, InstanceSnapshot,
-        PatchSet, PathIgnoreRule, RojoTree,
+        PatchSet, RojoTree,
     },
     snapshot_middleware::{is_script_relevant_path, snapshot_from_vfs, INIT_FILE_PRIORITY},
 };
@@ -138,14 +138,7 @@ fn prefetch_project_files(project: &Project, sync_scripts_only: bool) -> io::Res
 
     let folder = project.folder_location();
 
-    let ignore_rules: Vec<PathIgnoreRule> = project
-        .glob_ignore_paths
-        .iter()
-        .map(|glob| PathIgnoreRule {
-            glob: glob.clone(),
-            base_path: folder.to_path_buf(),
-        })
-        .collect();
+    let ignore_rules = project.path_ignore_rules();
 
     let mut roots: Vec<std::path::PathBuf> = Vec::new();
     collect_path_roots(&project.tree, folder, &mut roots);
@@ -454,14 +447,7 @@ impl ServeSession {
             .as_deref()
             .and_then(crate::git::git_head_commit);
 
-        let path_ignore_rules: Vec<PathIgnoreRule> = root_project
-            .glob_ignore_paths
-            .iter()
-            .map(|glob| PathIgnoreRule {
-                glob: glob.clone(),
-                base_path: root_project.folder_location().to_path_buf(),
-            })
-            .collect();
+        let path_ignore_rules = root_project.path_ignore_rules();
 
         log::trace!("Starting ChangeProcessor");
         let change_processor = ChangeProcessor::start(

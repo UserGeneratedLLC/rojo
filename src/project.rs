@@ -12,7 +12,11 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    glob::Glob, json, resolution::UnresolvedValue, snapshot::SyncRule, syncback::SyncbackRules,
+    glob::Glob,
+    json,
+    resolution::UnresolvedValue,
+    snapshot::{PathIgnoreRule, SyncRule},
+    syncback::SyncbackRules,
 };
 
 /// Represents 'default' project names that act as `init` files
@@ -333,6 +337,17 @@ impl Project {
 
     pub fn folder_location(&self) -> &Path {
         self.file_location.parent().unwrap()
+    }
+
+    pub fn path_ignore_rules(&self) -> Vec<PathIgnoreRule> {
+        let base = self.folder_location().to_path_buf();
+        self.glob_ignore_paths
+            .iter()
+            .map(|glob| PathIgnoreRule {
+                glob: glob.clone(),
+                base_path: base.clone(),
+            })
+            .collect()
     }
 }
 
