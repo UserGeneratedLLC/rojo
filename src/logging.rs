@@ -92,7 +92,11 @@ pub fn init_logging(
 
         match std::fs::create_dir_all(&log_dir) {
             Ok(()) => {
-                compress_old_logs(&log_dir);
+                let compress_dir = log_dir.clone();
+                std::thread::spawn(move || {
+                    lower_thread_priority();
+                    compress_old_logs(&compress_dir);
+                });
 
                 let log_filename = session_log_filename(command_name);
                 let log_path = log_dir.join(&log_filename);
@@ -149,6 +153,26 @@ pub fn init_logging(
 
     LogGuard {
         _file_guard: file_guard,
+    }
+}
+
+fn lower_thread_priority() {
+    #[cfg(windows)]
+    unsafe {
+        extern "system" {
+            fn GetCurrentThread() -> isize;
+            fn SetThreadPriority(handle: isize, priority: i32) -> i32;
+        }
+        const THREAD_PRIORITY_BELOW_NORMAL: i32 = -1;
+        SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    }
+
+    #[cfg(unix)]
+    unsafe {
+        extern "C" {
+            fn nice(inc: i32) -> i32;
+        }
+        nice(10);
     }
 }
 
