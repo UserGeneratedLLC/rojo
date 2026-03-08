@@ -31,10 +31,30 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
-* Replace greedy matching with optimal Hungarian (Kuhn-Munkres) algorithm in forward sync, syncback, and plugin reconciler for correct instance pairing when multiple same-named instances exist in ambiguous groups
+## [8.5.5] (March 8th, 2026)
+
+* Replace greedy matching with optimal Hungarian (Kuhn-Munkres) algorithm in forward sync, syncback, and plugin reconciler for correct instance pairing when multiple same-named instances exist in ambiguous groups ([#11])
 * Optimize syncback performance for large projects (~42% faster): skip hash computation in clean mode, reuse prefetch walkdir for orphan detection, rewrite collect_all_paths as O(n) top-down BFS, add file-size-first comparison in write phase, scope git index queries to project directory ([#10])
 
+<details>
+<summary>Full commit log</summary>
+
+- `b3732aca` fix: push pad-cost row for None snapshots in match_forward
+- `372e6bc7` feat: implement Hungarian algorithm for optimal instance pairing in reconciler
+- `3f469d61` refactor: enhance minCostAssignment function with sentinel column for improved indexing
+- `d26f82b4` feat: implement optimal assignment using Hungarian algorithm in matching process
+- `90ad6c0f` chore: update subproject commit reference in shared skills
+- `e06e9f75` fix: extract orphan helpers so pre-walked path reuses them without duplication
+- `a2c7968c` refactor: update git index refresh to a no-op and change logging level to debug
+- `3666c2a5` fix: scope pre-walked paths to $path roots and apply syncback filters
+- `53c05671` Update CHANGELOG.md for syncback performance optimization PR
+- `cd465a90` Optimize syncback performance for large projects (~42% faster)
+
+</details>
+
+[8.5.5]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.5.5
 [#10]: https://github.com/UserGeneratedLLC/rojo/pull/10
+[#11]: https://github.com/UserGeneratedLLC/rojo/pull/11
 
 ## [8.5.4] (March 7th, 2026)
 

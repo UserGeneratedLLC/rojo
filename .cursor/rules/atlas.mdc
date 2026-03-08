@@ -380,7 +380,7 @@ rojo-test/              - Test fixtures and utilities
 
 - **Protocol version:** 6 (`plugin/src/Config.lua`)
 - **Version matching:** Plugin WebSocket connection requires **exact version match** (`ApiContext.lua`). Live syncback validation uses **MAJOR.MINOR** match (`api.rs`).
-- **Current version:** 8.5.0
+- **Current version:** 8.5.5
 - **Default serve port:** 34873
 - **MSRV:** Rust 1.88
 - **License:** MPL-2.0 (rbx-dom uses MIT)
