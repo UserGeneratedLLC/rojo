@@ -410,7 +410,7 @@ pub fn syncback_loop_with_stats(
                 }
             }
 
-            log::info!(
+            log::debug!(
                 "[PERF] orphan scan: reusing pre-walked paths ({} -> {} after filters + supplements)",
                 before,
                 filtered.len()
@@ -501,7 +501,7 @@ pub fn syncback_loop_with_stats(
     } else {
         HashSet::new()
     };
-    log::info!(
+    log::debug!(
         "[PERF] orphan scan: {:.3}s ({} paths)",
         phase_timer.elapsed().as_secs_f64(),
         existing_paths.len()
