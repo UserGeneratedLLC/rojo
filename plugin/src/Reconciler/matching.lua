@@ -337,6 +337,8 @@ local function minCostAssignment(cost: { { number } }, rows: number, cols: numbe
 
 	local n = math.max(rows, cols)
 	local big = UNMATCHED_PENALTY * 2
+	local S = n + 1 -- sentinel column (replaces 0-index from the Rust version)
+	local INF = math.huge
 
 	local c: { { number } } = table.create(n)
 	for i = 1, n do
@@ -349,24 +351,26 @@ local function minCostAssignment(cost: { { number } }, rows: number, cols: numbe
 		c[i] = row
 	end
 
-	local u = table.create(n + 1, 0)
-	local v = table.create(n + 1, 0)
-	local p = table.create(n + 1, 0)
-	local way = table.create(n + 1, 0)
-
-	local INF = math.huge
+	-- u[1..n] = row potentials, u[S] unused but allocated for uniform indexing
+	local u = table.create(S, 0)
+	-- v[1..n] = col potentials, v[S] = sentinel potential
+	local v = table.create(S, 0)
+	-- p[j] = row assigned to column j (0 = unassigned), p[S] = sentinel
+	local p = table.create(S, 0)
+	-- way[j] = previous column in augmenting path
+	local way = table.create(S, 0)
 
 	for i = 1, n do
-		p[0] = i
-		local j0 = 0
-		local minV = table.create(n + 1, INF)
-		local used = table.create(n + 1, false)
+		p[S] = i
+		local j0 = S
+		local minV = table.create(S, INF)
+		local used = table.create(S, false)
 
 		while true do
 			used[j0] = true
 			local i0 = p[j0]
 			local delta = INF
-			local j1 = 0
+			local j1 = S
 
 			for j = 1, n do
 				if used[j] then
@@ -383,7 +387,10 @@ local function minCostAssignment(cost: { { number } }, rows: number, cols: numbe
 				end
 			end
 
-			for j = 0, n do
+			-- Update potentials: sentinel + real columns
+			u[p[S]] += delta
+			v[S] -= delta
+			for j = 1, n do
 				if used[j] then
 					u[p[j]] += delta
 					v[j] -= delta
@@ -402,7 +409,7 @@ local function minCostAssignment(cost: { { number } }, rows: number, cols: numbe
 			local j1 = way[j0]
 			p[j0] = p[j1]
 			j0 = j1
-			if j0 == 0 then
+			if j0 == S then
 				break
 			end
 		end
