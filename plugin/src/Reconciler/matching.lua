@@ -23,6 +23,7 @@ local Packages = script.Parent.Parent.Parent.Packages
 local RbxDom = require(Packages.RbxDom)
 
 local trueEquals = require(script.Parent.trueEquals)
+local minCostAssignment = require(script.Parent.Parent.Hungarian)
 
 local UNMATCHED_PENALTY = 10000
 local MAX_SCORING_DEPTH = 3
@@ -327,104 +328,6 @@ local function countOwnDiffs(vCache: VCache, sCache: SCache, classKeys: ClassCom
 end
 
 -- ================================================================
--- Optimal assignment via Hungarian (Kuhn-Munkres) algorithm
--- ================================================================
-
-local function minCostAssignment(cost: { { number } }, rows: number, cols: number): { { number } }
-	if rows == 0 or cols == 0 then
-		return {}
-	end
-
-	local n = math.max(rows, cols)
-	local big = UNMATCHED_PENALTY * 2
-	local S = n + 1 -- sentinel column (replaces 0-index from the Rust version)
-	local INF = math.huge
-
-	local c: { { number } } = table.create(n)
-	for i = 1, n do
-		local row = table.create(n, big)
-		for j = 1, n do
-			if i <= rows and j <= cols then
-				row[j] = cost[i][j]
-			end
-		end
-		c[i] = row
-	end
-
-	-- u[1..n] = row potentials, u[S] unused but allocated for uniform indexing
-	local u = table.create(S, 0)
-	-- v[1..n] = col potentials, v[S] = sentinel potential
-	local v = table.create(S, 0)
-	-- p[j] = row assigned to column j (0 = unassigned), p[S] = sentinel
-	local p = table.create(S, 0)
-	-- way[j] = previous column in augmenting path
-	local way = table.create(S, 0)
-
-	for i = 1, n do
-		p[S] = i
-		local j0 = S
-		local minV = table.create(S, INF)
-		local used = table.create(S, false)
-
-		while true do
-			used[j0] = true
-			local i0 = p[j0]
-			local delta = INF
-			local j1 = S
-
-			for j = 1, n do
-				if used[j] then
-					continue
-				end
-				local cur = c[i0][j] - u[i0] - v[j]
-				if cur < minV[j] then
-					minV[j] = cur
-					way[j] = j0
-				end
-				if minV[j] < delta then
-					delta = minV[j]
-					j1 = j
-				end
-			end
-
-			-- Update potentials: sentinel + real columns
-			u[p[S]] += delta
-			v[S] -= delta
-			for j = 1, n do
-				if used[j] then
-					u[p[j]] += delta
-					v[j] -= delta
-				else
-					minV[j] -= delta
-				end
-			end
-
-			j0 = j1
-			if p[j0] == 0 then
-				break
-			end
-		end
-
-		while true do
-			local j1 = way[j0]
-			p[j0] = p[j1]
-			j0 = j1
-			if j0 == S then
-				break
-			end
-		end
-	end
-
-	local result: { { number } } = {}
-	for j = 1, n do
-		if p[j] ~= 0 and p[j] <= rows and j <= cols then
-			table.insert(result, { p[j], j })
-		end
-	end
-	return result
-end
-
--- ================================================================
 -- Core: 2-function mutual recursion
 -- ================================================================
 
@@ -666,7 +569,7 @@ matchChildren = function(
 		end
 
 		-- Optimal assignment via the Hungarian algorithm.
-		local assignment = minCostAssignment(costMatrix, m, n)
+		local assignment = minCostAssignment(costMatrix, m, n, UNMATCHED_PENALTY * 2)
 		for _, pair in ipairs(assignment) do
 			local vi = vIndices[pair[1]]
 			local si = sIndices[pair[2]]

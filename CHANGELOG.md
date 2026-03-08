@@ -31,6 +31,7 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+* Replace greedy matching with optimal Hungarian (Kuhn-Munkres) algorithm in forward sync, syncback, and plugin reconciler for correct instance pairing when multiple same-named instances exist in ambiguous groups
 * Optimize syncback performance for large projects (~42% faster): skip hash computation in clean mode, reuse prefetch walkdir for orphan detection, rewrite collect_all_paths as O(n) top-down BFS, add file-size-first comparison in write phase, scope git index queries to project directory ([#10])
 
 [#10]: https://github.com/UserGeneratedLLC/rojo/pull/10

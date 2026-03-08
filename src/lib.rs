@@ -10,6 +10,7 @@ mod tree_view;
 mod change_processor;
 pub mod git;
 mod glob;
+pub mod hungarian;
 mod json;
 pub mod logging;
 mod lua_ast;
