@@ -31,6 +31,21 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+## [8.5.6] (March 8th, 2026)
+
+* Add asynchronous log file compression with lowered thread priority to avoid impacting main workloads
+* Reduce logging verbosity for orphan scan performance metrics (info → debug)
+
+<details>
+<summary>Full commit log</summary>
+
+- `b1e2bee5` feat: add asynchronous log compression with thread priority adjustment
+- `c3af9850` refactor: change logging level from info to debug for orphan scan performance metrics
+
+</details>
+
+[8.5.6]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.5.6
+
 ## [8.5.5] (March 8th, 2026)
 
 * Replace greedy matching with optimal Hungarian (Kuhn-Munkres) algorithm in forward sync, syncback, and plugin reconciler for correct instance pairing when multiple same-named instances exist in ambiguous groups ([#11])
