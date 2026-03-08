@@ -160,11 +160,15 @@ pub fn match_forward(
 
         let m = avail_snap.len();
         let n = avail_tree.len();
+        let pad = UNMATCHED_PENALTY.saturating_mul(2);
         let mut cost_matrix = Vec::with_capacity(m);
         for &si in &avail_snap {
             let snap = match &snap_available[si] {
                 Some(s) => s,
-                None => continue,
+                None => {
+                    cost_matrix.push(vec![pad; n]);
+                    continue;
+                }
             };
             let mut row = Vec::with_capacity(n);
             for &ti in &avail_tree {
@@ -175,12 +179,7 @@ pub fn match_forward(
             cost_matrix.push(row);
         }
 
-        let assignment = crate::hungarian::min_cost_assignment(
-            &cost_matrix,
-            m,
-            n,
-            UNMATCHED_PENALTY.saturating_mul(2),
-        );
+        let assignment = crate::hungarian::min_cost_assignment(&cost_matrix, m, n, pad);
         for (row, col) in assignment {
             let si = avail_snap[row];
             let ti = avail_tree[col];
