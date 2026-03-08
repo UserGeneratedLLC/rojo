@@ -113,6 +113,7 @@ dirs = "6"
 pathdiff = "0.2.3"
 
 blake3 = "1.8.3"
+rand = "0.10.0"
 
 sha1 = "0.10"
 indexmap = { version = "2.13.0", features = ["serde"] }
@@ -144,4 +145,3 @@ regex = "1"
 serde_yaml = "0.9"
 tempfile = "3"
 walkdir = "2.5.0"
-rand = "0.10.0"

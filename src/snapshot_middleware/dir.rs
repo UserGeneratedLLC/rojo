@@ -235,7 +235,23 @@ pub fn syncback_dir_no_meta<'sync>(
             })
             .collect();
 
-        // Run the 3-pass matching algorithm to pair new ↔ old children.
+        // In debug builds, shuffle children to catch order-dependent matching bugs.
+        #[cfg(debug_assertions)]
+        let eligible_new = {
+            use rand::seq::SliceRandom;
+            let mut v = eligible_new;
+            v.shuffle(&mut rand::rng());
+            v
+        };
+        #[cfg(debug_assertions)]
+        let eligible_old = {
+            use rand::seq::SliceRandom;
+            let mut v = eligible_old;
+            v.shuffle(&mut rand::rng());
+            v
+        };
+
+        // Run the matching algorithm to pair new ↔ old children.
         let matching_session = crate::syncback::matching::MatchingSession::new();
         let match_result = match_children(
             &eligible_new,

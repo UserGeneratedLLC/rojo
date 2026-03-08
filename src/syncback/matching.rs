@@ -5,8 +5,8 @@
 //!
 //! Algorithm per parent:
 //!   1. Group by (Name, ClassName) -- 1:1 groups instant-match
-//!   2. Ambiguous groups: change-count scoring + greedy assignment
-//!      (with hash fast-path: hash equal = 0 cost)
+//!   2. Ambiguous groups: change-count scoring + optimal assignment
+//!      via the Hungarian algorithm (with hash fast-path: hash equal = 0 cost)
 //!
 //! The change count = how many things the reconciler would need to touch
 //! to turn instance A into instance B.
@@ -71,6 +71,22 @@ pub fn match_children(
         };
     }
 
+    // In debug builds, shuffle to catch order-dependent matching bugs.
+    #[cfg(debug_assertions)]
+    let new_children = &{
+        use rand::seq::SliceRandom;
+        let mut v = new_children.to_vec();
+        v.shuffle(&mut rand::rng());
+        v
+    };
+    #[cfg(debug_assertions)]
+    let old_children = &{
+        use rand::seq::SliceRandom;
+        let mut v = old_children.to_vec();
+        v.shuffle(&mut rand::rng());
+        v
+    };
+
     let new_len = new_children.len();
     let old_len = old_children.len();
     let mut new_matched = vec![false; new_len];
@@ -127,7 +143,7 @@ pub fn match_children(
     }
 
     // ================================================================
-    // Ambiguous groups: change-count scoring + greedy assignment
+    // Ambiguous groups: change-count scoring + optimal assignment
     // ================================================================
     for (key, new_indices) in &new_by_key {
         let Some(old_indices) = old_by_key.get(key) else {
@@ -158,12 +174,12 @@ pub fn match_children(
             continue;
         }
 
-        // Score all (A, B) pairs using recursive change-count scoring
-        let mut pairs: Vec<(u32, usize, usize)> =
-            Vec::with_capacity(avail_new.len() * avail_old.len());
-        let mut best_so_far = u32::MAX;
-
+        // Build cost matrix for the Hungarian algorithm.
+        let m = avail_new.len();
+        let n = avail_old.len();
+        let mut cost_matrix = Vec::with_capacity(m);
         for &ni in &avail_new {
+            let mut row = Vec::with_capacity(n);
             for &oi in &avail_old {
                 let cost = compute_change_count(
                     new_children[ni],
@@ -172,25 +188,25 @@ pub fn match_children(
                     old_dom,
                     new_hashes,
                     old_hashes,
-                    best_so_far,
+                    u32::MAX,
                     0,
                     session,
                 );
-                pairs.push((cost, ni, oi));
-                if cost < best_so_far {
-                    best_so_far = cost;
-                }
+                row.push(cost);
             }
+            cost_matrix.push(row);
         }
 
-        // Stable sort by cost ascending
-        pairs.sort_by_key(|&(cost, _, _)| cost);
-
-        // Greedy assign
-        for &(_, ni, oi) in &pairs {
-            if new_matched[ni] || old_matched[oi] {
-                continue;
-            }
+        // Optimal assignment via the Hungarian algorithm.
+        let assignment = crate::hungarian::min_cost_assignment(
+            &cost_matrix,
+            m,
+            n,
+            UNMATCHED_PENALTY.saturating_mul(2),
+        );
+        for (row, col) in assignment {
+            let ni = avail_new[row];
+            let oi = avail_old[col];
             matched.push((ni, oi));
             new_matched[ni] = true;
             old_matched[oi] = true;
@@ -310,7 +326,7 @@ fn match_children_for_scoring(
         }
     }
 
-    // Ambiguous groups: score + greedy assign
+    // Ambiguous groups: score + optimal assign
     for (key, new_indices) in &new_by_key {
         let Some(old_indices) = old_by_key.get(key) else {
             continue;
@@ -339,10 +355,11 @@ fn match_children_for_scoring(
             continue;
         }
 
-        let mut pairs: Vec<(u32, usize, usize)> =
-            Vec::with_capacity(avail_new.len() * avail_old.len());
-        let mut best_so_far = u32::MAX;
+        let m = avail_new.len();
+        let n = avail_old.len();
+        let mut cost_matrix = Vec::with_capacity(m);
         for &ni in &avail_new {
+            let mut row = Vec::with_capacity(n);
             for &oi in &avail_old {
                 let cost = compute_change_count(
                     new_children[ni],
@@ -351,23 +368,24 @@ fn match_children_for_scoring(
                     old_dom,
                     new_hashes,
                     old_hashes,
-                    best_so_far,
+                    u32::MAX,
                     depth,
                     session,
                 );
-                pairs.push((cost, ni, oi));
-                if cost < best_so_far {
-                    best_so_far = cost;
-                }
+                row.push(cost);
             }
+            cost_matrix.push(row);
         }
 
-        pairs.sort_by_key(|&(cost, _, _)| cost);
-
-        for &(_, ni, oi) in &pairs {
-            if new_matched[ni] || old_matched[oi] {
-                continue;
-            }
+        let assignment = crate::hungarian::min_cost_assignment(
+            &cost_matrix,
+            m,
+            n,
+            UNMATCHED_PENALTY.saturating_mul(2),
+        );
+        for (row, col) in assignment {
+            let ni = avail_new[row];
+            let oi = avail_old[col];
             matched.push((ni, oi));
             new_matched[ni] = true;
             old_matched[oi] = true;
@@ -800,6 +818,8 @@ mod tests {
 
     #[test]
     fn matching_stability() {
+        use std::collections::HashSet;
+
         let mut new_dom = WeakDom::new(InstanceBuilder::new("DataModel"));
         let new_root = new_dom.root_ref();
         new_dom.insert(new_root, InstanceBuilder::new("Folder").with_name("X"));
@@ -833,9 +853,9 @@ mod tests {
         );
 
         assert_eq!(r1.matched.len(), r2.matched.len());
-        for (a, b) in r1.matched.iter().zip(r2.matched.iter()) {
-            assert_eq!(a, b);
-        }
+        let set1: HashSet<(Ref, Ref)> = r1.matched.into_iter().collect();
+        let set2: HashSet<(Ref, Ref)> = r2.matched.into_iter().collect();
+        assert_eq!(set1, set2);
     }
 
     #[test]
