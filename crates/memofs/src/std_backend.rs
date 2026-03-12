@@ -1,11 +1,12 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
 use std::{collections::HashSet, io, thread};
 
 use crossbeam_channel::Receiver;
 use notify::event::{CreateKind, EventKind, ModifyKind, RemoveKind, RenameMode};
 use notify::{RecursiveMode, Watcher};
+
+#[cfg(not(target_os = "macos"))]
+use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
 
 use crate::{DirEntry, Metadata, ReadDir, VfsBackend, VfsEvent};
 
@@ -52,7 +53,10 @@ pub type CriticalErrorHandler = Box<dyn Fn(WatcherCriticalError) -> bool + Send 
 
 /// `VfsBackend` that uses `std::fs` and the `notify` crate.
 pub struct StdBackend {
+    #[cfg(target_os = "macos")]
     watcher: notify::RecommendedWatcher,
+    #[cfg(not(target_os = "macos"))]
+    debouncer: Debouncer<notify::RecommendedWatcher, RecommendedCache>,
     watcher_receiver: Receiver<VfsEvent>,
     watches: HashSet<PathBuf>,
     recursive_watches: HashSet<PathBuf>,
@@ -102,66 +106,118 @@ impl StdBackend {
     pub fn new_with_error_handler(error_handler: CriticalErrorHandler) -> StdBackend {
         let (event_tx, event_rx) = crossbeam_channel::unbounded();
         let (error_tx, error_rx) = crossbeam_channel::unbounded();
-        let (raw_tx, raw_rx) = std::sync::mpsc::channel::<Result<notify::Event, notify::Error>>();
 
-        let watcher = notify::RecommendedWatcher::new(
-            move |result| {
-                let _ = raw_tx.send(result);
-            },
-            notify::Config::default(),
-        )
-        .expect("Failed to create file watcher");
+        #[cfg(target_os = "macos")]
+        let watcher = {
+            let (raw_tx, raw_rx) =
+                std::sync::mpsc::channel::<Result<notify::Event, notify::Error>>();
 
-        let debounce_ms = Duration::from_millis(50);
+            let w = notify::RecommendedWatcher::new(
+                move |result| {
+                    let _ = raw_tx.send(result);
+                },
+                notify::Config::default(),
+            )
+            .expect("Failed to create file watcher");
 
-        thread::spawn(move || {
-            let mut pending: HashMap<PathBuf, VfsEvent> = HashMap::new();
-            let mut last_event = Instant::now();
+            let debounce_ms = std::time::Duration::from_millis(50);
 
-            loop {
-                match raw_rx.recv_timeout(debounce_ms) {
-                    Ok(Ok(event)) => {
-                        last_event = Instant::now();
-                        for vfs_event in Self::convert_event(&event) {
-                            let path = match &vfs_event {
-                                VfsEvent::Create(p) | VfsEvent::Write(p) | VfsEvent::Remove(p) => {
-                                    p.clone()
-                                }
+            thread::spawn(move || {
+                use std::collections::HashMap;
+                use std::time::Instant;
+
+                let mut pending: HashMap<PathBuf, VfsEvent> = HashMap::new();
+                let mut last_event = Instant::now();
+
+                loop {
+                    match raw_rx.recv_timeout(debounce_ms) {
+                        Ok(Ok(event)) => {
+                            last_event = Instant::now();
+                            for vfs_event in Self::convert_event(&event) {
+                                let path = match &vfs_event {
+                                    VfsEvent::Create(p)
+                                    | VfsEvent::Write(p)
+                                    | VfsEvent::Remove(p) => p.clone(),
+                                };
+                                pending.insert(path, vfs_event);
+                            }
+                        }
+                        Ok(Err(error)) => {
+                            let critical_err = WatcherCriticalError::WatcherError {
+                                error: format!("{:?}", error.kind),
+                                path: error.paths.first().cloned(),
                             };
-                            pending.insert(path, vfs_event);
+                            let _ = error_tx.send(critical_err.clone());
+                            if error_handler(critical_err) {
+                                return;
+                            }
                         }
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
                     }
-                    Ok(Err(error)) => {
-                        let critical_err = WatcherCriticalError::WatcherError {
-                            error: format!("{:?}", error.kind),
-                            path: error.paths.first().cloned(),
-                        };
-                        let _ = error_tx.send(critical_err.clone());
-                        if error_handler(critical_err) {
-                            return;
-                        }
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
-                }
 
-                if !pending.is_empty() && last_event.elapsed() >= debounce_ms {
-                    for (_, vfs_event) in pending.drain() {
-                        if let Err(err) = event_tx.send(vfs_event) {
-                            let critical_err =
-                                WatcherCriticalError::ChannelSendFailed(err.to_string());
+                    if !pending.is_empty() && last_event.elapsed() >= debounce_ms {
+                        for (_, vfs_event) in pending.drain() {
+                            if let Err(err) = event_tx.send(vfs_event) {
+                                let critical_err =
+                                    WatcherCriticalError::ChannelSendFailed(err.to_string());
+                                let _ = error_tx.send(critical_err.clone());
+                                if error_handler(critical_err) {
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            w
+        };
+
+        #[cfg(not(target_os = "macos"))]
+        let debouncer = {
+            let debounce_timeout = std::time::Duration::from_millis(50);
+
+            new_debouncer(
+                debounce_timeout,
+                None,
+                move |result: DebounceEventResult| match result {
+                    Ok(events) => {
+                        for event in events {
+                            for vfs_event in Self::convert_event(&event.event) {
+                                if let Err(err) = event_tx.send(vfs_event) {
+                                    let critical_err =
+                                        WatcherCriticalError::ChannelSendFailed(err.to_string());
+                                    let _ = error_tx.send(critical_err.clone());
+                                    if error_handler(critical_err) {
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    Err(errors) => {
+                        for error in errors {
+                            let critical_err = WatcherCriticalError::WatcherError {
+                                error: format!("{:?}", error.kind),
+                                path: error.paths.first().cloned(),
+                            };
                             let _ = error_tx.send(critical_err.clone());
                             if error_handler(critical_err) {
                                 return;
                             }
                         }
                     }
-                }
-            }
-        });
+                },
+            )
+            .expect("Failed to create file watcher debouncer")
+        };
 
         Self {
+            #[cfg(target_os = "macos")]
             watcher,
+            #[cfg(not(target_os = "macos"))]
+            debouncer,
             watcher_receiver: event_rx,
             watches: HashSet::new(),
             recursive_watches: HashSet::new(),
@@ -333,7 +389,11 @@ impl VfsBackend for StdBackend {
         } else {
             RecursiveMode::NonRecursive
         };
-        match self.watcher.watch(path, mode) {
+        #[cfg(target_os = "macos")]
+        let result = self.watcher.watch(path, mode);
+        #[cfg(not(target_os = "macos"))]
+        let result = self.debouncer.watch(path, mode);
+        match result {
             Ok(()) => {
                 log::debug!(
                     "Watching path ({}): {}",
@@ -360,7 +420,11 @@ impl VfsBackend for StdBackend {
     fn unwatch(&mut self, path: &Path) -> io::Result<()> {
         let was_watched = self.watches.contains(path);
 
-        match self.watcher.unwatch(path) {
+        #[cfg(target_os = "macos")]
+        let result = self.watcher.unwatch(path);
+        #[cfg(not(target_os = "macos"))]
+        let result = self.debouncer.unwatch(path);
+        match result {
             Ok(()) => {
                 if was_watched {
                     log::info!("Unwatched path: {}", path.display());
