@@ -1,10 +1,11 @@
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
-use std::{collections::HashSet, io};
+use std::time::{Duration, Instant};
+use std::{collections::HashSet, io, thread};
 
-use crossbeam_channel::{Receiver, Sender};
-use notify::RecursiveMode;
-use notify_debouncer_mini::{new_debouncer, DebounceEventResult, DebouncedEventKind, Debouncer};
+use crossbeam_channel::Receiver;
+use notify::event::{CreateKind, EventKind, ModifyKind, RemoveKind, RenameMode};
+use notify::{RecursiveMode, Watcher};
 
 use crate::{DirEntry, Metadata, ReadDir, VfsBackend, VfsEvent};
 
@@ -51,12 +52,10 @@ pub type CriticalErrorHandler = Box<dyn Fn(WatcherCriticalError) -> bool + Send 
 
 /// `VfsBackend` that uses `std::fs` and the `notify` crate.
 pub struct StdBackend {
-    debouncer: Debouncer<notify::RecommendedWatcher>,
+    watcher: notify::RecommendedWatcher,
     watcher_receiver: Receiver<VfsEvent>,
     watches: HashSet<PathBuf>,
     recursive_watches: HashSet<PathBuf>,
-    /// Receiver for critical errors from the watcher thread.
-    /// Callers should poll this to detect when watching becomes unreliable.
     critical_error_receiver: Receiver<WatcherCriticalError>,
 }
 
@@ -103,41 +102,51 @@ impl StdBackend {
     pub fn new_with_error_handler(error_handler: CriticalErrorHandler) -> StdBackend {
         let (event_tx, event_rx) = crossbeam_channel::unbounded();
         let (error_tx, error_rx) = crossbeam_channel::unbounded();
+        let (raw_tx, raw_rx) = std::sync::mpsc::channel::<Result<notify::Event, notify::Error>>();
 
-        let debouncer = Self::create_debouncer(event_tx, error_tx, error_handler);
+        let watcher = notify::RecommendedWatcher::new(
+            move |result| {
+                let _ = raw_tx.send(result);
+            },
+            notify::Config::default(),
+        )
+        .expect("Failed to create file watcher");
 
-        Self {
-            debouncer,
-            watcher_receiver: event_rx,
-            watches: HashSet::new(),
-            recursive_watches: HashSet::new(),
-            critical_error_receiver: error_rx,
-        }
-    }
+        let debounce_ms = Duration::from_millis(50);
 
-    fn create_debouncer(
-        event_tx: Sender<VfsEvent>,
-        error_tx: Sender<WatcherCriticalError>,
-        error_handler: CriticalErrorHandler,
-    ) -> Debouncer<notify::RecommendedWatcher> {
-        let debounce_timeout = Duration::from_millis(50);
+        thread::spawn(move || {
+            let mut pending: HashMap<PathBuf, VfsEvent> = HashMap::new();
+            let mut last_event = Instant::now();
 
-        new_debouncer(
-            debounce_timeout,
-            move |result: DebounceEventResult| match result {
-                Ok(events) => {
-                    for event in events {
-                        let vfs_event = match event.kind {
-                            DebouncedEventKind::Any | DebouncedEventKind::AnyContinuous => {
-                                if event.path.exists() {
-                                    VfsEvent::Write(event.path)
-                                } else {
-                                    VfsEvent::Remove(event.path)
+            loop {
+                match raw_rx.recv_timeout(debounce_ms) {
+                    Ok(Ok(event)) => {
+                        last_event = Instant::now();
+                        for vfs_event in Self::convert_event(&event) {
+                            let path = match &vfs_event {
+                                VfsEvent::Create(p) | VfsEvent::Write(p) | VfsEvent::Remove(p) => {
+                                    p.clone()
                                 }
-                            }
-                            _ => continue,
+                            };
+                            pending.insert(path, vfs_event);
+                        }
+                    }
+                    Ok(Err(error)) => {
+                        let critical_err = WatcherCriticalError::WatcherError {
+                            error: format!("{:?}", error.kind),
+                            path: error.paths.first().cloned(),
                         };
-                        log::trace!("VFS debounced event: {:?}", &vfs_event);
+                        let _ = error_tx.send(critical_err.clone());
+                        if error_handler(critical_err) {
+                            return;
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => return,
+                }
+
+                if !pending.is_empty() && last_event.elapsed() >= debounce_ms {
+                    for (_, vfs_event) in pending.drain() {
                         if let Err(err) = event_tx.send(vfs_event) {
                             let critical_err =
                                 WatcherCriticalError::ChannelSendFailed(err.to_string());
@@ -148,17 +157,86 @@ impl StdBackend {
                         }
                     }
                 }
-                Err(error) => {
-                    let critical_err = WatcherCriticalError::WatcherError {
-                        error: format!("{:?}", error.kind),
-                        path: error.paths.first().cloned(),
-                    };
-                    let _ = error_tx.send(critical_err.clone());
-                    error_handler(critical_err);
+            }
+        });
+
+        Self {
+            watcher,
+            watcher_receiver: event_rx,
+            watches: HashSet::new(),
+            recursive_watches: HashSet::new(),
+            critical_error_receiver: error_rx,
+        }
+    }
+
+    fn convert_event(event: &notify::Event) -> Vec<VfsEvent> {
+        let mut vfs_events = Vec::new();
+
+        match &event.kind {
+            EventKind::Create(CreateKind::File)
+            | EventKind::Create(CreateKind::Folder)
+            | EventKind::Create(CreateKind::Any)
+            | EventKind::Create(CreateKind::Other) => {
+                for path in &event.paths {
+                    vfs_events.push(VfsEvent::Create(path.clone()));
                 }
-            },
-        )
-        .expect("Failed to create file watcher debouncer")
+            }
+
+            EventKind::Modify(ModifyKind::Data(_))
+            | EventKind::Modify(ModifyKind::Any)
+            | EventKind::Modify(ModifyKind::Other)
+            | EventKind::Modify(ModifyKind::Metadata(_)) => {
+                for path in &event.paths {
+                    vfs_events.push(VfsEvent::Write(path.clone()));
+                }
+            }
+
+            EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => {
+                if event.paths.len() >= 2 {
+                    vfs_events.push(VfsEvent::Remove(event.paths[0].clone()));
+                    vfs_events.push(VfsEvent::Create(event.paths[1].clone()));
+                }
+            }
+            EventKind::Modify(ModifyKind::Name(RenameMode::From)) => {
+                for path in &event.paths {
+                    vfs_events.push(VfsEvent::Remove(path.clone()));
+                }
+            }
+            EventKind::Modify(ModifyKind::Name(RenameMode::To)) => {
+                for path in &event.paths {
+                    vfs_events.push(VfsEvent::Create(path.clone()));
+                }
+            }
+            EventKind::Modify(ModifyKind::Name(RenameMode::Any))
+            | EventKind::Modify(ModifyKind::Name(RenameMode::Other)) => {
+                for path in &event.paths {
+                    vfs_events.push(VfsEvent::Write(path.clone()));
+                }
+            }
+
+            EventKind::Remove(RemoveKind::File)
+            | EventKind::Remove(RemoveKind::Folder)
+            | EventKind::Remove(RemoveKind::Any)
+            | EventKind::Remove(RemoveKind::Other) => {
+                for path in &event.paths {
+                    vfs_events.push(VfsEvent::Remove(path.clone()));
+                }
+            }
+
+            EventKind::Access(_) => {}
+
+            EventKind::Other | EventKind::Any => {
+                for path in &event.paths {
+                    vfs_events.push(VfsEvent::Write(path.clone()));
+                }
+            }
+        }
+
+        for event in &vfs_events {
+            log::trace!("VFS event: {:?}", event);
+        }
+
+        vfs_events
     }
 
     /// Returns a receiver for critical errors from the watcher thread.
@@ -255,7 +333,7 @@ impl VfsBackend for StdBackend {
         } else {
             RecursiveMode::NonRecursive
         };
-        match self.debouncer.watcher().watch(path, mode) {
+        match self.watcher.watch(path, mode) {
             Ok(()) => {
                 log::debug!(
                     "Watching path ({}): {}",
@@ -282,7 +360,7 @@ impl VfsBackend for StdBackend {
     fn unwatch(&mut self, path: &Path) -> io::Result<()> {
         let was_watched = self.watches.contains(path);
 
-        match self.debouncer.watcher().unwatch(path) {
+        match self.watcher.unwatch(path) {
             Ok(()) => {
                 if was_watched {
                     log::info!("Unwatched path: {}", path.display());
