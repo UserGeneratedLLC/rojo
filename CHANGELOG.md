@@ -31,6 +31,8 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+* Add .gitignore for logs and refactor ServeSession to include path_roots in init_tree return
+
 ## [8.5.6] (March 8th, 2026)
 
 * Add asynchronous log file compression with lowered thread priority to avoid impacting main workloads

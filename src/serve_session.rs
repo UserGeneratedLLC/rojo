@@ -326,12 +326,22 @@ pub fn collect_path_roots(node: &crate::project::ProjectNode, base: &Path, out: 
 impl ServeSession {
     /// Shared initialization: loads the project and builds the initial
     /// snapshot tree. Used by both `new()` and `new_oneshot()`.
-    /// Returns the walked paths from prefetch (if available) for syncback reuse.
+    /// Returns the walked paths from prefetch (if available) for syncback reuse,
+    /// plus collected ref path index entries for building RefPathIndex.
+    #[allow(clippy::type_complexity)]
     fn init_tree(
         vfs: &Vfs,
         start_path: &Path,
-    ) -> Result<(Project, RojoTree, Option<HashSet<PathBuf>>, Vec<PathBuf>), ServeSessionError>
-    {
+    ) -> Result<
+        (
+            Project,
+            RojoTree,
+            Option<HashSet<PathBuf>>,
+            Vec<PathBuf>,
+            Vec<(String, std::path::PathBuf)>,
+        ),
+        ServeSessionError,
+    > {
         log::trace!("Starting new ServeSession at path {}", start_path.display());
 
         let root_project = Project::load_initial_project(vfs, start_path)?;
@@ -413,48 +423,27 @@ impl ServeSession {
 
         let snap_start = Instant::now();
         log::trace!("Generating snapshot of instances from VFS");
-        let was_watch_enabled = vfs.is_watch_enabled();
-        vfs.set_watch_enabled(false);
         let snapshot = snapshot_from_vfs(&instance_context, vfs, start_path)?;
-        vfs.set_watch_enabled(was_watch_enabled);
         log::debug!("Snapshot built in {:.1?}", snap_start.elapsed());
 
         vfs.clear_prefetch_cache();
 
         let patch_start = Instant::now();
+        log::trace!("Computing initial patch set");
+        let patch_set = compute_patch_set(snapshot, &tree, root_id);
 
-        if vfs.is_watch_enabled() {
-            std::thread::scope(|s| {
-                s.spawn(|| {
-                    let watch_start = Instant::now();
-                    let mut watch_count: usize = 0;
-                    for root in &path_roots {
-                        let _ = vfs.watch(root);
-                        watch_count += 1;
-                    }
-                    log::debug!(
-                        "Set up {} watches in {:.1?}",
-                        watch_count,
-                        watch_start.elapsed(),
-                    );
-                });
+        log::trace!("Applying initial patch set");
+        let applied = apply_patch_set(&mut tree, patch_set);
+        let ref_path_entries = applied.ref_path_index_entries;
+        log::debug!("Patch computed + applied in {:.1?}", patch_start.elapsed());
 
-                log::trace!("Computing initial patch set");
-                let patch_set = compute_patch_set(snapshot, &tree, root_id);
-
-                log::trace!("Applying initial patch set");
-                apply_patch_set(&mut tree, patch_set);
-            });
-        } else {
-            log::trace!("Computing initial patch set");
-            let patch_set = compute_patch_set(snapshot, &tree, root_id);
-
-            log::trace!("Applying initial patch set");
-            apply_patch_set(&mut tree, patch_set);
-        }
-        log::debug!("Watch + patch in {:.1?}", patch_start.elapsed());
-
-        Ok((root_project, tree, walked_paths, path_roots))
+        Ok((
+            root_project,
+            tree,
+            walked_paths,
+            path_roots,
+            ref_path_entries,
+        ))
     }
 
     /// Start a new serve session from the given in-memory filesystem and start
@@ -471,7 +460,10 @@ impl ServeSession {
         let start_path = start_path.as_ref();
         let start_time = Instant::now();
 
-        let (root_project, tree, _walked_paths, _path_roots) = Self::init_tree(&vfs, start_path)?;
+        let t_init_start = Instant::now();
+        let (root_project, tree, _walked_paths, _path_roots, ref_path_entries) =
+            Self::init_tree(&vfs, start_path)?;
+        let t_init_tree = Instant::now();
 
         let session_id = SessionId::new();
         let message_queue = MessageQueue::new();
@@ -482,28 +474,25 @@ impl ServeSession {
 
         let (tree_mutation_sender, tree_mutation_receiver) = crossbeam_channel::unbounded();
         let suppressed_paths = Arc::new(Mutex::new(std::collections::HashMap::new()));
-        let ref_path_index = {
-            let mut index = crate::RefPathIndex::new();
-            let tree_guard = tree.lock().unwrap();
-            let mut ref_roots = Vec::new();
-            collect_path_roots(
-                &root_project.tree,
-                root_project.folder_location(),
-                &mut ref_roots,
-            );
-            for root in &ref_roots {
-                index.populate_from_dir(root, &tree_guard);
-            }
-            drop(tree_guard);
-            Arc::new(Mutex::new(index))
-        };
+        let ref_path_index = Arc::new(Mutex::new(crate::RefPathIndex::from_entries(
+            ref_path_entries,
+        )));
+        let t_ref_index = Instant::now();
 
         let git_repo_root = crate::git::git_repo_root(root_project.folder_location());
         let initial_head_commit = git_repo_root
             .as_deref()
             .and_then(crate::git::git_head_commit);
+        let t_git = Instant::now();
 
         let path_ignore_rules = root_project.path_ignore_rules();
+
+        log::debug!(
+            "[PERF] ServeSession::new breakdown: init_tree={:.1?}, ref_path_index={:.1?}, git={:.1?}",
+            t_init_tree - t_init_start,
+            t_ref_index - t_init_tree,
+            t_git - t_ref_index,
+        );
 
         log::trace!("Starting ChangeProcessor");
         let change_processor = ChangeProcessor::start(
@@ -547,7 +536,8 @@ impl ServeSession {
         let start_path = start_path.as_ref();
         let start_time = Instant::now();
 
-        let (root_project, tree, walked_paths, _path_roots) = Self::init_tree(&vfs, start_path)?;
+        let (root_project, tree, walked_paths, _path_roots, _ref_entries) =
+            Self::init_tree(&vfs, start_path)?;
 
         Ok(Self {
             change_processor: None,

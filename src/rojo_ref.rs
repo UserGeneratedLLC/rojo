@@ -326,6 +326,22 @@ impl RefPathIndex {
         }
     }
 
+    /// Build from pre-collected entries (avoids re-walking the directory tree).
+    pub fn from_entries(entries: Vec<(String, PathBuf)>) -> Self {
+        let mut index = Self::new();
+        let count = entries.len();
+        for (ref_path, meta_file) in entries {
+            index.add(&ref_path, &meta_file);
+        }
+        if count > 0 {
+            log::debug!(
+                "RefPathIndex: built from {} collected Rojo_Ref_* entries",
+                count
+            );
+        }
+        index
+    }
+
     /// Record that `meta_file` contains a `Rojo_Ref_*` attribute with value
     /// `ref_path` (the instance path string, e.g., "Workspace/Model/Part1").
     pub fn add(&mut self, ref_path: &str, meta_file: &Path) {
