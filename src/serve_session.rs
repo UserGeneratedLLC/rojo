@@ -17,7 +17,7 @@ use crate::{
     session_id::SessionId,
     snapshot::{
         apply_patch_set, compute_patch_set, AppliedPatchSet, InstanceContext, InstanceSnapshot,
-        PatchSet, PathIgnoreRule, RojoTree,
+        PatchSet, RojoTree,
     },
     snapshot_middleware::{is_script_relevant_path, snapshot_from_vfs, INIT_FILE_PRIORITY},
 };
@@ -330,7 +330,8 @@ impl ServeSession {
     fn init_tree(
         vfs: &Vfs,
         start_path: &Path,
-    ) -> Result<(Project, RojoTree, Option<HashSet<PathBuf>>), ServeSessionError> {
+    ) -> Result<(Project, RojoTree, Option<HashSet<PathBuf>>, Vec<PathBuf>), ServeSessionError>
+    {
         log::trace!("Starting new ServeSession at path {}", start_path.display());
 
         let root_project = Project::load_initial_project(vfs, start_path)?;
@@ -421,69 +422,39 @@ impl ServeSession {
         vfs.clear_prefetch_cache();
 
         let patch_start = Instant::now();
-        let watch_ignore_rules = root_project.path_ignore_rules();
-        std::thread::scope(|s| {
-            s.spawn(|| {
-                use walkdir::WalkDir;
 
-                let watch_start = Instant::now();
-                let mut watch_count: usize = 0;
-
-                if cfg!(target_os = "macos") {
-                    // macOS kqueue: one FD per watched path. Walk each $path
-                    // root, skip globIgnorePaths subtrees, and watch every
-                    // non-ignored file and directory non-recursively. File
-                    // watches are required because kqueue directory watches
-                    // only fire for structural changes, not child content edits.
-                    let passes_ignore = |entry: &walkdir::DirEntry| -> bool {
-                        if let Some(name) = entry.file_name().to_str() {
-                            if matches!(name, ".git" | ".hg" | ".svn") {
-                                return false;
-                            }
-                        }
-                        watch_ignore_rules
-                            .iter()
-                            .all(|rule: &PathIgnoreRule| rule.passes(entry.path()))
-                    };
-                    vfs.set_watch_recursive(false);
-                    for root in &path_roots {
-                        for entry in WalkDir::new(root)
-                            .into_iter()
-                            .filter_entry(&passes_ignore)
-                            .flatten()
-                        {
-                            let _ = vfs.watch(entry.path());
-                            watch_count += 1;
-                        }
-                    }
-                    vfs.set_watch_recursive(true);
-                } else {
-                    // Linux/Windows: inotify uses a single FD for all watches,
-                    // RDCW uses one handle per directory. Recursive watches are
-                    // cheap and directory watches already cover child file
-                    // events. globIgnorePaths filtering is handled by the
-                    // change processor's event filter.
+        if vfs.is_watch_enabled() {
+            std::thread::scope(|s| {
+                s.spawn(|| {
+                    let watch_start = Instant::now();
+                    let mut watch_count: usize = 0;
                     for root in &path_roots {
                         let _ = vfs.watch(root);
                         watch_count += 1;
                     }
-                }
-                log::debug!(
-                    "Set up {} watches in {:.1?}",
-                    watch_count,
-                    watch_start.elapsed(),
-                );
-            });
+                    log::debug!(
+                        "Set up {} watches in {:.1?}",
+                        watch_count,
+                        watch_start.elapsed(),
+                    );
+                });
 
+                log::trace!("Computing initial patch set");
+                let patch_set = compute_patch_set(snapshot, &tree, root_id);
+
+                log::trace!("Applying initial patch set");
+                apply_patch_set(&mut tree, patch_set);
+            });
+        } else {
             log::trace!("Computing initial patch set");
             let patch_set = compute_patch_set(snapshot, &tree, root_id);
 
             log::trace!("Applying initial patch set");
             apply_patch_set(&mut tree, patch_set);
-        });
+        }
         log::debug!("Watch + patch in {:.1?}", patch_start.elapsed());
 
-        Ok((root_project, tree, walked_paths))
+        Ok((root_project, tree, walked_paths, path_roots))
     }
 
     /// Start a new serve session from the given in-memory filesystem and start
@@ -500,7 +471,7 @@ impl ServeSession {
         let start_path = start_path.as_ref();
         let start_time = Instant::now();
 
-        let (root_project, tree, _walked_paths) = Self::init_tree(&vfs, start_path)?;
+        let (root_project, tree, _walked_paths, _path_roots) = Self::init_tree(&vfs, start_path)?;
 
         let session_id = SessionId::new();
         let message_queue = MessageQueue::new();
@@ -576,7 +547,7 @@ impl ServeSession {
         let start_path = start_path.as_ref();
         let start_time = Instant::now();
 
-        let (root_project, tree, walked_paths) = Self::init_tree(&vfs, start_path)?;
+        let (root_project, tree, walked_paths, _path_roots) = Self::init_tree(&vfs, start_path)?;
 
         Ok(Self {
             change_processor: None,

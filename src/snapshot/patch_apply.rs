@@ -42,8 +42,6 @@ pub fn apply_patch_set(tree: &mut RojoTree, patch_set: PatchSet) -> AppliedPatch
 
     {
         profiling::scope!("updates");
-        // Updates need to be applied after additions, which reduces the complexity
-        // of updates significantly.
         for update_patch in patch_set.updated_instances {
             apply_update_child(&mut context, tree, update_patch);
         }
@@ -109,8 +107,6 @@ struct PatchApplyContext {
 #[profiling::function]
 fn finalize_patch_application(context: PatchApplyContext, tree: &mut RojoTree) -> AppliedPatchSet {
     for id in context.has_refs_to_rewrite {
-        // This should always succeed since instances marked as added in our
-        // patch should be added without fail.
         let mut instance = tree
             .get_instance_mut(id)
             .expect("Invalid instance ID in deferred property map");
@@ -181,7 +177,6 @@ fn finalize_patch_application(context: PatchApplyContext, tree: &mut RojoTree) -
             _ => continue,
         };
 
-        // Remove all Rojo ref-related attributes
         let keys_to_remove: Vec<String> = attributes
             .iter()
             .filter_map(|(name, _)| {

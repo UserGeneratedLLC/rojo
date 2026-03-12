@@ -125,27 +125,24 @@ impl RojoTree {
         //
         // We need to insert the NeedsPivotMigration property with a value of false on
         // every instance that inherits from Model for pivots to build correctly.
-        let hack_needs_pivot_migration = match snapshot.class_name.as_ref() {
-            // This is not a future proof way to do this but the last time a
-            // descendant of Model was added was in 2020 so it's probably fine.
+        let needs_pivot = match snapshot.class_name.as_ref() {
             "Model" | "Actor" | "Tool" | "HopperBin" | "Flag" | "WorldModel" | "Workspace"
-            | "Status"
-                if !snapshot
-                    .properties
-                    .contains_key(&ustr("NeedsPivotMigration")) =>
-            {
-                vec![("NeedsPivotMigration", Variant::Bool(false))]
-            }
-            _ => Vec::new(),
+            | "Status" => !snapshot
+                .properties
+                .contains_key(&ustr("NeedsPivotMigration")),
+            _ => false,
         };
 
         let is_script = is_script_class(snapshot.class_name.as_ref());
 
-        let builder = InstanceBuilder::empty()
+        let mut builder = InstanceBuilder::empty()
             .with_class(snapshot.class_name)
             .with_name(snapshot.name.into_owned())
-            .with_properties(hack_needs_pivot_migration)
             .with_properties(snapshot.properties);
+
+        if needs_pivot {
+            builder = builder.with_property("NeedsPivotMigration", Variant::Bool(false));
+        }
 
         let referent = self.inner.insert(parent_ref, builder);
         self.insert_metadata(referent, snapshot.metadata);
