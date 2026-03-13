@@ -866,17 +866,18 @@ mod tests {
         // Should get either:
         // - Remove(original) + Create(renamed) for RenameMode::Both
         // - Or separate From/To events
-        let has_remove = events
-            .iter()
-            .any(|e| matches!(e, VfsEvent::Remove(p) if p == &original));
-        let has_create = events
-            .iter()
-            .any(|e| matches!(e, VfsEvent::Create(p) if p == &renamed));
+        // FSEvents on macOS may report renames as Write/Metadata events rather
+        // than the specific Create/Remove pair. Verify that at least one event
+        // references either the original or renamed path.
+        let has_relevant_event = events.iter().any(|e| match e {
+            VfsEvent::Create(p) | VfsEvent::Write(p) | VfsEvent::Remove(p) => {
+                p == &original || p == &renamed
+            }
+        });
 
-        // At minimum we should see the new file appear
         assert!(
-            has_create || has_remove || !events.is_empty(),
-            "Expected rename to generate events (got {} events: {:?})",
+            has_relevant_event,
+            "Expected rename to generate events for original or renamed path (got {} events: {:?})",
             events.len(),
             events
         );
