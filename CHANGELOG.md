@@ -31,6 +31,15 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+* Parallelize syncback middleware execution with rayon wave-based processing ([#13])
+* Add per-class property filter cache to eliminate repeated superclass-chain walks during syncback ([#13])
+* Add size hint pre-allocation for JSON5 serialization output ([#13])
+* Skip redundant `walkdir` traversal when prefetch already covers a directory ([#13])
+* Fix `RunCode` MCP tool to report syntax errors and avoid double-reporting `error()` calls ([#13])
+* Fix `RunScriptInPlayMode` to JSON-encode table results instead of returning raw tables ([#13])
+
+[#13]: https://github.com/UserGeneratedLLC/rojo/pull/13
+
 ## [8.5.7] (March 12th, 2026)
 
 * Optimize serve/sourcemap startup from >180s to ~8s: replace kqueue with FSEvents on macOS, lazy watch setup, build RefPathIndex from patch entries instead of directory walk

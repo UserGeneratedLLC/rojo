@@ -4,19 +4,24 @@ use std::time::Instant;
 
 use criterion::{criterion_group, criterion_main, Criterion};
 
-fn test_repo() -> PathBuf {
-    let home = std::env::var("HOME").expect("HOME not set");
+fn test_repo() -> Option<PathBuf> {
+    let home = std::env::var("HOME").ok()?;
     let path = PathBuf::from(home).join("workspace/escape-tsunami-for-brainrots");
-    assert!(
-        path.join(".git").is_dir(),
-        "Test repo not found at {}",
-        path.display()
-    );
-    path
+    if path.join(".git").is_dir() {
+        Some(path)
+    } else {
+        None
+    }
 }
 
 fn bench_git_status_uall(c: &mut Criterion) {
-    let repo = test_repo();
+    let repo = match test_repo() {
+        Some(r) => r,
+        None => {
+            eprintln!("Skipping git_metadata benchmark: test repo not found");
+            return;
+        }
+    };
 
     let mut group = c.benchmark_group("git_changed_files");
     group.sample_size(10);

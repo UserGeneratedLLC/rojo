@@ -1,9 +1,132 @@
+use std::collections::HashMap;
+
 use rbx_dom_weak::{types::Variant, Instance, Ustr, UstrMap};
 use rbx_reflection::{PropertyKind, PropertySerialization, Scriptability};
 
 use crate::{variant_eq::variant_eq, Project};
 
 use super::SyncbackStats;
+
+/// Per-class cache of which properties should be skipped during syncback
+/// filtering. Eliminates repeated superclass-chain walks in the reflection
+/// database for serialization and scriptability checks.
+pub struct PropertyFilterCache {
+    sync_unscriptable: bool,
+    /// ClassName -> set of property names that FAIL the static checks
+    /// (DoesNotSerialize or Scriptability::None when sync_unscriptable=false).
+    /// Properties in this set should be skipped.
+    skip_sets: HashMap<Ustr, UstrSet>,
+}
+
+type UstrSet = std::collections::HashSet<Ustr>;
+
+impl PropertyFilterCache {
+    pub fn new(project: &Project) -> Self {
+        let sync_unscriptable = project
+            .syncback_rules
+            .as_ref()
+            .and_then(|s| s.sync_unscriptable)
+            .unwrap_or(false);
+        Self {
+            sync_unscriptable,
+            skip_sets: HashMap::new(),
+        }
+    }
+
+    /// Returns the set of property names to skip for a given class.
+    /// Builds and caches the set on first access.
+    fn skip_set_for(&mut self, class_name: &Ustr) -> &UstrSet {
+        if self.skip_sets.contains_key(class_name) {
+            return &self.skip_sets[class_name];
+        }
+        let sync_unscriptable = self.sync_unscriptable;
+        let database = rbx_reflection_database::get().unwrap();
+        let class_data = database.classes.get(class_name.as_str());
+        let mut skip = UstrSet::new();
+
+        if let Some(class_data) = class_data {
+            let mut seen = UstrSet::new();
+            let mut current = Some(class_data);
+            while let Some(data) = current {
+                for (prop_name, prop_data) in &data.properties {
+                    let ustr_name = Ustr::from(prop_name);
+                    if !seen.insert(ustr_name) {
+                        continue;
+                    }
+                    let should_skip_serialize = match &prop_data.kind {
+                        PropertyKind::Alias { alias_for } => {
+                            !should_property_serialize(class_name.as_str(), alias_for)
+                        }
+                        PropertyKind::Canonical { serialization } => {
+                            matches!(serialization, PropertySerialization::DoesNotSerialize)
+                        }
+                        _ => false,
+                    };
+                    if should_skip_serialize {
+                        skip.insert(ustr_name);
+                        continue;
+                    }
+                    if !sync_unscriptable && matches!(prop_data.scriptability, Scriptability::None)
+                    {
+                        skip.insert(ustr_name);
+                    }
+                }
+                current = data
+                    .superclass
+                    .as_ref()
+                    .and_then(|s| database.classes.get(&**s));
+            }
+        }
+
+        self.skip_sets.entry(*class_name).or_insert(skip)
+    }
+
+    /// Cached version of `filter_properties_preallocated`. Fills `allocation`
+    /// with properties that pass all static and value-dependent checks.
+    pub fn filter_properties<'inst>(
+        &mut self,
+        inst: &'inst Instance,
+        allocation: &mut Vec<(Ustr, &'inst Variant)>,
+        stats: Option<&SyncbackStats>,
+    ) {
+        let database = rbx_reflection_database::get().unwrap();
+        let class_data = database.classes.get(inst.class.as_str());
+
+        if class_data.is_none() {
+            if let Some(stats) = stats {
+                stats.record_unknown_class(&inst.class);
+            }
+        }
+
+        let skip = self.skip_set_for(&inst.class);
+
+        if let Some(class_data) = class_data {
+            let defaults = &class_data.default_properties;
+            for (name, value) in &inst.properties {
+                if matches!(value, Variant::Ref(_) | Variant::UniqueId(_)) {
+                    continue;
+                }
+                if skip.contains(name) {
+                    continue;
+                }
+                if let Some(default) = defaults.get(name.as_str()) {
+                    if !variant_eq(value, default) {
+                        allocation.push((*name, value));
+                    }
+                } else {
+                    allocation.push((*name, value));
+                }
+            }
+        } else {
+            for (name, value) in &inst.properties {
+                if matches!(value, Variant::Ref(_) | Variant::UniqueId(_)) {
+                    continue;
+                }
+                allocation.push((*name, value));
+            }
+        }
+    }
+}
 
 /// Returns a map of properties from `inst` that are both allowed under the
 /// user-provided settings, are not their default value, and serialize.

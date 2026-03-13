@@ -41,6 +41,7 @@ pub use fs_snapshot::FsSnapshot;
 pub use hash::*;
 pub use property_filter::{
     filter_properties, filter_properties_preallocated, should_property_serialize,
+    PropertyFilterCache,
 };
 pub use snapshot::{inst_path, SyncbackData, SyncbackSnapshot};
 pub use stats::SyncbackStats;
@@ -387,6 +388,15 @@ pub fn syncback_loop_with_stats(
                 if !dir.is_dir() {
                     continue;
                 }
+                // If the pre-walked set already contains paths under this dir,
+                // the prefetch covered it — just insert the dir itself.
+                let already_covered = filtered.iter().any(|p| p.starts_with(dir));
+                if already_covered {
+                    if is_valid_path(&ignore_patterns, project_path, dir) {
+                        filtered.insert(dir.clone());
+                    }
+                    continue;
+                }
                 for entry in walkdir::WalkDir::new(dir)
                     .follow_links(true)
                     .into_iter()
@@ -508,7 +518,8 @@ pub fn syncback_loop_with_stats(
     );
 
     let phase_timer = std::time::Instant::now();
-    let ref_path_map = std::cell::RefCell::new(HashMap::new());
+    let ref_path_map = std::sync::Mutex::new(HashMap::new());
+    let prop_filter_cache = std::sync::Mutex::new(PropertyFilterCache::new(project));
     let syncback_data = SyncbackData {
         vfs,
         old_tree,
@@ -517,6 +528,7 @@ pub fn syncback_loop_with_stats(
         incremental,
         stats,
         ref_path_map: &ref_path_map,
+        prop_filter_cache: &prop_filter_cache,
     };
 
     // Always start with old reference for the Project middleware.
@@ -533,172 +545,171 @@ pub fn syncback_loop_with_stats(
     let mut fs_snapshot = FsSnapshot::new();
     let mut instance_paths: HashMap<Ref, Vec<PathBuf>> = HashMap::new();
     let mut walk_count: usize = 0;
-    let mut walk_syncback_ns: u128 = 0;
-    let mut walk_merge_ns: u128 = 0;
-    let mut walk_path_ns: u128 = 0;
 
-    'syncback: while let Some(snapshot) = snapshots.pop() {
-        walk_count += 1;
-        let path_start = std::time::Instant::now();
-        let inst_path = snapshot.get_new_inst_path(snapshot.new);
-        walk_path_ns += path_start.elapsed().as_nanos();
-        // In incremental mode, we can quickly check that two subtrees are identical
-        // and if they are, skip reconciling them. In clean mode, we always process
-        // all instances to ensure fresh structure.
-        if incremental {
-            if let Some(old_ref) = snapshot.old {
-                match (old_hashes.get(&old_ref), new_hashes.get(&snapshot.new)) {
-                    (Some(old), Some(new)) => {
-                        if old == new {
-                            log::trace!(
-                                "Skipping {inst_path} due to it being identically hashed as {old:?}"
-                            );
+    use rayon::prelude::*;
+
+    struct WaveItem<'sync> {
+        snapshot: SyncbackSnapshot<'sync>,
+        middleware: Middleware,
+    }
+
+    while !snapshots.is_empty() {
+        // Phase 1: Sequential pre-filter to build this wave's work items.
+        let mut wave: Vec<WaveItem> = Vec::with_capacity(snapshots.len());
+        let mut next_snapshots: Vec<SyncbackSnapshot> = Vec::new();
+
+        'filter: for snapshot in snapshots.drain(..) {
+            walk_count += 1;
+
+            if incremental {
+                if let Some(old_ref) = snapshot.old {
+                    match (old_hashes.get(&old_ref), new_hashes.get(&snapshot.new)) {
+                        (Some(old), Some(new)) if old == new => continue,
+                        _ => {}
+                    }
+                }
+            }
+
+            if !is_valid_path(&ignore_patterns, project_path, &snapshot.path) {
+                continue;
+            }
+            if let Some(ref globs) = tree_globs {
+                let inst_path = snapshot.get_new_inst_path(snapshot.new);
+                for (glob, _pattern) in globs {
+                    if glob.is_match(&inst_path) {
+                        continue 'filter;
+                    }
+                }
+            }
+
+            let middleware = get_best_middleware(&snapshot);
+
+            if matches!(middleware, Middleware::Json | Middleware::Toml) {
+                continue;
+            }
+
+            wave.push(WaveItem {
+                snapshot,
+                middleware,
+            });
+        }
+
+        if wave.is_empty() {
+            break;
+        }
+
+        // Phase 2: Parallel middleware execution.
+        let results: Vec<_> = wave
+            .into_par_iter()
+            .map(|item| {
+                let WaveItem {
+                    snapshot,
+                    middleware,
+                } = item;
+                let mut dir_to_remove: Option<PathBuf> = None;
+                let result = match middleware.syncback(&snapshot) {
+                    Ok(syncback) => Ok(syncback),
+                    Err(err) if middleware == Middleware::Dir => {
+                        let new_middleware = match env::var(DEBUG_MODEL_FORMAT_VAR) {
+                            Ok(value) if value == "1" => Middleware::Rbxmx,
+                            Ok(value) if value == "2" => Middleware::JsonModel,
+                            _ => Middleware::Rbxm,
+                        };
+                        let file_name = snapshot
+                            .path
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("");
+                        let mut path = snapshot.path.clone();
+                        path.set_file_name(format!(
+                            "{file_name}.{}",
+                            extension_for_middleware(new_middleware)
+                        ));
+                        let inst_path = snapshot.get_new_inst_path(snapshot.new);
+                        let new_snapshot = snapshot.with_new_path(path, snapshot.new, snapshot.old);
+                        stats.record_rbxm_fallback(&inst_path, &err.to_string());
+                        let new_syncback_result = new_middleware
+                            .syncback(&new_snapshot)
+                            .with_context(|| format!("Failed to syncback {inst_path}"));
+                        if new_syncback_result.is_ok() && snapshot.old_inst().is_some() {
+                            dir_to_remove = Some(snapshot.path.clone());
+                        }
+                        new_syncback_result
+                    }
+                    Err(err) => {
+                        let inst_path = snapshot.get_new_inst_path(snapshot.new);
+                        Err(err).with_context(|| format!("Failed to syncback {inst_path}"))
+                    }
+                };
+                (snapshot, result, dir_to_remove)
+            })
+            .collect();
+
+        // Phase 3: Sequential merge of results.
+        for (snapshot, result, dir_to_remove) in results {
+            let syncback = result?;
+
+            if let Some(ref dir_path) = dir_to_remove {
+                fs_snapshot.remove_dir(dir_path);
+            }
+
+            if !syncback.removed_children.is_empty() {
+                'remove: for inst in &syncback.removed_children {
+                    let path = inst.metadata().instigating_source.as_ref().unwrap().path();
+                    let inst_path = snapshot.get_old_inst_path(inst.id());
+                    if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                        if name.starts_with('.') && name != ".gitkeep" {
                             continue;
                         }
                     }
-                    _ => unreachable!("All Instances in both DOMs should have hashes"),
-                }
-            }
-        }
-
-        if !is_valid_path(&ignore_patterns, project_path, &snapshot.path) {
-            log::debug!("Skipping {inst_path} because its path matches ignore pattern");
-            continue;
-        }
-        // Check ignoreTrees with glob pattern support
-        if let Some(ref globs) = tree_globs {
-            for (glob, _pattern) in globs {
-                if glob.is_match(&inst_path) {
-                    log::debug!("Tree {inst_path} is blocked by ignoreTrees glob pattern");
-                    continue 'syncback;
-                }
-            }
-        }
-
-        let middleware = get_best_middleware(&snapshot);
-
-        log::trace!(
-            "Middleware for {inst_path} is {:?} (path is {})",
-            middleware,
-            snapshot.path.display()
-        );
-
-        if matches!(middleware, Middleware::Json | Middleware::Toml) {
-            log::warn!("Cannot syncback {middleware:?} at {inst_path}, skipping");
-            continue;
-        }
-
-        let syncback_start = std::time::Instant::now();
-        let syncback = match middleware.syncback(&snapshot) {
-            Ok(syncback) => syncback,
-            Err(err) if middleware == Middleware::Dir => {
-                let new_middleware = match env::var(DEBUG_MODEL_FORMAT_VAR) {
-                    Ok(value) if value == "1" => Middleware::Rbxmx,
-                    Ok(value) if value == "2" => Middleware::JsonModel,
-                    _ => Middleware::Rbxm,
-                };
-                let file_name = snapshot
-                    .path
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .context("Directory middleware should have a name in its path")?;
-                let mut path = snapshot.path.clone();
-                path.set_file_name(format!(
-                    "{file_name}.{}",
-                    extension_for_middleware(new_middleware)
-                ));
-                let new_snapshot = snapshot.with_new_path(path, snapshot.new, snapshot.old);
-                // Record the fallback in stats instead of warning directly
-                stats.record_rbxm_fallback(&inst_path, &err.to_string());
-                let new_syncback_result = new_middleware
-                    .syncback(&new_snapshot)
-                    .with_context(|| format!("Failed to syncback {inst_path}"));
-                if new_syncback_result.is_ok() && snapshot.old_inst().is_some() {
-                    // We need to remove the old FS representation if we're
-                    // reserializing it as an rbxm.
-                    fs_snapshot.remove_dir(&snapshot.path);
-                }
-                new_syncback_result?
-            }
-            Err(err) => anyhow::bail!("Failed to syncback {inst_path} because {err}"),
-        };
-
-        walk_syncback_ns += syncback_start.elapsed().as_nanos();
-
-        if !syncback.removed_children.is_empty() {
-            log::debug!(
-                "removed children for {inst_path}: {}",
-                syncback.removed_children.len()
-            );
-            'remove: for inst in &syncback.removed_children {
-                let path = inst.metadata().instigating_source.as_ref().unwrap().path();
-                let inst_path = snapshot.get_old_inst_path(inst.id());
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.starts_with('.') && name != ".gitkeep" {
-                        log::debug!("Skipping removing {} (hidden path)", path.display());
+                    if !is_valid_path(&ignore_patterns, project_path, path) {
                         continue;
                     }
-                }
-                if !is_valid_path(&ignore_patterns, project_path, path) {
-                    log::debug!(
-                        "Skipping removing {} because its matches an ignore pattern",
-                        path.display()
-                    );
-                    continue;
-                }
-                // Check ignoreTrees with glob pattern support
-                if let Some(ref globs) = tree_globs {
-                    for (glob, _pattern) in globs {
-                        if glob.is_match(&inst_path) {
-                            log::debug!("Skipping removing {inst_path} because its path is blocked by ignoreTrees glob pattern");
-                            continue 'remove;
+                    if let Some(ref globs) = tree_globs {
+                        for (glob, _pattern) in globs {
+                            if glob.is_match(&inst_path) {
+                                continue 'remove;
+                            }
                         }
                     }
-                }
-                if path.is_dir() {
-                    fs_snapshot.remove_dir(path)
-                } else {
-                    fs_snapshot.remove_file(path)
+                    if path.is_dir() {
+                        fs_snapshot.remove_dir(path)
+                    } else {
+                        fs_snapshot.remove_file(path)
+                    }
                 }
             }
+
+            let files_for_instance: Vec<PathBuf> = syncback
+                .fs_snapshot
+                .added_files()
+                .into_iter()
+                .map(|p| p.to_path_buf())
+                .collect();
+            if !files_for_instance.is_empty() {
+                instance_paths.insert(snapshot.new, files_for_instance);
+            }
+
+            fs_snapshot.merge_with_filter(syncback.fs_snapshot, |path| {
+                is_valid_path(&ignore_patterns, project_path, path)
+            });
+
+            next_snapshots.extend(syncback.children);
         }
 
-        // TODO provide replacement snapshots for e.g. two way sync
-
-        // Collect file paths for this instance before merging into the main snapshot.
-        // This builds the instance-to-path map used for sourcemap generation.
-        let files_for_instance: Vec<PathBuf> = syncback
-            .fs_snapshot
-            .added_files()
-            .into_iter()
-            .map(|p| p.to_path_buf())
-            .collect();
-        if !files_for_instance.is_empty() {
-            instance_paths.insert(snapshot.new, files_for_instance);
-        }
-
-        let merge_start = std::time::Instant::now();
-        fs_snapshot.merge_with_filter(syncback.fs_snapshot, |path| {
-            is_valid_path(&ignore_patterns, project_path, path)
-        });
-        walk_merge_ns += merge_start.elapsed().as_nanos();
-
-        snapshots.extend(syncback.children);
+        snapshots = next_snapshots;
     }
     log::debug!(
-        "[PERF] main walk loop: {:.3}s ({} instances, syncback={:.3}s, merge={:.3}s, path={:.3}s)",
+        "[PERF] main walk loop: {:.3}s ({} instances)",
         phase_timer.elapsed().as_secs_f64(),
         walk_count,
-        walk_syncback_ns as f64 / 1e9,
-        walk_merge_ns as f64 / 1e9,
-        walk_path_ns as f64 / 1e9,
     );
 
     let phase_timer = std::time::Instant::now();
     {
         use ref_properties::tentative_fs_path_public;
 
-        let final_map = ref_path_map.borrow();
+        let final_map = ref_path_map.lock().unwrap();
         let mut substitutions: Vec<(String, String)> = Vec::new();
         for (placeholder, (source_ref, target_ref)) in &placeholder_map {
             let source_abs = final_map

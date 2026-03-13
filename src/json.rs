@@ -187,6 +187,23 @@ enum Json5Value {
 }
 
 impl Json5Value {
+    /// Rough byte-size estimate for pre-allocating the output string.
+    fn size_hint(&self) -> usize {
+        match self {
+            Json5Value::Null => 4,
+            Json5Value::Bool(_) => 5,
+            Json5Value::Number(s) => s.len(),
+            Json5Value::String(s) => s.len() + 2,
+            Json5Value::Array(items) => 8 + items.iter().map(|v| v.size_hint() + 6).sum::<usize>(),
+            Json5Value::Object(map) => {
+                8 + map
+                    .iter()
+                    .map(|(k, v)| k.len() + v.size_hint() + 10)
+                    .sum::<usize>()
+            }
+        }
+    }
+
     /// Write this value to a string with proper JSON5 formatting and indentation.
     fn write_to(&self, output: &mut String, indent: usize) {
         let indent_str = "  ".repeat(indent);
@@ -682,8 +699,7 @@ pub fn to_vec_pretty_sorted<T: Serialize>(value: &T) -> anyhow::Result<Vec<u8>> 
         .serialize(Json5ValueSerializer)
         .map_err(|e| anyhow::anyhow!("Failed to serialize: {}", e))?;
 
-    // Write the tree to string with pretty formatting
-    let mut output = String::new();
+    let mut output = String::with_capacity(tree.size_hint());
     tree.write_to(&mut output, 0);
     output.push('\n');
     Ok(output.into_bytes())

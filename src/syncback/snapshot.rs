@@ -1,8 +1,8 @@
 use indexmap::IndexMap;
 use memofs::Vfs;
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use crate::{
     glob::Glob,
@@ -15,9 +15,7 @@ use rbx_dom_weak::{
     Instance, Ustr, UstrMap, WeakDom,
 };
 
-use super::{
-    get_best_middleware, name_for_inst, property_filter::filter_properties, SyncbackStats,
-};
+use super::{get_best_middleware, name_for_inst, PropertyFilterCache, SyncbackStats};
 
 #[derive(Clone, Copy)]
 pub struct SyncbackData<'sync> {
@@ -33,7 +31,10 @@ pub struct SyncbackData<'sync> {
     /// Records (Ref → ref-path-string) for each instance as filenames are
     /// assigned during the syncback walk. Used after the walk to fix
     /// Rojo_Ref_* attribute paths with correct dedup suffixes.
-    pub(super) ref_path_map: &'sync RefCell<HashMap<Ref, String>>,
+    pub(super) ref_path_map: &'sync Mutex<HashMap<Ref, String>>,
+    /// Cached property filter results per ClassName, avoiding repeated
+    /// superclass-chain walks in the reflection database.
+    pub(super) prop_filter_cache: &'sync Mutex<PropertyFilterCache>,
 }
 
 impl<'sync> SyncbackData<'sync> {
@@ -147,7 +148,8 @@ impl<'sync> SyncbackSnapshot<'sync> {
         let parent_path = self
             .data
             .ref_path_map
-            .borrow()
+            .lock()
+            .unwrap()
             .get(&self.new)
             .cloned()
             .unwrap_or_default();
@@ -158,7 +160,8 @@ impl<'sync> SyncbackSnapshot<'sync> {
         };
         self.data
             .ref_path_map
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .insert(child_ref, child_path);
     }
 
@@ -196,9 +199,10 @@ impl<'sync> SyncbackSnapshot<'sync> {
     pub fn get_path_filtered_properties(&self, new_ref: Ref) -> Option<UstrMap<&'sync Variant>> {
         let inst = self.get_new_instance(new_ref)?;
 
-        // The only filtering we have to do is filter out properties that are
-        // special-cased in some capacity.
-        let properties = filter_properties(self.data.project, inst)
+        let mut buf = Vec::with_capacity(inst.properties.len());
+        self.filter_properties_cached(inst, &mut buf);
+
+        let properties = buf
             .into_iter()
             .filter(|(name, _)| !filter_out_property(inst, name))
             .collect();
@@ -254,6 +258,20 @@ impl<'sync> SyncbackSnapshot<'sync> {
     #[inline]
     pub fn project(&self) -> &'sync Project {
         self.data.project
+    }
+
+    /// Fills `allocation` with filtered properties using the shared cache.
+    #[inline]
+    pub fn filter_properties_cached<'inst>(
+        &self,
+        inst: &'inst Instance,
+        allocation: &mut Vec<(rbx_dom_weak::Ustr, &'inst Variant)>,
+    ) {
+        self.data
+            .prop_filter_cache
+            .lock()
+            .unwrap()
+            .filter_properties(inst, allocation, None);
     }
 
     /// Returns the underlying VFS being used for syncback.

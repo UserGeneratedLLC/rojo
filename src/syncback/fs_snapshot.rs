@@ -338,7 +338,8 @@ impl FsSnapshot {
             let full_path = base_path.join(path);
 
             if let Some(cache) = git_cache {
-                if cache.file_matches_index(path, contents) {
+                let rel = path.strip_prefix(base_path).unwrap_or(path);
+                if cache.file_matches_index(rel, contents) {
                     skipped_files.fetch_add(1, Ordering::Relaxed);
                     git_skipped.fetch_add(1, Ordering::Relaxed);
                     return;
