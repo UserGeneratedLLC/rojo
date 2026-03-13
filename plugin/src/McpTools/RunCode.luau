@@ -82,39 +82,51 @@ local function runCodeWithOutput(command: string): string
 		output ..= header .. " " .. table.concat(strResults, "\t") .. "\n"
 	end
 
-	local function executeCode(): { any }
-		local chunk = loadstring(command) :: any
-		local chunkfenv = getfenv(chunk)
+	local chunk, syntaxErr = loadstring(command)
+	if not chunk then
+		addToOutput("[SYNTAX ERROR]", syntaxErr or "Unknown syntax error")
+		return output
+	end
 
-		local oldPrint = print
-		chunkfenv.print = function(...)
-			oldPrint(...)
-			addToOutput("[OUTPUT]", ...)
-		end
+	local chunkfenv = getfenv(chunk :: any)
 
-		local oldWarn = warn
-		chunkfenv.warn = function(...)
-			oldWarn(...)
-			addToOutput("[WARNING]", ...)
-		end
+	local savedPrint = chunkfenv.print
+	local savedWarn = chunkfenv.warn
+	local savedError = chunkfenv.error
 
-		local oldError = error
-		chunkfenv.error = function(...)
-			oldError(...)
-			addToOutput("[ERROR]", ...)
-		end
+	local errorCaptured = false
 
-		local results = table.pack(chunk())
+	chunkfenv.print = function(...)
+		savedPrint(...)
+		addToOutput("[OUTPUT]", ...)
+	end
+
+	chunkfenv.warn = function(...)
+		savedWarn(...)
+		addToOutput("[WARNING]", ...)
+	end
+
+	chunkfenv.error = function(message: any, level: number?)
+		errorCaptured = true
+		addToOutput("[ERROR]", message)
+		savedError(message, (level or 1) + 1)
+	end
+
+	local ok, resultOrErr = pcall(function()
+		return table.pack((chunk :: any)())
+	end)
+
+	chunkfenv.print = savedPrint
+	chunkfenv.warn = savedWarn
+	chunkfenv.error = savedError
+
+	if ok then
+		local results = resultOrErr :: { any }
 		if #results > 0 then
 			addToOutput("[RETURNED RESULTS]", table.unpack(results))
 		end
-
-		return results
-	end
-
-	local ok, errorMessage = pcall(executeCode)
-	if not ok then
-		addToOutput("[UNEXPECTED ERROR]", errorMessage)
+	elseif not errorCaptured then
+		addToOutput("[UNEXPECTED ERROR]", resultOrErr)
 	end
 
 	return output

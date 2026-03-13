@@ -1,5 +1,6 @@
 --!strict
 
+local HttpService = game:GetService("HttpService")
 local ServerScriptService = game:GetService("ServerScriptService")
 local StudioTestService = game:GetService("StudioTestService")
 
@@ -126,7 +127,10 @@ local function runScriptInPlayMode(args: Args): string?
 		error(`Failed to run script in play mode: {result}`)
 	end
 
-	return result
+	if type(result) == "table" then
+		return HttpService:JSONEncode(result)
+	end
+	return tostring(result)
 end
 
 local function handleRunScriptInPlayMode(args: Args): string?
