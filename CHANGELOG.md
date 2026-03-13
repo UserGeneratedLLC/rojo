@@ -31,9 +31,39 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
-* Optimize serve/sourcemap startup performance: replace kqueue with FSEvents on macOS, lazy watch setup, build RefPathIndex from patch entries instead of directory walk
+## [8.5.7] (March 12th, 2026)
+
+* Optimize serve/sourcemap startup from >180s to ~8s: replace kqueue with FSEvents on macOS, lazy watch setup, build RefPathIndex from patch entries instead of directory walk
 * Use platform-specific file watcher: raw notify + custom debounce on macOS, debouncer-full on Linux/Windows
 * Use oneshot session for non-watch sourcemap generation
+* Fix cross-platform compilation: gate macOS-only imports behind `cfg(target_os = "macos")` ([#12])
+* Deduplicate `is_meta_or_model` into shared helper
+
+<details>
+<summary>Full commit log</summary>
+
+- `e40e9522` Merge pull request #12 from UserGeneratedLLC/fixmac
+- `74f7ce26` style: cargo fmt rojo_ref.rs
+- `122602df` refactor: deduplicate is_meta_or_model into shared helper
+- `3c87b408` ci: enable Clippy warnings as errors in linting step
+- `7289f51e` ci: add GIT_CONFIG_NOSYSTEM environment variable to submodule initialization
+- `48f64f71` fix: gate macOS-only imports behind cfg(target_os = "macos")
+- `b16f3bf5` ci: retry (previous failure was Windows git permission denied infra flake)
+- `1f5dacd2` chore: update CI configuration and Rust settings
+- `7e3e58a0` ci: retry windows-latest (ref_through_deduped_instance timing)
+- `361b4a30` fix: tighten stress_rename_operations assertion to check relevant paths
+- `22808e61` feat: add is_empty method to GitIndexCache and refactor Hungarian algorithm loop
+- `a9018488` refactor: optimize file watching and sourcemap generation
+- `34375d13` fix: restore RescanRequired classification in debouncer-full error handler
+- `a727881e` fix: platform-specific watcher for macOS FSEvents + Windows RDCW
+- `b8bc7dda` fix: replace notify-debouncer-full/mini with raw notify + custom debounce
+- `9cf4cea9` fix: optimize serve/sourcemap startup from >180s to ~8s
+- `4ddc4a3e` feat: add .gitignore for logs and refactor ServeSession to include path_roots in init_tree return
+
+</details>
+
+[8.5.7]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.5.7
+[#12]: https://github.com/UserGeneratedLLC/rojo/pull/12
 
 ## [8.5.6] (March 8th, 2026)
 
