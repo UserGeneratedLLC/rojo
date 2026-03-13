@@ -198,9 +198,13 @@ impl StdBackend {
                     }
                     Err(errors) => {
                         for error in errors {
-                            let critical_err = WatcherCriticalError::WatcherError {
-                                error: format!("{:?}", error.kind),
-                                path: error.paths.first().cloned(),
+                            let critical_err = if error.paths.is_empty() {
+                                WatcherCriticalError::RescanRequired
+                            } else {
+                                WatcherCriticalError::WatcherError {
+                                    error: format!("{:?}", error.kind),
+                                    path: error.paths.first().cloned(),
+                                }
                             };
                             let _ = error_tx.send(critical_err.clone());
                             if error_handler(critical_err) {
