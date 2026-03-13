@@ -13,7 +13,7 @@ use crate::{
     json,
     resolution::UnresolvedValue,
     snapshot::{InstanceContext, InstanceSnapshot},
-    syncback::{filter_properties_preallocated, FsSnapshot, SyncbackReturn, SyncbackSnapshot},
+    syncback::{FsSnapshot, SyncbackReturn, SyncbackSnapshot},
     RojoRef,
 };
 
@@ -126,7 +126,7 @@ fn json_model_from_pair<'sync>(
         .get_new_instance(new)
         .expect("all new referents passed to json_model_from_pair should exist");
 
-    filter_properties_preallocated(snapshot.project(), new_inst, prop_buffer);
+    snapshot.filter_properties_cached(new_inst, prop_buffer);
 
     let mut properties = IndexMap::new();
     let mut attributes = IndexMap::new();
