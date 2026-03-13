@@ -1,9 +1,12 @@
 use std::path::{Path, PathBuf};
-use std::{collections::HashSet, io, thread};
+use std::{collections::HashSet, io};
 
 use crossbeam_channel::Receiver;
 use notify::event::{CreateKind, EventKind, ModifyKind, RemoveKind, RenameMode};
-use notify::{RecursiveMode, Watcher};
+use notify::RecursiveMode;
+
+#[cfg(target_os = "macos")]
+use {notify::Watcher, std::thread};
 
 #[cfg(not(target_os = "macos"))]
 use notify_debouncer_full::{new_debouncer, DebounceEventResult, Debouncer, RecommendedCache};
