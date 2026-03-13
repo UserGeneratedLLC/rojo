@@ -402,10 +402,7 @@ impl RefPathIndex {
             .into_iter()
             .filter_map(|e: Result<walkdir::DirEntry, _>| e.ok())
             .filter(|e: &walkdir::DirEntry| {
-                e.file_type().is_file()
-                    && e.file_name()
-                        .to_str()
-                        .is_some_and(is_meta_or_model_name)
+                e.file_type().is_file() && e.file_name().to_str().is_some_and(is_meta_or_model_name)
             })
             .map(|e: walkdir::DirEntry| e.into_path())
             .collect();
