@@ -20,6 +20,8 @@ jobs:
     needs: ["create-release"]
     name: Build Roblox Studio Plugin
     runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,6 +29,9 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
 
       - name: Install Rokit
         uses: CompeyDev/setup-rokit@v0.1.2
@@ -62,8 +67,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: true
+
+      - name: Init vscode-rojo submodule
+        run: git submodule update --init --depth 1 vscode-rojo
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -134,14 +140,16 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       BIN: atlas
+      CARGO_INCREMENTAL: "0"
     steps:
       - name: Disable Windows Defender
         if: runner.os == 'Windows'
         run: Set-MpPreference -DisableRealtimeMonitoring $true
 
       - uses: actions/checkout@v4
-        with:
-          submodules: true
+
+      - name: Init rbx-dom submodule
+        run: git submodule update --init --depth 1 rbx-dom
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

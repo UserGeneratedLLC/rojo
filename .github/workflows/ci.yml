@@ -13,6 +13,8 @@ jobs:
   build:
     name: Build and Test
     runs-on: ${{ matrix.os }}
+    env:
+      CARGO_INCREMENTAL: "0"
 
     strategy:
       fail-fast: false
@@ -25,8 +27,9 @@ jobs:
       run: Set-MpPreference -DisableRealtimeMonitoring $true
 
     - uses: actions/checkout@v4
-      with:
-        submodules: true
+
+    - name: Init rbx-dom submodule
+      run: git submodule update --init --depth 1 rbx-dom
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -45,8 +48,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-      with:
-        submodules: true
+
+    - name: Init vscode-rojo submodule
+      run: git submodule update --init --depth 1 vscode-rojo
 
     - name: Setup Node.js
       uses: actions/setup-node@v4
@@ -64,11 +68,14 @@ jobs:
   msrv:
     name: Check MSRV
     runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
 
     steps:
     - uses: actions/checkout@v4
-      with:
-        submodules: true
+
+    - name: Init rbx-dom submodule
+      run: git submodule update --init --depth 1 rbx-dom
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@1.88.0
@@ -84,11 +91,14 @@ jobs:
   lint:
     name: Rustfmt, Clippy, Stylua, & Selene
     runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
 
     steps:
     - uses: actions/checkout@v4
-      with:
-        submodules: true
+
+    - name: Init rbx-dom submodule
+      run: git submodule update --init --depth 1 rbx-dom
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -113,4 +123,4 @@ jobs:
       run: cargo fmt -- --check
 
     - name: Clippy
-      run: cargo clippy
+      run: cargo clippy -- -D warnings
