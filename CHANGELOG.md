@@ -31,13 +31,31 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+## [8.5.8] (March 13th, 2026)
+
 * Parallelize syncback middleware execution with rayon wave-based processing ([#13])
 * Add per-class property filter cache to eliminate repeated superclass-chain walks during syncback ([#13])
 * Add size hint pre-allocation for JSON5 serialization output ([#13])
 * Skip redundant `walkdir` traversal when prefetch already covers a directory ([#13])
+* Optimize git-metadata endpoint with `diff-index` and caching ([#13])
 * Fix `RunCode` MCP tool to report syntax errors and avoid double-reporting `error()` calls ([#13])
 * Fix `RunScriptInPlayMode` to JSON-encode table results instead of returning raw tables ([#13])
 
+<details>
+<summary>Full commit log</summary>
+
+- `a78490a9` Merge pull request #13 from UserGeneratedLLC/syncback_opt
+- `6130346d` fix: address bugbot findings - dir removal and cache hierarchy
+- `81ef8175` fix: skip git_metadata benchmark when test repo is unavailable
+- `1ed69abf` chore: update CHANGELOG with recent enhancements and fixes
+- `1e24a1cb` feat: add property filter caching and size hint for JSON5 serialization
+- `f95035d5` refactor: improve error handling and output formatting in RunCode and RunScriptInPlayMode
+- `0e318b6b` perf: optimize git-metadata endpoint with diff-index + caching
+- `d0c9d028` ci: update actions/checkout and actions/setup-node versions in workflows
+
+</details>
+
+[8.5.8]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.5.8
 [#13]: https://github.com/UserGeneratedLLC/rojo/pull/13
 
 ## [8.5.7] (March 12th, 2026)
