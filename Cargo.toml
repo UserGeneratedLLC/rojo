@@ -45,6 +45,10 @@ path = "src/lib.rs"
 name = "build"
 harness = false
 
+[[bench]]
+name = "git_metadata"
+harness = false
+
 [dependencies]
 memofs = { version = "0.3.1", path = "crates/memofs" }
 

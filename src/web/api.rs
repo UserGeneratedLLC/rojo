@@ -541,8 +541,22 @@ impl ApiService {
 
     async fn handle_api_git_metadata(&self) -> Response<Full<Bytes>> {
         let git_metadata = if let Some(repo_root) = self.serve_session.git_repo_root() {
+            let cache_handle = self.serve_session.git_metadata_cache().clone();
+            let repo_root_owned = repo_root.to_owned();
+            let tree_cursor = self.serve_session.message_queue().cursor();
+
+            // Fast path: check cache before doing any expensive git work.
+            {
+                let cache = cache_handle.lock().unwrap();
+                if let Some(ref entry) = *cache {
+                    if let Some(cached) = entry.get_if_fresh(&repo_root_owned, tree_cursor) {
+                        log::debug!("Git metadata: returning cached result");
+                        return msgpack_ok(Some(cached));
+                    }
+                }
+            }
+
             let tree_handle = self.serve_session.tree_handle();
-            let repo_root = repo_root.to_owned();
             let initial_head = self
                 .serve_session
                 .initial_head_commit()
@@ -556,7 +570,7 @@ impl ApiService {
             );
             let project_prefixes: Vec<String> = project_roots
                 .iter()
-                .filter_map(|abs| abs.strip_prefix(&repo_root).ok())
+                .filter_map(|abs| abs.strip_prefix(&repo_root_owned).ok())
                 .map(|r| r.to_string_lossy().replace('\\', "/"))
                 .collect();
 
@@ -566,12 +580,13 @@ impl ApiService {
                 project_prefixes
             );
 
+            let repo_root_for_cache = repo_root_owned.clone();
             match tokio::time::timeout(
                 std::time::Duration::from_secs(10),
                 tokio::task::spawn_blocking(move || {
                     crate::git::compute_git_metadata(
                         &tree_handle,
-                        &repo_root,
+                        &repo_root_owned,
                         initial_head.as_deref(),
                         &project_prefixes,
                     )
@@ -579,7 +594,15 @@ impl ApiService {
             )
             .await
             {
-                Ok(Ok(meta)) => Some(meta),
+                Ok(Ok(meta)) => {
+                    let mut cache = cache_handle.lock().unwrap();
+                    *cache = Some(crate::git::GitMetadataCache::new(
+                        &repo_root_for_cache,
+                        tree_cursor,
+                        meta.clone(),
+                    ));
+                    Some(meta)
+                }
                 Ok(Err(e)) => {
                     log::warn!("Git metadata task failed: {}", e);
                     None

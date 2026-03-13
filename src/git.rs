@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Instant, SystemTime},
 };
 
 use anyhow::Context;
@@ -72,48 +72,56 @@ impl ChangedFiles {
     }
 }
 
-fn git_changed_files_impl(
-    repo_root: &Path,
-    initial_head: Option<&str>,
-    project_prefixes: &[String],
-) -> Option<ChangedFiles> {
-    let mut tracked = HashSet::new();
-    let mut untracked = HashSet::new();
-
-    let mut status_cmd = Command::new("git");
-    status_cmd
-        .args(["status", "--porcelain", "--no-renames", "-uall"])
-        .current_dir(repo_root);
+fn append_pathspec_prefixes(cmd: &mut Command, project_prefixes: &[String]) {
     if !project_prefixes.is_empty() {
-        status_cmd.arg("--");
+        cmd.arg("--");
         for prefix in project_prefixes {
-            status_cmd.arg(prefix);
+            cmd.arg(prefix);
         }
     }
+}
 
-    let (status_output, diff_output) = if let Some(ih) = initial_head {
-        let mut diff_cmd = Command::new("git");
-        diff_cmd
-            .args(["diff", ih, "--name-only"])
-            .current_dir(repo_root);
-        if !project_prefixes.is_empty() {
-            diff_cmd.arg("--");
-            for prefix in project_prefixes {
-                diff_cmd.arg(prefix);
+fn collect_lines_into(output: &std::process::Output, set: &mut HashSet<PathBuf>) {
+    if output.status.success() {
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                set.insert(PathBuf::from(trimmed));
             }
         }
+    }
+}
 
-        std::thread::scope(|s| {
-            let diff_handle = s.spawn(move || diff_cmd.output().ok());
-            let status = status_cmd.output().ok();
-            let diff = diff_handle.join().ok().flatten();
-            (status, diff)
-        })
-    } else {
-        (status_cmd.output().ok(), None)
-    };
+fn has_head_commit(repo_root: &Path) -> bool {
+    Command::new("git")
+        .args(["--no-optional-locks", "rev-parse", "--verify", "HEAD"])
+        .current_dir(repo_root)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
 
-    let output = status_output?;
+/// Fallback for repos with no commits where diff-index cannot be used.
+fn git_changed_files_fallback(
+    repo_root: &Path,
+    project_prefixes: &[String],
+) -> Option<ChangedFiles> {
+    let mut cmd = Command::new("git");
+    cmd.args([
+        "--no-optional-locks",
+        "status",
+        "--porcelain",
+        "--no-renames",
+        "-uall",
+    ])
+    .current_dir(repo_root);
+    append_pathspec_prefixes(&mut cmd, project_prefixes);
+
+    let output = cmd.output().ok()?;
+    let mut tracked = HashSet::new();
+    let mut untracked = HashSet::new();
     if output.status.success() {
         for line in String::from_utf8_lossy(&output.stdout).lines() {
             if line.len() < 4 {
@@ -128,16 +136,60 @@ fn git_changed_files_impl(
             }
         }
     }
+    Some(ChangedFiles { tracked, untracked })
+}
 
-    if let Some(output) = diff_output {
-        if output.status.success() {
-            for line in String::from_utf8_lossy(&output.stdout).lines() {
-                let trimmed = line.trim();
-                if !trimmed.is_empty() {
-                    tracked.insert(PathBuf::from(trimmed));
-                }
-            }
-        }
+fn git_changed_files_impl(
+    repo_root: &Path,
+    initial_head: Option<&str>,
+    project_prefixes: &[String],
+) -> Option<ChangedFiles> {
+    if !has_head_commit(repo_root) {
+        return git_changed_files_fallback(repo_root, project_prefixes);
+    }
+
+    let mut tracked = HashSet::new();
+    let mut untracked = HashSet::new();
+
+    // Build the tracked-changes command.
+    // When initial_head is set, `git diff <initial_head>` is a superset of
+    // `git diff-index HEAD` (captures both committed-since-session AND
+    // uncommitted changes), so diff-index would be redundant.
+    let mut tracked_cmd = Command::new("git");
+    if let Some(ih) = initial_head {
+        tracked_cmd
+            .args(["--no-optional-locks", "diff", ih, "--name-only"])
+            .current_dir(repo_root);
+    } else {
+        tracked_cmd
+            .args(["--no-optional-locks", "diff-index", "--name-only", "HEAD"])
+            .current_dir(repo_root);
+    }
+    append_pathspec_prefixes(&mut tracked_cmd, project_prefixes);
+
+    let mut untracked_cmd = Command::new("git");
+    untracked_cmd
+        .args([
+            "--no-optional-locks",
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+        ])
+        .current_dir(repo_root);
+    append_pathspec_prefixes(&mut untracked_cmd, project_prefixes);
+
+    let (tracked_output, untracked_output) = std::thread::scope(|s| {
+        let ut_handle = s.spawn(move || untracked_cmd.output().ok());
+        let tr = tracked_cmd.output().ok();
+        let ut = ut_handle.join().ok().flatten();
+        (tr, ut)
+    });
+
+    if let Some(ref output) = tracked_output {
+        collect_lines_into(output, &mut tracked);
+    }
+    if let Some(ref output) = untracked_output {
+        collect_lines_into(output, &mut untracked);
     }
 
     Some(ChangedFiles { tracked, untracked })
@@ -490,6 +542,57 @@ struct ResolvedInstance {
     id: Ref,
     class_name: String,
     rel_path: PathBuf,
+}
+
+/// Cached git metadata with a staleness key derived from the git index
+/// mtime, HEAD SHA, and tree mutation cursor. Safe for advisory-only
+/// default selections in the two-way sync confirmation UI.
+pub struct GitMetadataCache {
+    index_mtime: Option<SystemTime>,
+    head_sha: Option<String>,
+    tree_cursor: u32,
+    metadata: GitMetadata,
+}
+
+impl GitMetadataCache {
+    /// Returns the cached metadata if the git index, HEAD, and tree
+    /// mutation cursor haven't changed.
+    ///
+    /// Empty changesets are never cached: an external file edit (not yet
+    /// picked up by the VFS) would turn an empty result stale, and the
+    /// only reliable detection is to re-run the git commands.
+    pub fn get_if_fresh(&self, repo_root: &Path, current_tree_cursor: u32) -> Option<GitMetadata> {
+        if self.metadata.changed_ids.is_empty() && self.metadata.new_file_ids.is_empty() {
+            return None;
+        }
+        if current_tree_cursor != self.tree_cursor {
+            return None;
+        }
+        let current_mtime = std::fs::metadata(repo_root.join(".git/index"))
+            .ok()
+            .and_then(|m| m.modified().ok());
+        if current_mtime != self.index_mtime {
+            return None;
+        }
+        let current_head = git_head_commit(repo_root);
+        if current_head != self.head_sha {
+            return None;
+        }
+        Some(self.metadata.clone())
+    }
+
+    pub fn new(repo_root: &Path, tree_cursor: u32, metadata: GitMetadata) -> Self {
+        let index_mtime = std::fs::metadata(repo_root.join(".git/index"))
+            .ok()
+            .and_then(|m| m.modified().ok());
+        let head_sha = git_head_commit(repo_root);
+        Self {
+            index_mtime,
+            head_sha,
+            tree_cursor,
+            metadata,
+        }
+    }
 }
 
 /// Computes git metadata for the two-way sync confirmation UI.
@@ -1226,6 +1329,240 @@ mod tests {
         assert!(!is_script_class("Part"));
         assert!(!is_script_class("Model"));
         assert!(!is_script_class("StringValue"));
+    }
+
+    // -----------------------------------------------------------------------
+    // Hash consistency: our SHA1 matches git hash-object
+    // -----------------------------------------------------------------------
+
+    // -----------------------------------------------------------------------
+    // has_head_commit
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn has_head_empty_repo() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        assert!(!has_head_commit(dir.path()));
+    }
+
+    #[test]
+    fn has_head_after_commit() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("f.luau"), "x").unwrap();
+        git_commit_all(dir.path(), "init");
+        assert!(has_head_commit(dir.path()));
+    }
+
+    #[test]
+    fn has_head_not_a_repo() {
+        let dir = tempdir().unwrap();
+        assert!(!has_head_commit(dir.path()));
+    }
+
+    // -----------------------------------------------------------------------
+    // Empty-repo fallback (no HEAD commit)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn changed_files_empty_repo_staged_file() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("staged.luau"), "content").unwrap();
+        git_stage(dir.path(), "staged.luau");
+
+        let changed = git_changed_files_impl(dir.path(), None, &[]).unwrap();
+        assert!(
+            changed.tracked.contains(&PathBuf::from("staged.luau")),
+            "staged file in empty repo should appear as tracked"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // diff-index path: mixed tracked + untracked
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn changed_files_diff_index_mixed() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("committed.luau"), "original").unwrap();
+        git_commit_all(dir.path(), "init");
+
+        fs::write(dir.path().join("committed.luau"), "modified").unwrap();
+        fs::write(dir.path().join("brand_new.luau"), "new").unwrap();
+
+        let changed = git_changed_files_impl(dir.path(), None, &[]).unwrap();
+        assert!(
+            changed.tracked.contains(&PathBuf::from("committed.luau")),
+            "modified tracked file should be in tracked set"
+        );
+        assert!(
+            !changed.tracked.contains(&PathBuf::from("brand_new.luau")),
+            "untracked file should NOT be in tracked set"
+        );
+        assert!(
+            changed.untracked.contains(&PathBuf::from("brand_new.luau")),
+            "untracked file should be in untracked set"
+        );
+        assert!(
+            !changed.untracked.contains(&PathBuf::from("committed.luau")),
+            "tracked file should NOT be in untracked set"
+        );
+    }
+
+    #[test]
+    fn changed_files_diff_index_staged_addition() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("base.luau"), "x").unwrap();
+        git_commit_all(dir.path(), "init");
+
+        fs::write(dir.path().join("added.luau"), "new").unwrap();
+        git_stage(dir.path(), "added.luau");
+
+        let changed = git_changed_files_impl(dir.path(), None, &[]).unwrap();
+        assert!(
+            changed.tracked.contains(&PathBuf::from("added.luau")),
+            "staged addition should appear in tracked set via diff-index"
+        );
+        assert!(
+            !changed.untracked.contains(&PathBuf::from("added.luau")),
+            "staged file should NOT appear in untracked"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // GitMetadataCache
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn cache_fresh_returns_data() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("f.luau"), "x").unwrap();
+        git_commit_all(dir.path(), "init");
+
+        let metadata = GitMetadata {
+            changed_ids: vec![Ref::new()],
+            script_committed_hashes: HashMap::new(),
+            new_file_ids: Vec::new(),
+        };
+        let cache = GitMetadataCache::new(dir.path(), 0, metadata);
+
+        let result = cache.get_if_fresh(dir.path(), 0);
+        assert!(
+            result.is_some(),
+            "cache should be fresh immediately after creation"
+        );
+    }
+
+    #[test]
+    fn cache_empty_changeset_never_cached() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("f.luau"), "x").unwrap();
+        git_commit_all(dir.path(), "init");
+
+        let metadata = GitMetadata {
+            changed_ids: Vec::new(),
+            script_committed_hashes: HashMap::new(),
+            new_file_ids: Vec::new(),
+        };
+        let cache = GitMetadataCache::new(dir.path(), 0, metadata);
+
+        let result = cache.get_if_fresh(dir.path(), 0);
+        assert!(
+            result.is_none(),
+            "empty changesets should never be served from cache"
+        );
+    }
+
+    #[test]
+    fn cache_stale_after_commit() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("f.luau"), "v1").unwrap();
+        git_commit_all(dir.path(), "init");
+
+        let metadata = GitMetadata {
+            changed_ids: Vec::new(),
+            script_committed_hashes: HashMap::new(),
+            new_file_ids: Vec::new(),
+        };
+        let cache = GitMetadataCache::new(dir.path(), 0, metadata);
+
+        fs::write(dir.path().join("f.luau"), "v2").unwrap();
+        git_commit_all(dir.path(), "second");
+
+        let result = cache.get_if_fresh(dir.path(), 0);
+        assert!(result.is_none(), "cache should be stale after a commit");
+    }
+
+    #[test]
+    fn cache_stale_after_stage() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("f.luau"), "v1").unwrap();
+        git_commit_all(dir.path(), "init");
+
+        let metadata = GitMetadata {
+            changed_ids: Vec::new(),
+            script_committed_hashes: HashMap::new(),
+            new_file_ids: Vec::new(),
+        };
+        let cache = GitMetadataCache::new(dir.path(), 0, metadata);
+
+        fs::write(dir.path().join("f.luau"), "v2").unwrap();
+        git_stage(dir.path(), "f.luau");
+
+        let result = cache.get_if_fresh(dir.path(), 0);
+        assert!(result.is_none(), "cache should be stale after git add");
+    }
+
+    #[test]
+    fn cache_still_fresh_same_cursor_no_git_op() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("f.luau"), "v1").unwrap();
+        git_commit_all(dir.path(), "init");
+
+        let metadata = GitMetadata {
+            changed_ids: vec![Ref::new()],
+            script_committed_hashes: HashMap::new(),
+            new_file_ids: Vec::new(),
+        };
+        let cache = GitMetadataCache::new(dir.path(), 5, metadata);
+
+        fs::write(dir.path().join("f.luau"), "v2").unwrap();
+
+        let result = cache.get_if_fresh(dir.path(), 5);
+        assert!(
+            result.is_some(),
+            "cache should remain fresh when tree cursor unchanged and no git operation"
+        );
+    }
+
+    #[test]
+    fn cache_stale_when_tree_cursor_advances() {
+        let dir = tempdir().unwrap();
+        git_init(dir.path());
+        fs::write(dir.path().join("f.luau"), "v1").unwrap();
+        git_commit_all(dir.path(), "init");
+
+        let metadata = GitMetadata {
+            changed_ids: Vec::new(),
+            script_committed_hashes: HashMap::new(),
+            new_file_ids: Vec::new(),
+        };
+        let cache = GitMetadataCache::new(dir.path(), 0, metadata);
+
+        let result = cache.get_if_fresh(dir.path(), 1);
+        assert!(
+            result.is_none(),
+            "cache should be stale when tree cursor advances (VFS detected changes)"
+        );
     }
 
     // -----------------------------------------------------------------------

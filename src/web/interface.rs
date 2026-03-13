@@ -210,7 +210,7 @@ fn property_filter(value: Option<&Variant>) -> bool {
 }
 
 /// Git-related metadata sent to the plugin for smart sync direction defaults.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GitMetadata {
     pub changed_ids: Vec<Ref>,

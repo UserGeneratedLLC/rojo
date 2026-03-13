@@ -128,6 +128,11 @@ pub struct ServeSession {
     /// still appear in `changedIds` for auto-select defaults.
     initial_head_commit: Option<String>,
 
+    /// Cached git metadata for the `/api/git-metadata` endpoint.
+    /// Keyed on `.git/index` mtime + HEAD SHA to avoid recomputation
+    /// when the git state hasn't changed.
+    git_metadata_cache: Arc<Mutex<Option<crate::git::GitMetadataCache>>>,
+
     /// Filesystem paths discovered during prefetch walk (non-root entries).
     /// Available for syncback to reuse for orphan detection, avoiding a
     /// redundant walkdir.
@@ -509,6 +514,7 @@ impl ServeSession {
             ref_path_index: Some(ref_path_index),
             git_repo_root,
             initial_head_commit,
+            git_metadata_cache: Arc::new(Mutex::new(None)),
             prefetch_walked_paths: None,
         })
     }
@@ -537,6 +543,7 @@ impl ServeSession {
             ref_path_index: None,
             git_repo_root: None,
             initial_head_commit: None,
+            git_metadata_cache: Arc::new(Mutex::new(None)),
             prefetch_walked_paths: walked_paths,
         })
     }
@@ -632,6 +639,10 @@ impl ServeSession {
 
     pub fn initial_head_commit(&self) -> Option<&str> {
         self.initial_head_commit.as_deref()
+    }
+
+    pub fn git_metadata_cache(&self) -> &Arc<Mutex<Option<crate::git::GitMetadataCache>>> {
+        &self.git_metadata_cache
     }
 
     pub fn root_project(&self) -> &Project {
