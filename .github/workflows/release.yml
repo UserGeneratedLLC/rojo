@@ -135,6 +135,10 @@ jobs:
     env:
       BIN: atlas
     steps:
+      - name: Disable Windows Defender
+        if: runner.os == 'Windows'
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+
       - uses: actions/checkout@v4
         with:
           submodules: true
@@ -144,26 +148,15 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Restore Rust Cache
-        uses: actions/cache/restore@v4
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          shared-key: release-${{ matrix.target }}
 
       - name: Build Release
-        run: cargo build --release --locked --verbose --target ${{ matrix.target }}
-
-      - name: Save Rust Cache
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        env:
+          CARGO_TERM_VERBOSE: ${{ runner.debug && 'true' || 'false' }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Generate Artifact Name
         shell: bash

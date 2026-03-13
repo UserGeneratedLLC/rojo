@@ -20,6 +20,10 @@ jobs:
         os: [ubuntu-22.04, windows-latest, macos-latest, windows-11-arm, ubuntu-22.04-arm]
 
     steps:
+    - name: Disable Windows Defender
+      if: runner.os == 'Windows'
+      run: Set-MpPreference -DisableRealtimeMonitoring $true
+
     - uses: actions/checkout@v4
       with:
         submodules: true
@@ -27,29 +31,13 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
 
-    - name: Restore Rust Cache
-      uses: actions/cache/restore@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
 
-    - name: Build
-      run: cargo build --locked --verbose
-
-    - name: Test
-      run: cargo test --locked --verbose
-
-    - name: Save Rust Cache
-      uses: actions/cache/save@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Build and Test
+      env:
+        CARGO_TERM_VERBOSE: ${{ runner.debug && 'true' || 'false' }}
+      run: cargo test --locked --all-targets
 
   build-vscode:
     name: Build VS Code Extension
@@ -85,26 +73,13 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@1.88.0
 
-    - name: Restore Rust Cache
-      uses: actions/cache/restore@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
 
     - name: Build
-      run: cargo build --locked --verbose
-
-    - name: Save Rust Cache
-      uses: actions/cache/save@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      env:
+        CARGO_TERM_VERBOSE: ${{ runner.debug && 'true' || 'false' }}
+      run: cargo build --locked
 
   lint:
     name: Rustfmt, Clippy, Stylua, & Selene
@@ -120,14 +95,8 @@ jobs:
       with:
         components: rustfmt, clippy
 
-    - name: Restore Rust Cache
-      uses: actions/cache/restore@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
 
     - name: Setup Rokit
       uses: CompeyDev/setup-rokit@v0.1.2
@@ -145,12 +114,3 @@ jobs:
 
     - name: Clippy
       run: cargo clippy
-
-    - name: Save Rust Cache
-      uses: actions/cache/save@v4
-      with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
