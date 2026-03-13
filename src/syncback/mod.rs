@@ -606,6 +606,7 @@ pub fn syncback_loop_with_stats(
                     snapshot,
                     middleware,
                 } = item;
+                let mut dir_to_remove: Option<PathBuf> = None;
                 let result = match middleware.syncback(&snapshot) {
                     Ok(syncback) => Ok(syncback),
                     Err(err) if middleware == Middleware::Dir => {
@@ -627,22 +628,30 @@ pub fn syncback_loop_with_stats(
                         let inst_path = snapshot.get_new_inst_path(snapshot.new);
                         let new_snapshot = snapshot.with_new_path(path, snapshot.new, snapshot.old);
                         stats.record_rbxm_fallback(&inst_path, &err.to_string());
-                        new_middleware
+                        let new_syncback_result = new_middleware
                             .syncback(&new_snapshot)
-                            .with_context(|| format!("Failed to syncback {inst_path}"))
+                            .with_context(|| format!("Failed to syncback {inst_path}"));
+                        if new_syncback_result.is_ok() && snapshot.old_inst().is_some() {
+                            dir_to_remove = Some(snapshot.path.clone());
+                        }
+                        new_syncback_result
                     }
                     Err(err) => {
                         let inst_path = snapshot.get_new_inst_path(snapshot.new);
                         Err(err).with_context(|| format!("Failed to syncback {inst_path}"))
                     }
                 };
-                (snapshot, result)
+                (snapshot, result, dir_to_remove)
             })
             .collect();
 
         // Phase 3: Sequential merge of results.
-        for (snapshot, result) in results {
+        for (snapshot, result, dir_to_remove) in results {
             let syncback = result?;
+
+            if let Some(ref dir_path) = dir_to_remove {
+                fs_snapshot.remove_dir(dir_path);
+            }
 
             if !syncback.removed_children.is_empty() {
                 'remove: for inst in &syncback.removed_children {

@@ -45,13 +45,12 @@ impl PropertyFilterCache {
         let mut skip = UstrSet::new();
 
         if let Some(class_data) = class_data {
-            // Walk all properties known to the reflection DB for this class
-            // (including inherited) and mark those that fail static checks.
+            let mut seen = UstrSet::new();
             let mut current = Some(class_data);
             while let Some(data) = current {
                 for (prop_name, prop_data) in &data.properties {
                     let ustr_name = Ustr::from(prop_name);
-                    if skip.contains(&ustr_name) {
+                    if !seen.insert(ustr_name) {
                         continue;
                     }
                     let should_skip_serialize = match &prop_data.kind {
