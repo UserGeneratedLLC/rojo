@@ -26,7 +26,7 @@ jobs:
       if: runner.os == 'Windows'
       run: Set-MpPreference -DisableRealtimeMonitoring $true
 
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Init rbx-dom submodule
       env:
@@ -49,15 +49,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Init vscode-rojo submodule
       run: git submodule update --init --depth 1 vscode-rojo
 
     - name: Setup Node.js
-      uses: actions/setup-node@v4
+      uses: actions/setup-node@v5
       with:
-        node-version: 20
+        node-version: 22
 
     - name: Install Dependencies
       working-directory: vscode-rojo
@@ -74,7 +74,7 @@ jobs:
       CARGO_INCREMENTAL: "0"
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Init rbx-dom submodule
       run: git submodule update --init --depth 1 rbx-dom
@@ -97,7 +97,7 @@ jobs:
       CARGO_INCREMENTAL: "0"
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v5
 
     - name: Init rbx-dom submodule
       run: git submodule update --init --depth 1 rbx-dom
