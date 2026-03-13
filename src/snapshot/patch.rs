@@ -1,6 +1,6 @@
 //! Defines the data structures used for describing instance patches.
 
-use std::collections::HashSet;
+use std::{collections::HashSet, path::PathBuf};
 
 use rbx_dom_weak::{
     types::{Ref, Variant},
@@ -81,6 +81,11 @@ pub struct AppliedPatchSet {
     pub removed: Vec<Ref>,
     pub added: Vec<Ref>,
     pub updated: Vec<AppliedPatchUpdate>,
+
+    /// Collected during patch application: `(resolved_absolute_ref_path, meta_or_model_file_path)`.
+    /// Used to build `RefPathIndex` without re-walking the directory tree.
+    #[serde(skip)]
+    pub ref_path_index_entries: Vec<(String, PathBuf)>,
 }
 
 impl AppliedPatchSet {
@@ -89,6 +94,7 @@ impl AppliedPatchSet {
             removed: Vec::new(),
             added: Vec::new(),
             updated: Vec::new(),
+            ref_path_index_entries: Vec::new(),
         }
     }
 

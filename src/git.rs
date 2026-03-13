@@ -306,6 +306,10 @@ impl GitIndexCache {
         self.entries.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
     /// Returns `true` if the new content's blob SHA1 matches the git index
     /// entry for this path, meaning the file on disk almost certainly
     /// already has this content.

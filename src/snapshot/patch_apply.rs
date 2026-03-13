@@ -3,6 +3,8 @@
 use std::{
     collections::{HashMap, HashSet},
     mem::take,
+    path::PathBuf,
+    time::Instant,
 };
 
 use rbx_dom_weak::{
@@ -24,7 +26,12 @@ use crate::{
 /// tree in sync with Rojo's.
 #[profiling::function]
 pub fn apply_patch_set(tree: &mut RojoTree, patch_set: PatchSet) -> AppliedPatchSet {
+    let t0 = Instant::now();
     let mut context = PatchApplyContext::default();
+
+    let removal_count = patch_set.removed_instances.len();
+    let addition_count = patch_set.added_instances.len();
+    let update_count = patch_set.updated_instances.len();
 
     {
         profiling::scope!("removals");
@@ -32,6 +39,7 @@ pub fn apply_patch_set(tree: &mut RojoTree, patch_set: PatchSet) -> AppliedPatch
             apply_remove_instance(&mut context, tree, removed_id);
         }
     }
+    let t1 = Instant::now();
 
     {
         profiling::scope!("additions");
@@ -39,15 +47,30 @@ pub fn apply_patch_set(tree: &mut RojoTree, patch_set: PatchSet) -> AppliedPatch
             apply_add_child(&mut context, tree, add_patch.parent_id, add_patch.instance);
         }
     }
+    let t2 = Instant::now();
 
     {
         profiling::scope!("updates");
-        // Updates need to be applied after additions, which reduces the complexity
-        // of updates significantly.
         for update_patch in patch_set.updated_instances {
             apply_update_child(&mut context, tree, update_patch);
         }
     }
+    let t3 = Instant::now();
+
+    log::debug!(
+        "[PERF] patch_apply phases: removals={} in {:.1?}, additions={} in {:.1?}, updates={} in {:.1?}",
+        removal_count, t1 - t0,
+        addition_count, t2 - t1,
+        update_count, t3 - t2,
+    );
+    log::debug!(
+        "[PERF] patch_apply context: snapshot_id_map={}, has_refs={}, attr_refs={}, path_refs={}, cleanup={}",
+        context.snapshot_id_to_instance_id.len(),
+        context.has_refs_to_rewrite.len(),
+        context.attribute_refs_to_rewrite.keys().count(),
+        context.path_refs_to_rewrite.keys().count(),
+        context.instances_needing_attr_cleanup.len(),
+    );
 
     finalize_patch_application(context, tree)
 }
@@ -92,6 +115,10 @@ struct PatchApplyContext {
     /// format and should not persist in the live game.
     instances_needing_attr_cleanup: HashSet<Ref>,
 
+    /// Collected `(resolved_absolute_ref_path, meta_or_model_file_path)` entries
+    /// for building `RefPathIndex` without a redundant directory walk.
+    ref_path_index_entries: Vec<(String, PathBuf)>,
+
     /// The current applied patch result, describing changes made to the tree.
     applied_patch_set: AppliedPatchSet,
 }
@@ -107,10 +134,13 @@ struct PatchApplyContext {
 /// where we build up a map of snapshot IDs to instance IDs as they're created,
 /// then apply properties all at once at the end.
 #[profiling::function]
-fn finalize_patch_application(context: PatchApplyContext, tree: &mut RojoTree) -> AppliedPatchSet {
+fn finalize_patch_application(
+    mut context: PatchApplyContext,
+    tree: &mut RojoTree,
+) -> AppliedPatchSet {
+    let finalize_start = Instant::now();
+
     for id in context.has_refs_to_rewrite {
-        // This should always succeed since instances marked as added in our
-        // patch should be added without fail.
         let mut instance = tree
             .get_instance_mut(id)
             .expect("Invalid instance ID in deferred property map");
@@ -123,11 +153,13 @@ fn finalize_patch_application(context: PatchApplyContext, tree: &mut RojoTree) -
             }
         }
     }
+    let t_refs_rewrite = Instant::now();
 
     // IMPORTANT: Rojo_Target_* (legacy) must be resolved BEFORE Rojo_Ref_*
     // (path-based) so that path-based results overwrite legacy results when
     // both exist for the same property. Do not reorder these two blocks.
     let mut real_rewrites = Vec::new();
+    let attr_ref_count = context.attribute_refs_to_rewrite.keys().count();
     for (id, map) in context.attribute_refs_to_rewrite {
         for (prop_name, prop_value) in map {
             if let Some(target) = tree.get_specified_id(&RojoRef::new(prop_value)) {
@@ -139,11 +171,28 @@ fn finalize_patch_application(context: PatchApplyContext, tree: &mut RojoTree) -
             .expect("Invalid instance ID in deferred attribute ref map");
         instance.properties_mut().extend(real_rewrites.drain(..));
     }
+    let t_attr_refs = Instant::now();
 
     // Handle path-based references (Rojo_Ref_)
     let mut path_rewrites = Vec::new();
+    let mut path_ref_total = 0usize;
+    let mut path_ref_resolved = 0usize;
+    let mut path_ref_failed = 0usize;
     for (id, map) in context.path_refs_to_rewrite {
+        let source_abs = crate::ref_target_path_from_tree(tree, id);
+        let meta_file = find_meta_or_model_path(tree, id);
+
         for (prop_name, path) in map {
+            path_ref_total += 1;
+
+            if let Some(meta_path) = &meta_file {
+                let resolved = crate::resolve_ref_path_to_absolute(&path, &source_abs)
+                    .unwrap_or_else(|| path.clone());
+                context
+                    .ref_path_index_entries
+                    .push((resolved, meta_path.clone()));
+            }
+
             if let Some(target) = tree.resolve_ref_path(&path, id) {
                 log::trace!(
                     "Resolved path reference {} -> {} (path: {})",
@@ -151,8 +200,10 @@ fn finalize_patch_application(context: PatchApplyContext, tree: &mut RojoTree) -
                     target,
                     path
                 );
+                path_ref_resolved += 1;
                 path_rewrites.push((prop_name, Variant::Ref(target)));
             } else {
+                path_ref_failed += 1;
                 log::debug!(
                     "Could not resolve path reference {} at path '{}' - instance not found in tree",
                     prop_name,
@@ -167,9 +218,11 @@ fn finalize_patch_application(context: PatchApplyContext, tree: &mut RojoTree) -
             instance.properties_mut().extend(path_rewrites.drain(..));
         }
     }
+    let t_path_refs = Instant::now();
 
     // Clean up Rojo ref attributes - they're only used for transport in the file
     // format and should not persist in the live game
+    let cleanup_count = context.instances_needing_attr_cleanup.len();
     for id in context.instances_needing_attr_cleanup {
         let mut instance = match tree.get_instance_mut(id) {
             Some(inst) => inst,
@@ -181,7 +234,6 @@ fn finalize_patch_application(context: PatchApplyContext, tree: &mut RojoTree) -
             _ => continue,
         };
 
-        // Remove all Rojo ref-related attributes
         let keys_to_remove: Vec<String> = attributes
             .iter()
             .filter_map(|(name, _)| {
@@ -200,8 +252,25 @@ fn finalize_patch_application(context: PatchApplyContext, tree: &mut RojoTree) -
             attributes.remove(key);
         }
     }
+    let t_cleanup = Instant::now();
 
-    context.applied_patch_set
+    log::debug!(
+        "[PERF] finalize_patch_application: refs_rewrite={:.1?}, attr_refs({})={:.1?}, path_refs({}, ok={}, fail={})={:.1?}, cleanup({})={:.1?}, total={:.1?}",
+        t_refs_rewrite - finalize_start,
+        attr_ref_count,
+        t_attr_refs - t_refs_rewrite,
+        path_ref_total,
+        path_ref_resolved,
+        path_ref_failed,
+        t_path_refs - t_attr_refs,
+        cleanup_count,
+        t_cleanup - t_path_refs,
+        t_cleanup - finalize_start,
+    );
+
+    let mut result = context.applied_patch_set;
+    result.ref_path_index_entries = context.ref_path_index_entries;
+    result
 }
 
 fn apply_remove_instance(context: &mut PatchApplyContext, tree: &mut RojoTree, removed_id: Ref) {
@@ -322,6 +391,20 @@ fn apply_update_child(context: &mut PatchApplyContext, tree: &mut RojoTree, patc
     defer_ref_properties(tree, patch.id, context);
 
     context.applied_patch_set.updated.push(applied_patch)
+}
+
+fn find_meta_or_model_path(tree: &RojoTree, id: Ref) -> Option<PathBuf> {
+    let instance = tree.get_instance(id)?;
+    instance
+        .metadata()
+        .relevant_paths
+        .iter()
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(crate::is_meta_or_model_name)
+        })
+        .cloned()
 }
 
 /// Calculates manually-specified Ref properties and marks them in the provided

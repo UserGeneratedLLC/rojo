@@ -79,7 +79,17 @@ impl SourcemapCommand {
         let vfs = Vfs::new_default();
         vfs.set_watch_enabled(self.watch);
 
-        let session = ServeSession::new(vfs, project_path, None)?;
+        let session_start = std::time::Instant::now();
+        let session = if self.watch {
+            ServeSession::new(vfs, project_path, None)?
+        } else {
+            ServeSession::new_oneshot(vfs, project_path)?
+        };
+        log::debug!(
+            "[PERF] ServeSession::new() total: {:.1?}",
+            session_start.elapsed()
+        );
+
         let mut cursor = session.message_queue().cursor();
 
         let filter = if self.include_non_scripts {
@@ -88,13 +98,12 @@ impl SourcemapCommand {
             filter_non_scripts
         };
 
-        // Pre-build a rayon threadpool with a low number of threads to avoid
-        // dynamic creation overhead on systems with a high number of cpus.
         rayon::ThreadPoolBuilder::new()
             .num_threads(num_cpus::get().min(6))
             .build_global()
             .ok();
 
+        let sm_start = std::time::Instant::now();
         write_sourcemap(
             &session,
             self.output.as_deref(),
@@ -102,6 +111,7 @@ impl SourcemapCommand {
             self.absolute,
             false,
         )?;
+        log::debug!("[PERF] write_sourcemap: {:.1?}", sm_start.elapsed());
 
         if self.watch {
             if !std::io::stdin().is_terminal() {
@@ -261,6 +271,7 @@ pub(crate) fn write_sourcemap(
     use_absolute_paths: bool,
     quiet: bool,
 ) -> anyhow::Result<()> {
+    let t0 = std::time::Instant::now();
     let tree = session.tree();
 
     let canonical_project_dir = session.root_dir().to_path_buf();
@@ -272,22 +283,32 @@ pub(crate) fn write_sourcemap(
         filter,
         use_absolute_paths,
     );
+    let t1 = std::time::Instant::now();
 
     if let Some(output_path) = output {
-        // Use standard JSON (not JSON5) for sourcemaps - required by external tools like LSPs
         let json_output = serde_json::to_string(&root_node)?;
+        let t2 = std::time::Instant::now();
 
-        // Use atomic write (temp file + rename) to prevent file watchers from
-        // reading partial files. Rename is atomic on all major filesystems when
-        // source and destination are on the same filesystem.
         write_atomic(output_path, json_output.as_bytes())?;
+        let t3 = std::time::Instant::now();
+
+        log::debug!(
+            "[PERF] write_sourcemap: tree_walk={:.1?}, json_serialize={:.1?} ({} bytes), write={:.1?}",
+            t1 - t0,
+            t2 - t1,
+            json_output.len(),
+            t3 - t2,
+        );
 
         if !quiet {
             println!("Created sourcemap at {}", output_path.display());
         }
     } else {
-        // Use standard JSON (not JSON5) for sourcemaps - required by external tools like LSPs
         let output = serde_json::to_string(&root_node)?;
+        log::debug!(
+            "[PERF] write_sourcemap: tree_walk={:.1?}, json_serialize=inline",
+            t1 - t0
+        );
         println!("{}", output);
     }
 

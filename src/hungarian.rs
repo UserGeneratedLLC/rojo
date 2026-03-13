@@ -94,9 +94,9 @@ pub fn min_cost_assignment(
     }
 
     let mut result = Vec::with_capacity(rows.min(cols));
-    for j in 1..=n {
-        if p[j] != 0 && p[j] <= rows && j <= cols {
-            result.push((p[j] - 1, j - 1));
+    for (j, &assigned_row) in p.iter().enumerate().skip(1) {
+        if assigned_row != 0 && assigned_row <= rows && j <= cols {
+            result.push((assigned_row - 1, j - 1));
         }
     }
     result

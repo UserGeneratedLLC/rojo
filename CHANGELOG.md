@@ -31,6 +31,10 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+* Optimize serve/sourcemap startup performance: replace kqueue with FSEvents on macOS, lazy watch setup, build RefPathIndex from patch entries instead of directory walk
+* Use platform-specific file watcher: raw notify + custom debounce on macOS, debouncer-full on Linux/Windows
+* Use oneshot session for non-watch sourcemap generation
+
 ## [8.5.6] (March 8th, 2026)
 
 * Add asynchronous log file compression with lowered thread priority to avoid impacting main workloads

@@ -20,6 +20,8 @@ jobs:
     needs: ["create-release"]
     name: Build Roblox Studio Plugin
     runs-on: ubuntu-latest
+    env:
+      CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -27,6 +29,9 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
 
       - name: Install Rokit
         uses: CompeyDev/setup-rokit@v0.1.2
@@ -62,8 +67,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: true
+
+      - name: Init vscode-rojo submodule
+        run: git submodule update --init --depth 1 vscode-rojo
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -134,36 +140,33 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       BIN: atlas
+      CARGO_INCREMENTAL: "0"
     steps:
+      - name: Disable Windows Defender
+        if: runner.os == 'Windows'
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+
       - uses: actions/checkout@v4
-        with:
-          submodules: true
+
+      - name: Init rbx-dom submodule
+        env:
+          GIT_CONFIG_NOSYSTEM: "1"
+        run: git submodule update --init --depth 1 rbx-dom
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      - name: Restore Rust Cache
-        uses: actions/cache/restore@v4
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          shared-key: release-${{ matrix.target }}
 
       - name: Build Release
-        run: cargo build --release --locked --verbose --target ${{ matrix.target }}
-
-      - name: Save Rust Cache
-        uses: actions/cache/save@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target
-          key: ${{ matrix.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        env:
+          CARGO_TERM_VERBOSE: ${{ runner.debug && 'true' || 'false' }}
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Generate Artifact Name
         shell: bash
