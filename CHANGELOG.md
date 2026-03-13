@@ -31,7 +31,9 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
-* Add .gitignore for logs and refactor ServeSession to include path_roots in init_tree return
+* Optimize serve/sourcemap startup performance: replace kqueue with FSEvents on macOS, lazy watch setup, build RefPathIndex from patch entries instead of directory walk
+* Use platform-specific file watcher: raw notify + custom debounce on macOS, debouncer-full on Linux/Windows
+* Use oneshot session for non-watch sourcemap generation
 
 ## [8.5.6] (March 8th, 2026)
 

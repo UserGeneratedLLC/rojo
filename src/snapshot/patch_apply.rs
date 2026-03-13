@@ -175,7 +175,6 @@ fn finalize_patch_application(
 
     // Handle path-based references (Rojo_Ref_)
     let mut path_rewrites = Vec::new();
-    let _path_ref_count = context.path_refs_to_rewrite.keys().count();
     let mut path_ref_total = 0usize;
     let mut path_ref_resolved = 0usize;
     let mut path_ref_failed = 0usize;

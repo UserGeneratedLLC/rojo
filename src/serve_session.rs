@@ -337,7 +337,6 @@ impl ServeSession {
             Project,
             RojoTree,
             Option<HashSet<PathBuf>>,
-            Vec<PathBuf>,
             Vec<(String, std::path::PathBuf)>,
         ),
         ServeSessionError,
@@ -414,13 +413,6 @@ impl ServeSession {
         let mut instance_context = InstanceContext::new();
         instance_context.sync_scripts_only = sync_scripts_only;
 
-        let mut path_roots = Vec::new();
-        collect_path_roots(
-            &root_project.tree,
-            root_project.folder_location(),
-            &mut path_roots,
-        );
-
         let snap_start = Instant::now();
         log::trace!("Generating snapshot of instances from VFS");
         let snapshot = snapshot_from_vfs(&instance_context, vfs, start_path)?;
@@ -437,13 +429,7 @@ impl ServeSession {
         let ref_path_entries = applied.ref_path_index_entries;
         log::debug!("Patch computed + applied in {:.1?}", patch_start.elapsed());
 
-        Ok((
-            root_project,
-            tree,
-            walked_paths,
-            path_roots,
-            ref_path_entries,
-        ))
+        Ok((root_project, tree, walked_paths, ref_path_entries))
     }
 
     /// Start a new serve session from the given in-memory filesystem and start
@@ -461,7 +447,7 @@ impl ServeSession {
         let start_time = Instant::now();
 
         let t_init_start = Instant::now();
-        let (root_project, tree, _walked_paths, _path_roots, ref_path_entries) =
+        let (root_project, tree, _walked_paths, ref_path_entries) =
             Self::init_tree(&vfs, start_path)?;
         let t_init_tree = Instant::now();
 
@@ -536,8 +522,7 @@ impl ServeSession {
         let start_path = start_path.as_ref();
         let start_time = Instant::now();
 
-        let (root_project, tree, walked_paths, _path_roots, _ref_entries) =
-            Self::init_tree(&vfs, start_path)?;
+        let (root_project, tree, walked_paths, _ref_entries) = Self::init_tree(&vfs, start_path)?;
 
         Ok(Self {
             change_processor: None,
