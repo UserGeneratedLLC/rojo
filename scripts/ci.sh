@@ -64,7 +64,7 @@ record "Selene" $selene_exit
 step 6 "Rust Linting (Clippy) - Auto-fix"
 cargo clippy -j $BUILD_THREADS --fix --allow-dirty --allow-staged >/dev/null 2>&1
 echo "Verifying..."
-cargo clippy -j $BUILD_THREADS --all-targets --all-features 2>&1
+cargo clippy -j $BUILD_THREADS --all-targets --all-features -- -D warnings 2>&1
 clippy_exit=$?
 record "Clippy" $clippy_exit
 
