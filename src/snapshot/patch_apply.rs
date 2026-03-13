@@ -393,13 +393,6 @@ fn apply_update_child(context: &mut PatchApplyContext, tree: &mut RojoTree, patc
     context.applied_patch_set.updated.push(applied_patch)
 }
 
-fn is_meta_or_model(name: &str) -> bool {
-    name.ends_with(".meta.json5")
-        || name.ends_with(".model.json5")
-        || name.ends_with(".meta.json")
-        || name.ends_with(".model.json")
-}
-
 fn find_meta_or_model_path(tree: &RojoTree, id: Ref) -> Option<PathBuf> {
     let instance = tree.get_instance(id)?;
     instance
@@ -409,7 +402,7 @@ fn find_meta_or_model_path(tree: &RojoTree, id: Ref) -> Option<PathBuf> {
         .find(|p| {
             p.file_name()
                 .and_then(|n| n.to_str())
-                .is_some_and(is_meta_or_model)
+                .is_some_and(crate::is_meta_or_model_name)
         })
         .cloned()
 }

@@ -12,6 +12,14 @@ use rbx_dom_weak::{
 };
 use serde::{Deserialize, Serialize};
 
+/// Returns `true` if the filename is a meta or model JSON file.
+pub(crate) fn is_meta_or_model_name(name: &str) -> bool {
+    name.ends_with(".meta.json5")
+        || name.ends_with(".model.json5")
+        || name.ends_with(".meta.json")
+        || name.ends_with(".model.json")
+}
+
 /// Legacy: ID attribute on target instances (kept for backwards compatibility)
 pub const REF_ID_ATTRIBUTE_NAME: &str = "Rojo_Id";
 /// Legacy: Pointer attribute prefix using IDs (kept for backwards compatibility)
@@ -389,19 +397,15 @@ impl RefPathIndex {
         use rayon::prelude::*;
         use walkdir::WalkDir;
 
-        fn is_meta_or_model(name: &str) -> bool {
-            name.ends_with(".meta.json5")
-                || name.ends_with(".model.json5")
-                || name.ends_with(".meta.json")
-                || name.ends_with(".model.json")
-        }
-
         let meta_paths: Vec<std::path::PathBuf> = WalkDir::new(root)
             .follow_links(true)
             .into_iter()
             .filter_map(|e: Result<walkdir::DirEntry, _>| e.ok())
             .filter(|e: &walkdir::DirEntry| {
-                e.file_type().is_file() && e.file_name().to_str().is_some_and(is_meta_or_model)
+                e.file_type().is_file()
+                    && e.file_name()
+                        .to_str()
+                        .is_some_and(is_meta_or_model_name)
             })
             .map(|e: walkdir::DirEntry| e.into_path())
             .collect();
