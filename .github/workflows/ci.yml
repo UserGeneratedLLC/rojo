@@ -29,6 +29,8 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Init rbx-dom submodule
+      env:
+        GIT_CONFIG_NOSYSTEM: "1"
       run: git submodule update --init --depth 1 rbx-dom
 
     - name: Install Rust
