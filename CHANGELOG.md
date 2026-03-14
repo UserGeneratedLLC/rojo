@@ -31,6 +31,17 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+## [8.5.10] (March 13th, 2026)
+
+* Fix release CI failing to upload plugin to Roblox due to missing `opencloud-execute` submodule init
+
+<details>
+<summary>Full commit log</summary>
+
+- `76a1d172` 8.5.9
+
+</details>
+
 ## [8.5.9] (March 13th, 2026)
 
 * Enhance plugin build process to support prebuilt plugin artifacts via `PREBUILT_PLUGIN` environment variable
@@ -68,6 +79,7 @@ Making a new release? Simply add the new header with the version and date undern
 
 </details>
 
+[8.5.10]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.5.10
 [8.5.9]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.5.9
 [8.5.8]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.5.8
 [#13]: https://github.com/UserGeneratedLLC/rojo/pull/13
