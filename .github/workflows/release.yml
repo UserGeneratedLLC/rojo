@@ -50,7 +50,7 @@ jobs:
           gh release upload ${{ github.ref_name }} Atlas.rbxm
 
       - name: Upload Plugin to Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: Atlas.rbxm
           path: Atlas.rbxm
@@ -95,7 +95,7 @@ jobs:
           gh release upload ${{ github.ref_name }} atlas.vsix
 
       - name: Upload Extension to Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: atlas.vsix
           path: atlas.vsix
@@ -155,7 +155,7 @@ jobs:
         run: git submodule update --init --depth 1 rbx-dom
 
       - name: Download Pre-built Plugin
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: Atlas.rbxm
 
@@ -202,7 +202,7 @@ jobs:
           gh release upload ${{ github.ref_name }} ../$ARTIFACT_NAME
 
       - name: Upload Archive to Artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           path: ${{ env.ARTIFACT_NAME }}
           name: ${{ env.ARTIFACT_NAME }}
