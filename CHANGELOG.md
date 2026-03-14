@@ -31,6 +31,19 @@ Making a new release? Simply add the new header with the version and date undern
 
 ## Unreleased
 
+## [8.5.9] (March 13th, 2026)
+
+* Enhance plugin build process to support prebuilt plugin artifacts via `PREBUILT_PLUGIN` environment variable
+* Refactor plugin installation to differentiate between prebuilt and bincode formats
+* Update CI workflow to initialize plugin submodules and download prebuilt plugin artifact
+
+<details>
+<summary>Full commit log</summary>
+
+- `a27a908d` refactor: enhance plugin build process and add prebuilt plugin support
+
+</details>
+
 ## [8.5.8] (March 13th, 2026)
 
 * Parallelize syncback middleware execution with rayon wave-based processing ([#13])
@@ -55,6 +68,7 @@ Making a new release? Simply add the new header with the version and date undern
 
 </details>
 
+[8.5.9]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.5.9
 [8.5.8]: https://github.com/UserGeneratedLLC/rojo/releases/tag/v8.5.8
 [#13]: https://github.com/UserGeneratedLLC/rojo/pull/13
 
