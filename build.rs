@@ -57,57 +57,66 @@ fn snapshot_from_fs_path(path: &Path) -> io::Result<VfsSnapshot> {
 }
 
 fn main() -> Result<(), anyhow::Error> {
-    let out_dir = env::var_os("OUT_DIR").unwrap();
+    let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
 
     let root_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let plugin_dir = root_dir.join("plugin");
     let templates_dir = root_dir.join("assets").join("project-templates");
 
-    let our_version = Version::parse(env::var_os("CARGO_PKG_VERSION").unwrap().to_str().unwrap())?;
-    let plugin_version =
-        Version::parse(fs::read_to_string(plugin_dir.join("Version.txt"))?.trim())?;
+    println!("cargo:rustc-check-cfg=cfg(prebuilt_plugin)");
+    println!("cargo:rerun-if-env-changed=PREBUILT_PLUGIN");
 
-    assert_eq!(
-        our_version, plugin_version,
-        "plugin version does not match Cargo version"
-    );
+    if let Ok(prebuilt) = env::var("PREBUILT_PLUGIN") {
+        fs::copy(&prebuilt, out_dir.join("plugin.rbxm"))
+            .unwrap_or_else(|e| panic!("Failed to copy prebuilt plugin from `{prebuilt}`: {e}"));
+        println!("cargo:rustc-cfg=prebuilt_plugin");
+    } else {
+        let our_version =
+            Version::parse(env::var_os("CARGO_PKG_VERSION").unwrap().to_str().unwrap())?;
+        let plugin_version =
+            Version::parse(fs::read_to_string(plugin_dir.join("Version.txt"))?.trim())?;
+
+        assert_eq!(
+            our_version, plugin_version,
+            "plugin version does not match Cargo version"
+        );
+
+        // Try modern .json5 extension first, fall back to legacy .json
+        let plugin_project_path = {
+            let json5_path = root_dir.join("plugin.project.json5");
+            let json_path = root_dir.join("plugin.project.json");
+            if json5_path.exists() {
+                json5_path
+            } else {
+                json_path
+            }
+        };
+
+        let plugin_snapshot = VfsSnapshot::dir(hashmap! {
+            "default.project.json5" => snapshot_from_fs_path(&plugin_project_path)?,
+            "plugin" => VfsSnapshot::dir(hashmap! {
+                "fmt" => snapshot_from_fs_path(&plugin_dir.join("fmt"))?,
+                "http" => snapshot_from_fs_path(&plugin_dir.join("http"))?,
+                "log" => snapshot_from_fs_path(&plugin_dir.join("log"))?,
+                "msgpack" => snapshot_from_fs_path(&plugin_dir.join("msgpack.lua"))?,
+                "rbx_dom_lua" => snapshot_from_fs_path(&plugin_dir.join("rbx_dom_lua"))?,
+                "src" => snapshot_from_fs_path(&plugin_dir.join("src"))?,
+                "Packages" => snapshot_from_fs_path(&plugin_dir.join("Packages"))?,
+                "Version.txt" => snapshot_from_fs_path(&plugin_dir.join("Version.txt"))?,
+                "UploadDetails.json" => snapshot_from_fs_path(&plugin_dir.join("UploadDetails.json"))?,
+            }),
+        });
+
+        let mut plugin_file = File::create(out_dir.join("plugin.bincode"))?;
+        bincode::serde::encode_into_std_write(
+            &plugin_snapshot,
+            &mut plugin_file,
+            bincode::config::standard(),
+        )?;
+    }
 
     let template_snapshot = snapshot_from_fs_path(&templates_dir)?;
-
-    // Try modern .json5 extension first, fall back to legacy .json
-    let plugin_project_path = {
-        let json5_path = root_dir.join("plugin.project.json5");
-        let json_path = root_dir.join("plugin.project.json");
-        if json5_path.exists() {
-            json5_path
-        } else {
-            json_path
-        }
-    };
-
-    let plugin_snapshot = VfsSnapshot::dir(hashmap! {
-        "default.project.json5" => snapshot_from_fs_path(&plugin_project_path)?,
-        "plugin" => VfsSnapshot::dir(hashmap! {
-            "fmt" => snapshot_from_fs_path(&plugin_dir.join("fmt"))?,
-            "http" => snapshot_from_fs_path(&plugin_dir.join("http"))?,
-            "log" => snapshot_from_fs_path(&plugin_dir.join("log"))?,
-            "msgpack" => snapshot_from_fs_path(&plugin_dir.join("msgpack.lua"))?,
-            "rbx_dom_lua" => snapshot_from_fs_path(&plugin_dir.join("rbx_dom_lua"))?,
-            "src" => snapshot_from_fs_path(&plugin_dir.join("src"))?,
-            "Packages" => snapshot_from_fs_path(&plugin_dir.join("Packages"))?,
-            "Version.txt" => snapshot_from_fs_path(&plugin_dir.join("Version.txt"))?,
-            "UploadDetails.json" => snapshot_from_fs_path(&plugin_dir.join("UploadDetails.json"))?,
-        }),
-    });
-
-    let mut template_file = File::create(Path::new(&out_dir).join("templates.bincode"))?;
-    let mut plugin_file = File::create(Path::new(&out_dir).join("plugin.bincode"))?;
-
-    bincode::serde::encode_into_std_write(
-        &plugin_snapshot,
-        &mut plugin_file,
-        bincode::config::standard(),
-    )?;
+    let mut template_file = File::create(out_dir.join("templates.bincode"))?;
     bincode::serde::encode_into_std_write(
         &template_snapshot,
         &mut template_file,

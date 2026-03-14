@@ -1,15 +1,14 @@
-use std::{
-    fs::{self, File},
-    io::BufWriter,
-};
+use std::fs;
 
 use clap::Parser;
-use memofs::{InMemoryFs, Vfs, VfsSnapshot};
 use roblox_install::RobloxStudio;
 
-use crate::serve_session::ServeSession;
+#[cfg(prebuilt_plugin)]
+static PLUGIN_RBXM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/plugin.rbxm"));
 
+#[cfg(not(prebuilt_plugin))]
 static PLUGIN_BINCODE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/plugin.bincode"));
+
 static PLUGIN_FILE_NAME: &str = "AtlasManagedPlugin.rbxm";
 
 /// Install Rojo's plugin.
@@ -46,18 +45,6 @@ impl PluginSubcommand {
     }
 }
 
-fn initialize_plugin() -> anyhow::Result<ServeSession> {
-    let (plugin_snapshot, _): (VfsSnapshot, usize) =
-        bincode::serde::decode_from_slice(PLUGIN_BINCODE, bincode::config::standard())
-            .expect("Rojo's plugin was not properly packed into Rojo's binary");
-
-    let mut in_memory_fs = InMemoryFs::new();
-    in_memory_fs.load_snapshot("/plugin", plugin_snapshot)?;
-
-    let vfs = Vfs::new(in_memory_fs);
-    Ok(ServeSession::new_oneshot(vfs, "/plugin")?)
-}
-
 fn install_plugin() -> anyhow::Result<()> {
     let studio = RobloxStudio::locate()?;
 
@@ -71,13 +58,34 @@ fn install_plugin() -> anyhow::Result<()> {
     let plugin_path = plugins_folder_path.join(PLUGIN_FILE_NAME);
     log::debug!("Writing plugin to {}", plugin_path.display());
 
-    let mut file = BufWriter::new(File::create(plugin_path)?);
+    #[cfg(prebuilt_plugin)]
+    {
+        fs::write(&plugin_path, PLUGIN_RBXM)?;
+    }
 
-    let session = initialize_plugin()?;
-    let tree = session.tree();
-    let root_id = tree.get_root_id();
+    #[cfg(not(prebuilt_plugin))]
+    {
+        use std::io::BufWriter;
 
-    rbx_binary::to_writer(&mut file, tree.inner(), &[root_id])?;
+        use memofs::{InMemoryFs, Vfs, VfsSnapshot};
+
+        use crate::serve_session::ServeSession;
+
+        let (plugin_snapshot, _): (VfsSnapshot, usize) =
+            bincode::serde::decode_from_slice(PLUGIN_BINCODE, bincode::config::standard())
+                .expect("Rojo's plugin was not properly packed into Rojo's binary");
+
+        let mut in_memory_fs = InMemoryFs::new();
+        in_memory_fs.load_snapshot("/plugin", plugin_snapshot)?;
+
+        let vfs = Vfs::new(in_memory_fs);
+        let session = ServeSession::new_oneshot(vfs, "/plugin")?;
+        let tree = session.tree();
+        let root_id = tree.get_root_id();
+
+        let mut file = BufWriter::new(fs::File::create(&plugin_path)?);
+        rbx_binary::to_writer(&mut file, tree.inner(), &[root_id])?;
+    }
 
     Ok(())
 }
@@ -97,7 +105,22 @@ fn uninstall_plugin() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(not(prebuilt_plugin))]
 #[test]
 fn plugin_initialize() {
-    let _ = initialize_plugin().unwrap();
+    use memofs::{InMemoryFs, Vfs, VfsSnapshot};
+
+    use crate::serve_session::ServeSession;
+
+    let (plugin_snapshot, _): (VfsSnapshot, usize) =
+        bincode::serde::decode_from_slice(PLUGIN_BINCODE, bincode::config::standard())
+            .expect("Rojo's plugin was not properly packed into Rojo's binary");
+
+    let mut in_memory_fs = InMemoryFs::new();
+    in_memory_fs
+        .load_snapshot("/plugin", plugin_snapshot)
+        .unwrap();
+
+    let vfs = Vfs::new(in_memory_fs);
+    let _ = ServeSession::new_oneshot(vfs, "/plugin").unwrap();
 }

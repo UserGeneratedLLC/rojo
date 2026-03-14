@@ -24,8 +24,9 @@ jobs:
       CARGO_INCREMENTAL: "0"
     steps:
       - uses: actions/checkout@v5
-        with:
-          submodules: true
+
+      - name: Init submodules for plugin build
+        run: git submodule update --init --depth 1 rbx-dom plugin/Packages/Roact plugin/Packages/Flipper plugin/Packages/Promise plugin/Packages/t plugin/Packages/Highlighter plugin/Packages/msgpack-luau plugin/Packages/TestEZ
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -100,7 +101,7 @@ jobs:
           path: atlas.vsix
 
   build:
-    needs: ["create-release"]
+    needs: ["create-release", "build-plugin"]
     strategy:
       fail-fast: false
       matrix:
@@ -153,6 +154,11 @@ jobs:
           GIT_CONFIG_NOSYSTEM: "1"
         run: git submodule update --init --depth 1 rbx-dom
 
+      - name: Download Pre-built Plugin
+        uses: actions/download-artifact@v4
+        with:
+          name: Atlas.rbxm
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -165,6 +171,7 @@ jobs:
 
       - name: Build Release
         env:
+          PREBUILT_PLUGIN: ${{ github.workspace }}/Atlas.rbxm
           CARGO_TERM_VERBOSE: ${{ runner.debug && 'true' || 'false' }}
         run: cargo build --release --locked --target ${{ matrix.target }}
 
